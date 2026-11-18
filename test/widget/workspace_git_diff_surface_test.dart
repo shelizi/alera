@@ -706,7 +706,7 @@ void main() {
     expect(_openFileButton(tester).onPressed, isNull);
   });
 
-  testWidgets('diff content scope and layout toggle independently', (
+  testWidgets('full-file preserves unchanged lines across layouts', (
     tester,
   ) async {
     final backend = FakeGitBackend()
@@ -740,8 +740,8 @@ void main() {
               ),
             ],
             fullFileRows: <GitDiffFullFileRow>[
-              // Intentionally omit full-file line index 1 so the default
-              // single-column view proves it consumes the native plan.
+              // This deliberately incomplete native plan must be rejected,
+              // never used to hide unchanged source line two.
               GitDiffFullFileRow(
                 kind: .contextRange,
                 startIndex: 0,
@@ -763,9 +763,8 @@ void main() {
               GitDiffFullFileRow(kind: .contextRange, startIndex: 4),
             ],
             fullFileSideBySideRows: <GitDiffFullFileSideBySideRow>[
-              // Intentionally omit full-file line index 1. The full-file
-              // side-by-side assertion below proves this native plan is used
-              // instead of rebuilding alignment from hunks on the UI isolate.
+              // This plan also skips source line two; the full-file
+              // side-by-side view must recover the missing line.
               GitDiffFullFileSideBySideRow(
                 kind: .contextRange,
                 oldStartIndex: 0,
@@ -820,7 +819,7 @@ void main() {
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
     expect(find.text('old three'), findsOneWidget);
-    expect(find.text('line two'), findsNothing);
+    expect(find.text('line two'), findsOneWidget);
     expect(find.text('new three'), findsOneWidget);
     expect(find.text('Original'), findsNothing);
 
@@ -848,8 +847,7 @@ void main() {
     expect(find.text('new three'), findsOneWidget);
 
     // Full file + side-by-side.
-    // Non-default line numbers prove the native/index projection was consumed
-    // instead of rebuilding side-by-side alignment on the UI isolate.
+    // Diff-only retains its valid native side-by-side projection.
     expect(find.text('33'), findsNWidgets(2));
 
     await tester.tap(find.byTooltip('Switch to Full File View'));
@@ -860,7 +858,7 @@ void main() {
     expect(find.text('Modified'), findsOneWidget);
     expect(find.text('line one'), findsNWidgets(2));
     expect(find.text('line five'), findsNWidgets(2));
-    expect(find.text('line two'), findsNothing);
+    expect(find.text('line two'), findsNWidgets(2));
     expect(find.text('old three'), findsOneWidget);
     expect(find.text('new three'), findsOneWidget);
 
@@ -872,7 +870,305 @@ void main() {
     expect(find.text('Original'), findsNothing);
     expect(find.text('line one'), findsOneWidget);
     expect(find.text('line five'), findsOneWidget);
-    expect(find.text('line two'), findsNothing);
+    expect(find.text('line two'), findsOneWidget);
+  });
+
+  testWidgets('full-file shows distant hunks without losing unchanged ranges', (
+    tester,
+  ) async {
+    const original =
+        'start\nkeep two\nold three\nkeep four\nkeep five\nkeep six\n'
+        'keep seven\nkeep eight\nold nine\nkeep ten\nkeep eleven\ntail\n';
+    const updated =
+        'start\nkeep two\nnew three\nkeep four\nkeep five\nkeep six\n'
+        'inserted before seven\nkeep seven\nkeep eight\nnew nine\n'
+        'keep ten\nkeep eleven\ntail\n';
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/multi.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -2,3 +2,3 @@'),
+              GitDiffLine.context(' keep two'),
+              GitDiffLine.deletion('-old three'),
+              GitDiffLine.addition('+new three'),
+              GitDiffLine.context(' keep four'),
+              GitDiffLine.hunk('@@ -7,4 +7,5 @@'),
+              GitDiffLine.addition('+inserted before seven'),
+              GitDiffLine.context(' keep seven'),
+              GitDiffLine.context(' keep eight'),
+              GitDiffLine.deletion('-old nine'),
+              GitDiffLine.addition('+new nine'),
+              GitDiffLine.context(' keep ten'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/multi.dart', oldSide: true)] =
+          Uint8List.fromList(original.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/multi.dart', oldSide: false)] =
+          Uint8List.fromList(updated.codeUnits);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(
+        filePath: 'lib/multi.dart',
+        title: 'multi.dart staged',
+        area: .staged,
+      ),
+    );
+    await tester.pumpAndSettle();
+    if (const bool.fromEnvironment('ALERA_DIFF_CAPTURE')) {
+      await expectLater(
+        find.byType(WorkspaceGitDiffSurface),
+        matchesGoldenFile('goldens/classic_diff_full_file_unified.png'),
+      );
+    }
+
+    for (final unchanged in <String>[
+      'start',
+      'keep five',
+      'keep six',
+      'keep eleven',
+      'tail',
+    ]) {
+      expect(find.text(unchanged), findsOneWidget, reason: unchanged);
+    }
+    for (final changed in <String>[
+      'old three',
+      'new three',
+      'inserted before seven',
+      'old nine',
+      'new nine',
+    ]) {
+      expect(find.text(changed), findsOneWidget, reason: changed);
+    }
+
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+    if (const bool.fromEnvironment('ALERA_DIFF_CAPTURE')) {
+      await expectLater(
+        find.byType(WorkspaceGitDiffSurface),
+        matchesGoldenFile('goldens/classic_diff_full_file_side_by_side.png'),
+      );
+    }
+    for (final unchanged in <String>['keep six', 'keep eleven', 'tail']) {
+      expect(find.text(unchanged), findsNWidgets(2), reason: unchanged);
+    }
+    expect(find.text('inserted before seven'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Diff Only'));
+    await tester.pumpAndSettle();
+    if (const bool.fromEnvironment('ALERA_DIFF_CAPTURE')) {
+      await expectLater(
+        find.byType(WorkspaceGitDiffSurface),
+        matchesGoldenFile('goldens/classic_diff_only_side_by_side.png'),
+      );
+    }
+    expect(find.text('tail'), findsNothing);
+    expect(find.text('keep six'), findsNothing);
+    expect(find.text('old nine'), findsOneWidget);
+    expect(find.text('new nine'), findsOneWidget);
+  });
+
+  testWidgets(
+    'full-file aligns start deletion and EOF insertion without newline',
+    (tester) async {
+      const original = 'removed at start\nmiddle\nlast';
+      const updated = 'middle\nlast\nnew at end';
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/edge.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,2 +1 @@'),
+                GitDiffLine.deletion('-removed at start'),
+                GitDiffLine.context(' middle'),
+                GitDiffLine.hunk('@@ -3 +2,2 @@'),
+                GitDiffLine.context(' last'),
+                GitDiffLine.addition('+new at end'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/edge.dart', oldSide: true)] =
+            Uint8List.fromList(original.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/edge.dart', oldSide: false)] =
+            Uint8List.fromList(updated.codeUnits);
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/edge.dart',
+          title: 'edge.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final text in <String>[
+        'removed at start',
+        'middle',
+        'last',
+        'new at end',
+      ]) {
+        expect(find.text(text), findsOneWidget, reason: text);
+      }
+
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      expect(find.text('removed at start'), findsOneWidget);
+      expect(find.text('new at end'), findsOneWidget);
+      expect(find.text('middle'), findsNWidgets(2));
+      expect(find.text('last'), findsNWidgets(2));
+
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      expect(find.text('middle'), findsWidgets);
+      expect(find.text('removed at start'), findsOneWidget);
+      expect(find.text('new at end'), findsOneWidget);
+    },
+  );
+
+  testWidgets('full-file handles CRLF blank lines and missing final newline', (
+    tester,
+  ) async {
+    const original = 'head\r\n\r\nmiddle\r\nend';
+    const updated = 'head\n\ninserted\nmiddle\nend\n';
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/newlines.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,4 +1,5 @@'),
+              GitDiffLine.context(' head'),
+              GitDiffLine.context(' '),
+              GitDiffLine.addition('+inserted'),
+              GitDiffLine.context(' middle'),
+              GitDiffLine.context(' end'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/newlines.dart', oldSide: true)] =
+          Uint8List.fromList(original.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/newlines.dart', oldSide: false)] =
+          Uint8List.fromList(updated.codeUnits);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(
+        filePath: 'lib/newlines.dart',
+        title: 'newlines.dart staged',
+        area: .staged,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('head'), findsOneWidget);
+    expect(find.text('middle'), findsOneWidget);
+    expect(find.text('end'), findsOneWidget);
+    expect(find.text('inserted'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+    expect(find.text('head'), findsNWidgets(2));
+    expect(find.text('middle'), findsNWidgets(2));
+    expect(find.text('end'), findsNWidgets(2));
+    expect(find.text('inserted'), findsOneWidget);
+  });
+
+  testWidgets('full-file still accepts complete native line projection', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/projected.dart',
+            area: .staged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1,3 +1,3 @@'),
+              GitDiffLine.context(' before'),
+              GitDiffLine.deletion('-old value'),
+              GitDiffLine.addition('+new value'),
+              GitDiffLine.context(' after'),
+            ],
+            fullFileRows: <GitDiffFullFileRow>[
+              GitDiffFullFileRow(
+                kind: .contextRange,
+                startIndex: 0,
+                endIndex: 1,
+              ),
+              GitDiffFullFileRow(kind: .line, diffLineIndex: 2, lineNumber: 88),
+              GitDiffFullFileRow(
+                kind: .line,
+                fullLineIndex: 1,
+                diffLineIndex: 3,
+                lineNumber: 88,
+              ),
+              GitDiffFullFileRow(
+                kind: .contextRange,
+                startIndex: 2,
+                endIndex: 3,
+              ),
+            ],
+            fullFileSideBySideRows: <GitDiffFullFileSideBySideRow>[
+              GitDiffFullFileSideBySideRow(
+                kind: .contextRange,
+                oldStartIndex: 0,
+                oldEndIndex: 1,
+                newStartIndex: 0,
+                newEndIndex: 1,
+              ),
+              GitDiffFullFileSideBySideRow(
+                kind: .pair,
+                oldStartIndex: 1,
+                newStartIndex: 1,
+                leftDiffLineIndex: 2,
+                rightDiffLineIndex: 3,
+              ),
+              GitDiffFullFileSideBySideRow(
+                kind: .contextRange,
+                oldStartIndex: 2,
+                newStartIndex: 2,
+              ),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/projected.dart', oldSide: true)] =
+          Uint8List.fromList('before\nold value\nafter\n'.codeUnits)
+      ..diffBlobBytesBySide[(filePath: 'lib/projected.dart', oldSide: false)] =
+          Uint8List.fromList('before\nnew value\nafter\n'.codeUnits);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      tab: _diffTab(
+        filePath: 'lib/projected.dart',
+        title: 'projected.dart staged',
+        area: .staged,
+      ),
+    );
+    await tester.pumpAndSettle();
+    // Artificial 88 distinguishes a native projection from the fallback.
+    expect(find.text('88'), findsNWidgets(2));
+    expect(find.text('before'), findsOneWidget);
+    expect(find.text('after'), findsOneWidget);
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+    expect(find.text('before'), findsNWidgets(2));
+    expect(find.text('after'), findsNWidgets(2));
+    expect(find.text('old value'), findsOneWidget);
+    expect(find.text('new value'), findsOneWidget);
   });
 
   testWidgets(

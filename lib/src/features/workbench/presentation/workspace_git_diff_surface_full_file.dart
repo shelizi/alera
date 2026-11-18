@@ -204,6 +204,9 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
   );
   final spans = <_DiffRowSpan>[];
   final materialized = <_DiffRow>[];
+  // Validate the projection against the decoded blob; never silently skip
+  // unchanged lines when a cached/native plan is incomplete.
+  var nextFullIndex = 0;
 
   void flushMaterialized() {
     if (materialized.isEmpty) return;
@@ -217,7 +220,7 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
     switch (projection.kind) {
       case GitDiffFullFileRowKind.contextRange:
         final start = projection.startIndex;
-        if (start == null || start < 0 || start > lines.length) return null;
+        if (start == null || start != nextFullIndex) return null;
         final end = projection.endIndex ?? lines.length;
         if (end < start || end > lines.length) return null;
         flushMaterialized();
@@ -226,6 +229,7 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
             _FullFileContextDiffRowSpan(lines: lines, start: start, end: end),
           );
         }
+        nextFullIndex = end;
       case GitDiffFullFileRowKind.line:
         final diffLineIndex = projection.diffLineIndex;
         if (diffLineIndex == null ||
@@ -235,6 +239,17 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
         }
         final diffLine = file.lines[diffLineIndex];
         final fullLineIndex = projection.fullLineIndex;
+        if (diffLine.kind == GitDiffLineKind.deletion) {
+          if (fullLineIndex != null) return null;
+        } else if (diffLine.kind == GitDiffLineKind.context ||
+            diffLine.kind == GitDiffLineKind.addition) {
+          if (fullLineIndex != nextFullIndex || nextFullIndex >= lines.length) {
+            return null;
+          }
+          nextFullIndex += 1;
+        } else {
+          return null;
+        }
         final text =
             diffLine.kind == GitDiffLineKind.context &&
                 fullLineIndex != null &&
@@ -254,6 +269,7 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
         );
     }
   }
+  if (nextFullIndex != lines.length) return null;
   flushMaterialized();
   return spans;
 }
@@ -492,6 +508,8 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
 
   final spans = <_DiffRowSpan>[header];
   final materialized = <_DiffRow>[];
+  var nextOldIndex = 0;
+  var nextNewIndex = 0;
 
   void flushMaterialized() {
     if (materialized.isEmpty) return;
@@ -506,21 +524,23 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
       case GitDiffFullFileSideBySideRowKind.contextRange:
         final oldStart = projection.oldStartIndex;
         final newStart = projection.newStartIndex;
-        if (oldStart == null || newStart == null) return null;
-        final oldEnd = math.min(
-          projection.oldEndIndex ?? oldLines.length,
-          oldLines.length,
-        );
-        final newEnd = math.min(
-          projection.newEndIndex ?? newLines.length,
-          newLines.length,
-        );
+        if (oldStart == null ||
+            newStart == null ||
+            oldStart != nextOldIndex ||
+            newStart != nextNewIndex) {
+          return null;
+        }
+        final oldEnd = projection.oldEndIndex ?? oldLines.length;
+        final newEnd = projection.newEndIndex ?? newLines.length;
         if (oldStart < 0 ||
             newStart < 0 ||
             oldEnd < oldStart ||
             newEnd < newStart ||
             oldStart > oldLines.length ||
-            newStart > newLines.length) {
+            newStart > newLines.length ||
+            oldEnd > oldLines.length ||
+            newEnd > newLines.length ||
+            oldEnd - oldStart != newEnd - newStart) {
           return null;
         }
         flushMaterialized();
@@ -536,7 +556,31 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
             ),
           );
         }
+        nextOldIndex = oldEnd;
+        nextNewIndex = newEnd;
       case GitDiffFullFileSideBySideRowKind.pair:
+        if (projection.oldStartIndex == null &&
+            projection.newStartIndex == null) {
+          return null;
+        }
+        if (projection.oldStartIndex != null) {
+          if (projection.oldStartIndex != nextOldIndex ||
+              nextOldIndex >= oldLines.length) {
+            return null;
+          }
+          nextOldIndex += 1;
+        } else if (projection.leftDiffLineIndex != null) {
+          return null;
+        }
+        if (projection.newStartIndex != null) {
+          if (projection.newStartIndex != nextNewIndex ||
+              nextNewIndex >= newLines.length) {
+            return null;
+          }
+          nextNewIndex += 1;
+        } else if (projection.rightDiffLineIndex != null) {
+          return null;
+        }
         final left = _projectedFullFileSideLine(
           file: file,
           fullLines: oldLines,
@@ -561,6 +605,9 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
         }
         materialized.add(_SideBySideDiffRow(left: left, right: right));
     }
+  }
+  if (nextOldIndex != oldLines.length || nextNewIndex != newLines.length) {
+    return null;
   }
   flushMaterialized();
   return spans;

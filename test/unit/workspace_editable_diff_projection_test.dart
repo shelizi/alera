@@ -166,6 +166,43 @@ void main() {
     );
   });
 
+  test('large replacements keep unique unchanged interior anchors', () {
+    final before = <String>[
+      for (var index = 0; index < 1200; index++) 'old prefix $index',
+      '  // unique unchanged anchor',
+      for (var index = 0; index < 1200; index++) 'old suffix $index',
+    ].join('\n');
+    final after = <String>[
+      for (var index = 0; index < 1200; index++) 'new prefix $index',
+      '  // unique unchanged anchor',
+      for (var index = 0; index < 1200; index++) 'new suffix $index',
+    ].join('\n');
+
+    final result = workspaceEditableDiffSnapshotForTesting(
+      baseline: before,
+      current: after,
+    );
+
+    expect(result.added, 2400);
+    expect(result.removed, 2400);
+    expect(result.oldSpacers, isEmpty);
+    expect(result.newSpacers, isEmpty);
+    final oldAnchor = before.indexOf('unique unchanged anchor');
+    final newAnchor = after.indexOf('unique unchanged anchor');
+    expect(
+      result.oldHighlights.any(
+        (range) => range.start < oldAnchor + 23 && range.end > oldAnchor,
+      ),
+      isFalse,
+    );
+    expect(
+      result.newHighlights.any(
+        (range) => range.start < newAnchor + 23 && range.end > newAnchor,
+      ),
+      isFalse,
+    );
+  });
+
   test('unrelated replaced lines still report actual changes', () {
     final before = [for (var i = 0; i < 600; i++) 'old_key_$i = 1234;']
         .join('\n');

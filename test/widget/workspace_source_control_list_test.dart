@@ -3,6 +3,9 @@ import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_context_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -85,6 +88,234 @@ void main() {
     );
   });
 
+  testWidgets('change-list clicks open staged, unstaged and untracked diffs', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/staged.dart',
+            area: .staged,
+            status: .modified,
+          ),
+          GitChangeEntry(
+            path: 'lib/unstaged.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+          GitChangeEntry(
+            path: 'lib/new.dart',
+            area: .untracked,
+            status: .untracked,
+          ),
+        ],
+      );
+    final opened =
+        <
+          ({
+            String? path,
+            GitChangeArea? area,
+            WorkspaceGitDiffScope scope,
+            bool preview,
+          })
+        >[];
+
+    await _pumpPanel(
+      tester,
+      backend,
+      onOpenGitDiff:
+          ({
+            relativePath,
+            area,
+            gitDiffRoot,
+            required scope,
+            bool preview = false,
+          }) async {
+            opened.add((
+              path: relativePath,
+              area: area,
+              scope: scope,
+              preview: preview,
+            ));
+          },
+    );
+    await tester.pumpAndSettle();
+
+    for (final expected in <({String path, GitChangeArea area})>[
+      (path: 'lib/staged.dart', area: .staged),
+      (path: 'lib/unstaged.dart', area: .unstaged),
+      (path: 'lib/new.dart', area: .untracked),
+    ]) {
+      await tester.tap(find.text(expected.path));
+      await tester.pumpAndSettle();
+      expect(opened, isNotEmpty, reason: expected.path);
+      final open = opened.last;
+      expect(open.path, expected.path);
+      expect(open.area, expected.area);
+      expect(open.scope, WorkspaceGitDiffScope.file);
+      expect(open.preview, isTrue);
+    }
+    expect(opened, hasLength(3));
+    expect(
+      backend.calls.where(
+        (call) => call.method == 'stage' || call.method == 'discard',
+      ),
+      isEmpty,
+    );
+  });
+
+  testWidgets('same tracked path opens the correct staged or unstaged diff', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .staged,
+            status: .modified,
+          ),
+          GitChangeEntry(
+            path: 'lib/shared.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+    final opened = <GitChangeArea?>[];
+    await _pumpPanel(
+      tester,
+      backend,
+      onOpenGitDiff:
+          ({
+            relativePath,
+            area,
+            gitDiffRoot,
+            required scope,
+            bool preview = false,
+          }) async {
+            expect(relativePath, 'lib/shared.dart');
+            expect(scope, WorkspaceGitDiffScope.file);
+            opened.add(area);
+          },
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('lib/shared.dart'), findsNWidgets(2));
+    await tester.tap(find.text('lib/shared.dart').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('lib/shared.dart').last);
+    await tester.pumpAndSettle();
+
+    expect(opened, <GitChangeArea?>[.staged, .unstaged]);
+  });
+
+  testWidgets(
+    'Source Control tab opens the change list and dispatches its diff',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/from-list.dart',
+              area: .unstaged,
+              status: .modified,
+              added: 2,
+              removed: 1,
+            ),
+          ],
+        );
+      var activeTab = WorkbenchContextPanelTab.references;
+      final opened = <String>[];
+      final workspace = _workspace();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            gitBackendProvider.overrideWithValue(backend),
+            sourceControlWatcherProvider.overrideWithValue(
+              FakeSourceControlWatcher(),
+            ),
+            settingsControllerProvider.overrideWith(
+              () => _PanelSettingsController(),
+            ),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 700,
+                height: 560,
+                child: StatefulBuilder(
+                  builder: (context, update) => WorkspaceContextSidebar(
+                    workspace: workspace,
+                    prefs: WorkbenchViewPrefs.defaults.copyWith(
+                      activeContextPanelTab: activeTab,
+                      gitDiffViewMode: GitDiffViewMode.flat,
+                    ),
+                    sourceControlScope: WorkspaceSourceControlScope(
+                      workspaceId: workspace.id,
+                      workspacePath: workspace.path,
+                      path: workspace.path,
+                    ),
+                    isWorkspaceGitRepository: true,
+                    onToggleVisible: () {},
+                    onResize: (_) {},
+                    onSetContextPanelTab: (tab) =>
+                        update(() => activeTab = tab),
+                    onSetExplorerMode: (_) {},
+                    onSetShowHiddenFiles: (_) {},
+                    onSetGitDiffViewMode: (_) {},
+                    onSetGitDiffGroupMode: (_) {},
+                    onOpenFile: (_) {},
+                    onOpenGitDiff:
+                        ({
+                          area,
+                          relativePath,
+                          gitDiffRoot,
+                          required scope,
+                          bool preview = false,
+                        }) async {
+                          expect(area, GitChangeArea.unstaged);
+                          expect(scope, WorkspaceGitDiffScope.file);
+                          expect(preview, isTrue);
+                          opened.add(relativePath ?? '');
+                        },
+                    onOpenGitCommitDiff: ({
+                      relativePath,
+                      oldPath,
+                      required scope,
+                      gitDiffRoot,
+                      required commitOid,
+                      parentOid,
+                      required compareRef,
+                      subject,
+                      message,
+                      bool preview = false,
+                    }) async {},
+                    onOpenSearchMatch: (_) {},
+                    onPathMoved: (_, _) async {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(activeTab, WorkbenchContextPanelTab.references);
+      await tester.tap(find.byTooltip('Source Control'));
+      await tester.pumpAndSettle();
+      expect(activeTab, WorkbenchContextPanelTab.gitDiff);
+      expect(find.text('lib/from-list.dart'), findsOneWidget);
+      await tester.tap(find.text('lib/from-list.dart'));
+      await tester.pumpAndSettle();
+      expect(opened, <String>['lib/from-list.dart']);
+    },
+  );
+
   testWidgets('large change lists render rows lazily', (tester) async {
     final backend = FakeGitBackend()
       ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
@@ -125,7 +356,11 @@ void main() {
   });
 }
 
-Future<void> _pumpPanel(WidgetTester tester, FakeGitBackend backend) {
+Future<void> _pumpPanel(
+  WidgetTester tester,
+  FakeGitBackend backend, {
+  OpenGitDiffTabCallback? onOpenGitDiff,
+}) {
   final workspace = _workspace();
   return tester.pumpWidget(
     ProviderScope(
@@ -154,13 +389,15 @@ Future<void> _pumpPanel(WidgetTester tester, FakeGitBackend backend) {
               onViewModeChanged: (_) {},
               groupMode: .byArea,
               onGroupModeChanged: (_) {},
-              onOpenGitDiff: ({
-                area,
-                relativePath,
-                gitDiffRoot,
-                required scope,
-                bool preview = false,
-              }) async {},
+              onOpenGitDiff:
+                  onOpenGitDiff ??
+                  ({
+                    area,
+                    relativePath,
+                    gitDiffRoot,
+                    required scope,
+                    bool preview = false,
+                  }) async {},
               onOpenGitCommitDiff: ({
                 relativePath,
                 oldPath,

@@ -167,7 +167,11 @@ _EditableDiffInputs _prepareEditableDiff(
   // coarse prefix + deletion + addition + suffix sequence is exact here.
   final steps = _editableDiffHasNoSharedMiddle(normalizedOld, normalizedNew)
       ? _coarseEditableLineDiff(normalizedOld, normalizedNew)
-      : (_myersEditableLineDiff(normalizedOld, normalizedNew) ??
+      : ((normalizedOld.length + normalizedNew.length >= 1024
+                ? _anchoredEditableLineDiff(normalizedOld, normalizedNew)
+                : null) ??
+            _myersEditableLineDiff(normalizedOld, normalizedNew) ??
+            _anchoredEditableLineDiff(normalizedOld, normalizedNew) ??
             _coarseEditableLineDiff(normalizedOld, normalizedNew));
   return _EditableDiffInputs(
     oldLines: oldLines,
@@ -176,6 +180,102 @@ _EditableDiffInputs _prepareEditableDiff(
     oldRenderedLineCount: _editableRenderedLineCount(baseline, oldLines),
     newRenderedLineCount: _editableRenderedLineCount(current, newLines),
   );
+}
+
+/// Splits large comparisons at unchanged lines unique to each side. The
+/// increasing subsequence prevents crossed/moved anchors; each intervening
+/// chunk still uses exact Myers matching when feasible. This avoids treating
+/// unchanged middle sections as replacements after the Myers distance cap.
+List<_EditableLineDiffStep>? _anchoredEditableLineDiff(
+  List<String> oldLines,
+  List<String> newLines,
+) {
+  final oldPositions = <String, int>{};
+  final newPositions = <String, int>{};
+  for (var index = 0; index < oldLines.length; index++) {
+    oldPositions.update(oldLines[index], (_) => -1, ifAbsent: () => index);
+  }
+  for (var index = 0; index < newLines.length; index++) {
+    newPositions.update(newLines[index], (_) => -1, ifAbsent: () => index);
+  }
+
+  final candidates = <(int, int)>[];
+  for (var oldIndex = 0; oldIndex < oldLines.length; oldIndex++) {
+    final line = oldLines[oldIndex];
+    if (oldPositions[line] != oldIndex) continue;
+    final newIndex = newPositions[line];
+    if (newIndex != null && newIndex >= 0) {
+      candidates.add((oldIndex, newIndex));
+    }
+  }
+  if (candidates.isEmpty) return null;
+
+  // Longest increasing subsequence of new indices, ordered by old index.
+  final tails = <int>[];
+  final previous = List<int>.filled(candidates.length, -1);
+  for (var index = 0; index < candidates.length; index++) {
+    final newIndex = candidates[index].$2;
+    var low = 0;
+    var high = tails.length;
+    while (low < high) {
+      final middle = (low + high) >> 1;
+      if (candidates[tails[middle]].$2 < newIndex) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    if (low > 0) previous[index] = tails[low - 1];
+    if (low == tails.length) {
+      tails.add(index);
+    } else {
+      tails[low] = index;
+    }
+  }
+
+  final orderedAnchors = <(int, int)>[];
+  var cursor = tails.last;
+  while (cursor >= 0) {
+    orderedAnchors.add(candidates[cursor]);
+    cursor = previous[cursor];
+  }
+
+  final steps = <_EditableLineDiffStep>[];
+  void appendChunk(int oldStart, int oldEnd, int newStart, int newEnd) {
+    if (oldStart == oldEnd && newStart == newEnd) return;
+    final oldChunk = oldLines.sublist(oldStart, oldEnd);
+    final newChunk = newLines.sublist(newStart, newEnd);
+    final localSteps = _editableDiffHasNoSharedMiddle(oldChunk, newChunk)
+        ? _coarseEditableLineDiff(oldChunk, newChunk)
+        : (_myersEditableLineDiff(oldChunk, newChunk) ??
+              _coarseEditableLineDiff(oldChunk, newChunk));
+    for (final step in localSteps) {
+      steps.add(
+        _EditableLineDiffStep(
+          kind: step.kind,
+          oldIndex: step.oldIndex == null ? null : oldStart + step.oldIndex!,
+          newIndex: step.newIndex == null ? null : newStart + step.newIndex!,
+        ),
+      );
+    }
+  }
+
+  var oldCursor = 0;
+  var newCursor = 0;
+  for (final (oldIndex, newIndex) in orderedAnchors.reversed) {
+    appendChunk(oldCursor, oldIndex, newCursor, newIndex);
+    steps.add(
+      _EditableLineDiffStep(
+        kind: _EditableLineDiffKind.equal,
+        oldIndex: oldIndex,
+        newIndex: newIndex,
+      ),
+    );
+    oldCursor = oldIndex + 1;
+    newCursor = newIndex + 1;
+  }
+  appendChunk(oldCursor, oldLines.length, newCursor, newLines.length);
+  return steps;
 }
 
 /// True only when the changed interiors have no equal normalized line at all.
