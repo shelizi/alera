@@ -6,6 +6,7 @@ mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
 mod native_git_favorites_ui;
+mod native_git_graph_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
 mod native_popup_ui;
@@ -11275,9 +11276,27 @@ impl Render for Workbench {
                     )
                 })
         };
-        let git_graph_topology_rows = git_graph_topology
+        let (git_graph_topology_rows, git_graph_lane_count) = match git_graph_topology
             .and_then(Result::ok)
-            .map(|layout| layout.rows);
+        {
+            Some(layout) => (Some(layout.rows), layout.max_lanes),
+            None => (None, 1),
+        };
+        let git_graph_current_branch = self.git_history.as_ref()
+            .map(|history| history.current.clone())
+            .unwrap_or_default();
+        let git_graph_head_tip = self.git_history.as_ref()
+            .and_then(|history| history.branches.iter().find(|branch| branch.current))
+            .map(|branch| branch.tip.clone());
+        let mut git_graph_tags_by_oid: HashMap<String, Vec<String>> = HashMap::new();
+        if let Some(history) = self.git_history.as_ref() {
+            // Commit labels currently hold branch tips only. Project real
+            // lightweight/annotated tags into the UI without changing Git.
+            for tag in &history.tags {
+                git_graph_tags_by_oid.entry(tag.oid.clone())
+                    .or_default().push(format!("refs/tags/{}", tag.name));
+            }
+        }
         // Build topology on the full bounded graph before filtering. Filtering
         // first would invent edges/lanes between unrelated commits.
         let git_commit_rows = git_commit_rows
@@ -12793,33 +12812,65 @@ impl Render for Workbench {
                                             let oid = row.oid;
                                             let menu_oid = oid.clone();
                                             let menu_subject = row.subject.clone();
-                                            let marker = if row.parents > 1 { "◆" } else { "●" };
-                                            let labels = if row.labels.is_empty() { String::new() }
-                                                else { format!(" [{}]", row.labels.join(", ")) };
-                                            let title = format!("{} {}{} · {}", row.short, row.subject, labels, row.author);
-                                            let topology = git_graph_topology_rows.as_ref().and_then(|rows| rows.get(index));
-                                            let node_line = topology.map(|item| item.node_line.clone())
-                                                .unwrap_or_else(|| marker.to_string());
-                                            let connector = topology.map(|item| item.connector_line.clone())
-                                                .unwrap_or_default();
-                                            let rail_width = topology.map(|item| item.node_line.chars().count())
-                                                .unwrap_or(1) as f32 * 8.0;
+                                            let is_head = git_graph_head_tip.as_ref()
+                                                .is_some_and(|tip| tip == &row.short);
+                                            let is_merge = row.parents > 1;
+                                            let topology = git_graph_topology_rows.as_ref()
+                                                .and_then(|rows| rows.get(index)).cloned();
+                                            let subject = row.subject;
+                                            let short = row.short;
+                                            let author = row.author;
+                                            let mut refs = row.labels;
+                                            if let Some(tags) = git_graph_tags_by_oid.get(&oid) {
+                                                refs.extend(tags.iter().cloned());
+                                            }
+                                            refs.sort_by_key(|label| {
+                                                if label == &git_graph_current_branch { 0u8 }
+                                                else if label.starts_with("refs/tags/") { 1 }
+                                                else if label.starts_with("refs/remotes/") { 3 }
+                                                else { 2 }
+                                            });
+                                            let hidden_refs = refs.len().saturating_sub(2);
                                             div()
                                                 .id(("git-graph-commit", index))
-                                                .flex()
-                                                .flex_col()
                                                 .cursor_pointer()
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(div().flex().items_center().gap_2()
-                                                    .child(div().font_family("JetBrains Mono")
-                                                        .min_w(px(rail_width)).text_color(rgb(TEXT)).child(node_line))
-                                                    .child(div().min_w_0().flex_1().child(title)))
-                                                .when(!connector.trim().is_empty(), |item| item.child(
-                                                    div().font_family("JetBrains Mono")
-                                                        .text_color(rgb(MUTED)).child(connector)
-                                                ))
+                                                    .child(native_git_graph_ui::graph_lane(
+                                                        topology, git_graph_lane_count, is_merge, is_head,
+                                                    ))
+                                                    .child(div().min_w_0().flex_1().flex().flex_col().gap_1()
+                                                        .child(div().flex().items_center().gap_1()
+                                                            .child(div().min_w_0().flex_1()
+                                                                .text_color(rgb(TEXT)).child(subject))
+                                                            .children(refs.into_iter().take(2).map(|label| {
+                                                                let color = if label.starts_with("refs/remotes/") {
+                                                                    native_git_graph_ui::REF_REMOTE_COLOR
+                                                                } else if label.starts_with("refs/tags/") {
+                                                                    native_git_graph_ui::REF_TAG_COLOR
+                                                                } else {
+                                                                    native_git_graph_ui::REF_LOCAL_COLOR
+                                                                };
+                                                                let display = label.strip_prefix("refs/tags/")
+                                                                    .or_else(|| label.strip_prefix("refs/remotes/"))
+                                                                    .unwrap_or(&label);
+                                                                let shown = if display.chars().count() > 22 {
+                                                                    format!("{}…", display.chars().take(21).collect::<String>())
+                                                                } else { display.to_owned() };
+                                                                div().px(px(4.0)).py(px(1.0)).rounded_sm()
+                                                                    .bg(rgb(ELEVATED)).text_color(rgb(color))
+                                                                    .child(shown)
+                                                            }))
+                                                            .when(hidden_refs > 0, |item| item.child(
+                                                                div().text_color(rgb(MUTED))
+                                                                    .child(format!("+{hidden_refs}"))
+                                                            )))
+                                                        .child(div().flex().items_center().gap_2()
+                                                            .text_color(rgb(MUTED))
+                                                            .child(short)
+                                                            .child(author))))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
                                                 }))

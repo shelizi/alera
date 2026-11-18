@@ -79,4 +79,8 @@
 
 ## Known implementation gap at this checkpoint
 
-Native graph now also carries `GitCommitRow.parent_ids` and renders bounded Unicode lanes instead of just the old ●/◆ markers. The current output is a functional textual rail layout, not a polished vector graph. The render is limited to 96 commits and 12 lanes; when topology cannot be represented, Native explicitly shows the simplified commit list. A Windows GPUI UI acceptance test, refined graph geometry/interaction, and file-filter history edge cases are still outstanding.
+Native graph now uses exact `GitCommitRow.parent_ids` with a native GPUI Canvas renderer: stable palette IDs for lane movement, per-parent curved connectors, filled/outlined commit nodes, HEAD highlighting, and compact branch/ref pills. Its layout budget is 512 commits / 12 concurrent lanes, matching bounded incremental history loading; sparse whole-repository search intentionally shows only commits without invented graph edges. Commit preview and right-click actions still use the existing validated Git services.
+
+Third-party evaluation (2026-11-18): reviewed rgitui's GPUI Git graph approach, but avoid importing its full application / its separately versioned GPUI runtime into Alera's pinned `gpui-kit = 0.9.0`. The new renderer uses the mature Canvas and `PathBuilder` primitives already provided by GPUI Kit and keeps the tested topology model as a UI-independent module.
+
+Remaining acceptance work: perform a Windows native visual smoke test against Classic for long-lived branches, nested merges, 3+ parent merges, search filtering and virtualized history scrolling; inspect performance with 512 rows, DPI scaling and light/dark theme; re-evaluate third-party layout integration only if exact topology parity cannot be attained safely.
