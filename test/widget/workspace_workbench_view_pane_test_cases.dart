@@ -362,9 +362,13 @@ void _registerWorkspaceWorkbenchViewPaneTests() {
       updatedRatios: updatedRatios,
     );
 
-    await tester.tap(find.byTooltip('New Tab'));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('workbench-new-tab-button')),
+    );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('New Terminal'));
+    await tester.tap(
+      find.byKey(const ValueKey<String>('workbench-new-terminal-menu-item')),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Terminal 1'));
     await tester.pump();
@@ -375,6 +379,45 @@ void _registerWorkspaceWorkbenchViewPaneTests() {
     ]);
     expect(terminalRuntime.focusRequestsByTab['tab-1'], 1);
   });
+
+  testWidgets(
+    'new terminal menu action is stable under Traditional Chinese localization',
+    (tester) async {
+      final tab = _tab('tab-1', title: 'Terminal 1');
+      await _pumpWorkbenchView(
+        tester,
+        tabs: <WorkspaceTabRecord>[tab],
+        layout: WorkbenchLayout.single(
+          workspaceId: _workspaceId,
+          groupId: 'group-a',
+          tabIds: <String>[tab.id],
+        ),
+        terminalRuntime: terminalRuntime,
+        createdTabs: createdTabs,
+        selectedTabs: selectedTabs,
+        closedTabs: closedTabs,
+        closedTabGroups: closedTabGroups,
+        renamedTabs: renamedTabs,
+        movedTabs: movedTabs,
+        splitGroups: splitGroups,
+        mergedGroups: mergedGroups,
+        updatedRatios: updatedRatios,
+        locale: const Locale('zh', 'TW'),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey<String>('workbench-new-tab-button')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('新增終端機'), findsOneWidget);
+      expect(find.text('New Terminal'), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('workbench-new-terminal-menu-item')),
+      );
+      await tester.pumpAndSettle();
+      expect(createdTabs, <String?>['group-a']);
+    },
+  );
 
   testWidgets('new tab menu lists detected agents and opens an agent tab', (
     tester,

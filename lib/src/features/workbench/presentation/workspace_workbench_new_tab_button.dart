@@ -57,6 +57,7 @@ class const _NewTabButton({
             ),
           ),
         const AleraDropdownEntry<_NewTabMenuAction>(
+          key: ValueKey<String>('workbench-new-terminal-menu-item'),
           value: _NewTerminalMenuAction(),
           label: 'New Terminal',
           leading: Icon(
@@ -101,6 +102,7 @@ class const _NewTabButton({
         ref.watch(installedAgentClisProvider).asData?.value ??
         const <AgentType>[];
     return AleraIconButton(
+      key: const ValueKey<String>('workbench-new-tab-button'),
       tooltip: 'New Tab',
       icon: AleraIcons.add,
       iconSize: 16,

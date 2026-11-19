@@ -8,6 +8,7 @@ import 'package:alera/src/features/projects/application/projects_service.dart';
 import 'package:alera/src/features/projects/infra/drift_project_config_repository.dart';
 import 'package:alera/src/features/projects/infra/drift_project_repository.dart';
 import 'package:alera/src/features/projects/presentation/add_project_dialog.dart';
+import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/infra/drift_settings_repository.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -68,6 +69,16 @@ void main() {
     final workbenchRepository = DriftWorkbenchRepository(db);
     final projectConfigRepository = DriftProjectConfigRepository(db);
     final settingsRepository = DriftSettingsRepository(db);
+    // Seed a deterministic English language for the real SettingsController.
+    // Unlike overriding its value, this preserves .notifier for shell features
+    // (such as GitHub star prompts) that call controller methods during E2E.
+    await settingsRepository.save(
+      AleraSettings.defaults.copyWith(
+        general: GeneralSettings.defaults.copyWith(
+          language: AppLanguage.english,
+        ),
+      ),
+    );
     const gitBackend = E2eGitBackend();
     final projectsService = ProjectsService(
       projectService: ProjectService(gitBackend),
@@ -133,12 +144,21 @@ void main() {
     await tester.ensureVisible(workspaceRow);
     await tester.pumpAndSettle();
     await tester.tap(workspaceRow);
-    await _pumpUntilFound(tester, find.byTooltip('New Tab'));
+    final newTabButton = find
+        .byKey(const ValueKey<String>('workbench-new-tab-button'))
+        .first;
     await _pumpUntilFound(tester, find.text('E2E terminal: Terminal 1'));
+    await _pumpUntilFound(tester, newTabButton);
 
-    await tester.tap(find.byTooltip('New Tab').first);
+    await tester.tap(newTabButton);
+    final newTerminalItem = find.byKey(
+      const ValueKey<String>('workbench-new-terminal-menu-item'),
+    );
+    await _pumpUntilFound(tester, newTerminalItem);
+    // Finding the popup entry can precede the menu's first completed paint.
+    // Wait until its route animation/layout settles before hit testing it.
     await tester.pumpAndSettle();
-    await tester.tap(find.text('New Terminal'));
+    await tester.tap(newTerminalItem);
     await _pumpUntilFound(tester, find.text('E2E terminal: Terminal 2'));
 
     expect(

@@ -20,6 +20,7 @@ Future<void> _pumpWorkbenchView(
   List<String>? activatedGroups,
   List<String>? keptPreviewTabs,
   Size size = const Size(420, 280),
+  Locale? locale,
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
@@ -55,6 +56,16 @@ Future<void> _pumpWorkbenchView(
           ),
       ],
       child: MaterialApp(
+        locale: locale,
+        supportedLocales: locale == null
+            ? const <Locale>[Locale('en')]
+            : supportedAleraLocales,
+        localizationsDelegates: locale == null
+            ? null
+            : const <LocalizationsDelegate<dynamic>>[
+                AleraLocalizationsDelegate(),
+                ...GlobalMaterialLocalizations.delegates,
+              ],
         home: Scaffold(
           body: Center(
             child: SizedBox(
