@@ -265,6 +265,24 @@ impl WorkbenchPaneLayout {
         true
     }
 
+    /// Append an existing tab to the end of its own pane when dropped onto
+    /// the blank tail of the Tab strip. Never transfers an Editor or Host owner.
+    pub fn move_to_end(&mut self, id: &WorkbenchTabIdentity, slot: PaneSlot) -> bool {
+        let tabs = match slot {
+            PaneSlot::Primary => &mut self.primary,
+            PaneSlot::Secondary => &mut self.secondary,
+        };
+        let Some(index) = tabs.iter().position(|tab| tab == id) else {
+            return false;
+        };
+        if index + 1 == tabs.len() {
+            return false;
+        }
+        let moved = tabs.remove(index);
+        tabs.push(moved);
+        true
+    }
+
     /// Make `id` the active tab of its pane and focus that pane. Returns
     /// `false` for unknown identities and when the tab is already the active
     /// tab of the focused pane.
@@ -596,6 +614,31 @@ mod tests {
         for (index, id) in ids.iter().enumerate() {
             assert!(!ids[..index].contains(id), "duplicated identity {id:?}");
         }
+    }
+
+    #[test]
+    fn blank_tail_drop_appends_graph_without_cloning_host_or_editor() {
+        let terminal = host("tail-host");
+        let file = editor(9, 2);
+        let graph = WorkbenchTabIdentity::GitHistory;
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[graph.clone(), terminal.clone(), file.clone()]);
+        assert!(panes.move_to_end(&graph, PaneSlot::Primary));
+        expect(
+            &panes,
+            PaneSlot::Primary,
+            &[terminal.clone(), file.clone(), graph.clone()],
+        );
+        assert!(!panes.move_to_end(&graph, PaneSlot::Primary));
+        assert!(!panes.move_to_end(&editor(9, 999), PaneSlot::Primary));
+        assert!(panes.move_to(&graph, PaneSlot::Secondary));
+        assert!(panes.move_to(&file, PaneSlot::Secondary));
+        assert!(panes.move_to_end(&graph, PaneSlot::Secondary));
+        expect(&panes, PaneSlot::Primary, &[terminal.clone()]);
+        expect(&panes, PaneSlot::Secondary, &[file.clone(), graph.clone()]);
+        assert!(!panes.move_to_end(&graph, PaneSlot::Primary));
+        assert_unique(&panes);
+        assert_eq!(panes.active_in(PaneSlot::Secondary), Some(&file));
     }
 
     #[test]

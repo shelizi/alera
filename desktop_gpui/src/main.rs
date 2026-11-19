@@ -9653,6 +9653,39 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Match Classic's trailing Tab-strip drop target. A same-pane drop
+    /// appends the existing identity; a cross-pane drop transfers the real
+    /// Editor owner (or moves the read-only Graph/Host tab identity) first.
+    /// Never duplicate PTYs, discard drafts, or apply stale-workspace drags.
+    fn drop_mixed_tab_on_strip_tail(
+        &mut self,
+        drag: &MixedTabDrag,
+        destination: PaneSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if drag.workspace_generation != self.workspace_generation
+            || !self.mixed_tab_is_current(&drag.identity, cx)
+            || !self.mixed_tabs.contains(&drag.identity)
+        {
+            return;
+        }
+        let already_here = self.mixed_panes.tabs_in(destination).contains(&drag.identity);
+        if !already_here && !self.transfer_editor_to_pane(&drag.identity, destination, cx) {
+            return;
+        }
+        let pane_reordered = self.mixed_panes.move_to_end(&drag.identity, destination);
+        let global_reordered = self.mixed_tabs.move_to_end(&drag.identity);
+        self.focus_mixed_tab(&drag.identity, window, cx);
+        if !already_here {
+            self.refresh_terminal_split_output(cx);
+        }
+        if pane_reordered || global_reordered || !already_here {
+            self.save_mixed_pane_layout(cx);
+            cx.notify();
+        }
+    }
+
     fn reorder_mixed_tab(
         &mut self,
         drag: &MixedTabDrag,
@@ -14019,6 +14052,9 @@ impl Render for Workbench {
                                                         if event.click_count() == 2 {
                                                             this.new_editor_in_pane(PaneSlot::Primary, cx);
                                                         }
+                                                    }))
+                                                    .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
+                                                        this.drop_mixed_tab_on_strip_tail(drag, PaneSlot::Primary, window, cx);
                                                     })),
                                             ),
                                     )
@@ -14127,17 +14163,12 @@ impl Render for Workbench {
                                                                         if event.click_count() == 2 {
                                                                             this.new_editor_in_pane(PaneSlot::Secondary, cx);
                                                                         }
+                                                                    }))
+                                                                    .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
+                                                                        this.drop_mixed_tab_on_strip_tail(drag, PaneSlot::Secondary, window, cx);
                                                                     })),
                                                             )
-                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
-                                                                if drag.workspace_generation == this.workspace_generation
-                                                                    && this.mixed_tab_is_current(&drag.identity, cx)
-                                                                    && this.transfer_editor_to_pane(&drag.identity, PaneSlot::Secondary, cx)
-                                                                {
-                                                                    this.focus_mixed_tab(&drag.identity, window, cx);
-                                                                    this.refresh_terminal_split_output(cx);
-                                                                }
-                                                            })),
+
                                                     )
                                                     .child({
                                                         let owner = cx.entity().downgrade();
@@ -14725,17 +14756,12 @@ impl Render for Workbench {
                                                                         if event.click_count() == 2 {
                                                                             this.new_editor_in_pane(PaneSlot::Secondary, cx);
                                                                         }
+                                                                    }))
+                                                                    .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
+                                                                        this.drop_mixed_tab_on_strip_tail(drag, PaneSlot::Secondary, window, cx);
                                                                     })),
                                                             )
-                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
-                                                                if drag.workspace_generation == this.workspace_generation
-                                                                    && this.mixed_tab_is_current(&drag.identity, cx)
-                                                                    && this.transfer_editor_to_pane(&drag.identity, PaneSlot::Secondary, cx)
-                                                                {
-                                                                    this.focus_mixed_tab(&drag.identity, window, cx);
-                                                                    this.refresh_terminal_split_output(cx);
-                                                                }
-                                                            })),
+
                                                     )
                                                     .child({
                                                         let owner = cx.entity().downgrade();

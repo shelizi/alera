@@ -244,6 +244,21 @@ impl WorkbenchTabs {
         true
     }
 
+    /// Drop a live Tab onto the empty trailing strip space. This changes
+    /// presentation order only: the selected identity and Host/Editor owners
+    /// remain unchanged. Unknown or already-last tabs are no-ops.
+    pub fn move_to_end(&mut self, id: &WorkbenchTabIdentity) -> bool {
+        let Some(index) = self.tabs.iter().position(|tab| &tab.identity == id) else {
+            return false;
+        };
+        if index + 1 == self.tabs.len() {
+            return false;
+        }
+        let entry = self.tabs.remove(index);
+        self.tabs.push(entry);
+        true
+    }
+
     /// A stale drag source or target is ignored, never redirected to a tab
     /// which happens to occupy the same index after a close/reopen.
     /// Move a tab into the target's slot (the same drop semantics as the
@@ -685,6 +700,35 @@ mod tests {
         assert_eq!(tabs.active(), Some(&second.identity));
         tabs.reconcile(1, Vec::new(), None);
         assert_eq!(tabs.active(), None);
+    }
+
+    #[test]
+    fn blank_tail_drop_changes_order_not_selected_tab_or_pins() {
+        let first = editor(3, 11);
+        let second = editor(3, 12);
+        let graph = WorkbenchTab {
+            identity: WorkbenchTabIdentity::GitHistory,
+            kind: WorkbenchTabKind::GitHistory,
+            title: "Git Graph".into(),
+            dirty: false,
+            running: true,
+            agent_state: None,
+            interrupted: false,
+        };
+        let mut tabs = WorkbenchTabs::for_workspace(4);
+        tabs.reconcile(
+            4,
+            vec![first.clone(), graph.clone(), second.clone()],
+            Some(first.identity.clone()),
+        );
+        assert!(tabs.move_to_end(&first.identity));
+        assert_eq!(tabs.entries()[2].identity, first.identity);
+        assert_eq!(tabs.active(), Some(&first.identity));
+        assert!(!tabs.move_to_end(&first.identity));
+        assert!(!tabs.move_to_end(&WorkbenchTabIdentity::Editor {
+            editor_epoch: 99,
+            instance: 99
+        }));
     }
 
     #[test]
