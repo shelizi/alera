@@ -245,172 +245,64 @@ impl Workbench {
         }
     }
 
-    pub(super) fn render_center_git_graph(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
+    pub(super) fn render_center_git_graph(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let filter_text = self.git_graph_search_input.read(cx).query().to_owned();
         let full_search = self.git_history_options.search_query.is_some();
-        let commits = if self.git_history_loading && full_search {
-            Vec::new()
-        } else {
-            self.git_history
-                .as_ref()
-                .map(|history| history.display_commits(self.git_history_options.merged_visibility))
-                .unwrap_or_default()
-        };
-        // Layout MUST be built before filtering. Sparse search results must
-        // not gain invented connections across commits removed by the filter.
-        let graph_layout = (!full_search).then(|| {
-            layout_git_graph(
-                &commits
-                    .iter()
-                    .map(|row| GraphCommit {
-                        oid: row.oid.clone(),
-                        parents: row.parent_ids.clone(),
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        });
-        let (rails, lane_count, topology_error) = match graph_layout {
-            Some(Ok(layout)) => (Some(layout.rows), layout.max_lanes, None),
-            Some(Err(error)) => (None, 1, Some(error.message().to_owned())),
-            None => (None, 1, None),
-        };
-        let branch_name = self
-            .git_history
-            .as_ref()
-            .map(|history| history.current.clone())
-            .unwrap_or_default();
-        let head_tip = self
-            .git_history
-            .as_ref()
-            .and_then(|history| history.branches.iter().find(|branch| branch.current))
-            .map(|branch| branch.tip.clone());
-        let mut tags_by_oid: HashMap<String, Vec<String>> = HashMap::new();
-        if let Some(history) = &self.git_history {
-            for tag in &history.tags {
-                tags_by_oid
-                    .entry(tag.oid.clone())
-                    .or_default()
-                    .push(format!("refs/tags/{}", tag.name));
-            }
+        let filter_identity = format!("{full_search}:{filter_text}");
+        if self.git_center_graph_filter != filter_identity {
+            self.git_center_graph_filter = filter_identity;
+            self.git_center_graph_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
         }
-        // In a split pane preserve the commit subject and SHA before author
-        // and extra ref badges; full-width Graph keeps its detailed columns.
-        let compact_graph = self.mixed_panes.has_secondary();
-        let badge_limit = if compact_graph { 1 } else { 3 };
-        let rows = commits
-            .into_iter()
-            .enumerate()
-            .filter(|(_, row)| full_search || query.commit(row))
-            .take(MAX_HISTORY_PAGE)
-            .map(|(index, row)| {
-                let oid = row.oid;
-                let menu_oid = oid.clone();
-                let menu_subject = row.subject.clone();
-                let topology = rails.as_ref().and_then(|rows| rows.get(index)).cloned();
-                let is_merge = row.parent_ids.len() > 1;
-                let is_head = head_tip.as_ref().is_some_and(|tip| tip == &row.short);
-                let mut labels = row.labels;
-                if let Some(tags) = tags_by_oid.get(&oid) {
-                    labels.extend(tags.iter().cloned());
+        let query = GitGraphSearch::parse(&filter_text);
+        let visibility = self.git_history_options.merged_visibility;
+        let stale_cache = self.git_graph_render_cache.as_ref().is_none_or(|cache| {
+            cache.workspace_generation != self.workspace_generation
+                || cache.history_request != self.git_history_request
+                || cache.visibility != visibility
+                || cache.sparse_search != full_search
+        });
+        if stale_cache {
+            self.git_graph_render_cache = self.git_history.as_ref().map(|history| {
+                native_git_graph_rows_ui::GitGraphViewCache {
+                    workspace_generation: self.workspace_generation,
+                    history_request: self.git_history_request,
+                    visibility,
+                    sparse_search: full_search,
+                    prepared: Arc::new(PreparedGitGraph::new(
+                        history,
+                        visibility,
+                        full_search,
+                    )),
                 }
-                labels.sort_by_key(|label| {
-                    if label == &branch_name {
-                        0
-                    } else if label.starts_with("refs/tags/") {
-                        1
-                    } else if label.starts_with("refs/remotes/") {
-                        3
-                    } else {
-                        2
-                    }
-                });
-                let hidden_labels = labels.len().saturating_sub(badge_limit);
-                let author = row.author;
-                div()
-                    .id(("git-center-graph-commit", index))
-                    .h(px(28.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(rgb(ACTIVE)))
-                    .child(native_git_graph_ui::graph_lane(
-                        topology, lane_count, is_merge, is_head,
-                    ))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_sm()
-                            .text_color(rgb(TEXT))
-                            .child(row.subject),
-                    )
-                    .children(labels.into_iter().take(badge_limit).map(|label| {
-                        let color = if label.starts_with("refs/remotes/") {
-                            native_git_graph_ui::REF_REMOTE_COLOR
-                        } else if label.starts_with("refs/tags/") {
-                            native_git_graph_ui::REF_TAG_COLOR
-                        } else {
-                            native_git_graph_ui::REF_LOCAL_COLOR
-                        };
-                        let display = label
-                            .strip_prefix("refs/tags/")
-                            .or_else(|| label.strip_prefix("refs/remotes/"))
-                            .unwrap_or(&label);
-                        let display = if display.chars().count() > 24 {
-                            format!("{}…", display.chars().take(23).collect::<String>())
-                        } else {
-                            display.to_owned()
-                        };
-                        div()
-                            .px_1()
-                            .rounded_sm()
-                            .bg(rgb(ELEVATED))
-                            .text_xs()
-                            .text_color(rgb(color))
-                            .child(display)
-                    }))
-                    .when(hidden_labels > 0, |item| {
-                        item.child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(format!("+{hidden_labels}")),
-                        )
-                    })
-                    .when(!compact_graph, |entry| {
-                        entry.child(
-                            div()
-                                .w(px(116.0))
-                                .truncate()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(author),
-                        )
-                    })
-                    .child(
-                        div()
-                            .w(px(66.0))
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child(row.short),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
-                    }))
-                    .context_menu(Self::kit_git_graph_commit_menu(
-                        cx.entity().downgrade(),
-                        menu_oid,
-                        menu_subject,
-                        row.parents,
-                    ))
-            })
-            .collect::<Vec<_>>();
-
-        let count = rows.len();
+            });
+        }
+        let prepared = self
+            .git_graph_render_cache
+            .as_ref()
+            .map(|cache| Arc::clone(&cache.prepared));
+        let graph_indices = Arc::new(
+            if self.git_history_loading && full_search {
+                Vec::new()
+            } else {
+                prepared
+                    .as_ref()
+                    .map(|graph| graph.matching_indices(&query, full_search))
+                    .unwrap_or_default()
+            },
+        );
+        let topology_error = prepared
+            .as_ref()
+            .and_then(|graph| graph.topology_error.clone());
+        // Logical viewport width scales naturally with OS DPI; never use
+        // physical screen pixels to decide compact Git Graph layout.
+        let compact_graph = self.mixed_panes.has_secondary()
+            || f32::from(window.viewport_size().width) < 720.0;
+        let count = graph_indices.len();
         let loading = self.git_history_loading;
         let more = !loading
             && self
@@ -513,6 +405,31 @@ impl Workbench {
             "No Git history loaded".into()
         };
 
+        let graph_view = prepared.map(|graph| {
+            let indices = Arc::clone(&graph_indices);
+            let lane_count = graph.lane_count;
+            gpui::uniform_list(
+                "git-center-graph-virtual-commits",
+                count,
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                    PreparedGitGraph::viewport_indices(&indices, range)
+                        .iter()
+                        .filter_map(|index| {
+                            graph.rows.get(*index).map(|row| {
+                                this.render_git_graph_viewport_row(
+                                    *index, row, lane_count, compact_graph, cx,
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .track_scroll(&self.git_center_graph_scroll)
+            .into_any_element()
+        });
         let compare_panel = self.git_graph_compare_center
             .then(|| self.render_center_branch_compare(cx));
         div()
@@ -880,8 +797,13 @@ impl Workbench {
                     .id("git-center-graph-scroll")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .children(rows),
+                    .flex()
+                    .flex_col()
+                    .when_some(graph_view, |pane, viewport| pane.child(viewport))
+                    .when(count == 0 && !loading, |pane| {
+                        pane.child(div().px_3().py_2().text_xs().text_color(rgb(MUTED))
+                            .child("No matching commits in this Git Graph view"))
+                    }),
             )
             .when_some(compare_panel, |pane, comparison| pane.child(comparison))
             .into_any_element()

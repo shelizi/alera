@@ -8,6 +8,7 @@ mod native_file_icons;
 mod native_git_favorites_ui;
 mod native_git_graph_center_ui;
 mod native_git_graph_compare_ui;
+mod native_git_graph_rows_ui;
 mod native_git_graph_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
@@ -65,6 +66,7 @@ use alera_gpui_desktop::git_branch_compare::{
     original_compared_file, BranchFileComparison, CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
+use alera_gpui_desktop::git_graph_render::{PreparedGitGraph, PreparedGitGraphRow};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
     compare_git_refs, filter_git_branch_picker, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP, MAX_BRANCHES,
@@ -760,6 +762,10 @@ struct Workbench {
     git_trash_request: u64,
     git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
+    /// Cached bounded topology and refs for the central Graph viewport.
+    git_graph_render_cache: Option<native_git_graph_rows_ui::GitGraphViewCache>,
+    git_center_graph_scroll: UniformListScrollHandle,
+    git_center_graph_filter: String,
     git_history_open: bool,
     /// Sidebar Graph visibility is independent of the mixed Git History tab.
     git_history_sidebar_open: bool,
@@ -2404,11 +2410,13 @@ impl Workbench {
                 match result {
                     Ok(history) => {
                         view.git_history = Some(history);
+                        view.git_graph_render_cache = None;
                         view.git_history_error = None;
                         applied = view.git_history_open;
                     }
                     Err(error) => {
                         view.git_history = None;
+                        view.git_graph_render_cache = None;
                         view.git_history_error = Some(error);
                     }
                 }
@@ -5954,6 +5962,7 @@ impl Workbench {
         self.git_loading = false;
         self.git_refresh_gate.reset();
         self.git_history = None;
+        self.git_graph_render_cache = None;
         self.git_history_loading = false;
         self.git_history_watch_pending = false;
         self.git_history_error = None;
@@ -14301,7 +14310,7 @@ impl Render for Workbench {
                                             })
                             .child(
                                 if graph_in_primary {
-                                    self.render_center_git_graph(cx)
+                                    self.render_center_git_graph(window, cx)
                                 } else if let Some(original) = active_git_original.clone() {
                                     div().id("git-original-readonly-view")
                                         .flex_1().min_h_0().flex().flex_col()
@@ -14804,7 +14813,7 @@ impl Render for Workbench {
                                                     .into_any_element()
                                             })
                                             .child(if graph_in_secondary {
-                                                self.render_center_git_graph(cx)
+                                                self.render_center_git_graph(window, cx)
                                             } else if let Some(editor) = secondary_native_editor {
                                                 div()
                                                     .id("mixed-secondary-editor")
@@ -16316,6 +16325,9 @@ fn main() {
                             git_trash_request: 0,
                             git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
+                            git_graph_render_cache: None,
+                            git_center_graph_scroll: UniformListScrollHandle::new(),
+                            git_center_graph_filter: String::new(),
                             git_history_open: false,
                             git_history_sidebar_open: false,
                             git_history_tab_open: false,

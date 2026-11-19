@@ -4,6 +4,7 @@ use alera_gpui_desktop::git_graph_layout::{GraphLaneRow, MAX_GRAPH_LANES};
 use gpui::{canvas, point, prelude::*, px, rgb, IntoElement, PathBuilder, Pixels, Point, Window};
 
 const PITCH: f32 = 16.0;
+const COMPACT_PITCH: f32 = 12.0;
 // Match Classic GitHistoryGraphPainter.laneHeight and its 28px commit rows.
 const HEIGHT: f32 = 28.0;
 const MID_Y: f32 = HEIGHT / 2.0;
@@ -69,6 +70,23 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: u32, o
     }
 }
 
+fn graph_lane_width(columns: usize, pitch: f32) -> f32 {
+    (columns.min(MAX_GRAPH_LANES) as f32 + 1.0) * pitch
+}
+
+#[cfg(test)]
+mod compact_layout_tests {
+    use super::*;
+
+    #[test]
+    fn compact_twelve_lanes_preserve_all_columns_in_logical_pixels() {
+        assert_eq!(graph_lane_width(MAX_GRAPH_LANES, PITCH), 208.0);
+        assert_eq!(graph_lane_width(MAX_GRAPH_LANES, COMPACT_PITCH), 156.0);
+        assert_eq!(graph_lane_width(1, COMPACT_PITCH), 24.0);
+        assert_eq!(graph_lane_width(MAX_GRAPH_LANES + 10, COMPACT_PITCH), 156.0);
+    }
+}
+
 /// Each row is a 28px high native vector rail, matching Classic's commit
 /// row geometry. The parent div remains the accessible click target.
 pub fn graph_lane(
@@ -77,6 +95,19 @@ pub fn graph_lane(
     is_merge: bool,
     is_head: bool,
 ) -> impl IntoElement {
+    graph_lane_with_density(layout, max_lanes, is_merge, is_head, false)
+}
+
+/// Tighten lane spacing in split panes or narrow windows, but never drop
+/// commit/parent edges. Geometry is in GPUI logical pixels at any DPI.
+pub fn graph_lane_with_density(
+    layout: Option<GraphLaneRow>,
+    max_lanes: usize,
+    is_merge: bool,
+    is_head: bool,
+    compact: bool,
+) -> impl IntoElement {
+    let pitch = if compact { COMPACT_PITCH } else { PITCH };
     let columns = if layout.is_some() {
         max_lanes.clamp(1, MAX_GRAPH_LANES)
     } else {
@@ -87,7 +118,7 @@ pub fn graph_lane(
         move |bounds, _, window, _| {
             let at = |lane: usize, y: f32| {
                 point(
-                    bounds.left() + px(PITCH * (lane as f32 + 1.0)),
+                    bounds.left() + px(pitch * (lane as f32 + 1.0)),
                     bounds.top() + px(y),
                 )
             };
@@ -134,15 +165,15 @@ pub fn graph_lane(
             };
             let center = at(node_lane, MID_Y);
             if is_head {
-                circle(window, center, 8.0, 0xE0E0E0, true);
+                circle(window, center, if compact { 6.0 } else { 8.0 }, 0xE0E0E0, true);
             }
             if is_merge {
-                circle(window, center, 4.8, node_color, true);
+                circle(window, center, if compact { 4.0 } else { 4.8 }, node_color, true);
             } else {
-                circle(window, center, 4.2, node_color, false);
+                circle(window, center, if compact { 3.6 } else { 4.2 }, node_color, false);
             }
         },
     )
-    .w(px((columns as f32 + 1.0) * PITCH))
+    .w(px(graph_lane_width(columns, pitch)))
     .h(px(HEIGHT))
 }
