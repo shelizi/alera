@@ -576,6 +576,18 @@ impl Render for QuickOpenInput {
             .px_2()
             .py_1()
             .text_sm()
+            // Search and quick-open fields are single-line even inside a
+            // narrow split pane. Without this, a long placeholder wraps into
+            // several clipped rows and visually covers the Graph toolbar.
+            // Preserve true wrapping only for the explicit profile multiline
+            // editor; the IME capture element remains attached unchanged.
+            .when(!self.multiline_mode, |input| {
+                input
+                    .min_w_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+            })
             .when(self.multiline_mode, |input| input.min_h(px(108.0)))
             .child(if self.text.is_empty() {
                 self.placeholder.to_string()

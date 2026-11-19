@@ -4,6 +4,20 @@
 
 use super::*;
 
+/// Use GPUI logical pixels, not OS physical pixels: the breakpoint must not
+/// jump when an unchanged window is moved between displays with different DPI.
+fn compact_center_graph_controls(has_secondary: bool, viewport_logical_width: f32) -> bool {
+    has_secondary || viewport_logical_width < 720.0
+}
+
+fn center_graph_title(compact: bool, commits: usize) -> String {
+    if compact {
+        format!("Graph · {commits}")
+    } else {
+        "Git Graph".to_owned()
+    }
+}
+
 impl Workbench {
     pub(super) fn open_center_git_graph(&mut self, cx: &mut Context<Self>) {
         self.git_history_tab_open = true;
@@ -100,12 +114,14 @@ impl Workbench {
         if generation != self.workspace_generation || !self.git_history_tab_open {
             return;
         }
-        let (short, remote) = name.strip_prefix("refs/remotes/")
+        let (short, remote) = name
+            .strip_prefix("refs/remotes/")
             .map_or((name.as_str(), false), |short| (short, true));
         let live = self.git_history.as_ref().is_some_and(|history| {
-            history.branches.iter().any(|branch| {
-                branch.remote == remote && !branch.current && branch.name == short
-            })
+            history
+                .branches
+                .iter()
+                .any(|branch| branch.remote == remote && !branch.current && branch.name == short)
         });
         if !live {
             self.model
@@ -236,7 +252,11 @@ impl Workbench {
             }
             GitGraphBranchPickerMode::Compare => {
                 self.compare_git_graph_center_branch(
-                    if remote { format!("refs/remotes/{name}") } else { name },
+                    if remote {
+                        format!("refs/remotes/{name}")
+                    } else {
+                        name
+                    },
                     CompareDirection::CurrentToSelected,
                     generation,
                     cx,
@@ -273,11 +293,7 @@ impl Workbench {
                     history_request: self.git_history_request,
                     visibility,
                     sparse_search: full_search,
-                    prepared: Arc::new(PreparedGitGraph::new(
-                        history,
-                        visibility,
-                        full_search,
-                    )),
+                    prepared: Arc::new(PreparedGitGraph::new(history, visibility, full_search)),
                 }
             });
         }
@@ -285,23 +301,23 @@ impl Workbench {
             .git_graph_render_cache
             .as_ref()
             .map(|cache| Arc::clone(&cache.prepared));
-        let graph_indices = Arc::new(
-            if self.git_history_loading && full_search {
-                Vec::new()
-            } else {
-                prepared
-                    .as_ref()
-                    .map(|graph| graph.matching_indices(&query, full_search))
-                    .unwrap_or_default()
-            },
-        );
+        let graph_indices = Arc::new(if self.git_history_loading && full_search {
+            Vec::new()
+        } else {
+            prepared
+                .as_ref()
+                .map(|graph| graph.matching_indices(&query, full_search))
+                .unwrap_or_default()
+        });
         let topology_error = prepared
             .as_ref()
             .and_then(|graph| graph.topology_error.clone());
         // Logical viewport width scales naturally with OS DPI; never use
         // physical screen pixels to decide compact Git Graph layout.
-        let compact_graph = self.mixed_panes.has_secondary()
-            || f32::from(window.viewport_size().width) < 720.0;
+        let compact_graph = compact_center_graph_controls(
+            self.mixed_panes.has_secondary(),
+            f32::from(window.viewport_size().width),
+        );
         let count = graph_indices.len();
         let loading = self.git_history_loading;
         let more = !loading
@@ -384,7 +400,8 @@ impl Workbench {
             let query = self.git_branch_picker_input.read(cx).query().to_owned();
             let compare_choices;
             let choices = if mode == GitGraphBranchPickerMode::Compare {
-                compare_choices = branch_choices.iter()
+                compare_choices = branch_choices
+                    .iter()
                     .filter(|branch| !branch.current)
                     .cloned()
                     .collect::<Vec<_>>();
@@ -417,7 +434,11 @@ impl Workbench {
                         .filter_map(|index| {
                             graph.rows.get(*index).map(|row| {
                                 this.render_git_graph_viewport_row(
-                                    *index, row, lane_count, compact_graph, cx,
+                                    *index,
+                                    row,
+                                    lane_count,
+                                    compact_graph,
+                                    cx,
                                 )
                             })
                         })
@@ -430,7 +451,8 @@ impl Workbench {
             .track_scroll(&self.git_center_graph_scroll)
             .into_any_element()
         });
-        let compare_panel = self.git_graph_compare_center
+        let compare_panel = self
+            .git_graph_compare_center
             .then(|| self.render_center_branch_compare(cx));
         div()
             .id("git-center-full-graph")
@@ -456,7 +478,7 @@ impl Workbench {
                         div()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(TEXT))
-                            .child("Git Graph"),
+                            .child(center_graph_title(compact_graph, count)),
                     )
                     .child(
                         div()
@@ -465,7 +487,7 @@ impl Workbench {
                             .truncate()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .child(description),
+                            .child(if compact_graph { String::new() } else { description }),
                     )
                     .child(
                         icon_button(
@@ -498,12 +520,15 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .px_3()
+                    .when(compact_graph, |bar| bar.gap_1().px_2())
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .h(px(30.0))
+                            .overflow_hidden()
                             .child(self.git_graph_search_input.clone()),
                     )
                     .child(
@@ -547,22 +572,30 @@ impl Workbench {
             )
             .child(
                 div()
+                    .id("git-center-control-toolbar")
                     .h(px(34.0))
                     .flex_shrink_0()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap_2()
                     .px_3()
+                    // Narrow split panes cannot display all Classic controls at
+                    // full width. Keep every action in a single-line horizontal
+                    // strip instead of squeezing them into wrapped/overlapping
+                    // text. Icons retain their descriptive tooltip labels.
+                    .when(compact_graph, |bar| bar.gap_1().px_2().overflow_x_scroll())
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .child(
                         div()
                             .id("git-center-perspective-label")
                             .min_w_0()
-                            .max_w(px(if compact_graph { 164.0 } else { 280.0 }))
+                            .max_w(px(280.0))
                             .truncate()
                             .text_xs()
                             .text_color(rgb(TEXT))
+                            .when(compact_graph, |label| label.hidden())
                             .child(format!("Perspective: {scope}")),
                     )
                     .child(
@@ -599,6 +632,7 @@ impl Workbench {
                     .when(merge_controls, |bar| {
                         bar.child(
                             div().text_xs().text_color(rgb(MUTED))
+                                .when(compact_graph, |label| label.hidden())
                                 .child(if compact_graph {
                                     match merged_mode {
                                         GitMergedBranchVisibility::ShowAll => "Merged: All".to_owned(),
@@ -663,7 +697,7 @@ impl Workbench {
                             graph_generation,
                         )),
                     )
-                    .child(div().flex_1())
+                    .child(div().flex_1().when(compact_graph, |spacer| spacer.hidden()))
                     .when(more, |bar| {
                         bar.child(
                             icon_button(
@@ -681,6 +715,7 @@ impl Workbench {
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
+                            .when(compact_graph, |label| label.hidden())
                             .child(format!("{count} / {MAX_HISTORY_PAGE} max")),
                     ),
             )
@@ -795,10 +830,18 @@ impl Workbench {
             .child(
                 div()
                     .id("git-center-graph-scroll")
-                    .flex_1()
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    // In a narrow split with an open branch comparison, the
+                    // history graph should remain scrollable but must not
+                    // consume half the pane and leave only 2–3 Patch lines.
+                    // Full-width and non-comparing Graph layouts are unchanged.
+                    .when(compact_graph && self.git_graph_compare_center, |pane| {
+                        pane.h(px(120.0)).flex_shrink_0()
+                            .border_b_1().border_color(rgb(BORDER))
+                    })
+                    .when(!compact_graph || !self.git_graph_compare_center, |pane| pane.flex_1())
                     .when_some(graph_view, |pane, viewport| pane.child(viewport))
                     .when(count == 0 && !loading, |pane| {
                         pane.child(div().px_3().py_2().text_xs().text_color(rgb(MUTED))
@@ -807,5 +850,27 @@ impl Workbench {
             )
             .when_some(compare_panel, |pane, comparison| pane.child(comparison))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod compact_graph_controls_tests {
+    use super::{center_graph_title, compact_center_graph_controls};
+
+    #[test]
+    fn compact_breakpoint_uses_logical_width_and_split_state() {
+        assert!(compact_center_graph_controls(false, 0.0));
+        assert!(compact_center_graph_controls(false, 719.9));
+        assert!(!compact_center_graph_controls(false, 720.0));
+        assert!(!compact_center_graph_controls(false, 1200.0));
+        assert!(compact_center_graph_controls(true, 720.0));
+        assert!(compact_center_graph_controls(true, 1920.0));
+    }
+
+    #[test]
+    fn narrow_graph_title_keeps_commit_count_visible_without_long_label() {
+        assert_eq!(center_graph_title(true, 512), "Graph · 512");
+        assert_eq!(center_graph_title(true, 0), "Graph · 0");
+        assert_eq!(center_graph_title(false, 512), "Git Graph");
     }
 }
