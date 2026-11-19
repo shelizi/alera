@@ -15,13 +15,18 @@ class const _InteractiveTerminalView({
 class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   TerminalLinkRange? _hoveredLink;
   xterm.CellOffset? _lastHoverOffset;
-  TerminalLinkRange? _lastHoverLink;
-  TerminalCodeBlock? _hoveredCodeBlock;
-  int? _lastHoverCodeRow;
-  double _copyButtonTop = 8;
-  bool _copiedCode = false;
-  bool _pointerOverCopyButton = false;
+  // Copy actions are derived from the visible terminal buffer, not mouse hover.
+  List<_VisibleCodeCopyTarget> _visibleCodeBlocks = const [];
+  xterm.Terminal? _observedTerminal;
+  bool _copyRefreshScheduled = false;
+  String? _primaryCopyBlockId;
+  String? _copiedCodeBlockId;
+  double? _lastCopyViewportTop;
   Timer? _copyFeedbackTimer;
+  Timer? _copyDismissTimer;
+  bool _copyButtonsDismissed = false;
+  bool _pointerOverCodeBlock = false;
+  bool _pointerOverCopyButton = false;
   List<ClaudeSourceCodeBlock> _transcriptCodeBlocks = const [];
   DateTime? _nextClaudeTranscriptRead;
   bool _loadingClaudeTranscript = false;
@@ -30,17 +35,23 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   @override
   void initState() {
     super.initState();
-    widget.session._scrollController.addListener(_clearHoverOnScroll);
+    widget.session._scrollController.addListener(_scheduleCopyButtonsRefresh);
     widget.session._claudeCodeMessageStore?.addListener(_onClaudeSourceUpdate);
+    _observeTerminal(widget.session._terminal);
+    _scheduleCopyButtonsRefresh();
   }
 
   @override
   void dispose() {
-    widget.session._scrollController.removeListener(_clearHoverOnScroll);
+    widget.session._scrollController.removeListener(
+      _scheduleCopyButtonsRefresh,
+    );
     widget.session._claudeCodeMessageStore?.removeListener(
       _onClaudeSourceUpdate,
     );
+    _observedTerminal?.removeListener(_scheduleCopyButtonsRefresh);
     _copyFeedbackTimer?.cancel();
+    _copyDismissTimer?.cancel();
     _transcriptReadGeneration++;
     super.dispose();
   }
@@ -50,23 +61,28 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.showCodeBlockCopyButton != widget.showCodeBlockCopyButton) {
       _copyFeedbackTimer?.cancel();
-      // A setting change must clear any stale copy overlay immediately.
-      _hoveredCodeBlock = null;
-      _lastHoverCodeRow = null;
-      _lastHoverOffset = null;
-      _copiedCode = false;
+      _cancelCopyDismissTimer();
+      _copyButtonsDismissed = false;
+      _pointerOverCodeBlock = false;
       _pointerOverCopyButton = false;
+      _visibleCodeBlocks = const [];
+      _lastCopyViewportTop = null;
+      _primaryCopyBlockId = null;
+      _copiedCodeBlockId = null;
+      _lastHoverOffset = null;
       _transcriptCodeBlocks = const [];
       _nextClaudeTranscriptRead = null;
       _transcriptReadGeneration++;
       _loadingClaudeTranscript = false;
     }
     if (oldWidget.session != widget.session) {
-      oldWidget.session._scrollController.removeListener(_clearHoverOnScroll);
+      oldWidget.session._scrollController.removeListener(
+        _scheduleCopyButtonsRefresh,
+      );
       oldWidget.session._claudeCodeMessageStore?.removeListener(
         _onClaudeSourceUpdate,
       );
-      widget.session._scrollController.addListener(_clearHoverOnScroll);
+      widget.session._scrollController.addListener(_scheduleCopyButtonsRefresh);
       widget.session._claudeCodeMessageStore?.addListener(
         _onClaudeSourceUpdate,
       );
@@ -76,6 +92,77 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       _loadingClaudeTranscript = false;
       _clearHoverState();
     }
+    _observeTerminal(widget.session._terminal);
+    _scheduleCopyButtonsRefresh();
+  }
+
+  void _observeTerminal(xterm.Terminal terminal) {
+    if (identical(terminal, _observedTerminal)) return;
+    _observedTerminal?.removeListener(_scheduleCopyButtonsRefresh);
+    _observedTerminal = terminal;
+    terminal.addListener(_scheduleCopyButtonsRefresh);
+    _visibleCodeBlocks = const [];
+    _lastCopyViewportTop = null;
+  }
+
+  void _scheduleCopyButtonsRefresh() {
+    if (!mounted || !widget.showCodeBlockCopyButton || _copyRefreshScheduled) {
+      return;
+    }
+    _copyRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _copyRefreshScheduled = false;
+      if (mounted && widget.showCodeBlockCopyButton) {
+        _refreshVisibleCodeBlocks();
+      }
+    });
+  }
+
+  /// Scan only the rendered viewport once per frame, skipping each recognized
+  /// block after finding a witness. Do not scan all terminal scrollback or
+  /// resolve code on each mouse movement.
+  void _refreshVisibleCodeBlocks() {
+    final view = widget.session._terminalViewKey.currentState;
+    if (view == null) return;
+    final renderer = view.renderTerminal;
+    if (!renderer.attached || !renderer.hasSize) return;
+    final lines = widget.session._terminal.buffer.lines;
+    if (lines.length == 0) return;
+    final firstRow = renderer.getCellOffset(Offset.zero).y;
+    final bottomY = renderer.size.height > 1 ? renderer.size.height - 1 : 0.0;
+    final lastRow = renderer.getCellOffset(Offset(0, bottomY)).y;
+    final viewportTop = renderer.getOffset(xterm.CellOffset(0, firstRow)).dy;
+    final visible = <_VisibleCodeCopyTarget>[];
+    for (var row = firstRow; row <= lastRow && visible.length < 24; row++) {
+      if (lines[row].getText().trim().isEmpty) continue;
+      final block = _resolveCodeBlockAt(xterm.CellOffset(0, row));
+      if (block == null || !block.containsRow(row)) continue;
+      visible.add(_VisibleCodeCopyTarget(block: block, witnessRow: row));
+      // Long source blocks need only one button after their last line.
+      if (block.closingRow > row) row = block.closingRow;
+    }
+    if (visible.length == _visibleCodeBlocks.length) {
+      var unchanged = true;
+      for (var i = 0; i < visible.length; i++) {
+        if (visible[i].id != _visibleCodeBlocks[i].id ||
+            visible[i].witnessRow != _visibleCodeBlocks[i].witnessRow) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged && _lastCopyViewportTop == viewportTop) return;
+    }
+    setState(() {
+      _lastCopyViewportTop = viewportTop;
+      _visibleCodeBlocks = visible;
+      if (!visible.any((target) => target.id == _copiedCodeBlockId)) {
+        _copiedCodeBlockId = null;
+        _copyFeedbackTimer?.cancel();
+      }
+      if (!visible.any((target) => target.id == _primaryCopyBlockId)) {
+        _primaryCopyBlockId = visible.isEmpty ? null : visible.first.id;
+      }
+    });
   }
 
   @override
@@ -94,45 +181,53 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
                 : SystemMouseCursors.click,
             onTapUp: _handleTapUp,
           ),
-          if (widget.showCodeBlockCopyButton && _hoveredCodeBlock != null)
-            Positioned(
-              top: _copyButtonTop,
-              right: 8,
-              child: MouseRegion(
-                onEnter: (_) => _pointerOverCopyButton = true,
-                onExit: (_) => _pointerOverCopyButton = false,
-                child: Material(
-                  elevation: 2,
-                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(6),
-                  child: IconButton(
-                    key: const ValueKey<String>('terminal-copy-code-button'),
-                    tooltip: context.tr(_copiedCode ? 'Copied' : 'Copy code'),
-                    onPressed: () => unawaited(_copyCodeBlock()),
-                    icon: Icon(
-                      _copiedCode ? Icons.check : Icons.content_copy,
-                      size: 16,
-                    ),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(
-                      width: 32,
-                      height: 32,
+          if (widget.showCodeBlockCopyButton && !_copyButtonsDismissed)
+            for (final target in _visibleCodeBlocks)
+              Positioned(
+                top: _copyTopBelowCode(target.block),
+                right: 8,
+                child: MouseRegion(
+                  onEnter: (_) => _handleCopyButtonEnter(),
+                  onExit: (_) => _handleCopyButtonExit(),
+                  child: Material(
+                    elevation: 2,
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(6),
+                    child: IconButton(
+                      key: ValueKey<String>(
+                        target.id == _primaryCopyBlockId
+                            ? 'terminal-copy-code-button'
+                            : 'terminal-copy-code-button-${target.block.openingRow}',
+                      ),
+                      tooltip: context.tr(
+                        _copiedCodeBlockId == target.id
+                            ? 'Copied'
+                            : 'Copy code',
+                      ),
+                      onPressed: () => unawaited(_copyCodeBlock(target)),
+                      icon: Icon(
+                        _copiedCodeBlockId == target.id
+                            ? Icons.check
+                            : Icons.content_copy,
+                        size: 16,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 32,
+                        height: 32,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
         ],
       ),
     );
   }
 
   void _handleHover(PointerHoverEvent event) {
-    if (_pointerOverCopyButton) return;
     final viewState = widget.session._terminalViewKey.currentState;
-    if (viewState == null) {
-      return;
-    }
+    if (viewState == null) return;
     final localPosition = viewState.renderTerminal.globalToLocal(
       event.position,
     );
@@ -140,17 +235,68 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     if (widget.showCodeBlockCopyButton) {
       _maybeLoadClaudeTranscriptSource(offset);
     }
-    if (_lastHoverOffset == offset) {
-      _setHoveredLink(_lastHoverLink);
+    if (widget.showCodeBlockCopyButton && !_pointerOverCopyButton) {
+      _VisibleCodeCopyTarget? target;
+      for (final candidate in _visibleCodeBlocks) {
+        if (!candidate.block.containsRow(offset.y)) continue;
+        target = candidate;
+        break;
+      }
+      final selected = target;
+      if (selected != null) {
+        _pointerOverCodeBlock = true;
+        _cancelCopyDismissTimer();
+        if (_copyButtonsDismissed || _primaryCopyBlockId != selected.id) {
+          setState(() {
+            _copyButtonsDismissed = false;
+            _primaryCopyBlockId = selected.id;
+          });
+        }
+      } else if (_pointerOverCodeBlock) {
+        _pointerOverCodeBlock = false;
+        _startCopyDismissTimer();
+      }
+    }
+    if (_lastHoverOffset == offset) return;
+    _lastHoverOffset = offset;
+    _setHoveredLink(widget.session._linkAt(offset));
+  }
+
+  void _handleCopyButtonEnter() {
+    _pointerOverCopyButton = true;
+    _cancelCopyDismissTimer();
+  }
+
+  void _handleCopyButtonExit() {
+    _pointerOverCopyButton = false;
+    _pointerOverCodeBlock = false;
+    _startCopyDismissTimer();
+  }
+
+  void _cancelCopyDismissTimer() {
+    _copyDismissTimer?.cancel();
+    _copyDismissTimer = null;
+  }
+
+  void _startCopyDismissTimer() {
+    if (!widget.showCodeBlockCopyButton ||
+        _copyButtonsDismissed ||
+        _pointerOverCodeBlock ||
+        _pointerOverCopyButton ||
+        _copyDismissTimer != null ||
+        _visibleCodeBlocks.isEmpty) {
       return;
     }
-    final link = widget.session._linkAt(offset);
-    _lastHoverOffset = offset;
-    _lastHoverLink = link;
-    _setHoveredLink(link);
-    if (widget.showCodeBlockCopyButton) {
-      _handleCodeHover(offset);
-    }
+    _copyDismissTimer = Timer(const Duration(seconds: 10), () {
+      _copyDismissTimer = null;
+      if (!mounted ||
+          !widget.showCodeBlockCopyButton ||
+          _pointerOverCodeBlock ||
+          _pointerOverCopyButton) {
+        return;
+      }
+      setState(() => _copyButtonsDismissed = true);
+    });
   }
 
   /// Manually launched Claude does not receive Alera's optional hook args.
@@ -198,11 +344,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
           return;
         }
         _transcriptCodeBlocks = blocks;
-        final offset = _lastHoverOffset;
-        if (offset != null && !_pointerOverCopyButton) {
-          _lastHoverCodeRow = null;
-          _handleCodeHover(offset);
-        }
+        _refreshCodeButtonsAfterSourceUpdate();
       } catch (_) {
         // Failure to read an optional local transcript must not affect PTY.
       } finally {
@@ -213,13 +355,17 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     }());
   }
 
-  void _onClaudeSourceUpdate() {
-    if (!mounted || !widget.showCodeBlockCopyButton || _pointerOverCopyButton)
-      return;
-    final offset = _lastHoverOffset;
-    if (offset == null) return;
-    _lastHoverCodeRow = null;
-    _handleCodeHover(offset);
+  void _onClaudeSourceUpdate() => _refreshCodeButtonsAfterSourceUpdate();
+
+  void _refreshCodeButtonsAfterSourceUpdate() {
+    if (!mounted || !widget.showCodeBlockCopyButton) return;
+    // Hook/transcript source can arrive with no subsequent terminal output.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      _scheduleCopyButtonsRefresh();
+    } else {
+      _refreshVisibleCodeBlocks();
+    }
   }
 
   TerminalCodeBlock? _resolveCodeBlockAt(xterm.CellOffset offset) {
@@ -276,59 +422,34 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     return idealTop.clamp(4.0, maxTop).toDouble();
   }
 
-  void _handleCodeHover(xterm.CellOffset offset) {
-    if (!widget.showCodeBlockCopyButton || _lastHoverCodeRow == offset.y) {
-      return;
-    }
-    _lastHoverCodeRow = offset.y;
-    final block = _resolveCodeBlockAt(offset);
-    final buttonTop = block == null ? _copyButtonTop : _copyTopBelowCode(block);
-    final previous = _hoveredCodeBlock;
-    final sameBlock =
-        previous?.openingRow == block?.openingRow &&
-        previous?.closingRow == block?.closingRow &&
-        previous?.code == block?.code;
-    if (sameBlock && (block == null || _copyButtonTop == buttonTop)) return;
-    setState(() {
-      _hoveredCodeBlock = block;
-      _copyButtonTop = buttonTop;
-      if (!sameBlock) {
-        _copyFeedbackTimer?.cancel();
-        _copiedCode = false;
-      }
-    });
-  }
-
-  Future<void> _copyCodeBlock() async {
+  Future<void> _copyCodeBlock(_VisibleCodeCopyTarget target) async {
     if (!widget.showCodeBlockCopyButton) return;
-    final target = _hoveredCodeBlock;
-    if (target == null) return;
-    // A streaming TUI can repaint or replace rows between hover and click.
-    // Resolve the contents again instead of copying stale terminal output.
-    final hoveredRow = _lastHoverCodeRow;
-    if (hoveredRow == null) return;
-    final current = _resolveCodeBlockAt(xterm.CellOffset(0, hoveredRow));
+    // Revalidate the buffer before copying; streaming TUI redraws must never
+    // copy stale contents from a row that used to contain another answer.
+    final current = _resolveCodeBlockAt(xterm.CellOffset(0, target.witnessRow));
     if (current == null ||
-        current.openingRow != target.openingRow ||
-        current.closingRow != target.closingRow ||
-        current.code != target.code) {
-      _clearHoverState();
+        current.openingRow != target.block.openingRow ||
+        current.closingRow != target.block.closingRow ||
+        current.code != target.block.code) {
+      _scheduleCopyButtonsRefresh();
       return;
     }
     try {
-      // The hover resolver already selected the exact Claude source, or a
-      // normal shell's explicitly fenced block. Never re-parse source syntax
-      // from rendered TUI lines while copying.
       await widget.session._launchInputOwner.clipboard.writeText(current.code);
-      if (!mounted || !identical(_hoveredCodeBlock, target)) return;
+      if (!mounted ||
+          !_visibleCodeBlocks.any((block) => block.id == target.id)) {
+        return;
+      }
       _copyFeedbackTimer?.cancel();
-      setState(() => _copiedCode = true);
-      // Do not leave a permanent checkmark that looks like the button vanished.
-      // Keep the same button actionable for repeated copies without re-hovering.
+      setState(() => _copiedCodeBlockId = target.id);
       _copyFeedbackTimer = Timer(const Duration(milliseconds: 1200), () {
         _copyFeedbackTimer = null;
-        if (!mounted || !widget.showCodeBlockCopyButton || !_copiedCode) return;
-        setState(() => _copiedCode = false);
+        if (!mounted ||
+            !widget.showCodeBlockCopyButton ||
+            _copiedCodeBlockId != target.id) {
+          return;
+        }
+        setState(() => _copiedCodeBlockId = null);
       });
     } catch (_) {
       if (!mounted) return;
@@ -374,38 +495,35 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   }
 
   void _handleMouseExit(PointerExitEvent event) {
-    // Tooltips and overlay layers can change MouseRegion hit testing even
-    // while the physical pointer stays inside the terminal. In that case,
-    // do not dismiss a copy button that the user is actively clicking.
-    final render = context.findRenderObject();
-    if (render is RenderBox && render.attached) {
-      final local = render.globalToLocal(event.position);
-      if ((Offset.zero & render.size).contains(local)) return;
-    }
-    _clearHoverState();
-  }
-
-  void _clearHoverOnScroll() {
-    // Restoring keyboard focus after copying can scroll xterm to its cursor.
-    // Keep the button under the pointer so another click can copy again;
-    // _copyCodeBlock revalidates the buffer before writing to the clipboard.
-    if (_pointerOverCopyButton && _hoveredCodeBlock != null) return;
-    _clearHoverState();
+    _lastHoverOffset = null;
+    _setHoveredLink(null);
+    _pointerOverCodeBlock = false;
+    _startCopyDismissTimer();
   }
 
   void _clearHoverState() {
     _copyFeedbackTimer?.cancel();
-    _lastHoverOffset = null;
-    _lastHoverLink = null;
-    _lastHoverCodeRow = null;
+    _cancelCopyDismissTimer();
+    _copyButtonsDismissed = false;
+    _pointerOverCodeBlock = false;
     _pointerOverCopyButton = false;
-    if (_hoveredLink == null && _hoveredCodeBlock == null) return;
-    setState(() {
-      _hoveredLink = null;
-      _hoveredCodeBlock = null;
-      _copiedCode = false;
-    });
+    _lastHoverOffset = null;
+    _primaryCopyBlockId = null;
+    _copiedCodeBlockId = null;
+    _visibleCodeBlocks = const [];
+    _lastCopyViewportTop = null;
+    if (_hoveredLink != null) setState(() => _hoveredLink = null);
   }
+}
+
+final class _VisibleCodeCopyTarget {
+  const _VisibleCodeCopyTarget({required this.block, required this.witnessRow});
+
+  final TerminalCodeBlock block;
+  final int witnessRow;
+
+  String get id =>
+      '${block.openingRow}:${block.closingRow}:${block.code.hashCode}';
 }
 
 class const _TerminalPtySize({

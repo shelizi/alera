@@ -11,33 +11,30 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('AleraSettings JSON', () {
-    test('code block copy is opt-in and survives settings JSON', () {
-      expect(TerminalSettings.defaults.showCodeBlockCopyButton, isFalse);
-      expect(AleraSettings.defaults.terminal.showCodeBlockCopyButton, isFalse);
+    test('code block copy defaults on and explicit opt-out survives JSON', () {
+      expect(TerminalSettings.defaults.showCodeBlockCopyButton, isTrue);
+      expect(AleraSettings.defaults.terminal.showCodeBlockCopyButton, isTrue);
 
-      final disabledJson = Map<String, Object?>.from(
-        AleraSettings.defaults.toMap(),
-      );
-      final terminal = Map<String, Object?>.from(
-        disabledJson['terminal']! as Map,
-      )..remove('showCodeBlockCopyButton');
-      disabledJson['terminal'] = terminal;
+      final oldJson = Map<String, Object?>.from(AleraSettings.defaults.toMap());
+      final terminal = Map<String, Object?>.from(oldJson['terminal']! as Map)
+        ..remove('showCodeBlockCopyButton');
+      oldJson['terminal'] = terminal;
       expect(
-        AleraSettings.fromJson(disabledJson).terminal.showCodeBlockCopyButton,
-        isFalse,
-        reason: 'Old settings files must not activate the hover button',
+        AleraSettings.fromJson(oldJson).terminal.showCodeBlockCopyButton,
+        isTrue,
+        reason: 'Missing keys should show persistent copy buttons by default',
       );
 
-      final enabled = AleraSettings.defaults.copyWith(
+      final disabled = AleraSettings.defaults.copyWith(
         terminal: TerminalSettings.defaults.copyWith(
-          showCodeBlockCopyButton: true,
+          showCodeBlockCopyButton: false,
         ),
       );
-      final saved = enabled.toMap();
-      expect((saved['terminal'] as Map)['showCodeBlockCopyButton'], isTrue);
+      final saved = disabled.toMap();
+      expect((saved['terminal'] as Map)['showCodeBlockCopyButton'], isFalse);
       expect(
         AleraSettings.fromJson(saved).terminal.showCodeBlockCopyButton,
-        isTrue,
+        isFalse,
       );
     });
 

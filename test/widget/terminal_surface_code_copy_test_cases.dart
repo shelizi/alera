@@ -89,6 +89,16 @@ void _registerTerminalSurfaceCodeCopyTests() {
           findsOneWidget,
           reason: 'Original transcript arriving under cursor shows the button',
         );
+        expect(
+          find.byWidgetPredicate((candidate) {
+            if (candidate is! IconButton) return false;
+            final key = candidate.key;
+            return key is ValueKey<String> &&
+                key.value.startsWith('terminal-copy-code-button');
+          }),
+          findsNWidgets(2),
+          reason: 'Both visible code blocks must expose copy actions at once',
+        );
 
         await tester.tap(find.byKey(key));
         await tester.pump();
@@ -118,8 +128,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
         await tester.pump();
         expect(
           find.byKey(key),
-          findsNothing,
-          reason: 'Prose below the code block must not be copyable',
+          findsOneWidget,
+          reason:
+              'Copy actions stay visible when the mouse is over non-code text',
         );
         await mouse.removePointer();
       } finally {
@@ -794,7 +805,7 @@ void _registerTerminalSurfaceCodeCopyTests() {
 
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(2, 4)));
       await tester.pump();
-      expect(find.byKey(copyKey), findsNothing);
+      expect(find.byKey(copyKey), findsOneWidget);
       await mouse.removePointer();
     } finally {
       await tester.pumpWidget(const SizedBox());
@@ -866,7 +877,7 @@ void _registerTerminalSurfaceCodeCopyTests() {
         expect(pty.writes, isEmpty);
         await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 4)));
         await tester.pump();
-        expect(find.byKey(key), findsNothing);
+        expect(find.byKey(key), findsOneWidget);
         await mouse.removePointer();
       } finally {
         await tester.pumpWidget(const SizedBox());
@@ -942,7 +953,7 @@ void _registerTerminalSurfaceCodeCopyTests() {
 
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 4)));
       await tester.pump();
-      expect(find.byKey(copyKey), findsNothing);
+      expect(find.byKey(copyKey), findsOneWidget);
 
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 7)));
       await tester.pump();
@@ -957,7 +968,7 @@ void _registerTerminalSurfaceCodeCopyTests() {
 
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 4)));
       await tester.pump();
-      expect(find.byKey(copyKey), findsNothing);
+      expect(find.byKey(copyKey), findsOneWidget);
       await mouse.removePointer();
     } finally {
       await tester.pumpWidget(const SizedBox());
@@ -1053,8 +1064,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
         await tester.pump();
         expect(
           find.byKey(copyKey),
-          findsNothing,
-          reason: 'C language heading is not itself source code',
+          findsOneWidget,
+          reason:
+              'Copy actions stay visible when the mouse is over non-code text',
         );
         await mouse.removePointer();
       } finally {
@@ -1164,15 +1176,17 @@ void _registerTerminalSurfaceCodeCopyTests() {
       await tester.pump();
       expect(
         find.byKey(key),
-        findsNothing,
-        reason: 'Swift label must not be copyable code',
+        findsOneWidget,
+        reason:
+            'Copy actions stay visible when the mouse is over non-code text',
       );
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 15)));
       await tester.pump();
       expect(
         find.byKey(key),
-        findsNothing,
-        reason: 'English explanation must not be copyable code',
+        findsOneWidget,
+        reason:
+            'Copy actions stay visible when the mouse is over non-code text',
       );
       await mouse.removePointer();
     } finally {
@@ -1265,8 +1279,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
       await tester.pump();
       expect(
         find.byKey(buttonKey),
-        findsNothing,
-        reason: 'Claude explanation is not source code',
+        findsOneWidget,
+        reason:
+            'Copy actions stay visible when the mouse is over non-code text',
       );
       await mouse.removePointer();
     } finally {
@@ -1351,8 +1366,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
       await tester.pump();
       expect(
         find.byKey(button),
-        findsNothing,
-        reason: 'explanation text must not be copied',
+        findsOneWidget,
+        reason:
+            'Copy actions stay visible when the mouse is over non-code text',
       );
       await mouse.removePointer();
     } finally {
@@ -1366,9 +1382,113 @@ void _registerTerminalSurfaceCodeCopyTests() {
   });
 
   testWidgets(
-    'copy button defaults off and toggles live without restarting the PTY',
+    'copy button hides ten seconds after leaving code, not during the click',
     (tester) async {
       debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
+      try {
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+        );
+        addTearDown(runtime.dispose);
+        final session = runtime.sessionFor(
+          workspace: _workspace(),
+          tab: _tab(),
+        );
+        await _pumpTerminalSurface(tester, session);
+        factory.sessions.single.emitOutput(
+          utf8.encode('~~~dart\r\nvoid main() {}\r\n~~~\r\nDone'),
+        );
+        await _pumpTerminalOutput(tester);
+        const key = ValueKey<String>('terminal-copy-code-button');
+        expect(find.byKey(key), findsOneWidget);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(3, 1)),
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 3)));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 9));
+        expect(
+          find.byKey(key),
+          findsOneWidget,
+          reason: 'Leaving source lines must not immediately remove copy',
+        );
+
+        await mouse.moveTo(tester.getCenter(find.byKey(key)));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 11));
+        expect(
+          find.byKey(key),
+          findsOneWidget,
+          reason: 'Time spent over the button must not dismiss it',
+        );
+
+        await mouse.down(tester.getCenter(find.byKey(key)));
+        await mouse.up();
+        await tester.pump();
+        expect(copied, <String>['void main() {}']);
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 3)));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 9));
+        expect(find.byKey(key), findsOneWidget);
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          find.byKey(key),
+          findsNothing,
+          reason: 'Ten seconds outside code and button dismisses it',
+        );
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
+        await tester.pump();
+        expect(
+          find.byKey(key),
+          findsOneWidget,
+          reason: 'Returning to code must reveal the button again',
+        );
+        await mouse.removePointer();
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+      }
+    },
+  );
+
+  testWidgets(
+    'copy buttons default on, persist across mouse paths, and toggle live',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
       try {
         final factory = _FakeTerminalPtySessionFactory();
         final runtime = XtermTerminalRuntime(
@@ -1392,51 +1512,53 @@ void _registerTerminalSurfaceCodeCopyTests() {
           ),
         );
         await _pumpTerminalOutput(tester);
-        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-        await mouse.addPointer(
-          location: _cellCenter(tester, const xterm.CellOffset(3, 0)),
-        );
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
-        await tester.pump();
 
         const copyKey = ValueKey<String>('terminal-copy-code-button');
-        expect(runtime.terminalSettings.showCodeBlockCopyButton, isFalse);
-        expect(find.byKey(copyKey), findsNothing);
+        expect(runtime.terminalSettings.showCodeBlockCopyButton, isTrue);
+        expect(
+          find.byKey(copyKey),
+          findsOneWidget,
+          reason: 'A recognized code block gets a button before any hover',
+        );
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(3, 2)),
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 4)));
+        await tester.pump();
+        expect(
+          find.byKey(copyKey),
+          findsOneWidget,
+          reason: 'Passing over non-code spacer rows must not hide the button',
+        );
+        await mouse.moveTo(tester.getCenter(find.byKey(copyKey)));
+        await tester.pump();
+        await mouse.down(tester.getCenter(find.byKey(copyKey)));
+        await mouse.up();
+        await tester.pump();
+        expect(copied, <String>['void main() {}']);
+        expect(pty.writes, isEmpty);
 
         runtime.updateSettings(
-          TerminalSettings.defaults.copyWith(showCodeBlockCopyButton: true),
+          TerminalSettings.defaults.copyWith(showCodeBlockCopyButton: false),
         );
         await tester.pump();
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
-        await tester.pump();
-        expect(find.byKey(copyKey), findsOneWidget);
+        expect(find.byKey(copyKey), findsNothing);
 
         runtime.updateSettings(TerminalSettings.defaults);
         await tester.pump();
-        expect(find.byKey(copyKey), findsNothing);
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
-        await tester.pump();
-        expect(find.byKey(copyKey), findsNothing);
-
-        runtime.updateSettings(
-          TerminalSettings.defaults.copyWith(showCodeBlockCopyButton: true),
-        );
-        await tester.pump();
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
-        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
         await tester.pump();
         expect(find.byKey(copyKey), findsOneWidget);
-        expect(
-          pty.writes,
-          isEmpty,
-          reason: 'setting changes must not send PTY input',
-        );
+        expect(pty.writes, isEmpty);
         await mouse.removePointer();
       } finally {
         await tester.pumpWidget(const SizedBox());
         debugDefaultTargetPlatformOverride = null;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
       }
     },
   );

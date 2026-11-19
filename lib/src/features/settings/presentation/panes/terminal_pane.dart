@@ -257,7 +257,7 @@ class const TerminalSettingsPane({
               ),
               SettingsSwitchRow(
                 title: 'Show Code Block Copy Button',
-                description: 'Show a copy button over recognized code blocks in terminal output, including Claude Code.',
+                description: 'Keep copy buttons visible below recognized code blocks, including Claude Code.',
                 value: settings.showCodeBlockCopyButton,
                 onChanged: (value) => onChanged(
                   (settings) =>

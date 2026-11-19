@@ -3605,7 +3605,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     'showCodeBlockCopyButton',
     _$showCodeBlockCopyButton,
     opt: true,
-    def: false,
+    def: true,
   );
   static TerminalToolbarCorner _$toolbarCorner(TerminalSettings v) =>
       v.toolbarCorner;
