@@ -66,7 +66,7 @@ use alera_gpui_desktop::git_branch_compare::{
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
+    compare_git_refs, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
@@ -445,6 +445,16 @@ impl ConfirmGitAction {
 #[derive(Clone)]
 enum GitReadRequest {
     Commit(String),
+}
+
+/// Explicit, inert selectors for Classic's History Tab branch perspective.
+/// A ref is accepted only when it still exists in the current Git snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GitGraphCenterPerspective {
+    Current,
+    AllBranches,
+    Favorites,
+    Branch { name: String, remote: bool },
 }
 
 /// Shared actions for branch context menus in the Native Git Graph.
@@ -2747,8 +2757,16 @@ impl Workbench {
     }
 
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
+        if selected.is_some() {
+            // A branch ref selected from Source Control must switch the
+            // History Tab to that branch, not leave All branches active.
+            self.git_history_options.all_branches = false;
+            self.git_history_options.favorites_only = false;
+        }
         self.git_history_options.selected_ref = selected;
-        if self.git_history_tab_open { self.save_mixed_pane_layout(cx); }
+        if self.git_history_tab_open {
+            self.save_mixed_pane_layout(cx);
+        }
         self.refresh_git_history(cx);
     }
 
@@ -3364,6 +3382,8 @@ impl Workbench {
         self.git_diff_loading = true;
         self.git_history_open = true;
         self.git_history_sidebar_open = true;
+        self.model.set_status(format!("Comparing HEAD and {selected} (read-only); see Source Control"));
+        let report_branch = selected.clone();
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move { compare_branch_files(&root, &selected, direction) })
@@ -3376,10 +3396,15 @@ impl Workbench {
                 view.git_diff_loading = false;
                 match result {
                     Ok(comparison) => {
+                        view.model.set_status(format!(
+                            "Compared HEAD with {report_branch}: {} file(s) · Source Control",
+                            comparison.files.len(),
+                        ));
                         view.git_diff = Some(comparison.summary());
                         view.git_branch_comparison = Some(comparison);
                     }
                     Err(error) => {
+                        view.model.set_status(format!("Branch comparison refused: {error}"));
                         view.git_diff = Some(format!("Branch comparison refused: {error}"));
                         view.git_branch_comparison = None;
                     }

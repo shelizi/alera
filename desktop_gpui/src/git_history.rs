@@ -329,11 +329,19 @@ impl GitHistorySnapshot {
         let mut tips = Vec::new();
         let mut truncated = false;
         for branch in repo
-            .branches(if options.all_branches || options.favorites_only {
-                None
-            } else {
-                Some(BranchType::Local)
-            })
+            .branches(
+                if options.all_branches
+                    || options.favorites_only
+                    || options
+                        .selected_ref
+                        .as_deref()
+                        .is_some_and(|reference| reference.starts_with("refs/remotes/"))
+                {
+                    None
+                } else {
+                    Some(BranchType::Local)
+                },
+            )
             .map_err(|e| e.to_string())?
         {
             check_cancelled(&cancelled)?;
@@ -409,6 +417,17 @@ impl GitHistorySnapshot {
             });
         }
         tags.sort_by(|a, b| a.name.cmp(&b.name));
+        // The current-branch perspective must not accidentally walk every
+        // local branch just because the branch picker lists those refs.
+        // Keep their labels for reachable commits, but revwalk only HEAD.
+        let current_branch_label_tips =
+            if !options.all_branches && !options.favorites_only && options.selected_ref.is_none() {
+                let labels = tips.clone();
+                tips.clear();
+                Some(labels)
+            } else {
+                None
+            };
         if let Some(requested) = options.selected_ref.as_deref() {
             // Host references are accepted only after resolving an exact,
             // visible branch. Do not interpret arbitrary revspec operators.
@@ -533,7 +552,9 @@ impl GitHistorySnapshot {
                     continue;
                 }
             }
-            let labels = tips
+            let labels = current_branch_label_tips
+                .as_ref()
+                .unwrap_or(&tips)
                 .iter()
                 .filter(|(tip, _, _)| *tip == oid)
                 .take(5)
@@ -954,6 +975,55 @@ mod tests {
     }
 
     #[test]
+    fn current_branch_perspective_excludes_divergent_local_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Perspective", "perspective@example.invalid").unwrap();
+        fs::write(dir.path().join("scope.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("scope.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let base = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        repo.branch("topic", &repo.find_commit(base).unwrap(), false)
+            .unwrap();
+        fs::write(dir.path().join("scope.txt"), "topic only\n").unwrap();
+        index.add_path(Path::new("scope.txt")).unwrap();
+        let topic_tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let topic = repo
+            .commit(
+                Some("refs/heads/topic"),
+                &sig,
+                &sig,
+                "topic-only",
+                &topic_tree,
+                &[&repo.find_commit(base).unwrap()],
+            )
+            .unwrap();
+        let current =
+            GitHistorySnapshot::load_filtered(dir.path(), &GitHistoryOptions::default()).unwrap();
+        assert!(current
+            .commits
+            .iter()
+            .any(|row| row.oid == base.to_string()));
+        assert!(!current
+            .commits
+            .iter()
+            .any(|row| row.oid == topic.to_string()));
+        assert!(current.branches.iter().any(|row| row.name == "topic"));
+        let all = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                all_branches: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(all.commits.iter().any(|row| row.oid == topic.to_string()));
+    }
+
+    #[test]
     fn history_compare_and_commit_preview_are_read_only() {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
@@ -1074,6 +1144,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(remote.commits[0].oid, second.to_string());
+        // History Tab's exact remote-branch perspective is a single ref,
+        // independent of the all-branches graph switch. Raw ambiguous names
+        // must still be rejected (see below).
+        let focused_remote = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                selected_ref: Some("refs/remotes/origin/feature".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(focused_remote.commits[0].oid, second.to_string());
+        assert!(focused_remote
+            .branches
+            .iter()
+            .any(|row| row.remote && row.name == "origin/feature"));
         let favorite_remote = GitHistorySnapshot::load_filtered(
             dir.path(),
             &GitHistoryOptions {

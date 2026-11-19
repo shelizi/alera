@@ -34,6 +34,84 @@ impl Workbench {
         self.close_mixed_tab(&WorkbenchTabIdentity::GitHistory, cx);
     }
 
+    /// Switch History Tab perspective without accepting arbitrary revspecs.
+    /// Only a branch still present in the read-only snapshot may be selected.
+    pub(super) fn select_git_graph_center_perspective(
+        &mut self,
+        choice: GitGraphCenterPerspective,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation || !self.git_history_tab_open {
+            return;
+        }
+        let next = match choice {
+            GitGraphCenterPerspective::Current => (false, false, None),
+            GitGraphCenterPerspective::AllBranches => (true, false, None),
+            GitGraphCenterPerspective::Favorites => (true, true, None),
+            GitGraphCenterPerspective::Branch { name, remote } => {
+                let verified = self.git_history.as_ref().is_some_and(|history| {
+                    history
+                        .branches
+                        .iter()
+                        .any(|branch| branch.name == name && branch.remote == remote)
+                });
+                if !verified {
+                    self.model
+                        .set_status("Git Graph branch changed; refresh perspective menu");
+                    cx.notify();
+                    return;
+                }
+                let reference = if remote {
+                    format!("refs/remotes/{name}")
+                } else {
+                    name
+                };
+                (false, false, Some(reference))
+            }
+        };
+        if (
+            self.git_history_options.all_branches,
+            self.git_history_options.favorites_only,
+            self.git_history_options.selected_ref.clone(),
+        ) == next
+        {
+            return;
+        }
+        self.git_history_options.all_branches = next.0;
+        self.git_history_options.favorites_only = next.1;
+        self.git_history_options.selected_ref = next.2;
+        self.save_mixed_pane_layout(cx);
+        self.refresh_git_history(cx);
+    }
+
+    /// Read-only comparison reuses the Source Control engine and verifies
+    /// both the snapshot's local-branch identity and Workspace generation.
+    pub(super) fn compare_git_graph_center_branch(
+        &mut self,
+        name: String,
+        direction: CompareDirection,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation || !self.git_history_tab_open {
+            return;
+        }
+        let live = self.git_history.as_ref().is_some_and(|history| {
+            history
+                .branches
+                .iter()
+                .any(|branch| !branch.remote && !branch.current && branch.name == name)
+        });
+        if !live {
+            self.model
+                .set_status("Git Graph comparison branch is stale; refresh Graph");
+            cx.notify();
+            return;
+        }
+        self.compare_git_branch_files(name, direction, cx);
+    }
+
     pub(super) fn render_center_git_graph(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
         let full_search = self.git_history_options.search_query.is_some();
@@ -82,6 +160,10 @@ impl Workbench {
                     .push(format!("refs/tags/{}", tag.name));
             }
         }
+        // In a split pane preserve the commit subject and SHA before author
+        // and extra ref badges; full-width Graph keeps its detailed columns.
+        let compact_graph = self.mixed_panes.has_secondary();
+        let badge_limit = if compact_graph { 1 } else { 3 };
         let rows = commits
             .into_iter()
             .enumerate()
@@ -109,7 +191,8 @@ impl Workbench {
                         2
                     }
                 });
-                let hidden_labels = labels.len().saturating_sub(3);
+                let hidden_labels = labels.len().saturating_sub(badge_limit);
+                let author = row.author;
                 div()
                     .id(("git-center-graph-commit", index))
                     .h(px(28.0))
@@ -132,7 +215,7 @@ impl Workbench {
                             .text_color(rgb(TEXT))
                             .child(row.subject),
                     )
-                    .children(labels.into_iter().take(3).map(|label| {
+                    .children(labels.into_iter().take(badge_limit).map(|label| {
                         let color = if label.starts_with("refs/remotes/") {
                             native_git_graph_ui::REF_REMOTE_COLOR
                         } else if label.starts_with("refs/tags/") {
@@ -165,14 +248,16 @@ impl Workbench {
                                 .child(format!("+{hidden_labels}")),
                         )
                     })
-                    .child(
-                        div()
-                            .w(px(116.0))
-                            .truncate()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child(row.author),
-                    )
+                    .when(!compact_graph, |entry| {
+                        entry.child(
+                            div()
+                                .w(px(116.0))
+                                .truncate()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(author),
+                        )
+                    })
                     .child(
                         div()
                             .w(px(66.0))
@@ -201,17 +286,48 @@ impl Workbench {
                 .is_some_and(|history| history.truncated && !history.scan_limit_reached)
             && self.git_history_options.max_commits.max(HISTORY_PAGE_STEP) < MAX_HISTORY_PAGE;
         let all_branches = self.git_history_options.all_branches;
-        let scope = self
-            .git_history_options
-            .selected_ref
-            .clone()
-            .unwrap_or_else(|| {
-                if all_branches {
-                    "All branches".into()
+        let favorite_scope = self.git_history_options.favorites_only;
+        let selected_ref = self.git_history_options.selected_ref.clone();
+        let branch_choices = self
+            .git_history
+            .as_ref()
+            .map(|history| history.branches.clone())
+            .unwrap_or_default();
+        let perspective = if favorite_scope {
+            GitGraphCenterPerspective::Favorites
+        } else if all_branches {
+            GitGraphCenterPerspective::AllBranches
+        } else if let Some(reference) = selected_ref.as_deref() {
+            let selected = branch_choices.iter().find(|branch| {
+                let expected = if branch.remote {
+                    format!("refs/remotes/{}", branch.name)
                 } else {
-                    "HEAD".into()
-                }
+                    branch.name.clone()
+                };
+                expected == reference
             });
+            selected
+                .map(|branch| GitGraphCenterPerspective::Branch {
+                    name: branch.name.clone(),
+                    remote: branch.remote,
+                })
+                .unwrap_or(GitGraphCenterPerspective::Current)
+        } else {
+            GitGraphCenterPerspective::Current
+        };
+        let scope = match &perspective {
+            GitGraphCenterPerspective::Current => "HEAD".into(),
+            GitGraphCenterPerspective::AllBranches => "All branches".into(),
+            GitGraphCenterPerspective::Favorites => "Favorite branches".into(),
+            GitGraphCenterPerspective::Branch { name, remote } => {
+                if *remote {
+                    format!("Remote: {name}")
+                } else {
+                    name.clone()
+                }
+            }
+        };
+        let graph_generation = self.workspace_generation;
         let description = if loading {
             "Loading Git history…".to_owned()
         } else if self.git_history.is_some() {
@@ -249,8 +365,15 @@ impl Workbench {
                             .text_color(rgb(TEXT))
                             .child("Git Graph"),
                     )
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(description))
-                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(description),
+                    )
                     .child(
                         icon_button(
                             "git-center-refresh",
@@ -341,40 +464,43 @@ impl Workbench {
                     .border_color(rgb(BORDER))
                     .child(
                         div()
-                            .id("git-center-scope-head")
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .cursor_pointer()
+                            .id("git-center-perspective-label")
+                            .min_w_0()
+                            .max_w(px(if compact_graph { 164.0 } else { 280.0 }))
+                            .truncate()
                             .text_xs()
-                            .bg(rgb(if !all_branches { ACTIVE } else { PANEL }))
                             .text_color(rgb(TEXT))
-                            .child("Current branch")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.git_history_options.all_branches = false;
-                                this.git_history_options.favorites_only = false;
-                                this.git_history_options.selected_ref = None;
-                                this.save_mixed_pane_layout(cx);
-                                this.refresh_git_history(cx);
-                            })),
+                            .child(format!("Perspective: {scope}")),
                     )
                     .child(
-                        div()
-                            .id("git-center-scope-all")
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .text_xs()
-                            .bg(rgb(if all_branches { ACTIVE } else { PANEL }))
-                            .text_color(rgb(TEXT))
-                            .child("All branches")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.git_history_options.all_branches = true;
-                                this.git_history_options.selected_ref = None;
-                                this.save_mixed_pane_layout(cx);
-                                this.refresh_git_history(cx);
-                            })),
+                        icon_button(
+                            "git-center-perspective-menu",
+                            UiIcon::ChevronDown,
+                            "Choose HEAD, all branches, favorites, local or remote branch",
+                            false,
+                        )
+                        .dropdown_menu(
+                            Self::kit_git_center_perspective_menu(
+                                cx.entity().downgrade(),
+                                branch_choices.clone(),
+                                perspective,
+                                graph_generation,
+                            ),
+                        ),
+                    )
+                    .child(
+                        icon_button(
+                            "git-center-compare-menu",
+                            UiIcon::History,
+                            "Compare local branch changes with HEAD (read-only)",
+                            false,
+                        )
+                        .dropdown_menu(Self::kit_git_center_compare_menu(
+                            cx.entity().downgrade(),
+                            branch_choices,
+                            selected_ref,
+                            graph_generation,
+                        )),
                     )
                     .child(div().flex_1())
                     .when(more, |bar| {

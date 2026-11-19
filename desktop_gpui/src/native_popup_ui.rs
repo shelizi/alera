@@ -729,6 +729,165 @@ impl Workbench {
         }
     }
 
+    /// A true History Tab perspective popup: presets and exact snapshot refs,
+    /// with no mutable Git actions and no ad-hoc text revspec execution.
+    pub(super) fn kit_git_center_perspective_menu(
+        owner: gpui::WeakEntity<Self>,
+        branches: Vec<GitBranchRow>,
+        active: GitGraphCenterPerspective,
+        generation: u64,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, window, _| {
+            menu = menu.label("Git History perspective");
+            for (label, choice) in [
+                ("Current branch", GitGraphCenterPerspective::Current),
+                ("All branches", GitGraphCenterPerspective::AllBranches),
+                ("Favorite branches", GitGraphCenterPerspective::Favorites),
+            ] {
+                let owner = owner.clone();
+                let selected = choice == active;
+                menu = menu.item(
+                    PopupMenuItem::new(format!("{}{}", if selected { "✓ " } else { "" }, label))
+                        .on_click(move |_, _, cx| {
+                            let _ = owner.update(cx, |view, cx| {
+                                view.select_git_graph_center_perspective(
+                                    choice.clone(),
+                                    generation,
+                                    cx,
+                                );
+                            });
+                        }),
+                );
+            }
+            menu = menu.separator();
+            menu = menu.label("Choose a branch (read-only)");
+            for branch in &branches {
+                let choice = GitGraphCenterPerspective::Branch {
+                    name: branch.name.clone(),
+                    remote: branch.remote,
+                };
+                let selected = choice == active;
+                let title = format!(
+                    "{}{}{}",
+                    if selected {
+                        "✓ "
+                    } else if branch.favorite {
+                        "★ "
+                    } else {
+                        ""
+                    },
+                    if branch.remote { "Remote: " } else { "Local: " },
+                    branch.name
+                );
+                let owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.select_git_graph_center_perspective(choice.clone(), generation, cx);
+                    });
+                }));
+            }
+            // Keep all bounded refs accessible without extending beyond the
+            // window height, even for repositories with 80 branches.
+            let height = (f32::from(window.viewport_size().height) - 120.0)
+                .max(160.0)
+                .min(480.0);
+            menu.scrollable(true).max_h(px(height))
+        }
+    }
+
+    /// Compare branches only through the existing bounded read-only service.
+    /// Both directions for the selected local branch, and one-click compare
+    /// for other local branches, remain available in the main Graph viewport.
+    pub(super) fn kit_git_center_compare_menu(
+        owner: gpui::WeakEntity<Self>,
+        branches: Vec<GitBranchRow>,
+        selected_ref: Option<String>,
+        generation: u64,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, window, _| {
+            let selected_branch = selected_ref.as_deref().and_then(|reference| {
+                let short = reference.strip_prefix("refs/heads/").unwrap_or(reference);
+                branches
+                    .iter()
+                    .find(|branch| !branch.remote && !branch.current && branch.name == short)
+                    .map(|branch| branch.name.clone())
+            });
+            menu = menu.label("Compare branches (read-only)");
+            if let Some(selected) = selected_branch {
+                for (label, direction) in [
+                    (
+                        "Changes on selected branch",
+                        CompareDirection::CurrentToSelected,
+                    ),
+                    (
+                        "Changes on current branch",
+                        CompareDirection::SelectedToCurrent,
+                    ),
+                ] {
+                    let owner = owner.clone();
+                    let branch = selected.clone();
+                    menu = menu.item(PopupMenuItem::new(format!("{label} · {branch}")).on_click(
+                        move |_, _, cx| {
+                            let _ = owner.update(cx, |view, cx| {
+                                view.compare_git_graph_center_branch(
+                                    branch.clone(),
+                                    direction,
+                                    generation,
+                                    cx,
+                                );
+                            });
+                        },
+                    ));
+                }
+                menu = menu.separator();
+            }
+            menu = menu.label("Compare with HEAD");
+            let mut added = 0usize;
+            for branch in &branches {
+                if branch.remote || branch.current {
+                    continue;
+                }
+                added += 1;
+                let owner = owner.clone();
+                let branch_name = branch.name.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(format!(
+                        "{}{}",
+                        if branch.favorite { "★ " } else { "" },
+                        branch_name
+                    ))
+                    .on_click(move |_, _, cx| {
+                        let _ = owner.update(cx, |view, cx| {
+                            view.compare_git_graph_center_branch(
+                                branch_name.clone(),
+                                CompareDirection::CurrentToSelected,
+                                generation,
+                                cx,
+                            );
+                        });
+                    }),
+                );
+            }
+            if added == 0 {
+                menu = menu.label("No other local branches in this perspective");
+            }
+            let height = (f32::from(window.viewport_size().height) - 120.0)
+                .max(160.0)
+                .min(480.0);
+            menu.scrollable(true).max_h(px(height))
+        }
+    }
+
     pub(super) fn kit_git_graph_branch_menu(
         owner: gpui::WeakEntity<Self>,
         branch: String,
