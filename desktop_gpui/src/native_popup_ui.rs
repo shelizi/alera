@@ -931,9 +931,8 @@ impl Workbench {
         }
     }
 
-    /// Compare branches only through the existing bounded read-only service.
-    /// Both directions for the selected local branch, and one-click compare
-    /// for other local branches, remain available in the main Graph viewport.
+    /// Compare both complete committed tips without checking out any branch.
+    /// The center Graph supports both local and remote refs, in either direction.
     pub(super) fn kit_git_center_compare_menu(
         owner: gpui::WeakEntity<Self>,
         branches: Vec<GitBranchRow>,
@@ -947,21 +946,31 @@ impl Workbench {
            + 'static {
         move |mut menu, window, _| {
             let selected_branch = selected_ref.as_deref().and_then(|reference| {
-                let short = reference.strip_prefix("refs/heads/").unwrap_or(reference);
-                branches
-                    .iter()
-                    .find(|branch| !branch.remote && !branch.current && branch.name == short)
-                    .map(|branch| branch.name.clone())
+                branches.iter()
+                    .find(|branch| {
+                        if branch.current { return false; }
+                        let key = if branch.remote {
+                            format!("refs/remotes/{}", branch.name)
+                        } else {
+                            branch.name.clone()
+                        };
+                        key == reference || (!branch.remote && format!("refs/heads/{}", key) == reference)
+                    })
+                    .map(|branch| if branch.remote {
+                        format!("refs/remotes/{}", branch.name)
+                    } else {
+                        branch.name.clone()
+                    })
             });
             menu = menu.label("Compare branches (read-only)");
             if let Some(selected) = selected_branch {
                 for (label, direction) in [
                     (
-                        "Changes on selected branch",
+                        "HEAD -> selected (committed tips)",
                         CompareDirection::CurrentToSelected,
                     ),
                     (
-                        "Changes on current branch",
+                        "Selected -> HEAD (committed tips)",
                         CompareDirection::SelectedToCurrent,
                     ),
                 ] {
@@ -985,7 +994,7 @@ impl Workbench {
             menu = menu.label("Compare with HEAD");
             let owner_search = owner.clone();
             menu = menu.item(
-                PopupMenuItem::new("Search local branches to compare…").on_click(
+                PopupMenuItem::new("Search local or remote branches to compare...").on_click(
                     move |_, window, cx| {
                         let _ = owner_search.update(cx, |view, cx| {
                             view.open_git_center_branch_picker(
@@ -1002,18 +1011,24 @@ impl Workbench {
             let mut added = 0usize;
             for branch in branches
                 .iter()
-                .filter(|branch| !branch.remote && !branch.current)
+                .filter(|branch| !branch.current)
                 .take(24)
             {
                 added += 1;
                 let owner = owner.clone();
-                let branch_name = branch.name.clone();
+                let branch_name = if branch.remote {
+                    format!("refs/remotes/{}", branch.name)
+                } else {
+                    branch.name.clone()
+                };
+                let display_name = format!(
+                    "{}{}{}",
+                    if branch.favorite { "★ " } else { "" },
+                    if branch.remote { "Remote: " } else { "Local: " },
+                    branch.name
+                );
                 menu = menu.item(
-                    PopupMenuItem::new(format!(
-                        "{}{}",
-                        if branch.favorite { "★ " } else { "" },
-                        branch_name
-                    ))
+                    PopupMenuItem::new(display_name)
                     .on_click(move |_, _, cx| {
                         let _ = owner.update(cx, |view, cx| {
                             view.compare_git_graph_center_branch(
@@ -1027,7 +1042,7 @@ impl Workbench {
                 );
             }
             if added == 0 {
-                menu = menu.label("No other local branches in this perspective");
+                menu = menu.label("No other branches in this perspective");
             }
             let height = (f32::from(window.viewport_size().height) - 120.0)
                 .max(160.0)
