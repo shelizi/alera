@@ -167,6 +167,80 @@ impl Workbench {
         self.refresh_git_history(cx);
     }
 
+    /// Open a bounded, case-insensitive picker over exact refs already
+    /// enumerated by the read-only Git history loader.
+    pub(super) fn open_git_center_branch_picker(
+        &mut self,
+        mode: GitGraphBranchPickerMode,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation || !self.git_history_tab_open {
+            return;
+        }
+        self.git_branch_picker_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_branch_picker_mode = Some(mode);
+        cx.notify();
+    }
+
+    pub(super) fn pick_git_center_searched_branch(
+        &mut self,
+        name: String,
+        remote: bool,
+        mode: GitGraphBranchPickerMode,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation
+            || self.git_branch_picker_mode != Some(mode)
+            || !self.git_history_tab_open
+        {
+            return;
+        }
+        let valid = self.git_history.as_ref().is_some_and(|history| {
+            history.branches.iter().any(|branch| {
+                branch.name == name
+                    && branch.remote == remote
+                    && (mode != GitGraphBranchPickerMode::Compare || !branch.current)
+            })
+        });
+        if !valid || (mode == GitGraphBranchPickerMode::Compare && remote) {
+            self.model
+                .set_status("Searched branch is stale; refresh Git Graph");
+            cx.notify();
+            return;
+        }
+        self.git_branch_picker_mode = None;
+        self.git_branch_picker_input
+            .update(cx, |input, cx| input.clear(cx));
+        match mode {
+            GitGraphBranchPickerMode::Perspective => {
+                self.select_git_graph_center_perspective(
+                    GitGraphCenterPerspective::Branch { name, remote },
+                    generation,
+                    cx,
+                );
+            }
+            GitGraphBranchPickerMode::MergeTarget => {
+                let target = if remote {
+                    format!("refs/remotes/{name}")
+                } else {
+                    name
+                };
+                self.set_git_graph_merged_target(Some(target), generation, cx);
+            }
+            GitGraphBranchPickerMode::Compare => {
+                self.compare_git_graph_center_branch(
+                    name,
+                    CompareDirection::CurrentToSelected,
+                    generation,
+                    cx,
+                );
+            }
+        }
+    }
+
     pub(super) fn render_center_git_graph(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
         let full_search = self.git_history_options.search_query.is_some();
@@ -360,6 +434,7 @@ impl Workbench {
                     branch.name.clone()
                 };
                 expected == reference
+                    || (!branch.remote && format!("refs/heads/{}", branch.name) == reference)
             });
             selected
                 .map(|branch| GitGraphCenterPerspective::Branch {
@@ -409,6 +484,17 @@ impl Workbench {
             .map(|history| history.current.clone())
             .unwrap_or_else(|| "HEAD".into());
         let graph_generation = self.workspace_generation;
+        let picker_data = self.git_branch_picker_mode.map(|mode| {
+            let query = self.git_branch_picker_input.read(cx).query().to_owned();
+            (
+                mode,
+                filter_git_branch_picker(
+                    &branch_choices,
+                    &query,
+                    mode == GitGraphBranchPickerMode::Compare,
+                ),
+            )
+        });
         let description = if loading {
             "Loading Git history…".to_owned()
         } else if self.git_history.is_some() {
@@ -569,6 +655,21 @@ impl Workbench {
                             ),
                         ),
                     )
+                    .child(
+                        icon_button(
+                            "git-center-find-branch",
+                            UiIcon::Search,
+                            "Find a local or remote branch in the full loaded inventory (read-only)",
+                            false,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let generation = this.workspace_generation;
+                            this.open_git_center_branch_picker(
+                                GitGraphBranchPickerMode::Perspective, generation, cx,
+                            );
+                            window.focus(&this.git_branch_picker_input.read(cx).focus_handle(cx), cx);
+                        })),
+                    )
                     .when(merge_controls, |bar| {
                         bar.child(
                             div().text_xs().text_color(rgb(MUTED))
@@ -657,6 +758,102 @@ impl Workbench {
                             .child(format!("{count} / {MAX_HISTORY_PAGE} max")),
                     ),
             )
+            .when_some(picker_data, |pane, (mode, matches)| {
+                let available = matches.inventory_count;
+                let matched = matches.match_count;
+                let shown = matches.rows.len();
+                pane.child(
+                    div()
+                        .id("git-center-branch-picker")
+                        .h(px(194.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_3()
+                        .py_1()
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(PANEL))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div().flex_1().min_w_0()
+                                        .child(self.git_branch_picker_input.clone()),
+                                )
+                                .child(
+                                    icon_button(
+                                        "git-center-branch-picker-close",
+                                        UiIcon::Close,
+                                        "Close branch search without changing Git Graph",
+                                        false,
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.git_branch_picker_mode = None;
+                                        this.git_branch_picker_input.update(cx, |input, cx| input.clear(cx));
+                                        cx.notify();
+                                    })),
+                                ),
+                        )
+                        .child(
+                            div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                "{} · {matched} match(es) / {available} loaded refs · showing first {shown}{}",
+                                match mode {
+                                    GitGraphBranchPickerMode::Perspective => "Choose graph perspective",
+                                    GitGraphBranchPickerMode::MergeTarget => "Choose merged-into target",
+                                    GitGraphBranchPickerMode::Compare => "Compare local branch with HEAD",
+                                },
+                                if available >= MAX_BRANCHES {
+                                    " (inventory cap reached)"
+                                } else {
+                                    ""
+                                },
+                            )),
+                        )
+                        .child(
+                            div().id("git-center-branch-picker-results")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .flex()
+                                .flex_col()
+                                .when(matched == 0, |list| {
+                                    list.child(div().py_2().text_xs().text_color(rgb(MUTED))
+                                        .child("No matching loaded branches; try another name"))
+                                })
+                                .children(matches.rows.into_iter().enumerate().map(|(i, branch)| {
+                                    let name = branch.name;
+                                    let remote = branch.remote;
+                                    let label = format!(
+                                        "{}{} {} · {}",
+                                        if branch.favorite { "★ " } else { "" },
+                                        if remote { "Remote:" } else { "Local:" },
+                                        name,
+                                        branch.tip
+                                    );
+                                    div()
+                                        .id(("git-center-branch-picker-row", i))
+                                        .min_w_0()
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .py_1()
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.pick_git_center_searched_branch(
+                                                name.clone(), remote, mode, graph_generation, cx,
+                                            );
+                                        }))
+                                })),
+                        ),
+                )
+            })
             .when(full_search || topology_error.is_some(), |pane| {
                 pane.child(div().px_3().py_1().text_xs().text_color(rgb(MUTED)).child(
                     if full_search {

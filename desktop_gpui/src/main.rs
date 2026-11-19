@@ -66,7 +66,7 @@ use alera_gpui_desktop::git_branch_compare::{
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP,
+    compare_git_refs, filter_git_branch_picker, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP, MAX_BRANCHES,
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
@@ -457,6 +457,15 @@ enum GitGraphCenterPerspective {
     Branch { name: String, remote: bool },
 }
 
+/// Inert search selector: typed text only filters enumerated Git refs. It is
+/// never interpreted as a Git command, revspec, checkout or branch writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitGraphBranchPickerMode {
+    Perspective,
+    MergeTarget,
+    Compare,
+}
+
 /// Shared actions for branch context menus in the Native Git Graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitGraphBranchMenuAction {
@@ -801,6 +810,8 @@ struct Workbench {
     git_conflict_confirm_armed: bool,
     git_filter_input: Entity<QuickOpenInput>,
     git_graph_search_input: Entity<QuickOpenInput>,
+    git_branch_picker_input: Entity<QuickOpenInput>,
+    git_branch_picker_mode: Option<GitGraphBranchPickerMode>,
     git_commit_input: Entity<QuickOpenInput>,
     git_commit_draft_loading: bool,
     git_commit_draft_request: u64,
@@ -5796,6 +5807,8 @@ impl Workbench {
         self.git_history_sidebar_open = false;
         self.git_history_open = false;
         self.git_graph_center_open = false;
+        self.git_branch_picker_mode = None;
+        self.git_branch_picker_input.update(cx, |input, cx| input.clear(cx));
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
         self.mixed_panes.reset();
@@ -12832,13 +12845,13 @@ impl Render for Workbench {
                                             .child("No matching refs in this tab. Try another tab or clear search.")
                                     ))
                                     .when(git_graph_ref_tab != GitGraphRefTab::Tags, |panel| panel.child(
-                                        div().text_xs().text_color(rgb(TEXT)).child("Branches · click name to select history, star to favorite")
+                                        div().text_xs().text_color(rgb(TEXT)).child("Branches · first 96 shown; search Graph with branch: to narrow, star to favorite")
                                     ))
                                     .child(div()
                                         .id("git-graph-branches")
                                         .max_h(px(85.0))
                                         .overflow_y_scroll()
-                                        .children(git_branch_rows.into_iter().enumerate().map(|(index, row)| {
+                                        .children(git_branch_rows.into_iter().take(96).enumerate().map(|(index, row)| {
                                             let name = row.name;
                                             let remote = row.remote;
                                             let favorite = row.favorite;
@@ -16066,6 +16079,11 @@ fn main() {
                             cx.notify();
                         })
                         .detach();
+                        let git_branch_picker_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Filter local or remote branches…", cx)
+                        });
+                        cx.observe(&git_branch_picker_input, |_: &mut Workbench, _, cx| cx.notify())
+                            .detach();
                         let sidebar_search_input = cx.new(|cx| {
                             QuickOpenInput::with_placeholder("Search projects / worktrees…", cx)
                         });
@@ -16271,6 +16289,8 @@ fn main() {
                             git_filter_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx)),
                             git_graph_search_input,
+                            git_branch_picker_input,
+                            git_branch_picker_mode: None,
                             git_amend_preview: None,
                             git_amend_loading: false,
                             git_amend_request: 0,
