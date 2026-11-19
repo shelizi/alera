@@ -162,6 +162,12 @@ pub struct SavedWorkbenchLayoutV1 {
     pub git_history_tab_favorites_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_history_tab_selected_ref: Option<String>,
+    /// V1-compatible optional Classic Git History merged-branch projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_history_tab_merged_visibility: Option<String>,
+    /// Inert exact merge-target ref (not a revspec or Git authorization).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_history_tab_merged_target_ref: Option<String>,
 }
 
 impl SavedWorkbenchLayoutV1 {
@@ -298,6 +304,22 @@ impl SavedWorkbenchLayoutV1 {
                         && !value.chars().any(char::is_control)
                 },
             ),
+            git_history_tab_merged_visibility: self
+                .git_history_tab_merged_visibility
+                .clone()
+                .filter(|value| {
+                    self.git_history_tab_open
+                        && matches!(value.as_str(), "hideMergedNames" | "hideMergedGraph")
+                }),
+            git_history_tab_merged_target_ref: self
+                .git_history_tab_merged_target_ref
+                .clone()
+                .filter(|value| {
+                    self.git_history_tab_open
+                        && !value.is_empty()
+                        && value.len() <= 512
+                        && !value.chars().any(char::is_control)
+                }),
         }
     }
 }
@@ -381,6 +403,8 @@ mod tests {
             git_history_tab_all_branches: None,
             git_history_tab_favorites_only: false,
             git_history_tab_selected_ref: None,
+            git_history_tab_merged_visibility: None,
+            git_history_tab_merged_target_ref: None,
         }
     }
 
@@ -465,6 +489,8 @@ mod tests {
         saved.git_history_tab_active = true;
         saved.git_history_tab_all_branches = Some(false);
         saved.git_history_tab_selected_ref = Some("refs/heads/develop".into());
+        saved.git_history_tab_merged_visibility = Some("hideMergedGraph".into());
+        saved.git_history_tab_merged_target_ref = Some("refs/remotes/origin/release".into());
         let json = saved.to_json().unwrap();
         let restored = SavedWorkbenchLayoutV1::from_json(&json).unwrap();
         assert_eq!(restored.focused_pane, SavedWorkbenchPane::Secondary);
@@ -477,6 +503,14 @@ mod tests {
             restored.git_history_tab_selected_ref.as_deref(),
             Some("refs/heads/develop")
         );
+        assert_eq!(
+            restored.git_history_tab_merged_visibility.as_deref(),
+            Some("hideMergedGraph")
+        );
+        assert_eq!(
+            restored.git_history_tab_merged_target_ref.as_deref(),
+            Some("refs/remotes/origin/release")
+        );
 
         let mut closed = restored;
         closed.git_history_tab_open = false;
@@ -486,6 +520,8 @@ mod tests {
         assert!(!normalized.git_history_tab_active);
         assert_eq!(normalized.git_history_tab_all_branches, None);
         assert_eq!(normalized.git_history_tab_selected_ref, None);
+        assert_eq!(normalized.git_history_tab_merged_visibility, None);
+        assert_eq!(normalized.git_history_tab_merged_target_ref, None);
         assert!(!normalized.to_json().unwrap().contains("git_history_tab"));
 
         let mut unsplit = saved;
@@ -514,6 +550,15 @@ mod tests {
         invalid.git_history_tab_selected_ref = Some("refs/heads/invalid\nref".into());
         let sanitized = SavedWorkbenchLayoutV1::from_json(&invalid.to_json().unwrap()).unwrap();
         assert_eq!(sanitized.git_history_tab_selected_ref, None);
+        let mut merged_invalid = sample();
+        merged_invalid.git_history_tab_open = true;
+        merged_invalid.git_history_tab_merged_visibility = Some("malicious-mode".into());
+        merged_invalid.git_history_tab_merged_target_ref =
+            Some("refs/heads/a\\nb".replace("\\n", "\n"));
+        let sanitized =
+            SavedWorkbenchLayoutV1::from_json(&merged_invalid.to_json().unwrap()).unwrap();
+        assert_eq!(sanitized.git_history_tab_merged_visibility, None);
+        assert_eq!(sanitized.git_history_tab_merged_target_ref, None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! All repository I/O belongs on a background worker, never in GPUI render.
 use crate::git_graph_search::GitGraphSearch;
 use git2::{BranchType, Delta, DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository, Sort};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -19,6 +19,43 @@ const MAX_FILTER_SCAN: usize = 2048;
 /// traversal budget even when a large repository contains no match.
 pub const MAX_HISTORY_SEARCH_SCAN: usize = 50_000;
 const MAX_RENAME_DIFF_DELTAS: usize = 512;
+
+/// Classic-compatible merged branch projection. The real Git parent links
+/// remain untouched; the graph collapse is only a display transformation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GitMergedBranchVisibility {
+    #[default]
+    ShowAll,
+    HideMergedNames,
+    HideMergedGraph,
+}
+
+impl GitMergedBranchVisibility {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::ShowAll => "showAll",
+            Self::HideMergedNames => "hideMergedNames",
+            Self::HideMergedGraph => "hideMergedGraph",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ShowAll => "Show All",
+            Self::HideMergedNames => "Hide Merged Names",
+            Self::HideMergedGraph => "Hide Merged Graph",
+        }
+    }
+
+    pub fn from_key(value: &str) -> Option<Self> {
+        match value {
+            "showAll" => Some(Self::ShowAll),
+            "hideMergedNames" => Some(Self::HideMergedNames),
+            "hideMergedGraph" => Some(Self::HideMergedGraph),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct GitBranchRow {
@@ -57,6 +94,12 @@ pub struct GitHistorySnapshot {
     pub truncated: bool,
     pub scanned_commits: usize,
     pub scan_limit_reached: bool,
+    /// Exact branch identifiers already proven reachable from the selected
+    /// merged-into target (e.g. refs/remotes/origin/release).
+    pub merged_branch_refs: Vec<String>,
+    /// Target OID for *display-only* graph collapse. May be absent when the
+    /// target was deleted or this history perspective is not all branches.
+    pub merged_target_oid: Option<String>,
 }
 
 /// Native-owned Git Graph selection. Favorites belong to independent Native
@@ -70,6 +113,11 @@ pub struct GitHistoryOptions {
     pub max_commits: usize,
     pub selected_ref: Option<String>,
     pub favorites: Vec<String>,
+    /// Native read-only equivalent of Classic's three merged-branch modes.
+    pub merged_visibility: GitMergedBranchVisibility,
+    /// Exact local branch name or refs/remotes/* of the merge target;
+    /// None means current HEAD. Never interpreted as a Git revspec.
+    pub merged_target_ref: Option<String>,
     /// Host-validated Workspace-relative paths, checked independently again
     /// by Native. Paths never become shell arguments or Git revspecs.
     pub file_path: Option<String>,
@@ -417,6 +465,57 @@ impl GitHistorySnapshot {
             });
         }
         tags.sort_by(|a, b| a.name.cmp(&b.name));
+        // All merged reachability checks happen in this cancellable background
+        // loader, never while rendering. Resolve only exact, enumerated refs,
+        // not user-controlled revspec expressions. A stale merge target yields
+        // no filter instead of making the entire Git History unusable.
+        let merge_view_enabled = options.all_branches
+            && !options.favorites_only
+            && options.selected_ref.is_none()
+            && options.merged_visibility != GitMergedBranchVisibility::ShowAll;
+        let (merged_branch_refs, merged_target_oid) = if merge_view_enabled {
+            let selected_target = options.merged_target_ref.as_deref();
+            let target = if let Some(requested) = selected_target {
+                tips.iter().find_map(|(oid, name, remote)| {
+                    let exact = if *remote {
+                        format!("refs/remotes/{name}")
+                    } else {
+                        name.clone()
+                    };
+                    (requested == exact || (!*remote && requested == format!("refs/heads/{name}")))
+                        .then_some((*oid, exact))
+                })
+            } else {
+                repo.head()
+                    .ok()
+                    .and_then(|head| head.peel_to_commit().ok())
+                    .map(|commit| (commit.id(), current.clone()))
+            };
+            if let Some((target_oid, target_name)) = target {
+                let mut merged = Vec::new();
+                for (oid, name, remote) in &tips {
+                    check_cancelled(&cancelled)?;
+                    let branch_ref = if *remote {
+                        format!("refs/remotes/{name}")
+                    } else {
+                        name.clone()
+                    };
+                    if branch_ref == target_name {
+                        continue;
+                    }
+                    if *oid == target_oid
+                        || repo.graph_descendant_of(target_oid, *oid).unwrap_or(false)
+                    {
+                        merged.push(branch_ref);
+                    }
+                }
+                (merged, Some(target_oid.to_string()))
+            } else {
+                (Vec::new(), None)
+            }
+        } else {
+            (Vec::new(), None)
+        };
         // The current-branch perspective must not accidentally walk every
         // local branch just because the branch picker lists those refs.
         // Keep their labels for reachable commits, but revwalk only HEAD.
@@ -617,7 +716,64 @@ impl GitHistorySnapshot {
             truncated,
             scanned_commits: scanned,
             scan_limit_reached,
+            merged_branch_refs,
+            merged_target_oid,
         })
+    }
+}
+
+impl GitHistorySnapshot {
+    /// Return a pure display copy. Real commit SHA/parents in the cached
+    /// snapshot and all Git operations remain anchored to original history.
+    /// Exactly mirrors Classic's hide-names / collapse-target-lane semantics.
+    pub fn display_commits(&self, visibility: GitMergedBranchVisibility) -> Vec<GitCommitRow> {
+        let mut rows = self.commits.clone();
+        if visibility == GitMergedBranchVisibility::ShowAll {
+            return rows;
+        }
+        let merged: HashSet<&str> = self.merged_branch_refs.iter().map(String::as_str).collect();
+        for row in &mut rows {
+            row.labels.retain(|label| !merged.contains(label.as_str()));
+        }
+        if visibility != GitMergedBranchVisibility::HideMergedGraph {
+            return rows;
+        }
+        let Some(target_oid) = self.merged_target_oid.as_deref() else {
+            return rows;
+        };
+        // A selected target outside this bounded page cannot safely be
+        // projected; use names-only filtering until more commits are loaded.
+        let by_oid: HashMap<&str, &GitCommitRow> = self
+            .commits
+            .iter()
+            .map(|row| (row.oid.as_str(), row))
+            .collect();
+        if !by_oid.contains_key(target_oid) {
+            return rows;
+        }
+        let mut target_reachable = HashSet::new();
+        let mut stack = vec![target_oid];
+        while let Some(oid) = stack.pop() {
+            if !target_reachable.insert(oid) {
+                continue;
+            }
+            if let Some(row) = by_oid.get(oid) {
+                stack.extend(row.parent_ids.iter().map(String::as_str));
+            }
+        }
+        let indices = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| target_reachable.contains(row.oid.as_str()).then_some(index))
+            .collect::<Vec<_>>();
+        for pair in indices.windows(2) {
+            let parent = rows[pair[1]].oid.clone();
+            rows[pair[0]].parent_ids = vec![parent];
+        }
+        if let Some(last) = indices.last().copied() {
+            rows[last].parent_ids.truncate(1);
+        }
+        rows
     }
 }
 
@@ -805,6 +961,199 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::fs;
+
+    #[test]
+    fn merged_projection_matches_classic_and_preserves_real_parent_edges() {
+        fn commit(id: &str, parents: &[&str], labels: &[&str]) -> GitCommitRow {
+            GitCommitRow {
+                oid: id.into(),
+                short: id.into(),
+                subject: id.into(),
+                author: "Test".into(),
+                parents: parents.len(),
+                parent_ids: parents.iter().map(|s| (*s).into()).collect(),
+                labels: labels.iter().map(|s| (*s).into()).collect(),
+            }
+        }
+        let source = vec![
+            commit("m5", &["m4", "f2"], &["main"]),
+            commit("f2", &["f1"], &["merged-feature"]),
+            commit("f1", &["m3"], &[]),
+            commit("m4", &["m3", "g2"], &[]),
+            commit("g2", &["g1"], &["refs/tags/v1.0"]),
+            commit("g1", &["m2"], &[]),
+            commit("m3", &["m2"], &[]),
+            commit("m2", &["m1"], &[]),
+            commit("m1", &[], &[]),
+        ];
+        let snapshot = GitHistorySnapshot {
+            current: "main".into(),
+            branches: vec![],
+            tags: vec![],
+            commits: source.clone(),
+            truncated: false,
+            scanned_commits: source.len(),
+            scan_limit_reached: false,
+            merged_branch_refs: vec!["merged-feature".into()],
+            merged_target_oid: Some("m5".into()),
+        };
+        assert_eq!(
+            snapshot.display_commits(GitMergedBranchVisibility::ShowAll)[0].parent_ids,
+            vec!["m4", "f2"]
+        );
+        let names = snapshot.display_commits(GitMergedBranchVisibility::HideMergedNames);
+        assert!(names[1].labels.is_empty());
+        assert_eq!(names[0].parent_ids, vec!["m4", "f2"]);
+        assert_eq!(names[4].labels, vec!["refs/tags/v1.0"]);
+        let flat = snapshot.display_commits(GitMergedBranchVisibility::HideMergedGraph);
+        let parents = flat
+            .iter()
+            .map(|r| r.parent_ids.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parents,
+            vec![
+                vec!["f2"],
+                vec!["f1"],
+                vec!["m4"],
+                vec!["g2"],
+                vec!["g1"],
+                vec!["m3"],
+                vec!["m2"],
+                vec!["m1"],
+                vec![],
+            ]
+        );
+        assert!(flat[1].labels.is_empty());
+        assert_eq!(
+            flat[0].parents, 2,
+            "real merge parents used by commit actions"
+        );
+        assert_eq!(snapshot.commits[0].parent_ids, vec!["m4", "f2"]);
+        assert_eq!(snapshot.commits[1].labels, vec!["merged-feature"]);
+        let layout = crate::git_graph_layout::layout_git_graph(
+            &flat
+                .iter()
+                .map(|r| crate::git_graph_layout::GraphCommit {
+                    oid: r.oid.clone(),
+                    parents: r.parent_ids.clone(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(layout.max_lanes, 1);
+        let missing = GitHistorySnapshot {
+            merged_target_oid: Some("older-than-current-page".into()),
+            ..snapshot
+        };
+        let names_fallback = missing.display_commits(GitMergedBranchVisibility::HideMergedGraph);
+        assert_eq!(names_fallback[0].parent_ids, vec!["m4", "f2"]);
+        assert!(names_fallback[1].labels.is_empty());
+    }
+
+    #[test]
+    fn merged_ancestry_uses_exact_branch_tips_and_never_mutates_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Ancestry", "ancestry@example.invalid").unwrap();
+        fs::write(dir.path().join("state.txt"), "base").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("state.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let base = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        repo.branch("merged", &repo.find_commit(base).unwrap(), false)
+            .unwrap();
+        repo.branch("not-merged", &repo.find_commit(base).unwrap(), false)
+            .unwrap();
+        repo.reference("refs/remotes/origin/stable", base, false, "test")
+            .unwrap();
+        fs::write(dir.path().join("state.txt"), "separate").unwrap();
+        index.add_path(Path::new("state.txt")).unwrap();
+        let other_tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let separate = repo
+            .commit(
+                Some("refs/heads/not-merged"),
+                &sig,
+                &sig,
+                "not-merged tip",
+                &other_tree,
+                &[&repo.find_commit(base).unwrap()],
+            )
+            .unwrap();
+        fs::write(dir.path().join("state.txt"), "current").unwrap();
+        index.add_path(Path::new("state.txt")).unwrap();
+        let head_tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let head = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "main tip",
+                &head_tree,
+                &[&repo.find_commit(base).unwrap()],
+            )
+            .unwrap();
+        let before = repo.head().unwrap().target();
+        let options = GitHistoryOptions {
+            all_branches: true,
+            merged_visibility: GitMergedBranchVisibility::HideMergedNames,
+            ..Default::default()
+        };
+        let loaded = GitHistorySnapshot::load_filtered(dir.path(), &options).unwrap();
+        assert_eq!(
+            loaded.merged_target_oid.as_deref(),
+            Some(head.to_string().as_str())
+        );
+        assert!(loaded.merged_branch_refs.contains(&"merged".into()));
+        assert!(loaded
+            .merged_branch_refs
+            .contains(&"refs/remotes/origin/stable".into()));
+        assert!(!loaded.merged_branch_refs.contains(&"not-merged".into()));
+        assert!(!loaded.merged_branch_refs.contains(&loaded.current));
+        let raw = loaded
+            .commits
+            .iter()
+            .find(|row| row.oid == base.to_string())
+            .unwrap();
+        assert!(raw.labels.iter().any(|label| label == "merged"));
+        let display = loaded.display_commits(GitMergedBranchVisibility::HideMergedNames);
+        let visual_base = display
+            .iter()
+            .find(|row| row.oid == base.to_string())
+            .unwrap();
+        assert!(!visual_base.labels.iter().any(|label| label == "merged"));
+        assert!(!visual_base
+            .labels
+            .iter()
+            .any(|label| label == "refs/remotes/origin/stable"));
+        let selected = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                merged_target_ref: Some("not-merged".into()),
+                ..options.clone()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            selected.merged_target_oid.as_deref(),
+            Some(separate.to_string().as_str())
+        );
+        assert!(!selected.merged_branch_refs.contains(&loaded.current));
+        assert!(selected.merged_branch_refs.contains(&"merged".into()));
+        let missing = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                merged_target_ref: Some("not-merged~1".into()),
+                ..options
+            },
+        )
+        .unwrap();
+        assert!(missing.merged_branch_refs.is_empty());
+        assert!(missing.merged_target_oid.is_none());
+        assert_eq!(repo.head().unwrap().target(), before);
+    }
 
     #[test]
     fn full_history_search_can_cancel_during_walk_without_changing_git_state() {

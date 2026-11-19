@@ -112,6 +112,61 @@ impl Workbench {
         self.compare_git_branch_files(name, direction, cx);
     }
 
+    /// Read-only merged branch display settings; switching cancels any stale
+    /// graph load and persists only the existing workspace-local tab layout.
+    pub(super) fn set_git_graph_merged_visibility(
+        &mut self,
+        visibility: GitMergedBranchVisibility,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation || !self.git_history_tab_open {
+            return;
+        }
+        if self.git_history_options.merged_visibility == visibility {
+            return;
+        }
+        self.git_history_options.merged_visibility = visibility;
+        self.save_mixed_pane_layout(cx);
+        self.refresh_git_history(cx);
+    }
+
+    /// Accept only a branch in the current snapshot, never arbitrary revspecs.
+    pub(super) fn set_git_graph_merged_target(
+        &mut self,
+        target: Option<String>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.workspace_generation || !self.git_history_tab_open {
+            return;
+        }
+        if let Some(reference) = target.as_deref() {
+            let valid = self.git_history.as_ref().is_some_and(|history| {
+                history.branches.iter().any(|branch| {
+                    let key = if branch.remote {
+                        format!("refs/remotes/{}", branch.name)
+                    } else {
+                        branch.name.clone()
+                    };
+                    key == reference
+                })
+            });
+            if !valid {
+                self.model
+                    .set_status("Git Graph merge target changed; refresh and retry");
+                cx.notify();
+                return;
+            }
+        }
+        if self.git_history_options.merged_target_ref == target {
+            return;
+        }
+        self.git_history_options.merged_target_ref = target;
+        self.save_mixed_pane_layout(cx);
+        self.refresh_git_history(cx);
+    }
+
     pub(super) fn render_center_git_graph(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
         let full_search = self.git_history_options.search_query.is_some();
@@ -120,7 +175,7 @@ impl Workbench {
         } else {
             self.git_history
                 .as_ref()
-                .map(|history| history.commits.clone())
+                .map(|history| history.display_commits(self.git_history_options.merged_visibility))
                 .unwrap_or_default()
         };
         // Layout MUST be built before filtering. Sparse search results must
@@ -174,7 +229,7 @@ impl Workbench {
                 let menu_oid = oid.clone();
                 let menu_subject = row.subject.clone();
                 let topology = rails.as_ref().and_then(|rows| rows.get(index)).cloned();
-                let is_merge = row.parents > 1;
+                let is_merge = row.parent_ids.len() > 1;
                 let is_head = head_tip.as_ref().is_some_and(|tip| tip == &row.short);
                 let mut labels = row.labels;
                 if let Some(tags) = tags_by_oid.get(&oid) {
@@ -327,6 +382,32 @@ impl Workbench {
                 }
             }
         };
+        let merged_mode = self.git_history_options.merged_visibility;
+        let merged_target = self.git_history_options.merged_target_ref.clone();
+        let merge_controls = all_branches && !favorite_scope && selected_ref.is_none();
+        let merged_target_display = merged_target
+            .as_deref()
+            .map(|reference| reference.strip_prefix("refs/remotes/").unwrap_or(reference))
+            .unwrap_or("HEAD")
+            .to_owned();
+        let merged_target_missing = merged_mode != GitMergedBranchVisibility::ShowAll
+            && merged_target.is_some()
+            && self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.merged_target_oid.is_none());
+        let merged_target_off_page = merged_mode == GitMergedBranchVisibility::HideMergedGraph
+            && self.git_history.as_ref().is_some_and(|history| {
+                history
+                    .merged_target_oid
+                    .as_deref()
+                    .is_some_and(|oid| !history.commits.iter().any(|row| row.oid == oid))
+            });
+        let current_branch_for_merge = self
+            .git_history
+            .as_ref()
+            .map(|history| history.current.clone())
+            .unwrap_or_else(|| "HEAD".into());
         let graph_generation = self.workspace_generation;
         let description = if loading {
             "Loading Git history…".to_owned()
@@ -488,6 +569,59 @@ impl Workbench {
                             ),
                         ),
                     )
+                    .when(merge_controls, |bar| {
+                        bar.child(
+                            div().text_xs().text_color(rgb(MUTED))
+                                .child(if compact_graph {
+                                    match merged_mode {
+                                        GitMergedBranchVisibility::ShowAll => "Merged: All".to_owned(),
+                                        GitMergedBranchVisibility::HideMergedNames => "Hide Names".to_owned(),
+                                        GitMergedBranchVisibility::HideMergedGraph => "Hide Graph".to_owned(),
+                                    }
+                                } else {
+                                    format!("Merged: {}", merged_mode.label())
+                                }),
+                        )
+                        .child(
+                            icon_button(
+                                "git-center-merged-visibility-menu",
+                                UiIcon::ChevronDown,
+                                "Classic merged branch visibility: show all, hide merged names, or flatten merged graph",
+                                false,
+                            )
+                            .dropdown_menu(Self::kit_git_center_merged_visibility_menu(
+                                cx.entity().downgrade(), merged_mode, graph_generation,
+                            )),
+                        )
+                        .when(merged_mode != GitMergedBranchVisibility::ShowAll, |bar| {
+                            bar.when(!compact_graph, |bar| bar.child(
+                                div().max_w(px(160.0)).truncate()
+                                    .text_xs().text_color(rgb(if merged_target_missing { TEXT } else { MUTED }))
+                                    .child(if merged_target_missing {
+                                        "Merge target missing".to_owned()
+                                    } else if merged_target_off_page {
+                                        "Target beyond loaded page".to_owned()
+                                    } else {
+                                        format!("Into: {merged_target_display}")
+                                    })
+                            ))
+                            .child(
+                                icon_button(
+                                    "git-center-merged-target-menu",
+                                    UiIcon::ChevronDown,
+                                    "Choose the target branch for merged-name and graph collapse",
+                                    false,
+                                )
+                                .dropdown_menu(Self::kit_git_center_merged_target_menu(
+                                    cx.entity().downgrade(),
+                                    branch_choices.clone(),
+                                    current_branch_for_merge,
+                                    merged_target.clone(),
+                                    graph_generation,
+                                )),
+                            )
+                        })
+                    })
                     .child(
                         icon_button(
                             "git-center-compare-menu",

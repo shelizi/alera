@@ -800,6 +800,103 @@ impl Workbench {
         }
     }
 
+    /// Three mutually exclusive Classic-compatible display-only projections.
+    pub(super) fn kit_git_center_merged_visibility_menu(
+        owner: gpui::WeakEntity<Self>,
+        active: GitMergedBranchVisibility,
+        generation: u64,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            menu = menu.label("Merged Branch Visibility");
+            for choice in [
+                GitMergedBranchVisibility::ShowAll,
+                GitMergedBranchVisibility::HideMergedNames,
+                GitMergedBranchVisibility::HideMergedGraph,
+            ] {
+                let owner = owner.clone();
+                let label = format!(
+                    "{}{}",
+                    if choice == active { "✓ " } else { "" },
+                    choice.label()
+                );
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.set_git_graph_merged_visibility(choice, generation, cx);
+                    });
+                }));
+            }
+            menu
+        }
+    }
+
+    /// List exact local and remote merge targets from the same bounded Git
+    /// snapshot. The popup is viewport-scrolled, not a large off-screen menu.
+    pub(super) fn kit_git_center_merged_target_menu(
+        owner: gpui::WeakEntity<Self>,
+        branches: Vec<GitBranchRow>,
+        current: String,
+        active: Option<String>,
+        generation: u64,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, window, _| {
+            menu = menu.label("Merged Into (read-only)");
+            let owner_current = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format!(
+                    "{}Current: {}",
+                    if active.is_none() { "✓ " } else { "" },
+                    current
+                ))
+                .on_click(move |_, _, cx| {
+                    let _ = owner_current.update(cx, |view, cx| {
+                        view.set_git_graph_merged_target(None, generation, cx);
+                    });
+                }),
+            );
+            menu = menu.separator();
+            for branch in &branches {
+                if branch.current {
+                    continue;
+                }
+                let reference = if branch.remote {
+                    format!("refs/remotes/{}", branch.name)
+                } else {
+                    branch.name.clone()
+                };
+                let title = format!(
+                    "{}{}{}",
+                    if active.as_deref() == Some(reference.as_str()) {
+                        "✓ "
+                    } else {
+                        ""
+                    },
+                    if branch.remote { "Remote: " } else { "Local: " },
+                    branch.name
+                );
+                let owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.set_git_graph_merged_target(Some(reference.clone()), generation, cx);
+                    });
+                }));
+            }
+            let height = (f32::from(window.viewport_size().height) - 120.0)
+                .max(160.0)
+                .min(480.0);
+            menu.scrollable(true).max_h(px(height))
+        }
+    }
+
     /// Compare branches only through the existing bounded read-only service.
     /// Both directions for the selected local branch, and one-click compare
     /// for other local branches, remain available in the main Graph viewport.
