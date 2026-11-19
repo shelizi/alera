@@ -84,3 +84,13 @@ Native graph now uses exact `GitCommitRow.parent_ids` with a native GPUI Canvas 
 Third-party evaluation (2026-11-18): reviewed rgitui's GPUI Git graph approach, but avoid importing its full application / its separately versioned GPUI runtime into Alera's pinned `gpui-kit = 0.9.0`. The new renderer uses the mature Canvas and `PathBuilder` primitives already provided by GPUI Kit and keeps the tested topology model as a UI-independent module.
 
 Remaining acceptance work: perform a Windows native visual smoke test against Classic for long-lived branches, nested merges, 3+ parent merges, search filtering and virtualized history scrolling; inspect performance with 512 rows, DPI scaling and light/dark theme; re-evaluate third-party layout integration only if exact topology parity cannot be attained safely.
+
+## 2026-11-19 follow-up verification
+
+- Commit `9508dff3c` aligns Canvas commit rows to Classic's 28px height / 16px lane pitch and adds an octopus three-parent merge regression.
+- Rust standalone topology tests: **7 PASS / 0 FAIL**, covering linear and merge history, unrelated tips, invalid parent edges, 512-row budget, >12-lane refusal, and three-parent merges.
+- Added reusable real-Git topology smoke source: `tool/testing/gpui_git_graph_real_repo_smoke.rs`; compile with `rustc --edition=2021 tool/testing/gpui_git_graph_real_repo_smoke.rs -o desktop_gpui/target/debug/graph_smoke.exe`.
+- Actual Alera `main`, 512 commits using `git log main -512 --topo-order --format='%H %P'`: **PASS**, 4 lanes, 17 merge commits and 1,108 edges.
+- Actual Alera all refs, 512 commits using `git log --all -512 --topo-order --format='%H %P'`: **PASS**, 5 lanes, 12 merge commits and 1,263 edges.
+- Rust 1.98 Windows `cargo check --offline --locked --bin alera-gpui-desktop -j 2`: **PASS** with only existing `dead_code` warnings for `menu_item` and `PanelRight`.
+- UI parity is **NOT DONE** without a built Windows Native executable and manual GUI checks for branch labels, right-click actions, filtering, 512-row scrolling and DPI/theme rendering. Do not equate a checked binary with a launched GUI.
