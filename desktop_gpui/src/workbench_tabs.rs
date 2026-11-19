@@ -9,7 +9,12 @@ use crate::terminal::{AgentActivityState, TerminalSession, TerminalTabContextTar
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchTabIdentity {
     Host(TerminalTabContextTarget),
-    Editor { editor_epoch: u64, instance: u64 },
+    Editor {
+        editor_epoch: u64,
+        instance: u64,
+    },
+    /// Workspace-local, read-only Git History view. Never a Host or editor owner.
+    GitHistory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +22,7 @@ pub enum WorkbenchTabKind {
     Terminal,
     Agent,
     Editor,
+    GitHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,6 +318,34 @@ mod tests {
             agent_state: None,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn git_history_is_one_view_only_tab_and_pin_does_not_survive_close() {
+        let graph = WorkbenchTab {
+            identity: WorkbenchTabIdentity::GitHistory,
+            kind: WorkbenchTabKind::GitHistory,
+            title: "Git Graph".into(),
+            dirty: false,
+            running: true,
+            agent_state: None,
+            interrupted: false,
+        };
+        let editor = editor(7, 1);
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        tabs.reconcile(7, vec![editor.clone(), graph.clone()], None);
+        assert!(tabs.select(&graph.identity));
+        assert!(tabs.set_pinned(&graph.identity, true));
+        assert!(tabs.move_to(&graph.identity, &editor.identity));
+        assert!(tabs.is_pinned(&graph.identity));
+        tabs.reconcile(7, vec![editor.clone(), graph.clone()], None);
+        assert_eq!(tabs.active(), Some(&graph.identity));
+        assert!(tabs.is_pinned(&graph.identity));
+        tabs.reconcile(7, vec![editor.clone()], None);
+        assert!(!tabs.contains(&graph.identity));
+        assert!(!tabs.is_pinned(&graph.identity));
+        tabs.reconcile(8, vec![editor, graph.clone()], None);
+        assert!(!tabs.is_pinned(&graph.identity));
     }
 
     #[test]
