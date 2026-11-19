@@ -81,6 +81,31 @@ pub struct GitSidebarLayout {
     pub total: usize,
 }
 
+/// Section bulk actions are based on the unfiltered Git snapshot, matching
+/// Classic's section counts even when a search hides some file rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GitSidebarSectionActions {
+    pub stage: Vec<PathBuf>,
+    pub unstage: Vec<PathBuf>,
+}
+
+pub fn section_actions(all: &[GitChangeRow], section: SectionKey) -> GitSidebarSectionActions {
+    let mut actions = GitSidebarSectionActions::default();
+    for row in all.iter().filter(|row| belongs(row, section)) {
+        if row.area.can_stage() {
+            actions.stage.push(row.relative.clone());
+        }
+        if row.area.can_unstage() {
+            actions.unstage.push(row.relative.clone());
+        }
+    }
+    actions.stage.sort();
+    actions.stage.dedup();
+    actions.unstage.sort();
+    actions.unstage.dedup();
+    actions
+}
+
 impl GitSidebarLayout {
     /// Rows in actual rendered order only. Shift selection must not traverse
     /// invisible rows in collapsed sections/folders.
@@ -411,5 +436,25 @@ mod tests {
             .insert((None, PathBuf::from("src/ui")));
         let collapsed = layout_git_sidebar(&all, &opts);
         assert_eq!(collapsed.visible_files().len(), 3);
+    }
+
+    #[test]
+    fn section_actions_use_all_rows_and_keep_index_areas_separate() {
+        let all = sample();
+        assert_eq!(
+            section_actions(&all, Some(GitChangeArea::Changes)).stage,
+            vec![
+                PathBuf::from("src/ui/main.rs"),
+                PathBuf::from("src/utils/mod.rs")
+            ]
+        );
+        assert_eq!(
+            section_actions(&all, Some(GitChangeArea::Staged)).unstage,
+            vec![PathBuf::from("src/ui/main.rs")]
+        );
+        let unified = section_actions(&all, None);
+        assert_eq!(unified.stage.len(), 3);
+        assert_eq!(unified.unstage.len(), 1);
+        assert!(!unified.stage.contains(&PathBuf::from("src/conflict.rs")));
     }
 }

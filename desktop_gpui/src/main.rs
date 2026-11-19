@@ -79,7 +79,7 @@ use alera_gpui_desktop::git_inspect::{
 use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
-    layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
+    layout_git_sidebar, section_actions, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
@@ -761,6 +761,8 @@ struct Workbench {
     git_trash_loading: bool,
     git_trash_request: u64,
     git_sidebar_options: GitSidebarOptions,
+    /// Keep infrequent Git/remote operations out of the primary Source Control workflow.
+    git_advanced_actions_open: bool,
     git_history: Option<GitHistorySnapshot>,
     /// Cached bounded topology and refs for the central Graph viewport.
     git_graph_render_cache: Option<native_git_graph_rows_ui::GitGraphViewCache>,
@@ -12636,7 +12638,7 @@ impl Render for Workbench {
                                         div()
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child("SOURCE CONTROL"),
+                                            .child(tr(self.settings_menu_locale, "Source Control")),
                                     )
                                     .child(
                                         div()
@@ -12661,9 +12663,52 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .px_2()
+                                    .py_1()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
                                     .child(git_summary),
+                            )
+                            // Classic puts the commit form before history and file groups.
+                            // Keep the main action labelled, not an icon-only mystery button.
+                            .child(
+                                div()
+                                    .id("git-commit-controls")
+                                    .px_2()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().w_full().min_w_0().child(git_commit_input))
+                                    .child(div().flex().items_center().gap_1()
+                                        .child(div().flex_1().min_w_0().child(Button::new("git-commit-submit")
+                                            .label(tr(self.settings_menu_locale, "Commit"))
+                                            .primary()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                let message = this.git_commit_input.read(cx).query().trim().to_owned();
+                                                this.run_git_action(GitUiAction::Commit(message), cx);
+                                            }))))
+                                        .child(icon_button(
+                                            "git-commit-offline-draft",
+                                            if git_commit_draft_loading { UiIcon::Close } else { UiIcon::Edit },
+                                            if git_commit_draft_loading {
+                                                "Discard pending local commit draft"
+                                            } else {
+                                                "Draft commit message from staged file names (offline, not AI)"
+                                            },
+                                            git_commit_draft_loading,
+                                        ).on_click(cx.listener(|this, _, _, cx| {
+                                            this.prepare_offline_commit_draft(cx);
+                                        })))
+                                        .child(icon_button("git-amend-confirm",
+                                            if git_amend_ready { UiIcon::Check } else { UiIcon::Edit },
+                                            if git_amend_loading { "Calculating amend preview…" } else if git_amend_ready { "Confirm replacing last local commit" } else { "Prepare Amend: preview current HEAD/index; confirm twice" },
+                                            git_amend_ready)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.prepare_or_confirm_git_amend(cx);
+                                            }))))
                             )
                             .child(if git_graph_open {
                                 div()
@@ -13176,37 +13221,6 @@ impl Render for Workbench {
                             } else {
                                 div().h(px(0.0)).into_any_element()
                             })
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(git_commit_input)
-                                    .child(icon_button(
-                                        "git-commit-offline-draft",
-                                        if git_commit_draft_loading { UiIcon::Close } else { UiIcon::Edit },
-                                        if git_commit_draft_loading {
-                                            "Discard pending local commit draft"
-                                        } else {
-                                            "Draft commit message from staged file names (offline, not AI)"
-                                        },
-                                        git_commit_draft_loading,
-                                    ).on_click(cx.listener(|this, _, _, cx| {
-                                        this.prepare_offline_commit_draft(cx);
-                                    })))
-                                    .child(icon_button("git-commit-submit", UiIcon::GitCommit, "Commit staged changes using this message", false)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let message = this.git_commit_input.read(cx).query().trim().to_owned();
-                                            this.run_git_action(GitUiAction::Commit(message), cx);
-                                        })))
-                                    .child(icon_button("git-amend-confirm",
-                                        if git_amend_ready { UiIcon::Check } else { UiIcon::Edit },
-                                        if git_amend_loading { "Calculating amend preview…" } else if git_amend_ready { "Confirm replacing last local commit" } else { "Prepare Amend: preview current HEAD/index; confirm twice" },
-                                        git_amend_ready)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.prepare_or_confirm_git_amend(cx);
-                                        }))),
-                            )
                             .when(git_ai_generate_loading, |panel| panel.child(
                                 div().text_xs().text_color(rgb(MUTED))
                                     .child("Generating with the Host-configured read-only Agent... Click Cancel to stop.")
@@ -13255,6 +13269,25 @@ impl Render for Workbench {
                             })
                             .child(
                                 div()
+                                    .id("git-advanced-actions-toggle")
+                                    .h(px(30.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child(icon(if self.git_advanced_actions_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                    .child(tr(self.settings_menu_locale, "Branch & remote actions"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.git_advanced_actions_open = !this.git_advanced_actions_open;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
                                     .flex()
                                     .items_center()
                                     .gap_1()
@@ -13263,6 +13296,7 @@ impl Render for Workbench {
                                         "Choose local branch".into(),
                                         cx,
                                     ))
+                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden())
                             )
                             .child(
                                 div()
@@ -13278,7 +13312,8 @@ impl Render for Workbench {
                                     .child(icon_button("git-fetch-remote", UiIcon::GitFetch, "Fetch upstream branches (no working tree change)", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.run_git_action(GitUiAction::Fetch, cx);
-                                        }))),
+                                        })))
+                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden()),
                             )
                             .child(div()
                                 .flex()
@@ -13404,6 +13439,7 @@ impl Render for Workbench {
                                             menu
                                         })
                                 })
+                                .when(!self.git_advanced_actions_open, |panel| panel.hidden())
                             )
                             .child(if git_conflict_count > 0 {
                                 div()
@@ -13547,8 +13583,21 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("git-change-list")
-                                    .max_h(px(135.0))
+                                    // A 135px file list hid nearly all changes behind a nested
+                                    // scrollbar. Let Source Control use the available sidebar
+                                    // height and keep the patch preview below the files.
+                                    .flex_1()
+                                    .min_h(px(240.0))
+                                    .max_h(px(640.0))
                                     .overflow_y_scroll()
+                                    .when(git_sidebar_matches == 0, |list| list.child(
+                                        div().px_2().py_3().text_xs().text_color(rgb(MUTED))
+                                            .child(if git_sidebar_total == 0 {
+                                                "No changes"
+                                            } else {
+                                                "No matching files"
+                                            })
+                                    ))
                                     .children(git_sidebar_entries.into_iter().enumerate().map(|(i, entry)| {
                                         let (change, depth) = match entry {
                                             GitSidebarEntry::Section { key, total, matching, expanded } => {
@@ -13558,12 +13607,31 @@ impl Render for Workbench {
                                                 } else {
                                                     format!("{label} ({matching}/{total})")
                                                 };
+                                                let actions = section_actions(&git_all_changes, key);
+                                                let stage_paths = actions.stage;
+                                                let unstage_paths = actions.unstage;
                                                 return div().id(("git-group-section", i))
-                                                    .flex().items_center().gap_2().py_1().text_xs()
+                                                    .flex().items_center().gap_2().h(px(30.0)).px_2().text_xs()
                                                     .cursor_pointer().text_color(rgb(TEXT))
                                                     .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(if expanded { "⌄" } else { "›" })
-                                                    .child(caption)
+                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
+                                                    .when(!stage_paths.is_empty(), |row| row.child(
+                                                        icon_button(("git-section-stage-all", i), UiIcon::GitStage,
+                                                            format!("Stage all {label} changes"), false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.run_git_action(GitUiAction::StageMany(stage_paths.clone()), cx);
+                                                            }))
+                                                    ))
+                                                    .when(!unstage_paths.is_empty(), |row| row.child(
+                                                        icon_button(("git-section-unstage-all", i), UiIcon::GitUnstage,
+                                                            format!("Unstage all {label} changes"), false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.run_git_action(GitUiAction::UnstageMany(unstage_paths.clone()), cx);
+                                                            }))
+                                                    ))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.toggle_git_sidebar_section(key, cx);
                                                     }))
@@ -13571,18 +13639,22 @@ impl Render for Workbench {
                                             }
                                             GitSidebarEntry::Folder { key, depth, total, matching, expanded } => {
                                                 let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                                let folder_icon = explorer_file_icon_element(
+                                                    &name, true, expanded, 16.0, MUTED,
+                                                );
                                                 let caption = if total == matching {
                                                     format!("{name} ({total})")
                                                 } else {
                                                     format!("{name} ({matching}/{total})")
                                                 };
                                                 return div().id(("git-group-folder", i))
-                                                    .flex().items_center().gap_2().py_1().text_xs()
+                                                    .flex().items_center().gap_2().h(px(28.0)).text_xs()
                                                     .pl(px(8.0 + depth as f32 * 14.0))
                                                     .cursor_pointer().text_color(rgb(MUTED))
                                                     .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(if expanded { "⌄" } else { "›" })
-                                                    .child(caption)
+                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                    .child(folder_icon)
+                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.toggle_git_sidebar_folder(key.clone(), cx);
                                                     }))
@@ -13602,11 +13674,16 @@ impl Render for Workbench {
                                         } else {
                                             change.relative.display().to_string()
                                         };
-                                        let label = if git_group_by_area {
-                                            format!("{} {}", change.label, display_name)
-                                        } else {
-                                            format!("{} {} {}", change.area.title(), change.label, display_name)
+                                        let file_icon = explorer_file_icon_element(
+                                            &display_name, false, false, 16.0, MUTED,
+                                        );
+                                        let status_color = match change.label {
+                                            "A" | "?" | "U" => 0x77c79b,
+                                            "D" | "CONFLICT" => 0xe58d8d,
+                                            _ => 0xe7b96a,
                                         };
+                                        let status_label = change.label;
+                                        let area_label = change.area.title();
                                         let can_stage = change.area.can_stage();
                                         let can_unstage = change.area.can_unstage();
                                         let relative = change.relative;
@@ -13627,7 +13704,17 @@ impl Render for Workbench {
                                                 .flex_1()
                                                 .min_w_0()
                                                 .cursor_pointer()
-                                                .child(label)
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(file_icon)
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(display_name))
+                                                .when(!git_group_by_area, |row| row.child(
+                                                    div().text_xs().text_color(rgb(MUTED)).child(area_label)
+                                                ))
+                                                .child(div().min_w(px(14.0)).text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(status_color)).child(status_label))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                                                     let modifiers = event.modifiers();
                                                     let multi = modifiers.control || modifiers.platform;
@@ -16346,6 +16433,7 @@ fn main() {
                             git_trash_loading: false,
                             git_trash_request: 0,
                             git_sidebar_options: GitSidebarOptions::default(),
+                            git_advanced_actions_open: false,
                             git_history: None,
                             git_graph_render_cache: None,
                             git_center_graph_scroll: UniformListScrollHandle::new(),
