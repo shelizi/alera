@@ -599,6 +599,24 @@ mod tests {
     }
 
     #[test]
+    fn git_history_moves_between_mixed_panes_without_cloning_editor_or_pty() {
+        let terminal = host("terminal-1");
+        let file = editor(7, 2);
+        let graph = WorkbenchTabIdentity::GitHistory;
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[terminal.clone(), file.clone(), graph.clone()]);
+        assert!(panes.split_with(&graph));
+        assert_unique(&panes);
+        expect(&panes, PaneSlot::Primary, &[terminal.clone(), file.clone()]);
+        expect(&panes, PaneSlot::Secondary, &[graph.clone()]);
+        assert_eq!(panes.active_in(PaneSlot::Secondary), Some(&graph));
+        assert!(panes.move_to(&graph, PaneSlot::Primary));
+        assert_unique(&panes);
+        assert!(!panes.has_secondary());
+        expect(&panes, PaneSlot::Primary, &[terminal, file, graph]);
+    }
+
+    #[test]
     fn restored_host_pane_positions_require_running_exact_three_part_identity() {
         let left = host("left");
         let right = host("right");

@@ -1,11 +1,12 @@
-//! Full-height, read-only projection of the same bounded Native Git Graph.
-//! The mixed Terminal/Editor panes stay mounted but hidden while this surface
-//! is active, so opening/closing does not select, save or dispose their tabs.
+//! Read-only mixed-pane Git History tab backed by the bounded Native Git Graph.
+//! A first-class mixed tab now owns only presentation and pane placement.
+//! It never owns, saves, closes or duplicates Editor buffers or Host PTYs.
 
 use super::*;
 
 impl Workbench {
     pub(super) fn open_center_git_graph(&mut self, cx: &mut Context<Self>) {
+        self.git_history_tab_open = true;
         self.git_graph_center_open = true;
         // Classic's main-area Graph starts with all reachable branch tips.
         // Keep an explicitly selected reference or favorites projection intact.
@@ -17,7 +18,12 @@ impl Workbench {
         }
         let first_open = !self.git_history_open;
         self.git_history_open = true;
-        if first_open || expand_all {
+        self.sync_mixed_tabs(cx);
+        let identity = WorkbenchTabIdentity::GitHistory;
+        self.mixed_panes.activate(&identity);
+        self.mixed_tabs.select(&identity);
+        self.save_mixed_pane_layout(cx);
+        if first_open || expand_all || self.git_history.is_none() {
             self.refresh_git_history(cx);
         } else {
             cx.notify();
@@ -25,8 +31,7 @@ impl Workbench {
     }
 
     pub(super) fn close_center_git_graph(&mut self, cx: &mut Context<Self>) {
-        self.git_graph_center_open = false;
-        cx.notify();
+        self.close_mixed_tab(&WorkbenchTabIdentity::GitHistory, cx);
     }
 
     pub(super) fn render_center_git_graph(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -261,7 +266,7 @@ impl Workbench {
                         icon_button(
                             "git-center-close",
                             UiIcon::Close,
-                            "Close full-size Git Graph and return to the previous panes",
+                            "Close Git History tab without closing other workbench tabs",
                             false,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -349,6 +354,7 @@ impl Workbench {
                                 this.git_history_options.all_branches = false;
                                 this.git_history_options.favorites_only = false;
                                 this.git_history_options.selected_ref = None;
+                                this.save_mixed_pane_layout(cx);
                                 this.refresh_git_history(cx);
                             })),
                     )
@@ -366,6 +372,7 @@ impl Workbench {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.git_history_options.all_branches = true;
                                 this.git_history_options.selected_ref = None;
+                                this.save_mixed_pane_layout(cx);
                                 this.refresh_git_history(cx);
                             })),
                     )

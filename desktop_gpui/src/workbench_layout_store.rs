@@ -30,6 +30,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The only layout schema version this store reads or writes.
 pub const WORKBENCH_LAYOUT_VERSION: u32 = 1;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 const MAX_LAYOUT_BYTES: u64 = 64 * 1024;
 const MAX_SAVED_HOST_PANE_TABS: usize = 64;
 const MAX_SAVED_HOST_ID_BYTES: usize = 256;
@@ -141,6 +145,23 @@ pub struct SavedWorkbenchLayoutV1 {
     pub primary_active_host: Option<SavedWorkbenchHostTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_active_host: Option<SavedWorkbenchHostTab>,
+    /// Inert, workspace-local Git History tab state; not a Host or Git writer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub git_history_tab_open: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub git_history_tab_secondary: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub git_history_tab_pinned: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub git_history_tab_active: bool,
+    /// Optional until the first save: old V1 Graph tabs reopen with Classic's
+    /// all-branches default instead of silently falling back to HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_history_tab_all_branches: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub git_history_tab_favorites_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_history_tab_selected_ref: Option<String>,
 }
 
 impl SavedWorkbenchLayoutV1 {
@@ -232,7 +253,11 @@ impl SavedWorkbenchLayoutV1 {
             .filter(|key| secondary_editors.contains(key));
         let focused_pane = match self.focused_pane {
             SavedWorkbenchPane::Secondary
-                if secondary_editors.is_empty() && secondary_hosts.is_empty() =>
+                if secondary_editors.is_empty()
+                    && secondary_hosts.is_empty()
+                    && !(self.git_history_tab_open
+                        && self.split_enabled
+                        && self.git_history_tab_secondary) =>
             {
                 SavedWorkbenchPane::Primary
             }
@@ -253,6 +278,26 @@ impl SavedWorkbenchLayoutV1 {
             secondary_hosts,
             primary_active_host,
             secondary_active_host,
+            git_history_tab_open: self.git_history_tab_open,
+            git_history_tab_secondary: self.git_history_tab_open
+                && self.split_enabled
+                && self.git_history_tab_secondary,
+            git_history_tab_pinned: self.git_history_tab_open && self.git_history_tab_pinned,
+            git_history_tab_active: self.git_history_tab_open && self.git_history_tab_active,
+            git_history_tab_all_branches: self.git_history_tab_open.then_some(
+                self.git_history_tab_favorites_only
+                    || self.git_history_tab_all_branches.unwrap_or(true),
+            ),
+            git_history_tab_favorites_only: self.git_history_tab_open
+                && self.git_history_tab_favorites_only,
+            git_history_tab_selected_ref: self.git_history_tab_selected_ref.clone().filter(
+                |value| {
+                    self.git_history_tab_open
+                        && !value.is_empty()
+                        && value.len() <= 512
+                        && !value.chars().any(char::is_control)
+                },
+            ),
         }
     }
 }
@@ -329,6 +374,13 @@ mod tests {
             secondary_hosts: Vec::new(),
             primary_active_host: None,
             secondary_active_host: None,
+            git_history_tab_open: false,
+            git_history_tab_secondary: false,
+            git_history_tab_pinned: false,
+            git_history_tab_active: false,
+            git_history_tab_all_branches: None,
+            git_history_tab_favorites_only: false,
+            git_history_tab_selected_ref: None,
         }
     }
 
@@ -398,6 +450,70 @@ mod tests {
             .unwrap()
             .pinned_hosts
             .is_empty());
+    }
+
+    #[test]
+    fn git_history_tab_roundtrips_and_cannot_reopen_from_stale_flags() {
+        let mut saved = sample();
+        saved.primary_editors.clear();
+        saved.secondary_editors.clear();
+        saved.primary_active_editor = None;
+        saved.secondary_active_editor = None;
+        saved.git_history_tab_open = true;
+        saved.git_history_tab_secondary = true;
+        saved.git_history_tab_pinned = true;
+        saved.git_history_tab_active = true;
+        saved.git_history_tab_all_branches = Some(false);
+        saved.git_history_tab_selected_ref = Some("refs/heads/develop".into());
+        let json = saved.to_json().unwrap();
+        let restored = SavedWorkbenchLayoutV1::from_json(&json).unwrap();
+        assert_eq!(restored.focused_pane, SavedWorkbenchPane::Secondary);
+        assert!(restored.git_history_tab_open);
+        assert!(restored.git_history_tab_secondary);
+        assert!(restored.git_history_tab_pinned);
+        assert!(restored.git_history_tab_active);
+        assert_eq!(restored.git_history_tab_all_branches, Some(false));
+        assert_eq!(
+            restored.git_history_tab_selected_ref.as_deref(),
+            Some("refs/heads/develop")
+        );
+
+        let mut closed = restored;
+        closed.git_history_tab_open = false;
+        let normalized = SavedWorkbenchLayoutV1::from_json(&closed.to_json().unwrap()).unwrap();
+        assert!(!normalized.git_history_tab_secondary);
+        assert!(!normalized.git_history_tab_pinned);
+        assert!(!normalized.git_history_tab_active);
+        assert_eq!(normalized.git_history_tab_all_branches, None);
+        assert_eq!(normalized.git_history_tab_selected_ref, None);
+        assert!(!normalized.to_json().unwrap().contains("git_history_tab"));
+
+        let mut unsplit = saved;
+        unsplit.split_enabled = false;
+        let safe = SavedWorkbenchLayoutV1::from_json(&unsplit.to_json().unwrap()).unwrap();
+        assert!(!safe.git_history_tab_secondary);
+        assert_eq!(safe.focused_pane, SavedWorkbenchPane::Primary);
+
+        // A layout written by the previous Graph Tab implementation has no
+        // scope field; on upgrade the open view should follow Classic's all
+        // branch perspective, not silently revert to the current HEAD.
+        let mut older = sample();
+        older.git_history_tab_open = true;
+        assert_eq!(older.git_history_tab_all_branches, None);
+        let migrated = SavedWorkbenchLayoutV1::from_json(&older.to_json().unwrap()).unwrap();
+        assert_eq!(migrated.git_history_tab_all_branches, Some(true));
+
+        let mut favorites = older.clone();
+        favorites.git_history_tab_all_branches = Some(false);
+        favorites.git_history_tab_favorites_only = true;
+        let favorited = SavedWorkbenchLayoutV1::from_json(&favorites.to_json().unwrap()).unwrap();
+        assert_eq!(favorited.git_history_tab_all_branches, Some(true));
+        assert!(favorited.git_history_tab_favorites_only);
+
+        let mut invalid = older;
+        invalid.git_history_tab_selected_ref = Some("refs/heads/invalid\nref".into());
+        let sanitized = SavedWorkbenchLayoutV1::from_json(&invalid.to_json().unwrap()).unwrap();
+        assert_eq!(sanitized.git_history_tab_selected_ref, None);
     }
 
     #[test]

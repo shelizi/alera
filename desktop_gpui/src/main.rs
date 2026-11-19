@@ -741,7 +741,12 @@ struct Workbench {
     git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
+    /// Sidebar Graph visibility is independent of the mixed Git History tab.
+    git_history_sidebar_open: bool,
     /// Temporary full-height Graph projection; mixed Terminal/Editor tabs stay untouched.
+    /// Whether the real, workspace-local mixed-pane Git History tab exists.
+    git_history_tab_open: bool,
+    /// Whether the Git History tab currently has foreground focus.
     git_graph_center_open: bool,
     git_graph_ref_tab: GitGraphRefTab,
     git_history_options: GitHistoryOptions,
@@ -2463,18 +2468,18 @@ impl Workbench {
         self.git_graph_ref_tab = tab;
         if tab.needs_remote_history() && !self.git_history_options.all_branches {
             self.git_history_options.all_branches = true;
+            if self.git_history_tab_open { self.save_mixed_pane_layout(cx); }
             self.refresh_git_history(cx);
         }
         cx.notify();
     }
 
     fn toggle_git_history(&mut self, cx: &mut Context<Self>) {
-        self.git_history_open = !self.git_history_open;
-        if !self.git_history_open {
-            self.git_graph_center_open = false;
-        }
+        self.git_history_sidebar_open = !self.git_history_sidebar_open;
+        let was_open = self.git_history_open;
+        self.git_history_open = self.git_history_sidebar_open || self.git_history_tab_open;
         if self.git_history_open {
-            self.refresh_git_history(cx);
+            if !was_open || self.git_history.is_none() { self.refresh_git_history(cx); }
         } else {
             self.git_history_cancel.store(true, Ordering::Release);
             self.git_history_request = self.git_history_request.wrapping_add(1);
@@ -2530,6 +2535,7 @@ impl Workbench {
         self.git_history_options.selected_ref = None;
         self.git_history_options.favorites_only = false;
         self.git_history_open = true;
+        self.git_history_sidebar_open = true;
         self.refresh_git_history(cx);
         self.model
             .set_status("Loading selected Explorer item Git history…");
@@ -2742,6 +2748,7 @@ impl Workbench {
 
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         self.git_history_options.selected_ref = selected;
+        if self.git_history_tab_open { self.save_mixed_pane_layout(cx); }
         self.refresh_git_history(cx);
     }
 
@@ -3356,6 +3363,7 @@ impl Workbench {
         self.git_diff = None;
         self.git_diff_loading = true;
         self.git_history_open = true;
+        self.git_history_sidebar_open = true;
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move { compare_branch_files(&root, &selected, direction) })
@@ -5759,6 +5767,9 @@ impl Workbench {
         self.model = next;
         self.refresh_review_browser_url();
         self.center_view = CenterView::Terminal;
+        self.git_history_tab_open = false;
+        self.git_history_sidebar_open = false;
+        self.git_history_open = false;
         self.git_graph_center_open = false;
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
@@ -6522,6 +6533,7 @@ impl Workbench {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         self.git_history_open = true;
+        self.git_history_sidebar_open = true;
         self.load_git_history(Some(command), cx);
     }
 
@@ -6658,6 +6670,7 @@ impl Workbench {
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
         self.git_history_open = true;
+        self.git_history_sidebar_open = true;
         self.git_file_diff_paging = None;
         self.git_diff_loading = true;
         self.git_diff = None;
@@ -8552,6 +8565,13 @@ impl Workbench {
                 {
                     self.mixed_panes.toggle_axis();
                 }
+                self.git_history_tab_open = saved.git_history_tab_open;
+                self.git_graph_center_open = saved.git_history_tab_active;
+                if saved.git_history_tab_open {
+                    self.git_history_options.all_branches = saved.git_history_tab_all_branches.unwrap_or(true);
+                    self.git_history_options.favorites_only = saved.git_history_tab_favorites_only;
+                    self.git_history_options.selected_ref = saved.git_history_tab_selected_ref.clone();
+                }
                 self.mixed_layout_restore = Some(saved);
             }
             Ok(None) => {}
@@ -8648,6 +8668,14 @@ impl Workbench {
                 .mixed_panes
                 .active_in(PaneSlot::Secondary)
                 .and_then(&host_for),
+            git_history_tab_open: self.git_history_tab_open,
+            git_history_tab_secondary: self.mixed_panes.tabs_in(PaneSlot::Secondary)
+                .contains(&WorkbenchTabIdentity::GitHistory),
+            git_history_tab_pinned: self.mixed_tabs.is_pinned(&WorkbenchTabIdentity::GitHistory),
+            git_history_tab_active: self.git_graph_center_open,
+            git_history_tab_all_branches: self.git_history_tab_open.then_some(self.git_history_options.all_branches),
+            git_history_tab_favorites_only: self.git_history_options.favorites_only,
+            git_history_tab_selected_ref: self.git_history_options.selected_ref.clone(),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -8839,6 +8867,21 @@ impl Workbench {
                 }
             }
         }
+        // Restore a view-only Git History tab after reconciling real Host/Editor
+        // owners. Its saved identity cannot start a PTY or read editor buffers.
+        if saved.git_history_tab_open {
+            let graph = WorkbenchTabIdentity::GitHistory;
+            if saved.git_history_tab_secondary && saved.split_enabled {
+                self.mixed_panes.move_to(&graph, PaneSlot::Secondary);
+            }
+            if saved.git_history_tab_pinned {
+                self.mixed_tabs.set_pinned(&graph, true);
+            }
+            self.git_history_open = true;
+            if self.git_history.is_none() {
+                self.refresh_git_history(cx);
+            }
+        }
         for wanted in [
             saved.primary_active_editor.as_ref(),
             saved.secondary_active_editor.as_ref(),
@@ -8890,6 +8933,14 @@ impl Workbench {
                 self.mixed_panes.focus_pane(PaneSlot::Secondary);
             }
         }
+        // Restore the focused Graph only after legacy Host/Editor active-tab
+        // restoration, or those later activations can steal its saved pane.
+        if saved.git_history_tab_open && saved.git_history_tab_active {
+            let graph = WorkbenchTabIdentity::GitHistory;
+            self.mixed_panes.activate(&graph);
+            self.mixed_tabs.select(&graph);
+            self.git_graph_center_open = true;
+        }
         self.save_mixed_pane_layout(cx);
     }
 
@@ -8933,7 +8984,9 @@ impl Workbench {
         // Only the exact, still-running Host identity may choose a brand.
         // Generic Terminal/Editor tabs retain their own icon; the separate
         // 6px Hook status dot and stopped label never move or get concealed.
-        let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::Editor {
+        let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::GitHistory {
+            icon(UiIcon::Graph, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
+        } else if tab.kind == WorkbenchTabKind::Editor {
             explorer_file_icon_element(
                 &tab.title, false, false, 12.0,
                 if selected { TEXT } else { MUTED },
@@ -9139,6 +9192,20 @@ impl Workbench {
                 }
             }
         }
+        if self.git_history_tab_open {
+            observed.push(WorkbenchTab {
+                identity: WorkbenchTabIdentity::GitHistory,
+                kind: WorkbenchTabKind::GitHistory,
+                title: "Git Graph".into(),
+                dirty: false,
+                running: true,
+                agent_state: None,
+                interrupted: false,
+            });
+            if self.git_graph_center_open {
+                preferred = Some(WorkbenchTabIdentity::GitHistory);
+            }
+        }
         self.mixed_tabs
             .reconcile(self.workspace_generation, observed, preferred.clone());
         let live_tabs: Vec<_> = self
@@ -9292,6 +9359,7 @@ impl Workbench {
             WorkbenchTabIdentity::Host(target) => {
                 self.terminals.index_for_context(target).is_some()
             }
+            WorkbenchTabIdentity::GitHistory => self.git_history_tab_open,
             WorkbenchTabIdentity::Editor {
                 editor_epoch,
                 instance,
@@ -9343,6 +9411,13 @@ impl Workbench {
                     } else {
                         window.focus(&self.terminal_input.read(cx).focus_handle(cx), cx);
                     }
+                }
+            }
+            WorkbenchTabIdentity::GitHistory => {
+                self.git_graph_center_open = true;
+                if !self.git_history_open {
+                    self.git_history_open = true;
+                    self.refresh_git_history(cx);
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
@@ -9415,6 +9490,16 @@ impl Workbench {
                     self.refresh_terminal_output(cx);
                 }
             }
+            WorkbenchTabIdentity::GitHistory => {
+                self.git_history_tab_open = false;
+                self.git_graph_center_open = false;
+                self.git_history_open = self.git_history_sidebar_open;
+                if !self.git_history_open {
+                    self.git_history_cancel.store(true, Ordering::Release);
+                    self.git_history_request = self.git_history_request.wrapping_add(1);
+                    self.git_history_loading = false;
+                }
+            }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 if let Some((slot, editor)) = self.editor_for_instance(*instance, cx) {
                     let closed =
@@ -9466,9 +9551,13 @@ impl Workbench {
             .mixed_panes
             .tabs_in(destination)
             .contains(&drag.identity);
-        if !source_in_destination && !self.transfer_editor_to_pane(&drag.identity, destination, cx)
-        {
-            return;
+        if !source_in_destination {
+            let moved = if drag.identity == WorkbenchTabIdentity::GitHistory {
+                self.mixed_panes.move_to(&drag.identity, destination)
+            } else {
+                self.transfer_editor_to_pane(&drag.identity, destination, cx)
+            };
+            if !moved { return; }
         }
         let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
         let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
@@ -9512,7 +9601,7 @@ impl Workbench {
                 WorkbenchTabIdentity::Host(target) => {
                     self.toggle_host_tab_pinned(target.clone(), cx);
                 }
-                WorkbenchTabIdentity::Editor { .. } => {
+                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => {
                     let next = !self.mixed_tabs.is_pinned(&id);
                     if self.mixed_tabs.set_pinned(&id, next) {
                         self.save_mixed_pane_layout(cx);
@@ -9543,13 +9632,23 @@ impl Workbench {
             MixedContextAction::SecondPane => {
                 // Host stays in its Host-owned runtime; Editor transfers its
                 // existing EditorSession into an independent native viewport.
-                if self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx) {
+                let moved = if id == WorkbenchTabIdentity::GitHistory {
+                    self.mixed_panes.move_to(&id, PaneSlot::Secondary)
+                } else {
+                    self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx)
+                };
+                if moved {
                     self.focus_mixed_tab(&id, window, cx);
                     self.refresh_terminal_split_output(cx);
                 }
             }
             MixedContextAction::FirstPane => {
-                if self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx) {
+                let moved = if id == WorkbenchTabIdentity::GitHistory {
+                    self.mixed_panes.move_to(&id, PaneSlot::Primary)
+                } else {
+                    self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx)
+                };
+                if moved {
                     self.focus_mixed_tab(&id, window, cx);
                     self.refresh_terminal_split_output(cx);
                 }
@@ -10422,6 +10521,9 @@ impl Render for Workbench {
         let git_original_is_active = active_git_original.is_some();
         let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_primary_active = self.mixed_panes.active_in(PaneSlot::Primary).cloned();
+        let graph_in_primary = mixed_primary_active == Some(WorkbenchTabIdentity::GitHistory);
+        let graph_in_secondary = mixed_secondary_active == Some(WorkbenchTabIdentity::GitHistory);
+        let graph_surface_visible = graph_in_primary || graph_in_secondary;
         let mixed_has_secondary = self.mixed_panes.has_secondary();
         // Classic shows one independent mixed Tab strip per visible pane.
         // The old single shared strip remains the unsplit fallback only.
@@ -10473,7 +10575,7 @@ impl Render for Workbench {
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
             WorkbenchTabIdentity::Host(target) => Some(target.clone()),
-            WorkbenchTabIdentity::Editor { .. } => None,
+            WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => None,
         });
         let mixed_secondary_key_target = mixed_secondary_host.clone();
         let mixed_secondary_vt_rows: Option<Vec<StyledRow>> =
@@ -10502,6 +10604,7 @@ impl Render for Workbench {
                         TerminalViewMode::Transcript => session.output.clone(),
                     }
                 }
+                WorkbenchTabIdentity::GitHistory => String::new(),
                 WorkbenchTabIdentity::Editor {
                     editor_epoch,
                     instance,
@@ -10758,7 +10861,7 @@ impl Render for Workbench {
                 .active_in(PaneSlot::Primary)
                 .and_then(|identity| match identity {
                     WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    WorkbenchTabIdentity::Editor { .. } => None,
+                    WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => None,
                 })
         } else {
             self.terminals.active_tab
@@ -11155,7 +11258,7 @@ impl Render for Workbench {
         let git_worktree_commit_input = self.git_worktree_commit_input.clone();
         let git_worktree_commit_armed = self.git_worktree_commit_armed.is_some();
         let git_rename_armed = self.git_rename_armed.is_some();
-        let git_graph_open = self.git_history_open;
+        let git_graph_open = self.git_history_sidebar_open;
         let git_graph_ref_tab = self.git_graph_ref_tab;
         let git_graph_all_branches = self.git_history_options.all_branches;
         let git_graph_favorites_only = self.git_history_options.favorites_only;
@@ -12378,7 +12481,7 @@ impl Render for Workbench {
                                                     this.toggle_git_history(cx);
                                                 })))
                                             .child(icon_button("git-graph-expand-center", UiIcon::Open,
-                                                "Open full-height Git Graph in the main work area", false)
+                                                "Open persistent Git History tab in workbench", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.open_center_git_graph(cx);
                                                 })))
@@ -12403,7 +12506,7 @@ impl Render for Workbench {
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
                                     .child(div().flex().items_center().gap_1()
-                                        .child(if self.git_graph_center_open {
+                                        .child(if graph_surface_visible {
                                             div().flex_1().text_xs().text_color(rgb(MUTED))
                                                 .child("Search in full-height Git Graph").into_any_element()
                                         } else {
@@ -12644,6 +12747,7 @@ impl Render for Workbench {
                                                         this.git_graph_ref_tab = GitGraphRefTab::Local;
                                                     }
                                                 }
+                                                if this.git_history_tab_open { this.save_mixed_pane_layout(cx); }
                                                 this.refresh_git_history(cx);
                                             })))
                                         .child(div()
@@ -12657,6 +12761,7 @@ impl Render for Workbench {
                                                 if this.git_history_options.favorites_only {
                                                     this.git_history_options.all_branches = true;
                                                 }
+                                                if this.git_history_tab_open { this.save_mixed_pane_layout(cx); }
                                                 this.refresh_git_history(cx);
                                             })))
                                         .child(div()
@@ -13982,7 +14087,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(!show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
+                                    .when(graph_in_primary || !show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -14043,11 +14148,6 @@ impl Render for Workbench {
                                             }),
                                     ),
                             )
-                            .child(if self.git_graph_center_open {
-                                self.render_center_git_graph(cx)
-                            } else {
-                                div().h(px(0.0)).into_any_element()
-                            })
                             .child(
                                 div()
                                     .id("mixed-pane-layout")
@@ -14057,8 +14157,6 @@ impl Render for Workbench {
                                     .flex()
                                     .when(mixed_has_secondary && mixed_split_horizontal, |pane| pane.flex_row())
                                     .when(!mixed_has_secondary || !mixed_split_horizontal, |pane| pane.flex_col())
-                                    // hidden() must follow display:flex to avoid re-enabling the pane.
-                                    .when(self.git_graph_center_open, |layout| layout.hidden())
                                     .child(
                                         div()
                                             .id("mixed-primary-pane")
@@ -14071,7 +14169,9 @@ impl Render for Workbench {
                                                 pane.bg(rgb(TERMINAL_DEFAULT_BG))
                                             })
                             .child(
-                                if let Some(original) = active_git_original.clone() {
+                                if graph_in_primary {
+                                    self.render_center_git_graph(cx)
+                                } else if let Some(original) = active_git_original.clone() {
                                     div().id("git-original-readonly-view")
                                         .flex_1().min_h_0().flex().flex_col()
                                         .bg(rgb(BG))
@@ -14127,7 +14227,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     // Match the VT viewport, including the 12px text inset,
@@ -14380,7 +14480,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
@@ -14572,7 +14672,9 @@ impl Render for Workbench {
                                             )
                                                     .into_any_element()
                                             })
-                                            .child(if let Some(editor) = secondary_native_editor {
+                                            .child(if graph_in_secondary {
+                                                self.render_center_git_graph(cx)
+                                            } else if let Some(editor) = secondary_native_editor {
                                                 div()
                                                     .id("mixed-secondary-editor")
                                                     .flex_1()
@@ -16079,6 +16181,8 @@ fn main() {
                             git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
                             git_history_open: false,
+                            git_history_sidebar_open: false,
+                            git_history_tab_open: false,
                             git_graph_center_open: false,
                             git_graph_ref_tab: GitGraphRefTab::Local,
                             git_history_options: GitHistoryOptions {
