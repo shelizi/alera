@@ -6,6 +6,7 @@ mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
 mod native_git_favorites_ui;
+mod native_git_graph_center_ui;
 mod native_git_graph_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
@@ -740,6 +741,8 @@ struct Workbench {
     git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
+    /// Temporary full-height Graph projection; mixed Terminal/Editor tabs stay untouched.
+    git_graph_center_open: bool,
     git_graph_ref_tab: GitGraphRefTab,
     git_history_options: GitHistoryOptions,
     git_favorites_busy: bool,
@@ -2467,6 +2470,9 @@ impl Workbench {
 
     fn toggle_git_history(&mut self, cx: &mut Context<Self>) {
         self.git_history_open = !self.git_history_open;
+        if !self.git_history_open {
+            self.git_graph_center_open = false;
+        }
         if self.git_history_open {
             self.refresh_git_history(cx);
         } else {
@@ -5201,6 +5207,7 @@ impl Workbench {
 
     fn open_editor(&mut self, cx: &mut Context<Self>) {
         self.git_original_active = false;
+        self.git_graph_center_open = false;
         let Some(path) = self.model.selected_path().map(PathBuf::from) else {
             self.model.set_status("Choose a text file before editing");
             cx.notify();
@@ -5752,6 +5759,7 @@ impl Workbench {
         self.model = next;
         self.refresh_review_browser_url();
         self.center_view = CenterView::Terminal;
+        self.git_graph_center_open = false;
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
         self.mixed_panes.reset();
@@ -9313,6 +9321,7 @@ impl Workbench {
             self.center_git_diff_hunk = None;
         }
         self.mixed_tab_context = None;
+        self.git_graph_center_open = false;
         self.explorer_preview_active = false;
         self.git_original_active = false;
         self.mixed_tabs.select(id);
@@ -12368,6 +12377,11 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_git_history(cx);
                                                 })))
+                                            .child(icon_button("git-graph-expand-center", UiIcon::Open,
+                                                "Open full-height Git Graph in the main work area", false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_center_git_graph(cx);
+                                                })))
                                             .child(icon_button("git-refresh", UiIcon::GitRefresh, "Refresh Git status", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
@@ -12389,7 +12403,13 @@ impl Render for Workbench {
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
                                     .child(div().flex().items_center().gap_1()
-                                        .child(div().flex_1().min_w_0().child(git_graph_search_input))
+                                        .child(if self.git_graph_center_open {
+                                            div().flex_1().text_xs().text_color(rgb(MUTED))
+                                                .child("Search in full-height Git Graph").into_any_element()
+                                        } else {
+                                            div().flex_1().min_w_0()
+                                                .child(git_graph_search_input).into_any_element()
+                                        })
                                         .child(icon_button("git-graph-search-all", UiIcon::Search,
                                             "Search reachable Git history in background (up to 50,000 commits; path scopes remain limited)", false)
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -14023,6 +14043,11 @@ impl Render for Workbench {
                                             }),
                                     ),
                             )
+                            .child(if self.git_graph_center_open {
+                                self.render_center_git_graph(cx)
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
                             .child(
                                 div()
                                     .id("mixed-pane-layout")
@@ -14032,6 +14057,8 @@ impl Render for Workbench {
                                     .flex()
                                     .when(mixed_has_secondary && mixed_split_horizontal, |pane| pane.flex_row())
                                     .when(!mixed_has_secondary || !mixed_split_horizontal, |pane| pane.flex_col())
+                                    // hidden() must follow display:flex to avoid re-enabling the pane.
+                                    .when(self.git_graph_center_open, |layout| layout.hidden())
                                     .child(
                                         div()
                                             .id("mixed-primary-pane")
@@ -16052,6 +16079,7 @@ fn main() {
                             git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
                             git_history_open: false,
+                            git_graph_center_open: false,
                             git_graph_ref_tab: GitGraphRefTab::Local,
                             git_history_options: GitHistoryOptions {
                                 ..Default::default()
