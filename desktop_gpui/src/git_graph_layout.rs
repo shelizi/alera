@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-pub const MAX_GRAPH_COMMITS: usize = 96;
+pub const MAX_GRAPH_COMMITS: usize = 512;
 pub const MAX_GRAPH_LANES: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +33,12 @@ pub struct GraphEdge {
 pub struct GraphLaneRow {
     pub oid: String,
     pub node_lane: usize,
+    /// Whether this commit is connected to an earlier visible child.
+    pub has_incoming: bool,
+    /// Stable palette IDs, retained when Git lanes shift columns.
+    pub lane_colors_before: Vec<usize>,
+    pub lane_colors_after: Vec<usize>,
+    pub node_color: usize,
     pub edges: Vec<GraphEdge>,
     /// A Unicode rail with one node (● or ◆) and any pending branch lanes.
     pub node_line: String,
@@ -59,7 +65,7 @@ pub enum GraphLayoutError {
 impl GraphLayoutError {
     pub fn message(self) -> &'static str {
         match self {
-            Self::TooManyCommits => "Graph capped at 96 commits",
+            Self::TooManyCommits => "Graph capped at 512 commits",
             Self::TooManyLanes => "More than 12 simultaneous branches",
             Self::InvalidCommit => "Commit or parent ID is empty",
             Self::DuplicateCommit => "Duplicate commit in history",
@@ -73,6 +79,10 @@ impl GraphLayoutError {
 struct PendingRow {
     oid: String,
     node_lane: usize,
+    has_incoming: bool,
+    lane_colors_before: Vec<usize>,
+    lane_colors_after: Vec<usize>,
+    node_color: usize,
     before_lanes: usize,
     after_lanes: usize,
     is_merge: bool,
@@ -87,6 +97,8 @@ pub fn layout_git_graph(commits: &[GraphCommit]) -> Result<GitGraphLayout, Graph
 
     let mut seen = HashSet::<String>::new();
     let mut live = Vec::<String>::new();
+    let mut colors = Vec::<usize>::new();
+    let mut next_color = 0usize;
     let mut pending = Vec::with_capacity(commits.len());
     let mut max_lanes = 1;
 
@@ -107,28 +119,42 @@ pub fn layout_git_graph(commits: &[GraphCommit]) -> Result<GitGraphLayout, Graph
             }
         }
 
-        let node_lane = match live.iter().position(|oid| oid == &commit.oid) {
-            Some(existing) => existing,
+        let (node_lane, has_incoming) = match live.iter().position(|oid| oid == &commit.oid) {
+            Some(existing) => (existing, true),
             None => {
                 if live.len() >= MAX_GRAPH_LANES {
                     return Err(GraphLayoutError::TooManyLanes);
                 }
                 live.push(commit.oid.clone());
-                live.len() - 1
+                colors.push(next_color);
+                next_color += 1;
+                (live.len() - 1, false)
             }
         };
         let before = live.clone();
+        let lane_colors_before = colors.clone();
+        let node_color = colors.remove(node_lane);
         live.remove(node_lane);
 
         // Reuse a pending parent lane rather than drawing a second disconnected
         // parent node. Insert first-parent at the removed node lane when free.
         let mut insert_at = node_lane.min(live.len());
-        for parent in &commit.parents {
+        for (parent_index, parent) in commit.parents.iter().enumerate() {
             if !live.iter().any(|tracked| tracked == parent) {
                 if live.len() >= MAX_GRAPH_LANES {
                     return Err(GraphLayoutError::TooManyLanes);
                 }
                 live.insert(insert_at, parent.clone());
+                // First parent continues this branch's color; additional
+                // parents use their own palette IDs until convergence.
+                let color = if parent_index == 0 {
+                    node_color
+                } else {
+                    let color = next_color;
+                    next_color += 1;
+                    color
+                };
+                colors.insert(insert_at, color);
                 insert_at += 1;
             }
         }
@@ -164,6 +190,10 @@ pub fn layout_git_graph(commits: &[GraphCommit]) -> Result<GitGraphLayout, Graph
         pending.push(PendingRow {
             oid: commit.oid.clone(),
             node_lane,
+            has_incoming,
+            lane_colors_before,
+            lane_colors_after: colors.clone(),
+            node_color,
             before_lanes: before.len(),
             after_lanes: live.len(),
             is_merge: commit.parents.len() > 1,
@@ -191,6 +221,10 @@ pub fn layout_git_graph(commits: &[GraphCommit]) -> Result<GitGraphLayout, Graph
             GraphLaneRow {
                 oid: row.oid,
                 node_lane: row.node_lane,
+                has_incoming: row.has_incoming,
+                lane_colors_before: row.lane_colors_before,
+                lane_colors_after: row.lane_colors_after,
+                node_color: row.node_color,
                 edges: row.edges,
                 node_line,
                 connector_line,
@@ -307,12 +341,18 @@ mod tests {
         }));
         assert_eq!(graph.rows[3].node_lane, 0);
         assert_eq!(graph.rows[4].edges.len(), 0);
+        assert_eq!(graph.rows[0].node_color, graph.rows[1].node_color);
+        assert_ne!(graph.rows[0].node_color, graph.rows[2].node_color);
+        assert!(graph.rows[1].has_incoming);
+        assert!(!graph.rows[0].has_incoming);
     }
 
     #[test]
     fn unrelated_tips_never_receive_fake_edges() {
         let graph = layout_git_graph(&[c("a", &[]), c("b", &[])]).unwrap();
         assert!(graph.rows.iter().all(|row| row.edges.is_empty()));
+        assert!(graph.rows.iter().all(|row| !row.has_incoming));
+        assert_ne!(graph.rows[0].node_color, graph.rows[1].node_color);
     }
 
     #[test]
@@ -337,6 +377,52 @@ mod tests {
             layout_git_graph(&[c("", &[])]),
             Err(GraphLayoutError::InvalidCommit)
         );
+    }
+
+    #[test]
+    fn octopus_merge_keeps_three_real_parent_edges_and_stable_colors() {
+        let graph = layout_git_graph(&[
+            c("octopus", &["left", "middle", "right"]),
+            c("left", &["shared"]),
+            c("middle", &["shared"]),
+            c("right", &["shared"]),
+            c("shared", &["root"]),
+            c("root", &[]),
+        ])
+        .unwrap();
+        assert_eq!(graph.max_lanes, 3);
+        let parents = graph.rows[0]
+            .edges
+            .iter()
+            .filter_map(|edge| match edge.kind {
+                GraphEdgeKind::Parent(index) => Some(index),
+                GraphEdgeKind::Through => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parents, vec![0, 1, 2]);
+        assert_eq!(graph.rows[0].lane_colors_after.len(), 3);
+        assert_eq!(graph.rows[0].lane_colors_after[0], graph.rows[1].node_color);
+        assert_eq!(graph.rows[0].lane_colors_after[1], graph.rows[2].node_color);
+        assert_eq!(graph.rows[0].lane_colors_after[2], graph.rows[3].node_color);
+        assert_eq!(graph.rows[4].node_lane, 0);
+        assert!(graph.rows[5].edges.is_empty());
+    }
+    #[test]
+    fn maximum_history_page_keeps_the_graph_visible() {
+        let commits = (0..MAX_GRAPH_COMMITS)
+            .map(|i| GraphCommit {
+                oid: i.to_string(),
+                parents: (i + 1 < MAX_GRAPH_COMMITS)
+                    .then(|| (i + 1).to_string())
+                    .into_iter()
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let graph = layout_git_graph(&commits).unwrap();
+        assert_eq!(graph.rows.len(), MAX_GRAPH_COMMITS);
+        assert_eq!(graph.max_lanes, 1);
+        assert!(graph.rows.iter().skip(1).all(|row| row.has_incoming));
+        assert!(graph.rows.iter().all(|row| row.node_color == 0));
     }
 
     #[test]

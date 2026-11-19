@@ -79,4 +79,28 @@
 
 ## Known implementation gap at this checkpoint
 
-Native graph now also carries `GitCommitRow.parent_ids` and renders bounded Unicode lanes instead of just the old ●/◆ markers. The current output is a functional textual rail layout, not a polished vector graph. The render is limited to 96 commits and 12 lanes; when topology cannot be represented, Native explicitly shows the simplified commit list. A Windows GPUI UI acceptance test, refined graph geometry/interaction, and file-filter history edge cases are still outstanding.
+Native graph now uses exact `GitCommitRow.parent_ids` with a native GPUI Canvas renderer: stable palette IDs for lane movement, per-parent curved connectors, filled/outlined commit nodes, HEAD highlighting, and compact branch/ref pills. Its layout budget is 512 commits / 12 concurrent lanes, matching bounded incremental history loading; sparse whole-repository search intentionally shows only commits without invented graph edges. Commit preview and right-click actions still use the existing validated Git services.
+
+Third-party evaluation (2026-11-18): reviewed rgitui's GPUI Git graph approach, but avoid importing its full application / its separately versioned GPUI runtime into Alera's pinned `gpui-kit = 0.9.0`. The new renderer uses the mature Canvas and `PathBuilder` primitives already provided by GPUI Kit and keeps the tested topology model as a UI-independent module.
+
+Remaining acceptance work: perform a Windows native visual smoke test against Classic for long-lived branches, nested merges, 3+ parent merges, search filtering and virtualized history scrolling; inspect performance with 512 rows, DPI scaling and light/dark theme; re-evaluate third-party layout integration only if exact topology parity cannot be attained safely.
+
+## 2026-11-19 follow-up verification
+
+- Commit `9508dff3c` aligns Canvas commit rows to Classic's 28px height / 16px lane pitch and adds an octopus three-parent merge regression.
+- Rust standalone topology tests: **7 PASS / 0 FAIL**, covering linear and merge history, unrelated tips, invalid parent edges, 512-row budget, >12-lane refusal, and three-parent merges.
+- Added reusable real-Git topology smoke source: `tool/testing/gpui_git_graph_real_repo_smoke.rs`; compile with `rustc --edition=2021 tool/testing/gpui_git_graph_real_repo_smoke.rs -o desktop_gpui/target/debug/graph_smoke.exe`.
+- Actual Alera `main`, 512 commits using `git log main -512 --topo-order --format='%H %P'`: **PASS**, 4 lanes, 17 merge commits and 1,108 edges.
+- Actual Alera all refs, 512 commits using `git log --all -512 --topo-order --format='%H %P'`: **PASS**, 5 lanes, 12 merge commits and 1,263 edges.
+- Rust 1.98 Windows `cargo check --offline --locked --bin alera-gpui-desktop -j 2`: **PASS** with only existing `dead_code` warnings for `menu_item` and `PanelRight`.
+- **Full Classic GUI parity is NOT DONE**: targeted Windows Git Graph checks now pass, but the remaining Classic interaction and appearance differences listed below still need validation.
+
+## 2026-11-19 real Windows GUI smoke (isolated Native preview)
+
+- Windows Rust 1.98 `cargo build --offline --locked --bin alera-gpui-desktop -j 2`: **PASS**, Native debug executable generated; only the two pre-existing unused-code warnings.
+- Launched the built Native EXE through the interactive Windows desktop with isolated `ALERA_GPUI_STATE_DIR` and `ALERA_RUNTIME_DIR`; intentionally no CLI/Host connection and no PTY actions. The initially attempted non-interactive process did not surface a window, so only the subsequent **visible interactive** launch counts as GUI evidence.
+- Source Control snapshot and Graph Toggle: **PASS**, 80 branch entries (bounded), 96 initially loaded commits, stable colored GPUI Canvas nodes and parent lanes, and visible branch/tag ref pills; the current repository's unrelated tracked modifications were not altered.
+- Resized the right sidebar to inspect actual lane geometry. Commit right-click popup and `Preview commit changes` read-only patch: **PASS**. No destructive menu item was selected.
+- `Tags` ref-tab shows tag entries; `sha:9508dff3` filters Commit rows to the correct result, and clearing the query restores unfiltered rows: **PASS**.
+- Incremental `Load More`: 96 -> 192 -> 384 -> **512 Commit rows**, with the 512 cap displayed: **PASS**. Mouse-wheel scroll on the Graph commit list shows older rows and colored lanes: **PASS**.
+- **Remaining gaps, do not mark 100% parity:** Classic's full main-area Graph/history view versus Native's max-220px right-sidebar commit viewport; actual multi-DPI and light/dark theme inspection; nested and 3+-parent merges on the GUI (headless topology tests are not pixel parity); all Branch/Commit actions and favorite/compare flows; sustained 512-row performance and long-lived ref navigation. These are separate GUI acceptance gates.
