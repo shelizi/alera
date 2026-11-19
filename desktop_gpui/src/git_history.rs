@@ -9,7 +9,13 @@ use std::path::{Component, Path, PathBuf};
 const MAX_HISTORY: usize = 96;
 pub const MAX_HISTORY_PAGE: usize = 512;
 pub const HISTORY_PAGE_STEP: usize = 96;
-const MAX_BRANCHES: usize = 80;
+/// Bounded complete branch inventory for the searchable Native picker.
+/// Commit rows remain separately bounded to 96–512; do not render the entire
+/// inventory in a popup or sidebar. Repositories exceeding this inventory
+/// explicitly report truncation instead of claiming exhaustive search.
+pub const MAX_BRANCHES: usize = 2048;
+const MAX_FILE_HISTORY_ALIASES: usize = 80;
+pub const MAX_BRANCH_PICKER_ROWS: usize = 32;
 const MAX_TAGS: usize = 80;
 const MAX_PATCH: usize = 24 * 1024;
 /// Path-limited graph reads are background jobs but may still traverse a
@@ -64,6 +70,49 @@ pub struct GitBranchRow {
     pub tip: String,
     pub remote: bool,
     pub favorite: bool,
+}
+
+/// A lightweight, in-memory search of the bounded branch inventory. This
+/// runs at render time (no repository I/O), and never allows arbitrary
+/// user-entered revspecs to become selectable Git actions.
+#[derive(Debug, Clone)]
+pub struct GitBranchPickerResults {
+    pub rows: Vec<GitBranchRow>,
+    pub match_count: usize,
+    pub inventory_count: usize,
+}
+
+pub fn filter_git_branch_picker(
+    branches: &[GitBranchRow],
+    query: &str,
+    local_only: bool,
+) -> GitBranchPickerResults {
+    let needle = query.trim().to_lowercase();
+    let mut rows = Vec::new();
+    let mut match_count = 0;
+    for branch in branches {
+        if local_only && (branch.remote || branch.current) {
+            continue;
+        }
+        let name = branch.name.to_lowercase();
+        let typed = if branch.remote {
+            format!("remote:{name}")
+        } else {
+            format!("local:{name}")
+        };
+        if !needle.is_empty() && !name.contains(&needle) && !typed.contains(&needle) {
+            continue;
+        }
+        match_count += 1;
+        if rows.len() < MAX_BRANCH_PICKER_ROWS {
+            rows.push(branch.clone());
+        }
+    }
+    GitBranchPickerResults {
+        rows,
+        match_count,
+        inventory_count: branches.len(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -376,22 +425,11 @@ impl GitHistorySnapshot {
         let mut branches = Vec::new();
         let mut tips = Vec::new();
         let mut truncated = false;
-        for branch in repo
-            .branches(
-                if options.all_branches
-                    || options.favorites_only
-                    || options
-                        .selected_ref
-                        .as_deref()
-                        .is_some_and(|reference| reference.starts_with("refs/remotes/"))
-                {
-                    None
-                } else {
-                    Some(BranchType::Local)
-                },
-            )
-            .map_err(|e| e.to_string())?
-        {
+        // The branch picker inventory is independent of the chosen history
+        // perspective. Include remote refs even when the graph walks only
+        // HEAD or one local ref, so remote search does not disappear after a
+        // perspective switch. The revwalk scope is still restricted below.
+        for branch in repo.branches(None).map_err(|e| e.to_string())? {
             check_cancelled(&cancelled)?;
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
             let Some(name) = branch.name().map_err(|e| e.to_string())?.map(str::to_owned) else {
@@ -553,7 +591,12 @@ impl GitHistorySnapshot {
             let matching = tips
                 .iter()
                 .filter(|(_, name, remote)| {
-                    name == selected && expected_remote.is_none_or(|expected| expected == *remote)
+                    name == selected
+                        && if *remote {
+                            expected_remote == Some(true)
+                        } else {
+                            expected_remote.is_none_or(|expected| !expected)
+                        }
                 })
                 .collect::<Vec<_>>();
             if let Some(tag_oid) = tag_selected {
@@ -640,7 +683,7 @@ impl GitHistorySnapshot {
                     if let Some(parent) = first_parent {
                         let next = file_history_paths.entry(parent.id()).or_default();
                         for alias in previous {
-                            if !next.contains(&alias) && next.len() < MAX_BRANCHES {
+                            if !next.contains(&alias) && next.len() < MAX_FILE_HISTORY_ALIASES {
                                 next.push(alias);
                             }
                         }
@@ -961,6 +1004,78 @@ mod tests {
     use super::*;
     use std::cell::Cell;
     use std::fs;
+
+    #[test]
+    fn searchable_branch_inventory_reaches_past_old_eighty_ref_cap_without_writing_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Picker", "picker@example.invalid").unwrap();
+        fs::write(dir.path().join("inventory.txt"), "base").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("inventory.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let base = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        let base_commit = repo.find_commit(base).unwrap();
+        for n in 0..125 {
+            repo.branch(&format!("feat/search-{n:03}"), &base_commit, false)
+                .unwrap();
+        }
+        repo.reference(
+            "refs/remotes/origin/search-remote-124",
+            base,
+            false,
+            "picker test",
+        )
+        .unwrap();
+        let before = repo.head().unwrap().target();
+        let loaded = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                all_branches: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(loaded.branches.len() >= 127);
+        assert!(!loaded
+            .branches
+            .iter()
+            .all(|row| row.name != "feat/search-124"));
+        let last = filter_git_branch_picker(&loaded.branches, "SEARCH-124", false);
+        assert_eq!(last.match_count, 1);
+        assert_eq!(last.rows[0].name, "feat/search-124");
+        assert!(!last.rows[0].remote);
+        let remote = filter_git_branch_picker(&loaded.branches, "remote:origin/search", false);
+        assert_eq!(remote.match_count, 1);
+        assert!(remote.rows[0].remote);
+        assert_eq!(
+            filter_git_branch_picker(&loaded.branches, "remote:origin/search", true).match_count,
+            0
+        );
+        let all = filter_git_branch_picker(&loaded.branches, "", false);
+        assert_eq!(all.match_count, loaded.branches.len());
+        assert_eq!(all.rows.len(), MAX_BRANCH_PICKER_ROWS);
+        // Remote refs remain searchable after choosing a HEAD-only scope.
+        let head_only =
+            GitHistorySnapshot::load_filtered(dir.path(), &GitHistoryOptions::default()).unwrap();
+        assert_eq!(
+            filter_git_branch_picker(&head_only.branches, "remote:origin/search", false)
+                .match_count,
+            1
+        );
+        let selected = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                selected_ref: Some("refs/heads/feat/search-124".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.commits[0].oid, base.to_string());
+        assert_eq!(repo.head().unwrap().target(), before);
+    }
 
     #[test]
     fn merged_projection_matches_classic_and_preserves_real_parent_edges() {
@@ -1417,7 +1532,8 @@ mod tests {
         drop(index);
         let snapshot = GitHistorySnapshot::load(dir.path()).unwrap();
         assert_eq!(snapshot.commits.len(), 2);
-        assert_eq!(snapshot.branches.len(), 2);
+        assert_eq!(snapshot.branches.len(), 3);
+        assert!(snapshot.branches.iter().any(|branch| branch.remote));
         assert_eq!(snapshot.tags.len(), 1);
         assert_eq!(snapshot.tags[0].name, "v1.0.0");
         assert_eq!(snapshot.tags[0].oid, first.to_string());
@@ -1529,7 +1645,7 @@ mod tests {
                 },
             )
             .is_err(),
-            "remote references require allBranches"
+            "remote shorthand must not bypass exact refs/remotes/ validation"
         );
         assert!(
             GitHistorySnapshot::load_filtered(

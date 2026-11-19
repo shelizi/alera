@@ -766,7 +766,24 @@ impl Workbench {
             }
             menu = menu.separator();
             menu = menu.label("Choose a branch (read-only)");
-            for branch in &branches {
+            let owner_search = owner.clone();
+            menu = menu.item(PopupMenuItem::new("Search all loaded branches…").on_click(
+                move |_, window, cx| {
+                    let _ = owner_search.update(cx, |view, cx| {
+                        view.open_git_center_branch_picker(
+                            GitGraphBranchPickerMode::Perspective,
+                            generation,
+                            cx,
+                        );
+                        window.focus(&view.git_branch_picker_input.read(cx).focus_handle(cx), cx);
+                    });
+                },
+            ));
+            menu = menu.label(format!(
+                "{} refs available · first 24 shown",
+                branches.len()
+            ));
+            for branch in branches.iter().take(24) {
                 let choice = GitGraphCenterPerspective::Branch {
                     name: branch.name.clone(),
                     remote: branch.remote,
@@ -864,10 +881,27 @@ impl Workbench {
                 }),
             );
             menu = menu.separator();
-            for branch in &branches {
-                if branch.current {
-                    continue;
-                }
+            let owner_search = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Search all merged-into targets…").on_click(
+                    move |_, window, cx| {
+                        let _ = owner_search.update(cx, |view, cx| {
+                            view.open_git_center_branch_picker(
+                                GitGraphBranchPickerMode::MergeTarget,
+                                generation,
+                                cx,
+                            );
+                            window
+                                .focus(&view.git_branch_picker_input.read(cx).focus_handle(cx), cx);
+                        });
+                    },
+                ),
+            );
+            menu = menu.label(format!(
+                "{} refs available · first 24 shown",
+                branches.len()
+            ));
+            for branch in branches.iter().filter(|branch| !branch.current).take(24) {
                 let reference = if branch.remote {
                     format!("refs/remotes/{}", branch.name)
                 } else {
@@ -949,11 +983,28 @@ impl Workbench {
                 menu = menu.separator();
             }
             menu = menu.label("Compare with HEAD");
+            let owner_search = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Search local branches to compare…").on_click(
+                    move |_, window, cx| {
+                        let _ = owner_search.update(cx, |view, cx| {
+                            view.open_git_center_branch_picker(
+                                GitGraphBranchPickerMode::Compare,
+                                generation,
+                                cx,
+                            );
+                            window
+                                .focus(&view.git_branch_picker_input.read(cx).focus_handle(cx), cx);
+                        });
+                    },
+                ),
+            );
             let mut added = 0usize;
-            for branch in &branches {
-                if branch.remote || branch.current {
-                    continue;
-                }
+            for branch in branches
+                .iter()
+                .filter(|branch| !branch.remote && !branch.current)
+                .take(24)
+            {
                 added += 1;
                 let owner = owner.clone();
                 let branch_name = branch.name.clone();
