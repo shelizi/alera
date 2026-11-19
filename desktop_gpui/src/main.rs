@@ -66,7 +66,7 @@ use alera_gpui_desktop::git_branch_compare::{
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
+    compare_git_refs, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP,
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
@@ -8596,6 +8596,9 @@ impl Workbench {
                     self.git_history_options.all_branches = saved.git_history_tab_all_branches.unwrap_or(true);
                     self.git_history_options.favorites_only = saved.git_history_tab_favorites_only;
                     self.git_history_options.selected_ref = saved.git_history_tab_selected_ref.clone();
+                    self.git_history_options.merged_visibility = saved.git_history_tab_merged_visibility
+                        .as_deref().and_then(GitMergedBranchVisibility::from_key).unwrap_or_default();
+                    self.git_history_options.merged_target_ref = saved.git_history_tab_merged_target_ref.clone();
                 }
                 self.mixed_layout_restore = Some(saved);
             }
@@ -8701,6 +8704,10 @@ impl Workbench {
             git_history_tab_all_branches: self.git_history_tab_open.then_some(self.git_history_options.all_branches),
             git_history_tab_favorites_only: self.git_history_options.favorites_only,
             git_history_tab_selected_ref: self.git_history_options.selected_ref.clone(),
+            git_history_tab_merged_visibility: (self.git_history_options.merged_visibility
+                != GitMergedBranchVisibility::ShowAll)
+                .then(|| self.git_history_options.merged_visibility.key().to_owned()),
+            git_history_tab_merged_target_ref: self.git_history_options.merged_target_ref.clone(),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -11288,6 +11295,10 @@ impl Render for Workbench {
         let git_graph_all_branches = self.git_history_options.all_branches;
         let git_graph_favorites_only = self.git_history_options.favorites_only;
         let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
+        let git_graph_hide_merged_lanes = git_graph_all_branches
+            && !git_graph_favorites_only
+            && git_graph_selected_ref.is_none()
+            && self.git_history_options.merged_visibility == GitMergedBranchVisibility::HideMergedGraph;
         let git_graph_file = self.git_history_options.file_path.clone();
         let git_graph_scope = self.git_history_options.git_diff_root.clone();
         let git_graph_full_search = self.git_history_options.search_query.clone();
@@ -11384,7 +11395,7 @@ impl Render for Workbench {
         } else {
             self.git_history
                 .as_ref()
-                .map(|history| history.commits.clone())
+                .map(|history| history.display_commits(self.git_history_options.merged_visibility))
                 .unwrap_or_default()
         };
         // A sparse historical search is not a contiguous Git Graph. Drawing
@@ -12941,6 +12952,8 @@ impl Render for Workbench {
                                         .child(div().flex_1().text_xs().text_color(rgb(TEXT))
                                             .child(if git_graph_full_search_active {
                                                 "Commit matches · parent rails hidden across skipped history"
+                                            } else if git_graph_hide_merged_lanes {
+                                                "Commits · merged lanes collapsed for display only"
                                             } else {
                                                 "Commits · graph lanes represent actual parent commits"
                                             }))
@@ -12964,7 +12977,7 @@ impl Render for Workbench {
                                             let menu_subject = row.subject.clone();
                                             let is_head = git_graph_head_tip.as_ref()
                                                 .is_some_and(|tip| tip == &row.short);
-                                            let is_merge = row.parents > 1;
+                                            let is_merge = row.parent_ids.len() > 1;
                                             let topology = git_graph_topology_rows.as_ref()
                                                 .and_then(|rows| rows.get(index)).cloned();
                                             let subject = row.subject;
