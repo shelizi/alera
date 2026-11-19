@@ -7,6 +7,7 @@ mod native_components;
 mod native_file_icons;
 mod native_git_favorites_ui;
 mod native_git_graph_center_ui;
+mod native_git_graph_compare_ui;
 mod native_git_graph_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
@@ -60,7 +61,7 @@ use alera_gpui_desktop::git_actions::{
     GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
-    compare_branch_files, diff_compared_file, open_compared_original_snapshot,
+    compare_branch_files, compare_branch_trees, diff_compared_file, open_compared_original_snapshot,
     original_compared_file, BranchFileComparison, CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
@@ -837,6 +838,11 @@ struct Workbench {
     git_diff: Option<String>,
     git_branch_comparison: Option<BranchFileComparison>,
     git_branch_compare_loading: bool,
+    /// Central Graph compares immutable branch tips; sidebar preserves merge-base mode.
+    git_graph_compare_center: bool,
+    git_graph_compare_selected: Option<usize>,
+    git_graph_compare_rows: Arc<Vec<String>>,
+    git_graph_compare_scroll: UniformListScrollHandle,
     git_diff_loading: bool,
     git_diff_request: u64,
     git_file_diff_paging: Option<GitFileDiffPaging>,
@@ -3378,6 +3384,27 @@ impl Workbench {
         direction: CompareDirection,
         cx: &mut Context<Self>,
     ) {
+        self.start_git_branch_comparison(selected, direction, false, cx);
+    }
+
+    /// Central Git Graph compares complete committed tips in either direction.
+    /// The existing Source Control comparator keeps its merge-base semantics.
+    fn compare_git_center_branch_files(
+        &mut self,
+        selected: String,
+        direction: CompareDirection,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_git_branch_comparison(selected, direction, true, cx);
+    }
+
+    fn start_git_branch_comparison(
+        &mut self,
+        selected: String,
+        direction: CompareDirection,
+        center: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.git_action_busy {
             self.git_action_status = "Finish current Git action before comparing branches".into();
             cx.notify();
@@ -3389,15 +3416,30 @@ impl Workbench {
         let ticket = self.git_diff_request;
         self.git_branch_comparison = None;
         self.git_branch_compare_loading = true;
+        self.git_graph_compare_center = center;
+        self.git_graph_compare_selected = None;
+        self.git_graph_compare_rows = Arc::new(Vec::new());
+        self.git_graph_compare_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
         self.git_diff = None;
         self.git_diff_loading = true;
         self.git_history_open = true;
-        self.git_history_sidebar_open = true;
-        self.model.set_status(format!("Comparing HEAD and {selected} (read-only); see Source Control"));
+        if !center {
+            self.git_history_sidebar_open = true;
+        }
+        self.model.set_status(format!(
+            "Comparing HEAD and {selected} (read-only); see {}",
+            if center { "Git Graph" } else { "Source Control" }
+        ));
         let report_branch = selected.clone();
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { compare_branch_files(&root, &selected, direction) })
+                .background_spawn(async move {
+                    if center {
+                        compare_branch_trees(&root, &selected, direction)
+                    } else {
+                        compare_branch_files(&root, &selected, direction)
+                    }
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
@@ -3407,12 +3449,17 @@ impl Workbench {
                 view.git_diff_loading = false;
                 match result {
                     Ok(comparison) => {
+                        let preview_first = center && !comparison.files.is_empty();
                         view.model.set_status(format!(
-                            "Compared HEAD with {report_branch}: {} file(s) · Source Control",
+                            "Compared HEAD with {report_branch}: {} file(s) - {}",
                             comparison.files.len(),
+                            if center { "Git Graph" } else { "Source Control" },
                         ));
                         view.git_diff = Some(comparison.summary());
                         view.git_branch_comparison = Some(comparison);
+                        if preview_first {
+                            view.preview_git_compared_file(0, false, cx);
+                        }
                     }
                     Err(error) => {
                         view.model.set_status(format!("Branch comparison refused: {error}"));
@@ -3455,6 +3502,7 @@ impl Workbench {
                         "Git comparison changed; select a file again".to_owned()
                     })?;
                     if current.selected_branch != comparison.selected_branch
+                        || current.source_oid != comparison.source_oid
                         || current.merge_base_oid != comparison.merge_base_oid
                         || current.target_oid != comparison.target_oid
                         || current.direction != comparison.direction
@@ -3469,7 +3517,7 @@ impl Workbench {
                         view.explorer_preview_active = false;
                         view.center_view = CenterView::Editor;
                         view.model.set_status(
-                            "Opened immutable merge-base Git original tab; editing and saving are disabled",
+                            "Opened immutable comparison-source Git original tab; editing and saving are disabled",
                         );
                     }
                     Err(error) => {
@@ -3491,24 +3539,53 @@ impl Workbench {
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         self.git_diff_loading = true;
+        self.git_graph_compare_selected = Some(index);
+        self.git_graph_compare_rows = Arc::new(Vec::new());
         cx.spawn(async move |view, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    if original {
-                        original_compared_file(&root, &comparison, index)
-                    } else {
-                        diff_compared_file(&root, &comparison, index)
+            let result = cx.background_spawn(async move {
+                let text = if original {
+                    original_compared_file(&root, &comparison, index)
+                } else {
+                    diff_compared_file(&root, &comparison, index)
+                }?;
+                // Prepare capped, pre-split display rows off the GPUI thread.
+                let mut rows = text.lines().take(8193).map(|line| {
+                    let mut clipped = line.chars().take(4097).collect::<String>();
+                    if clipped.chars().count() > 4096 {
+                        clipped = clipped.chars().take(4096).collect::<String>();
+                        clipped.push_str(" ... row clipped");
                     }
-                })
-                .await;
+                    clipped
+                }).collect::<Vec<_>>();
+                if rows.len() > 8192 {
+                    rows.truncate(8192);
+                    rows.push("... preview row limit reached".into());
+                }
+                Ok::<_, String>((text, rows))
+            }).await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
                     return;
                 }
                 view.git_diff_loading = false;
-                view.git_diff = Some(result.unwrap_or_else(|error| {
-                    format!("Git comparison file preview refused: {error}")
-                }));
+                match result {
+                    Ok((text, rows)) => {
+                        view.git_diff = Some(text);
+                        if view.git_graph_compare_center {
+                            view.git_graph_compare_selected = Some(index);
+                            view.git_graph_compare_rows = Arc::new(rows);
+                            view.git_graph_compare_scroll
+                                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                        }
+                    }
+                    Err(error) => {
+                        let message = format!("Git comparison file preview refused: {error}");
+                        view.git_diff = Some(message.clone());
+                        if view.git_graph_compare_center {
+                            view.git_graph_compare_rows = Arc::new(vec![message]);
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -3518,6 +3595,9 @@ impl Workbench {
     }
 
     fn preview_git_history(&mut self, request: GitReadRequest, cx: &mut Context<Self>) {
+        self.git_graph_compare_center = false;
+        self.git_graph_compare_selected = None;
+        self.git_graph_compare_rows = Arc::new(Vec::new());
         self.git_branch_comparison = None;
         self.git_branch_compare_loading = false;
         let root = self.model.root().to_path_buf();
@@ -16321,6 +16401,10 @@ fn main() {
                             git_diff: None,
                             git_branch_comparison: None,
                             git_branch_compare_loading: false,
+                            git_graph_compare_center: false,
+                            git_graph_compare_selected: None,
+                            git_graph_compare_rows: Arc::new(Vec::new()),
+                            git_graph_compare_scroll: UniformListScrollHandle::new(),
                             git_diff_loading: false,
                             git_diff_request: 0,
                             git_file_diff_paging: None,

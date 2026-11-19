@@ -1,6 +1,6 @@
 //! Read-only, structured local-branch comparison for the Native Git Graph.
-//! A comparison always uses merge-base -> selected target. It never switches
-//! HEAD, touches the index, or reads uncommitted working tree contents.
+//! Compare immutable committed trees, either merge-base -> target (sidebar)
+//! or current tip -> selected tip (central Graph). Never touch the worktree.
 use crate::git_inspect::{GitChangeArea, GitOriginalSnapshot};
 use git2::{BranchType, Delta, DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository};
 use std::path::{Component, Path, PathBuf};
@@ -10,10 +10,16 @@ const MAX_PREVIEW_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareDirection {
-    /// Changes introduced on the selected branch since the common ancestor.
+    /// Source: current branch; target: selected branch.
     CurrentToSelected,
-    /// Changes introduced on the current branch since the common ancestor.
+    /// Source: selected branch; target: current branch.
     SelectedToCurrent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComparisonBasis {
+    MergeBase,
+    BranchTips,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,13 +39,6 @@ impl ComparedFile {
             (None, None) => "(unknown)".into(),
         }
     }
-
-    fn preview_path(&self) -> Result<&Path, String> {
-        self.new_path
-            .as_deref()
-            .or(self.old_path.as_deref())
-            .ok_or_else(|| "No path for Git comparison item".to_owned())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,7 +46,10 @@ pub struct BranchFileComparison {
     pub current_branch: String,
     pub selected_branch: String,
     pub direction: CompareDirection,
+    pub basis: ComparisonBasis,
     pub merge_base_oid: String,
+    pub source_oid: String,
+    pub source_branch: String,
     pub target_oid: String,
     pub target_branch: String,
     pub ahead: usize,
@@ -58,18 +60,22 @@ pub struct BranchFileComparison {
 impl BranchFileComparison {
     pub fn title(&self) -> String {
         format!(
-            "{} → {} (merge-base..target)",
-            match self.direction {
-                CompareDirection::CurrentToSelected => &self.current_branch,
-                CompareDirection::SelectedToCurrent => &self.selected_branch,
-            },
-            self.target_branch
+            "{} -> {} ({})",
+            self.source_branch,
+            self.target_branch,
+            match self.basis {
+                ComparisonBasis::MergeBase => "merge-base..target",
+                ComparisonBasis::BranchTips => "committed tips",
+            }
         )
     }
+
     pub fn summary(&self) -> String {
-        format!("Compare: {}\nMerge base: {}\nTarget: {}\nTarget: {} ahead / {} behind\nChanged files: {}\nRead only · no branch switch",
-            self.title(), self.merge_base_oid, self.target_oid,
-            self.ahead, self.behind, self.files.len())
+        format!(
+            "Compare: {}\nMerge base: {}\nSource: {}\nTarget: {}\nTarget: {} ahead / {} behind\nChanged files: {}\nRead only - no branch switch",
+            self.title(), self.merge_base_oid, self.source_oid, self.target_oid,
+            self.ahead, self.behind, self.files.len()
+        )
     }
 }
 
@@ -115,8 +121,41 @@ pub fn compare_branch_files(
     selected_branch: &str,
     direction: CompareDirection,
 ) -> Result<BranchFileComparison, String> {
-    if !valid_branch(selected_branch) {
-        return Err("Invalid local branch for Git comparison".into());
+    compare_branch_files_with_basis(root, selected_branch, direction, ComparisonBasis::MergeBase)
+}
+
+/// Compare both complete branch tips. Swapping direction reverses additions,
+/// deletions, and patch signs, unlike independent merge-base comparisons.
+pub fn compare_branch_trees(
+    root: &Path,
+    selected_branch: &str,
+    direction: CompareDirection,
+) -> Result<BranchFileComparison, String> {
+    compare_branch_files_with_basis(
+        root,
+        selected_branch,
+        direction,
+        ComparisonBasis::BranchTips,
+    )
+}
+
+fn compare_branch_files_with_basis(
+    root: &Path,
+    selected_branch: &str,
+    direction: CompareDirection,
+    basis: ComparisonBasis,
+) -> Result<BranchFileComparison, String> {
+    let (name, kind) = if basis == ComparisonBasis::BranchTips {
+        selected_branch
+            .strip_prefix("refs/remotes/")
+            .map_or((selected_branch, BranchType::Local), |name| {
+                (name, BranchType::Remote)
+            })
+    } else {
+        (selected_branch, BranchType::Local)
+    };
+    if !valid_branch(name) {
+        return Err("Invalid branch for Git comparison".into());
     }
     let repo = repo_at(root)?;
     let head = repo.head().map_err(|error| error.to_string())?;
@@ -129,31 +168,43 @@ pub fn compare_branch_files(
         .to_owned();
     let current = head.peel_to_commit().map_err(|error| error.to_string())?;
     let selected = repo
-        .find_branch(selected_branch, BranchType::Local)
-        .map_err(|_| "Selected local branch is unavailable".to_owned())?
+        .find_branch(name, kind)
+        .map_err(|_| "Selected branch is unavailable".to_owned())?
         .get()
         .peel_to_commit()
         .map_err(|error| error.to_string())?;
     let common = repo
         .merge_base(current.id(), selected.id())
         .map_err(|_| "Selected branch and current branch have no merge-base".to_owned())?;
-    let (target, other, target_name) = match direction {
-        CompareDirection::CurrentToSelected => (&selected, &current, selected_branch.to_owned()),
-        CompareDirection::SelectedToCurrent => (&current, &selected, current_name.clone()),
+    let display_name = name.to_owned();
+    let (source, target, source_name, target_name) = match direction {
+        CompareDirection::CurrentToSelected => (
+            &current,
+            &selected,
+            current_name.clone(),
+            display_name.clone(),
+        ),
+        CompareDirection::SelectedToCurrent => {
+            (&selected, &current, display_name, current_name.clone())
+        }
     };
     let (ahead, behind) = repo
-        .graph_ahead_behind(target.id(), other.id())
+        .graph_ahead_behind(target.id(), source.id())
         .map_err(|error| error.to_string())?;
     let base_tree = repo
         .find_commit(common)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
+    let source_tree = if basis == ComparisonBasis::BranchTips {
+        source.tree().map_err(|error| error.to_string())?
+    } else {
+        base_tree
+    };
     let target_tree = target.tree().map_err(|error| error.to_string())?;
     let mut diff = repo
-        .diff_tree_to_tree(Some(&base_tree), Some(&target_tree), None)
+        .diff_tree_to_tree(Some(&source_tree), Some(&target_tree), None)
         .map_err(|error| error.to_string())?;
-    // Rename detection is bounded; a rename still remains correctly visible
-    // as add/delete if it is too large to analyze.
+    // Rename detection is bounded; large renames remain visible as add/delete.
     if diff.deltas().len() <= 512 {
         let mut options = DiffFindOptions::new();
         options.renames(true).rename_limit(200);
@@ -163,21 +214,30 @@ pub fn compare_branch_files(
     if diff.deltas().len() > MAX_FILES {
         return Err("Too many changed files for Native comparison (limit 128)".into());
     }
-    let mut files = Vec::new();
-    for item in diff.deltas() {
-        let old_path = item.old_file().path().map(Path::to_path_buf);
-        let new_path = item.new_file().path().map(Path::to_path_buf);
-        files.push(ComparedFile {
-            old_path,
-            new_path,
+    let files = diff
+        .deltas()
+        .map(|item| ComparedFile {
+            old_path: item.old_file().path().map(Path::to_path_buf),
+            new_path: item.new_file().path().map(Path::to_path_buf),
             status: status(item.status()),
-        });
-    }
+        })
+        .collect();
     Ok(BranchFileComparison {
         current_branch: current_name,
         selected_branch: selected_branch.to_owned(),
         direction,
+        basis,
         merge_base_oid: common.to_string(),
+        source_oid: if basis == ComparisonBasis::MergeBase {
+            common.to_string()
+        } else {
+            source.id().to_string()
+        },
+        source_branch: if basis == ComparisonBasis::MergeBase {
+            "merge-base".to_owned()
+        } else {
+            source_name
+        },
         target_oid: target.id().to_string(),
         target_branch: target_name,
         ahead,
@@ -208,8 +268,7 @@ fn bounded_text(bytes: &[u8]) -> Result<String, String> {
     Ok(text.to_owned())
 }
 
-/// Read the original committed blob from the exact merge-base tree, never the
-/// working disk file. An absent base blob means the file was newly added.
+/// Read the immutable source-side blob, never the working disk file.
 pub fn original_compared_file(
     root: &Path,
     comparison: &BranchFileComparison,
@@ -228,17 +287,17 @@ pub fn original_compared_file(
         return Err("Unsafe Git comparison path".into());
     }
     let repo = repo_at(root)?;
-    let base = repo
+    let source = repo
         .find_commit(
-            Oid::from_str(&comparison.merge_base_oid).map_err(|_| "Invalid comparison base ID")?,
+            Oid::from_str(&comparison.source_oid).map_err(|_| "Invalid comparison source ID")?,
         )
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    let entry = match base.get_path(path) {
+    let entry = match source.get_path(path) {
         Ok(entry) => entry,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             return Ok(format!(
-                "{}\n(New file; no original at merge-base)",
+                "{}\n(New file; no original at comparison source)",
                 path.display()
             ))
         }
@@ -248,13 +307,14 @@ pub fn original_compared_file(
         .find_blob(entry.id())
         .map_err(|_| "Original is not a regular Git blob".to_owned())?;
     Ok(format!(
-        "Original at merge-base: {}\n\n{}",
+        "Original at {}: {}\n\n{}",
+        comparison.source_branch,
         path.display(),
         bounded_text(blob.content())?
     ))
 }
 
-/// Open the exact merge-base committed blob as an immutable Native Git
+/// Open the exact source-side committed blob as an immutable Native Git
 /// Original tab. Unlike a textual comparison preview, this preserves a
 /// selectable tab and never reads or saves the current worktree file.
 pub fn open_compared_original_snapshot(
@@ -274,40 +334,48 @@ pub fn open_compared_original_snapshot(
     if !safe_git_path(path) {
         return Err("Unsafe comparison original path".into());
     }
-    if comparison.merge_base_oid.len() != 40
+    if comparison.source_oid.len() != 40
         || !comparison
-            .merge_base_oid
+            .source_oid
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err("Invalid merge-base commit ID".into());
+        return Err("Invalid comparison source commit ID".into());
     }
     let repo = repo_at(root)?;
-    let base = repo
-        .find_commit(Oid::from_str(&comparison.merge_base_oid).map_err(|e| e.to_string())?)
+    let source = repo
+        .find_commit(Oid::from_str(&comparison.source_oid).map_err(|e| e.to_string())?)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
-    let entry = base
+    let entry = source
         .get_path(path)
-        .map_err(|_| "New file has no merge-base original to open".to_owned())?;
+        .map_err(|_| "New file has no comparison source original to open".to_owned())?;
     let blob = repo
         .find_blob(entry.id())
-        .map_err(|_| "Merge-base original is not a regular Git blob".to_owned())?;
+        .map_err(|_| "Comparison source original is not a regular Git blob".to_owned())?;
     if blob.content().len() > 32 * 1024 {
-        return Err("Merge-base original exceeds read-only tab size limit".into());
+        return Err("Comparison source original exceeds read-only tab size limit".into());
     }
     if blob.is_binary() || blob.content().contains(&0) {
-        return Err("Binary merge-base original cannot open as text".into());
+        return Err("Binary comparison source original cannot open as text".into());
     }
     let content = std::str::from_utf8(blob.content())
-        .map_err(|_| "Merge-base original is not UTF-8 text".to_owned())?
+        .map_err(|_| "Comparison source original is not UTF-8 text".to_owned())?
         .to_owned();
     Ok(GitOriginalSnapshot {
         relative: path.to_path_buf(),
         area: GitChangeArea::Staged,
         blob_oid: entry.id().to_string(),
         content,
-        revision_label: Some(format!("MERGE BASE {}", &comparison.merge_base_oid[..8])),
+        revision_label: Some(format!(
+            "{} {}",
+            if comparison.basis == ComparisonBasis::MergeBase {
+                "MERGE BASE"
+            } else {
+                "SOURCE"
+            },
+            &comparison.source_oid[..8]
+        )),
     })
 }
 /// Show the patch for a selected file using the captured immutable Git trees.
@@ -321,19 +389,18 @@ pub fn diff_compared_file(
         .files
         .get(index)
         .ok_or("Comparison file index is stale")?;
-    let path = selected.preview_path()?;
-    if !safe_git_path(path)
-        || selected
-            .old_path
-            .as_deref()
-            .is_some_and(|p| !safe_git_path(p))
+    for path in [selected.old_path.as_deref(), selected.new_path.as_deref()]
+        .into_iter()
+        .flatten()
     {
-        return Err("Unsafe Git comparison path".into());
+        if !safe_git_path(path) {
+            return Err("Unsafe Git comparison path".into());
+        }
     }
     let repo = repo_at(root)?;
-    let base = repo
+    let source = repo
         .find_commit(
-            Oid::from_str(&comparison.merge_base_oid).map_err(|_| "Invalid comparison base ID")?,
+            Oid::from_str(&comparison.source_oid).map_err(|_| "Invalid comparison source ID")?,
         )
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
@@ -345,143 +412,70 @@ pub fn diff_compared_file(
         .map_err(|error| error.to_string())?;
     let mut options = DiffOptions::new();
     options.context_lines(3);
-    options.pathspec(path);
-    if let Some(old_path) = &selected.old_path {
-        if old_path != path {
-            options.pathspec(old_path);
-        }
-    }
-    let diff = repo
-        .diff_tree_to_tree(Some(&base), Some(&target), Some(&mut options))
+    let mut diff = repo
+        .diff_tree_to_tree(Some(&source), Some(&target), Some(&mut options))
         .map_err(|error| error.to_string())?;
-    let mut result = format!("{}\n{}\n\n", comparison.title(), selected.display_path());
-    diff.print(DiffFormat::Patch, |_, _, line| {
-        if result.len() < MAX_PREVIEW_BYTES {
-            if matches!(line.origin(), '+' | '-' | ' ') {
-                result.push(line.origin());
-            }
-            let content = String::from_utf8_lossy(line.content());
-            let room = MAX_PREVIEW_BYTES.saturating_sub(result.len());
-            result.push_str(&content.chars().take(room).collect::<String>());
+    if diff.deltas().len() <= 512 {
+        let mut find = DiffFindOptions::new();
+        find.renames(true).rename_limit(200);
+        diff.find_similar(Some(&mut find))
+            .map_err(|error| error.to_string())?;
+    }
+    // Filter the final full-tree diff by exact delta identity, not pathspec.
+    // Pathspec loses rename identity and can inadvertently combine two files.
+    let same_file = |old: Option<&Path>, new: Option<&Path>, delta_status: Delta| {
+        selected.old_path.as_deref() == old
+            && selected.new_path.as_deref() == new
+            && selected.status == status(delta_status)
+    };
+    if !diff.deltas().any(|item| {
+        same_file(
+            item.old_file().path(),
+            item.new_file().path(),
+            item.status(),
+        )
+    }) {
+        return Err("Comparison file changed; refresh before preview".into());
+    }
+    let mut result = format!(
+        "{}\n{} [{}]\n\n",
+        comparison.title(),
+        selected.display_path(),
+        selected.status
+    );
+    let mut truncated = false;
+    diff.print(DiffFormat::Patch, |delta, _, line| {
+        if !same_file(
+            delta.old_file().path(),
+            delta.new_file().path(),
+            delta.status(),
+        ) {
+            return true;
         }
+        if result.len() >= MAX_PREVIEW_BYTES {
+            truncated = true;
+            return true;
+        }
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            result.push(line.origin());
+        }
+        let content = String::from_utf8_lossy(line.content());
+        let room = MAX_PREVIEW_BYTES.saturating_sub(result.len());
+        let mut boundary = room.min(content.len());
+        while !content.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        result.push_str(&content[..boundary]);
+        truncated |= boundary < content.len();
         true
     })
     .map_err(|error| error.to_string())?;
-    if result.len() >= MAX_PREVIEW_BYTES {
-        result.push_str("\n… preview truncated");
+    if truncated {
+        result.push_str("\n... preview truncated");
     }
     Ok(result)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use git2::{Repository, Signature};
-
-    fn commit_file(repo: &Repository, root: &Path, path: &str, contents: &str, title: &str) {
-        std::fs::write(root.join(path), contents).unwrap();
-        let mut index = repo.index().unwrap();
-        index.add_path(Path::new(path)).unwrap();
-        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
-        let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
-        let author = Signature::now("Test", "test@example.invalid").unwrap();
-        if let Some(parent) = &parent {
-            repo.commit(Some("HEAD"), &author, &author, title, &tree, &[parent])
-                .unwrap();
-        } else {
-            repo.commit(Some("HEAD"), &author, &author, title, &tree, &[])
-                .unwrap();
-        }
-        index.write().unwrap();
-    }
-
-    #[test]
-    fn directional_comparison_only_reads_committed_tree_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = Repository::init(dir.path()).unwrap();
-        repo.config()
-            .unwrap()
-            .set_bool("core.autocrlf", false)
-            .unwrap();
-        commit_file(&repo, dir.path(), "shared.txt", "base\n", "base");
-        let base = repo.head().unwrap().peel_to_commit().unwrap();
-        let current_name = repo.head().unwrap().shorthand().unwrap().to_owned();
-        repo.branch("topic", &base, false).unwrap();
-        drop(base);
-        commit_file(
-            &repo,
-            dir.path(),
-            "shared.txt",
-            "current\n",
-            "current change",
-        );
-        let current_id = repo.head().unwrap().target().unwrap();
-        repo.set_head("refs/heads/topic").unwrap();
-        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
-            .unwrap();
-        commit_file(&repo, dir.path(), "shared.txt", "topic\n", "topic change");
-        let topic_id = repo.head().unwrap().target().unwrap();
-        repo.set_head(&format!("refs/heads/{current_name}"))
-            .unwrap();
-        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
-            .unwrap();
-        std::fs::write(dir.path().join("shared.txt"), "uncommitted secret\n").unwrap();
-        let current_to_selected =
-            compare_branch_files(dir.path(), "topic", CompareDirection::CurrentToSelected).unwrap();
-        assert_eq!(current_to_selected.target_oid, topic_id.to_string());
-        assert_eq!(current_to_selected.files.len(), 1);
-        assert_eq!(current_to_selected.ahead, 1);
-        assert_eq!(current_to_selected.behind, 1);
-        assert!(diff_compared_file(dir.path(), &current_to_selected, 0)
-            .unwrap()
-            .contains("+topic"));
-        assert!(!diff_compared_file(dir.path(), &current_to_selected, 0)
-            .unwrap()
-            .contains("uncommitted secret"));
-        assert!(original_compared_file(dir.path(), &current_to_selected, 0)
-            .unwrap()
-            .contains("base\n"));
-        let snap = open_compared_original_snapshot(dir.path(), &current_to_selected, 0).unwrap();
-        assert_eq!(snap.content, "base\n");
-        assert!(snap
-            .revision_label
-            .as_deref()
-            .unwrap_or_default()
-            .contains("MERGE BASE"));
-        let mut originals = crate::git_original_tabs::GitOriginalTabs::default();
-        originals.open(snap).unwrap();
-        assert!(originals.active().unwrap().title().contains("MERGE BASE"));
-        let selected_to_current =
-            compare_branch_files(dir.path(), "topic", CompareDirection::SelectedToCurrent).unwrap();
-        assert_eq!(selected_to_current.target_oid, current_id.to_string());
-        assert!(diff_compared_file(dir.path(), &selected_to_current, 0)
-            .unwrap()
-            .contains("+current"));
-        assert_eq!(repo.head().unwrap().target().unwrap(), current_id);
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("shared.txt")).unwrap(),
-            "uncommitted secret\n"
-        );
-    }
-
-    #[test]
-    fn invalid_names_paths_and_stale_indices_are_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = Repository::init(dir.path()).unwrap();
-        commit_file(&repo, dir.path(), "file.txt", "base\n", "initial");
-        for name in ["", "topic~1", "../topic", "missing"] {
-            assert!(
-                compare_branch_files(dir.path(), name, CompareDirection::CurrentToSelected)
-                    .is_err(),
-                "{name}"
-            );
-        }
-        let snapshot = compare_branch_files(
-            dir.path(),
-            repo.head().unwrap().shorthand().unwrap(),
-            CompareDirection::CurrentToSelected,
-        )
-        .unwrap();
-        assert!(diff_compared_file(dir.path(), &snapshot, 0).is_err());
-    }
-}
+#[path = "git_branch_compare_tests.rs"]
+mod tests;

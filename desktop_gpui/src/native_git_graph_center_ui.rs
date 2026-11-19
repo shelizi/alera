@@ -31,6 +31,9 @@ impl Workbench {
     }
 
     pub(super) fn close_center_git_graph(&mut self, cx: &mut Context<Self>) {
+        if self.git_graph_compare_center {
+            self.close_center_branch_compare(cx);
+        }
         self.close_mixed_tab(&WorkbenchTabIdentity::GitHistory, cx);
     }
 
@@ -97,11 +100,12 @@ impl Workbench {
         if generation != self.workspace_generation || !self.git_history_tab_open {
             return;
         }
+        let (short, remote) = name.strip_prefix("refs/remotes/")
+            .map_or((name.as_str(), false), |short| (short, true));
         let live = self.git_history.as_ref().is_some_and(|history| {
-            history
-                .branches
-                .iter()
-                .any(|branch| !branch.remote && !branch.current && branch.name == name)
+            history.branches.iter().any(|branch| {
+                branch.remote == remote && !branch.current && branch.name == short
+            })
         });
         if !live {
             self.model
@@ -109,7 +113,7 @@ impl Workbench {
             cx.notify();
             return;
         }
-        self.compare_git_branch_files(name, direction, cx);
+        self.compare_git_center_branch_files(name, direction, cx);
     }
 
     /// Read-only merged branch display settings; switching cancels any stale
@@ -205,7 +209,7 @@ impl Workbench {
                     && (mode != GitGraphBranchPickerMode::Compare || !branch.current)
             })
         });
-        if !valid || (mode == GitGraphBranchPickerMode::Compare && remote) {
+        if !valid {
             self.model
                 .set_status("Searched branch is stale; refresh Git Graph");
             cx.notify();
@@ -232,7 +236,7 @@ impl Workbench {
             }
             GitGraphBranchPickerMode::Compare => {
                 self.compare_git_graph_center_branch(
-                    name,
+                    if remote { format!("refs/remotes/{name}") } else { name },
                     CompareDirection::CurrentToSelected,
                     generation,
                     cx,
@@ -486,14 +490,17 @@ impl Workbench {
         let graph_generation = self.workspace_generation;
         let picker_data = self.git_branch_picker_mode.map(|mode| {
             let query = self.git_branch_picker_input.read(cx).query().to_owned();
-            (
-                mode,
-                filter_git_branch_picker(
-                    &branch_choices,
-                    &query,
-                    mode == GitGraphBranchPickerMode::Compare,
-                ),
-            )
+            let compare_choices;
+            let choices = if mode == GitGraphBranchPickerMode::Compare {
+                compare_choices = branch_choices.iter()
+                    .filter(|branch| !branch.current)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                &compare_choices
+            } else {
+                &branch_choices
+            };
+            (mode, filter_git_branch_picker(choices, &query, false))
         });
         let description = if loading {
             "Loading Git history…".to_owned()
@@ -506,6 +513,8 @@ impl Workbench {
             "No Git history loaded".into()
         };
 
+        let compare_panel = self.git_graph_compare_center
+            .then(|| self.render_center_branch_compare(cx));
         div()
             .id("git-center-full-graph")
             .flex_1()
@@ -727,7 +736,7 @@ impl Workbench {
                         icon_button(
                             "git-center-compare-menu",
                             UiIcon::History,
-                            "Compare local branch changes with HEAD (read-only)",
+                            "Compare entire committed tips in both directions (read-only)",
                             false,
                         )
                         .dropdown_menu(Self::kit_git_center_compare_menu(
@@ -804,7 +813,7 @@ impl Workbench {
                                 match mode {
                                     GitGraphBranchPickerMode::Perspective => "Choose graph perspective",
                                     GitGraphBranchPickerMode::MergeTarget => "Choose merged-into target",
-                                    GitGraphBranchPickerMode::Compare => "Compare local branch with HEAD",
+                                    GitGraphBranchPickerMode::Compare => "Compare local or remote branch with HEAD",
                                 },
                                 if available >= MAX_BRANCHES {
                                     " (inventory cap reached)"
@@ -874,6 +883,7 @@ impl Workbench {
                     .overflow_y_scroll()
                     .children(rows),
             )
+            .when_some(compare_panel, |pane, comparison| pane.child(comparison))
             .into_any_element()
     }
 }
