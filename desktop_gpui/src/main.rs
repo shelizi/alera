@@ -841,7 +841,8 @@ struct Workbench {
     /// Central Graph compares immutable branch tips; sidebar preserves merge-base mode.
     git_graph_compare_center: bool,
     git_graph_compare_selected: Option<usize>,
-    git_graph_compare_rows: Arc<Vec<String>>,
+    git_graph_compare_rows: Arc<Vec<native_git_graph_compare_ui::CenterBranchPatchRow>>,
+    git_graph_compare_hunk: Option<usize>,
     git_graph_compare_scroll: UniformListScrollHandle,
     git_diff_loading: bool,
     git_diff_request: u64,
@@ -3419,6 +3420,7 @@ impl Workbench {
         self.git_graph_compare_center = center;
         self.git_graph_compare_selected = None;
         self.git_graph_compare_rows = Arc::new(Vec::new());
+        self.git_graph_compare_hunk = None;
         self.git_graph_compare_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
         self.git_diff = None;
         self.git_diff_loading = true;
@@ -3541,6 +3543,7 @@ impl Workbench {
         self.git_diff_loading = true;
         self.git_graph_compare_selected = Some(index);
         self.git_graph_compare_rows = Arc::new(Vec::new());
+        self.git_graph_compare_hunk = None;
         cx.spawn(async move |view, cx| {
             let result = cx.background_spawn(async move {
                 let text = if original {
@@ -3548,19 +3551,9 @@ impl Workbench {
                 } else {
                     diff_compared_file(&root, &comparison, index)
                 }?;
-                // Prepare capped, pre-split display rows off the GPUI thread.
-                let mut rows = text.lines().take(8193).map(|line| {
-                    let mut clipped = line.chars().take(4097).collect::<String>();
-                    if clipped.chars().count() > 4096 {
-                        clipped = clipped.chars().take(4096).collect::<String>();
-                        clipped.push_str(" ... row clipped");
-                    }
-                    clipped
-                }).collect::<Vec<_>>();
-                if rows.len() > 8192 {
-                    rows.truncate(8192);
-                    rows.push("... preview row limit reached".into());
-                }
+                // Parse old/new line positions and hunk targets only once in
+                // the background. Virtual UI renders cached bounded rows.
+                let rows = native_git_graph_compare_ui::parse_center_branch_patch_rows(&text);
                 Ok::<_, String>((text, rows))
             }).await;
             view.update(cx, |view, cx| {
@@ -3582,7 +3575,9 @@ impl Workbench {
                         let message = format!("Git comparison file preview refused: {error}");
                         view.git_diff = Some(message.clone());
                         if view.git_graph_compare_center {
-                            view.git_graph_compare_rows = Arc::new(vec![message]);
+                            view.git_graph_compare_rows = Arc::new(
+                                native_git_graph_compare_ui::parse_center_branch_patch_rows(&message),
+                            );
                         }
                     }
                 }
@@ -3598,6 +3593,7 @@ impl Workbench {
         self.git_graph_compare_center = false;
         self.git_graph_compare_selected = None;
         self.git_graph_compare_rows = Arc::new(Vec::new());
+        self.git_graph_compare_hunk = None;
         self.git_branch_comparison = None;
         self.git_branch_compare_loading = false;
         let root = self.model.root().to_path_buf();
@@ -16404,6 +16400,7 @@ fn main() {
                             git_graph_compare_center: false,
                             git_graph_compare_selected: None,
                             git_graph_compare_rows: Arc::new(Vec::new()),
+                            git_graph_compare_hunk: None,
                             git_graph_compare_scroll: UniformListScrollHandle::new(),
                             git_diff_loading: false,
                             git_diff_request: 0,
