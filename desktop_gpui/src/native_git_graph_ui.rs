@@ -4,14 +4,17 @@ use alera_gpui_desktop::git_graph_layout::{GraphLaneRow, MAX_GRAPH_LANES};
 use gpui::{canvas, point, prelude::*, px, rgb, IntoElement, PathBuilder, Pixels, Point, Window};
 
 const PITCH: f32 = 16.0;
-const HEIGHT: f32 = 34.0;
+// Match Classic GitHistoryGraphPainter.laneHeight and its 28px commit rows.
+const HEIGHT: f32 = 28.0;
 const MID_Y: f32 = HEIGHT / 2.0;
 // Identical to Classic's AleraTokens GitHistoryGraphColorId palette.
 pub const REF_LOCAL_COLOR: u32 = 0x22C55E;
 pub const REF_REMOTE_COLOR: u32 = 0x60A5FA;
 pub const REF_TAG_COLOR: u32 = 0xF59E0B;
 const PALETTE: [u32; 8] = [
-    REF_LOCAL_COLOR, REF_REMOTE_COLOR, REF_TAG_COLOR,
+    REF_LOCAL_COLOR,
+    REF_REMOTE_COLOR,
+    REF_TAG_COLOR,
     0x82AAFF, // syntaxFunction (lane1)
     0xC792EA, // syntaxKeyword (lane2)
     0xFFCB6B, // syntaxLiteral (lane3)
@@ -66,8 +69,8 @@ fn circle(window: &mut Window, center: Point<Pixels>, radius: f32, color: u32, o
     }
 }
 
-/// Each row is a 34px high native vector rail, matching the Classic editor's
-/// colored, curved graph. The parent div remains the accessible click target.
+/// Each row is a 28px high native vector rail, matching Classic's commit
+/// row geometry. The parent div remains the accessible click target.
 pub fn graph_lane(
     layout: Option<GraphLaneRow>,
     max_lanes: usize,
@@ -84,7 +87,7 @@ pub fn graph_lane(
         move |bounds, _, window, _| {
             let at = |lane: usize, y: f32| {
                 point(
-                    bounds.left() + px(9.0 + lane as f32 * PITCH),
+                    bounds.left() + px(PITCH * (lane as f32 + 1.0)),
                     bounds.top() + px(y),
                 )
             };
@@ -140,6 +143,6 @@ pub fn graph_lane(
             }
         },
     )
-    .w(px(columns as f32 * PITCH + 9.0))
+    .w(px((columns as f32 + 1.0) * PITCH))
     .h(px(HEIGHT))
 }

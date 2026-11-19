@@ -380,6 +380,34 @@ mod tests {
     }
 
     #[test]
+    fn octopus_merge_keeps_three_real_parent_edges_and_stable_colors() {
+        let graph = layout_git_graph(&[
+            c("octopus", &["left", "middle", "right"]),
+            c("left", &["shared"]),
+            c("middle", &["shared"]),
+            c("right", &["shared"]),
+            c("shared", &["root"]),
+            c("root", &[]),
+        ])
+        .unwrap();
+        assert_eq!(graph.max_lanes, 3);
+        let parents = graph.rows[0]
+            .edges
+            .iter()
+            .filter_map(|edge| match edge.kind {
+                GraphEdgeKind::Parent(index) => Some(index),
+                GraphEdgeKind::Through => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parents, vec![0, 1, 2]);
+        assert_eq!(graph.rows[0].lane_colors_after.len(), 3);
+        assert_eq!(graph.rows[0].lane_colors_after[0], graph.rows[1].node_color);
+        assert_eq!(graph.rows[0].lane_colors_after[1], graph.rows[2].node_color);
+        assert_eq!(graph.rows[0].lane_colors_after[2], graph.rows[3].node_color);
+        assert_eq!(graph.rows[4].node_lane, 0);
+        assert!(graph.rows[5].edges.is_empty());
+    }
+    #[test]
     fn maximum_history_page_keeps_the_graph_visible() {
         let commits = (0..MAX_GRAPH_COMMITS)
             .map(|i| GraphCommit {
