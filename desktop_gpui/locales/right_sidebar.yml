@@ -51,11 +51,26 @@ _version: 2
   zh-TW: "推送"
   zh-CN: "推送"
   ja: "プッシュ"
+"Publish Branch":
+  en: "Publish Branch"
+  zh-TW: "發布分支"
+  zh-CN: "发布分支"
+  ja: "ブランチを公開"
+"Confirm Publish Branch":
+  en: "Confirm Publish Branch"
+  zh-TW: "確認發布分支"
+  zh-CN: "确认发布分支"
+  ja: "ブランチ公開を確認"
 "Confirm Push":
   en: "Confirm Push"
   zh-TW: "確認推送"
   zh-CN: "确认推送"
   ja: "プッシュを確定"
+"Confirm Publish Branch: create current branch on origin (or the only remote), set upstream, never force-update an existing remote branch":
+  en: "Confirm Publish Branch: create current branch on origin (or the only remote), set upstream, never force-update an existing remote branch"
+  zh-TW: "確認發布：將目前分支發布到 origin（或唯一遠端）並設定上游；絕不強制覆蓋現有遠端分支"
+  zh-CN: "确认发布：将当前分支发布到 origin（或唯一远端）并设置上游；绝不强制覆盖现有远端分支"
+  ja: "公開を確認：現在のブランチを origin（または唯一のリモート）に新規公開して追跡を設定します。既存ブランチは上書きしません"
 "Review diverged branches":
   en: "Review diverged branches"
   zh-TW: "檢視分歧的分支"

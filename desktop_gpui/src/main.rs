@@ -314,6 +314,7 @@ enum GitUiAction {
     StashApply,
     PullFfOnly,
     PushUpstream,
+    PublishBranch,
     MergeWithChoices(GitConflictPlan, Vec<(String, GitConflictChoice)>),
 }
 
@@ -383,6 +384,7 @@ impl GitUiAction {
                     | Self::PullSelected(_)
                     | Self::PushSelected(_)
                     | Self::PushUpstream
+                    | Self::PublishBranch
                     | Self::CreateWorktreeAtCommit(_, _)
             )
     }
@@ -418,6 +420,7 @@ enum ConfirmGitAction {
     StashApply,
     PullFfOnly,
     PushUpstream,
+    PublishBranch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,6 +445,7 @@ impl ConfirmGitAction {
             Self::StashApply => GitUiAction::StashApply,
             Self::PullFfOnly => GitUiAction::PullFfOnly,
             Self::PushUpstream => GitUiAction::PushUpstream,
+            Self::PublishBranch => GitUiAction::PublishBranch,
         }
     }
 
@@ -455,6 +459,8 @@ impl ConfirmGitAction {
                 "Confirm Pull: fetch configured upstream and fast-forward only; never rebase or create a merge commit",
             Self::PushUpstream =>
                 "Confirm Push: push current branch only to its configured upstream; never force-push",
+            Self::PublishBranch =>
+                "Confirm Publish Branch: create current branch on origin (or the only remote), set upstream, never force-update an existing remote branch",
         }
     }
 }
@@ -4086,6 +4092,9 @@ impl Workbench {
                 }
             }
             Some(GitPrimaryAction::Fetch) => self.run_git_action(GitUiAction::Fetch, cx),
+            Some(GitPrimaryAction::PublishBranch) => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PublishBranch, cx);
+            }
             Some(GitPrimaryAction::Pull) => {
                 self.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
             }
@@ -4291,6 +4300,7 @@ impl Workbench {
                         GitUiAction::StashApply => git.apply_latest_stash(),
                         GitUiAction::PullFfOnly => git.pull_ff_only(),
                         GitUiAction::PushUpstream => git.push_current_upstream(),
+                        GitUiAction::PublishBranch => git.publish_current_branch(),
                         GitUiAction::MergeWithChoices(plan, selections) => {
                             git.merge_with_conflict_choices(&plan, &selections)
                         }
@@ -4683,7 +4693,7 @@ impl Workbench {
             self.git_merge_armed = None;
             self.git_conflict_confirm_armed = false;
             self.git_sensitive_armed = Some(action);
-            self.git_action_status = action.warning().into();
+            self.git_action_status = tr(self.settings_menu_locale, action.warning()).to_owned();
         }
         cx.notify();
     }
@@ -13566,6 +13576,8 @@ impl Render for Workbench {
                                                 Some(GitPrimaryAction::Commit) => "Commit",
                                                 Some(GitPrimaryAction::StageAll) => "Stage All",
                                                 Some(GitPrimaryAction::Fetch) => "Fetch",
+                                                Some(GitPrimaryAction::PublishBranch) if git_sensitive_armed == Some(ConfirmGitAction::PublishBranch) => "Confirm Publish Branch",
+                                                Some(GitPrimaryAction::PublishBranch) => "Publish Branch",
                                                 Some(GitPrimaryAction::Pull) if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) => "Confirm Pull",
                                                 Some(GitPrimaryAction::Pull) => "Pull (fast-forward)",
                                                 Some(GitPrimaryAction::Push) if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) => "Confirm Push",

@@ -113,6 +113,7 @@ pub struct GitUpstreamState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitPrimaryAction {
     Commit,
+    PublishBranch,
     StageAll,
     Fetch,
     Pull,
@@ -149,6 +150,19 @@ pub fn classic_primary_action(
             return Some(GitPrimaryAction::Push);
         }
     }
+    // A configured upstream whose tracking ref is unavailable requires Fetch.
+    if snapshot.upstream.is_none() && snapshot.upstream_configured {
+        return Some(GitPrimaryAction::Fetch);
+    }
+    // Classic offers Publish Branch when HEAD has no configured upstream.
+    // Detached/unborn HEAD cannot publish, and the writer revalidates this.
+    if snapshot.upstream.is_none()
+        && !snapshot.branch.is_empty()
+        && snapshot.branch != "HEAD"
+        && !snapshot.branch.starts_with('(')
+    {
+        return Some(GitPrimaryAction::PublishBranch);
+    }
     if stageable && !snapshot.truncated {
         return Some(GitPrimaryAction::StageAll);
     }
@@ -159,6 +173,8 @@ pub fn classic_primary_action(
 pub struct GitSnapshot {
     pub branch: String,
     pub upstream: Option<GitUpstreamState>,
+    /// Includes stale/unfetched tracking config, so Publish never guesses.
+    pub upstream_configured: bool,
     pub changed_files: Vec<GitChange>,
     pub truncated: bool,
     pub repository_root: PathBuf,
@@ -215,9 +231,19 @@ impl GitSnapshot {
                 let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid).ok()?;
                 Some(GitUpstreamState { name, ahead, behind })
             });
+        let upstream_configured = upstream.is_some() || head
+            .as_ref()
+            .filter(|head| head.is_branch())
+            .and_then(|head| head.shorthand().ok())
+            .and_then(|name| repo.config().ok().map(|config| {
+                config.get_string(&format!("branch.{name}.remote")).is_ok()
+                    || config.get_string(&format!("branch.{name}.merge")).is_ok()
+            }))
+            .unwrap_or(false);
         Ok(Self {
             branch,
             upstream,
+            upstream_configured,
             changed_files,
             truncated,
             repository_root: root,
@@ -345,6 +371,7 @@ mod classic_source_control_parity_tests {
     ) -> GitSnapshot {
         GitSnapshot {
             branch: "main".into(),
+            upstream_configured: tracking.is_some(),
             upstream: tracking.map(|(ahead, behind)| GitUpstreamState {
                 name: "origin/main".into(),
                 ahead,
@@ -369,15 +396,27 @@ mod classic_source_control_parity_tests {
         use GitPrimaryAction::*;
         assert_eq!(classic_primary_action(None, "message", false), None);
         let staged = snapshot(&[Status::INDEX_MODIFIED], None, false);
-        assert_eq!(classic_primary_action(Some(&staged), "  ", false), Some(Fetch));
+        assert_eq!(classic_primary_action(Some(&staged), "  ", false), Some(PublishBranch));
         assert_eq!(classic_primary_action(Some(&staged), "message", false), Some(Commit));
         assert_eq!(classic_primary_action(Some(&staged), "message", true), None);
         let conflicts = snapshot(&[Status::CONFLICTED, Status::INDEX_MODIFIED], None, false);
         assert_eq!(classic_primary_action(Some(&conflicts), "message", false), Some(Fetch));
         let stageable = snapshot(&[Status::WT_MODIFIED, Status::WT_NEW], None, false);
-        assert_eq!(classic_primary_action(Some(&stageable), "", false), Some(StageAll));
+        assert_eq!(classic_primary_action(Some(&stageable), "", false), Some(PublishBranch));
         let limited = snapshot(&[Status::WT_MODIFIED], None, true);
-        assert_eq!(classic_primary_action(Some(&limited), "", false), Some(Fetch));
+        assert_eq!(classic_primary_action(Some(&limited), "", false), Some(PublishBranch));
+        let mut stale = stageable.clone();
+        stale.upstream_configured = true;
+        assert_eq!(classic_primary_action(Some(&stale), "", false), Some(Fetch));
+        let mut no_branch = stageable.clone();
+        no_branch.branch = "(detached or unborn HEAD)".into();
+        assert_eq!(classic_primary_action(Some(&no_branch), "", false), Some(StageAll));
+        let mut detached = staged.clone();
+        detached.branch = "HEAD".into();
+        assert_eq!(classic_primary_action(Some(&detached), "", false), Some(Fetch));
+        // A tracked branch without upstream changes can Stage All, not Publish.
+        let tracked_stageable = snapshot(&[Status::WT_MODIFIED], Some((0, 0)), false);
+        assert_eq!(classic_primary_action(Some(&tracked_stageable), "", false), Some(StageAll));
         for (ahead, behind, expected) in [
             (0, 0, Fetch),
             (0, 3, Pull),
@@ -387,6 +426,25 @@ mod classic_source_control_parity_tests {
             let repo = snapshot(&[], Some((ahead, behind)), false);
             assert_eq!(classic_primary_action(Some(&repo), "", false), Some(expected));
         }
+    }
+
+    #[test]
+    fn configured_but_unfetched_upstream_shows_fetch_not_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let signature = git2::Signature::now("QA", "qa@example.invalid").unwrap();
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
+        drop(tree);
+        let branch = repo.head().unwrap().shorthand().unwrap().to_owned();
+        let mut config = repo.config().unwrap();
+        config.set_str(&format!("branch.{branch}.remote"), "origin").unwrap();
+        config.set_str(&format!("branch.{branch}.merge"), &format!("refs/heads/{branch}")).unwrap();
+        let snapshot = GitSnapshot::load(dir.path()).unwrap();
+        assert!(snapshot.upstream.is_none());
+        assert!(snapshot.upstream_configured);
+        assert_eq!(classic_primary_action(Some(&snapshot), "", false), Some(GitPrimaryAction::Fetch));
     }
 
     #[test]

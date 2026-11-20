@@ -1158,6 +1158,55 @@ impl GitActions {
         ))
     }
 
+    /// Publish the current, previously untracked local branch using an
+    /// explicit origin (or the only configured remote), never a guessed target.
+    /// Reject existing remote heads; a normal non-force push handles races.
+    /// Staged and working files remain untouched, but the branch gains tracking.
+    pub fn publish_current_branch(&self) -> Result<String, String> {
+        let head = self.repo.head()
+            .map_err(|_| "Cannot publish an unborn or detached HEAD".to_string())?;
+        if !head.is_branch() {
+            return Err("Cannot publish detached HEAD; check out a local branch first".into());
+        }
+        let branch = head.shorthand().ok()
+            .filter(|name| valid_branch(name))
+            .ok_or("Current branch name cannot be published safely")?
+            .to_owned();
+        // If remote tracking is configured but unavailable locally, refuse
+        // instead of treating this as a brand-new branch.
+        let config = self.repo.config().map_err(|error| error.to_string())?;
+        for key in [format!("branch.{branch}.remote"), format!("branch.{branch}.merge")] {
+            if config.get_string(&key).is_ok() {
+                return Err("This branch already has upstream settings; Fetch or fix its tracking configuration before publishing".into());
+            }
+        }
+        let remotes = self.repo.remotes().map_err(|error| error.to_string())?;
+        let names = remotes.iter().flatten().flatten().collect::<Vec<_>>();
+        let remote = if names.contains(&"origin") {
+            "origin"
+        } else if names.len() == 1 {
+            names[0]
+        } else if names.is_empty() {
+            return Err("No Git remote configured; add origin before publishing".into());
+        } else {
+            return Err("Several Git remotes configured; set origin explicitly before publishing".into());
+        };
+        let target = format!("refs/heads/{branch}");
+        // Do not update an existing remote branch under a Publish action.
+        // Ask the remote rather than trusting potentially stale local refs.
+        let existing = git_in_dir(
+            &self.root,
+            &["-c", "credential.interactive=never", "ls-remote", "--heads", "--", remote, &target],
+        ).map_err(|_| "Cannot verify remote branch availability; check remote access and retry".to_string())?;
+        if !existing.trim().is_empty() {
+            return Err("Remote branch already exists; Publish refused to update it. Set upstream separately".into());
+        }
+        let refspec = format!("{target}:{target}");
+        git_in_dir(&self.root, &["push", "--porcelain", "--set-upstream", "--", remote, &refspec])
+            .map_err(|_| "Publish failed; no force push attempted. Check remote permissions and branch status".to_string())?;
+        Ok(format!("Published {branch} to {remote}/{branch} without force; upstream configured"))
+    }
+
     /// Never force-push and never publish to an arbitrary user-supplied
     /// destination. Reject known divergence locally; the server additionally
     /// rejects any race where remote history changed after our last Fetch.
@@ -4039,6 +4088,48 @@ mod tests {
             (current.clone(), "origin".into(), current.clone())
         );
         (work, remote, actions, current)
+    }
+
+    #[test]
+    fn publish_branch_sets_upstream_without_touching_unsaved_worktree_files() {
+        let (work, actions) = repo_fixture();
+        let remote = tempfile::tempdir().unwrap();
+        Repository::init_bare(remote.path()).unwrap();
+        actions.repo.remote("origin", remote.path().to_str().unwrap()).unwrap();
+        let branch = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let oid = actions.repo.head().unwrap().target().unwrap();
+        let index_before = fs::read(actions.repo.path().join("index")).unwrap();
+        fs::write(work.path().join("untracked.txt"), "do not touch").unwrap();
+        let response = actions.publish_current_branch().unwrap();
+        assert!(response.contains("upstream configured"));
+        let remote_repo = Repository::open_bare(remote.path()).unwrap();
+        assert_eq!(
+            remote_repo.find_reference(&format!("refs/heads/{branch}")).unwrap().target(),
+            Some(oid),
+        );
+        let reopened = Repository::open(actions.root()).unwrap();
+        let tracking = reopened.find_branch(&branch, BranchType::Local).unwrap()
+            .upstream().unwrap();
+        assert_eq!(tracking.name().unwrap(), Some(format!("origin/{branch}").as_str()));
+        assert_eq!(reopened.head().unwrap().target(), Some(oid));
+        assert_eq!(fs::read(reopened.path().join("index")).unwrap(), index_before);
+        assert_eq!(fs::read_to_string(work.path().join("untracked.txt")).unwrap(), "do not touch");
+        assert!(actions.publish_current_branch().is_err(), "repeating Publish must refuse tracking");
+    }
+
+    #[test]
+    fn publish_branch_refuses_missing_remote_and_existing_remote_branch() {
+        let (_work, actions) = repo_fixture();
+        assert!(actions.publish_current_branch().unwrap_err().contains("No Git remote"));
+        let remote = tempfile::tempdir().unwrap();
+        Repository::init_bare(remote.path()).unwrap();
+        actions.repo.remote("origin", remote.path().to_str().unwrap()).unwrap();
+        let branch = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let branch_ref = format!("refs/heads/{branch}");
+        git_in_dir(actions.root(), &["push", "--", "origin", &branch_ref]).unwrap();
+        let result = actions.publish_current_branch().unwrap_err();
+        assert!(result.contains("already exists"), "{result}");
+        assert!(actions.repo.config().unwrap().get_string(&format!("branch.{branch}.remote")).is_err());
     }
 
     #[test]
