@@ -100,3 +100,28 @@ _version: 2
   zh-TW: "釘選衝突比較到工作區分頁"
   zh-CN: "固定冲突比较到工作区标签页"
   ja: "競合比較をワークスペースのタブに固定"
+"Show all lines":
+  en: "Show all lines"
+  zh-TW: "展開所有行"
+  zh-CN: "展开所有行"
+  ja: "すべての行を表示"
+"Collapse unchanged lines":
+  en: "Collapse unchanged lines"
+  zh-TW: "收合未變更行"
+  zh-CN: "折叠未更改行"
+  ja: "変更のない行を折りたたむ"
+"unchanged lines hidden":
+  en: "unchanged lines hidden"
+  zh-TW: "行未變更內容已隱藏"
+  zh-CN: "行未更改内容已隐藏"
+  ja: "行の未変更部分を非表示"
+"Long unchanged sections are folded":
+  en: "Long unchanged sections are folded"
+  zh-TW: "已收合較長的未變更段落"
+  zh-CN: "已折叠较长的未更改段落"
+  ja: "変更のない長い範囲は折りたたまれています"
+"F7 next · Shift+F7 previous · Alt+U expand/collapse":
+  en: "F7 next · Shift+F7 previous · Alt+U expand/collapse"
+  zh-TW: "F7 下一個 · Shift+F7 上一個 · Alt+U 展開／收合"
+  zh-CN: "F7 下一个 · Shift+F7 上一个 · Alt+U 展开／折叠"
+  ja: "F7 次へ · Shift+F7 前へ · Alt+U 展開／折りたたみ"

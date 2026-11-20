@@ -182,6 +182,11 @@ mod tests {
                 "Ours version",
                 "Theirs version",
                 "Pin conflict comparison to workspace tab",
+                "Show all lines",
+                "Collapse unchanged lines",
+                "unchanged lines hidden",
+                "Long unchanged sections are folded",
+                "F7 next · Shift+F7 previous · Alt+U expand/collapse",
             ] {
                 let value = tr(locale, source);
                 assert!(!value.is_empty(), "Missing {}: {}", locale.tag(), source);

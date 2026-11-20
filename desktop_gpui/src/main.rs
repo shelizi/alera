@@ -225,7 +225,10 @@ actions!(
         ExplorerOpen,
         ExplorerPreview,
         ExplorerNewFile,
-        ExplorerNewFolder
+        ExplorerNewFolder,
+        ConflictNextDifference,
+        ConflictPreviousDifference,
+        ConflictToggleContext
     ]
 );
 
@@ -12326,6 +12329,9 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::explorer_preview_action))
             .on_action(cx.listener(Self::explorer_new_file_action))
             .on_action(cx.listener(Self::explorer_new_folder_action))
+            .on_action(cx.listener(Self::conflict_next_difference_action))
+            .on_action(cx.listener(Self::conflict_previous_difference_action))
+            .on_action(cx.listener(Self::conflict_toggle_context_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -17098,6 +17104,9 @@ fn main() {
                 KeyBinding::new("ctrl-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("cmd-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("shift-f12", FindTextReferences, Some("AleraGpuiEditor")),
+                KeyBinding::new("f7", ConflictNextDifference, Some("AleraGpuiConflict")),
+                KeyBinding::new("shift-f7", ConflictPreviousDifference, Some("AleraGpuiConflict")),
+                KeyBinding::new("alt-u", ConflictToggleContext, Some("AleraGpuiConflict")),
             ]);
             let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
             gpui_kit::open_window(
