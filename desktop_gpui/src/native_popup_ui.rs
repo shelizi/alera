@@ -682,6 +682,10 @@ impl Workbench {
                     "Open worktree file externally",
                     GitChangeMenuAction::OpenExternal,
                 ),
+                ("Copy worktree file(s)", GitChangeMenuAction::CopyFiles),
+                ("Cut worktree file(s)", GitChangeMenuAction::CutFiles),
+                ("Paste into containing folder", GitChangeMenuAction::PasteFiles),
+                ("Reveal worktree file in file manager", GitChangeMenuAction::RevealFile),
                 ("Copy relative path", GitChangeMenuAction::CopyPath),
             ];
             if matches!(

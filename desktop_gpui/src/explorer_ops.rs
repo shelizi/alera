@@ -615,6 +615,14 @@ impl ExplorerClipboardBatch {
         self.entries.len()
     }
 
+    /// Match OS file clipboard content with this guarded in-app batch.
+    pub fn source_paths(&self) -> Vec<PathBuf> {
+        let mut paths = self.entries.iter()
+            .map(|entry| entry.source().to_path_buf()).collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
     pub fn consumed(&self) -> bool {
         self.entries.is_empty()
     }

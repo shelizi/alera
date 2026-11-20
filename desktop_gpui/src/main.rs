@@ -65,6 +65,7 @@ use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, compare_branch_trees, diff_compared_file, open_compared_original_snapshot,
     original_compared_file, BranchFileComparison, CompareDirection,
 };
+use alera_gpui_desktop::git_file_interop::selected_worktree_paths;
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_render::{PreparedGitGraph, PreparedGitGraphRow};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
@@ -204,6 +205,9 @@ actions!(
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
+        GitCopyFiles,
+        GitCutFiles,
+        GitPasteFiles,
         ExplorerSelectAll,
         ExplorerRename,
         ExplorerDelete,
@@ -503,6 +507,10 @@ enum GitChangeMenuAction {
     Original,
     OpenWorkingFile,
     OpenExternal,
+    CopyFiles,
+    CutFiles,
+    PasteFiles,
+    RevealFile,
     Stage,
     Unstage,
     Discard,
@@ -755,6 +763,7 @@ struct Workbench {
     git_original_active: bool,
     git_original_request: u64,
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
+    git_keyboard_focus: gpui::FocusHandle,
     git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_discard_armed: Option<Vec<PathBuf>>,
     git_trash_preview: Option<Vec<GitUntrackedTrashCandidate>>,
@@ -1236,6 +1245,57 @@ impl Workbench {
     }
 
     fn paste_explorer_clipboard(&mut self, cx: &mut Context<Self>) {
+        let root = self.model.root().to_path_buf();
+        let folder = self
+            .explorer_selection
+            .as_ref()
+            .map(|path| if path.is_dir() { path.clone() } else {
+                path.parent().unwrap_or(&root).to_path_buf()
+            })
+            .unwrap_or(root);
+        self.paste_shared_file_clipboard(folder, cx);
+    }
+
+    fn paste_git_file_clipboard(&mut self, hovered: Option<PathBuf>, cx: &mut Context<Self>) {
+        // The workspace root is a valid destination, but not a selectable
+        // Explorer row; native and in-app paste both represent it as None.
+        let hovered = hovered.filter(|path| path != self.model.root());
+        // Windows Explorer exposes a CF_HDROP file list. Distinguish a newly
+        // copied external selection from Alera's own guarded clipboard and
+        // import it as COPY. OS Cut markers are not trusted to delete outside
+        // files on an inbound paste.
+        let mut outside_paths = cx.read_from_clipboard().into_iter()
+            .flat_map(|item| item.into_entries())
+            .filter_map(|entry| match entry {
+                gpui::ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().to_vec()),
+                _ => None,
+            })
+            .flatten().collect::<Vec<_>>();
+        if !outside_paths.is_empty() {
+            outside_paths.sort();
+            outside_paths.dedup();
+            let is_ours = self.explorer_clipboard.as_ref()
+                .is_some_and(|clip| clip.source_paths() == outside_paths);
+            if !is_ours {
+                self.import_explorer_drop(outside_paths, hovered, cx);
+                return;
+            }
+        }
+        let result = ExplorerFiles::new(self.model.root())
+            .and_then(|files| {
+                let row = hovered.as_deref().filter(|row| *row != files.root());
+                files.external_drop_folder(row)
+            });
+        match result {
+            Ok(folder) => self.paste_shared_file_clipboard(folder, cx),
+            Err(error) => {
+                self.model.set_status(format!("Git Paste refused: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn paste_shared_file_clipboard(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
         // Do not block ordinary Copy because an unrelated Editor is dirty.
         // Cut is checked against the exact open files at paste time, so an
         // existing Editor tab cannot silently keep a stale moved path.
@@ -1252,17 +1312,6 @@ impl Workbench {
             return;
         };
         let root = self.model.root().to_path_buf();
-        let folder = self
-            .explorer_selection
-            .as_ref()
-            .map(|path| {
-                if path.is_dir() {
-                    path.clone()
-                } else {
-                    path.parent().unwrap_or(&root).to_path_buf()
-                }
-            })
-            .unwrap_or_else(|| root.clone());
         let result = ExplorerFiles::new(&root)
             .and_then(|files| clipboard.paste_into_with_open_files(&files, &folder, &open_paths));
         let consumed = clipboard.consumed();
@@ -2091,6 +2140,80 @@ impl Workbench {
         self.git_selection_anchor = Some(row);
     }
 
+    /// Git status rows reference worktree files, not immutable staged blobs.
+    /// Recompute visibility and revalidate paths before sharing Explorer's
+    /// non-overwriting, workspace-bound Copy/Cut clipboard.
+    fn set_git_file_clipboard(
+        &mut self,
+        clicked: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
+        mode: ExplorerClipboardMode,
+        cx: &mut Context<Self>,
+    ) {
+        let mut options = self.git_sidebar_options.clone();
+        options.filter = self.git_filter_input.read(cx).query().to_owned();
+        let visible = self.git_snapshot.as_ref()
+            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_files())
+            .unwrap_or_default();
+        let row = clicked.filter(|item| visible.contains(item))
+            .or_else(|| self.git_selection_anchor.clone().filter(|item| visible.contains(item)))
+            .or_else(|| visible.iter().find(|item| self.git_selected_changes.contains(*item)).cloned());
+        let Some(row) = row else {
+            self.model.set_status("Select a visible Git file first");
+            cx.notify();
+            return;
+        };
+        let paths = selected_worktree_paths(self.model.root(), &row, &self.git_selected_changes, &visible);
+        // An OS file-manager Cut can move the file without involving Alera.
+        // Therefore refuse to expose a live Editor tab to native Cut at all.
+        if mode == ExplorerClipboardMode::Cut {
+            let open_paths = self.all_editor_files_and_active(cx).0.into_iter()
+                .map(|(_, path)| path).collect::<Vec<_>>();
+            if paths.iter().any(|source| open_paths.iter().any(|open| open.starts_with(source))) {
+                self.model.set_status("Close Editor tabs for these files before cutting them outside Alera");
+                cx.notify();
+                return;
+            }
+        }
+        let result = ExplorerFiles::new(self.model.root())
+            .and_then(|files| ExplorerClipboardBatch::capture(&files, &paths, mode));
+        match result {
+            Ok(clipboard) => {
+                let count = clipboard.len();
+                self.explorer_clipboard = Some(clipboard);
+                #[cfg(windows)]
+                let native_message = match alera_gpui_desktop::native_file_clipboard::write_native_files(&paths, mode) {
+                    Ok(()) => "; Windows Explorer clipboard ready",
+                    Err(error) => {
+                        self.model.set_status(format!("{count} Git file(s) in Alera clipboard, but Windows clipboard failed: {error}"));
+                        cx.notify();
+                        return;
+                    }
+                };
+                #[cfg(not(windows))]
+                let native_message = "; internal Alera clipboard ready";
+                self.model.set_status(format!("{} {count} worktree file(s){native_message}",
+                    if mode == ExplorerClipboardMode::Copy { "Copied" } else { "Cut" }));
+            }
+            Err(error) => self.model.set_status(format!(
+                "Git file Copy/Cut refused: {error} (deleted files cannot be exported)"
+            )),
+        }
+        cx.notify();
+    }
+
+    fn paste_git_at_selection(&mut self, cx: &mut Context<Self>) {
+        let relative = self.git_selection_anchor.as_ref()
+            .filter(|row| self.git_selected_changes.contains(*row))
+            .map(|row| row.relative.clone());
+        let hovered = relative.map(|path| {
+            let target = self.model.root().join(path);
+            if target.is_file() { target } else {
+                target.parent().unwrap_or(self.model.root()).to_path_buf()
+            }
+        });
+        self.paste_git_file_clipboard(hovered, cx);
+    }
+
     /// The selected exact paths must be confirmed a second time. A change
     /// in selection disarms the previous confirmation, and the writer still
     /// validates status, paths and index before touching the working tree.
@@ -2264,6 +2387,29 @@ impl Workbench {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                     row.relative.to_string_lossy().into_owned(),
                 ));
+            }
+            GitChangeMenuAction::CopyFiles => {
+                self.set_git_file_clipboard(Some(row), ExplorerClipboardMode::Copy, cx);
+            }
+            GitChangeMenuAction::CutFiles => {
+                self.set_git_file_clipboard(Some(row), ExplorerClipboardMode::Cut, cx);
+            }
+            GitChangeMenuAction::PasteFiles => {
+                let path = self.model.root().join(&row.relative);
+                // Deleted Git entries have no working file; their parent may
+                // still be a valid destination for a paste.
+                let folder = path.parent().unwrap_or(self.model.root()).to_path_buf();
+                self.paste_git_file_clipboard(Some(folder), cx);
+            }
+            GitChangeMenuAction::RevealFile => {
+                let path = self.model.root().join(&row.relative);
+                let result = ExplorerFiles::new(self.model.root())
+                    .and_then(|files| files.reveal_in_file_manager(&path));
+                self.model.set_status(match result {
+                    Ok(()) => "Revealed worktree file in system file manager".into(),
+                    Err(error) => format!("Cannot reveal worktree file: {error}"),
+                });
+                cx.notify();
             }
             GitChangeMenuAction::Stage if row.area.can_stage() => {
                 self.run_git_action(GitUiAction::StageMany(selected), cx);
@@ -4600,6 +4746,24 @@ impl Workbench {
     ) {
         if self.explorer_keyboard_focus.is_focused(window) {
             self.set_explorer_clipboard(ExplorerClipboardMode::Copy, cx);
+        }
+    }
+
+    fn git_copy_files_action(&mut self, _: &GitCopyFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+            self.set_git_file_clipboard(None, ExplorerClipboardMode::Copy, cx);
+        }
+    }
+
+    fn git_cut_files_action(&mut self, _: &GitCutFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+            self.set_git_file_clipboard(None, ExplorerClipboardMode::Cut, cx);
+        }
+    }
+
+    fn git_paste_files_action(&mut self, _: &GitPasteFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+            self.paste_git_at_selection(cx);
         }
     }
 
@@ -11396,6 +11560,17 @@ impl Render for Workbench {
         let git_tree_mode = self.git_sidebar_options.view == GitSidebarViewMode::Tree;
         let git_group_by_area = self.git_sidebar_options.grouping == GitSidebarGroupMode::ByArea;
         let git_selected = self.git_selected_changes.clone();
+        let git_drag_root = workspace_root.clone();
+        let git_drag_generation = self.workspace_generation;
+        let git_drag_selection = Arc::new({
+            let mut paths = git_changes.iter()
+                .filter(|row| git_selected.contains(*row))
+                .map(|row| workspace_root.join(&row.relative))
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths.dedup();
+            paths
+        });
         let mut git_stage_paths = Vec::new();
         let mut git_unstage_paths = Vec::new();
         let mut git_discard_paths = Vec::new();
@@ -11760,6 +11935,9 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::explorer_copy_action))
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
+            .on_action(cx.listener(Self::git_copy_files_action))
+            .on_action(cx.listener(Self::git_cut_files_action))
+            .on_action(cx.listener(Self::git_paste_files_action))
             .on_action(cx.listener(Self::explorer_select_all_action))
             .on_action(cx.listener(Self::explorer_rename_action))
             .on_action(cx.listener(Self::explorer_delete_action))
@@ -13136,6 +13314,8 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("git-change-list")
+                                    .key_context("AleraGpuiGit")
+                                    .track_focus(&self.git_keyboard_focus)
                                     // A 135px file list hid nearly all changes behind a nested
                                     // scrollbar. Let Source Control use the available sidebar
                                     // height and keep the patch preview below the files.
@@ -13143,6 +13323,16 @@ impl Render for Workbench {
                                     .min_h(px(240.0))
                                     .max_h(px(640.0))
                                     .overflow_y_scroll()
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                        window.focus(&this.git_keyboard_focus, cx);
+                                    }))
+                                    .on_drop(cx.listener(|this, drag: &ExplorerDragBatch, _, cx| {
+                                        let root = this.model.root().to_path_buf();
+                                        this.drop_explorer_batch(drag, &root, cx);
+                                    }))
+                                    .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                                        this.import_explorer_drop(paths.paths().to_vec(), None, cx);
+                                    }))
                                     .when(git_sidebar_matches == 0, |list| list.child(
                                         div().px_2().py_3().text_xs().text_color(rgb(MUTED))
                                             .child(tr(self.settings_menu_locale, if git_sidebar_total == 0 {
@@ -13192,6 +13382,8 @@ impl Render for Workbench {
                                             }
                                             GitSidebarEntry::Folder { key, depth, total, matching, expanded } => {
                                                 let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                                let folder_drop_target = git_drag_root.join(&key.1);
+                                                let external_folder_target = folder_drop_target.clone();
                                                 let folder_icon = explorer_file_icon_element(
                                                     &name, true, expanded, 16.0, MUTED,
                                                 );
@@ -13210,6 +13402,14 @@ impl Render for Workbench {
                                                     .child(div().flex_1().min_w_0().truncate().child(caption))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.toggle_git_sidebar_folder(key.clone(), cx);
+                                                    }))
+                                                    .on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.drop_explorer_batch(drag, &folder_drop_target, cx);
+                                                    }))
+                                                    .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.import_explorer_drop(paths.paths().to_vec(), Some(external_folder_target.clone()), cx);
                                                     }))
                                                     .into_any_element();
                                             }
@@ -13241,6 +13441,22 @@ impl Render for Workbench {
                                         let can_unstage = change.area.can_unstage();
                                         let tooltip_path = change.relative.display().to_string();
                                         let relative = change.relative;
+                                        let git_file_path = git_drag_root.join(&relative);
+                                        let git_drag_payload = ExplorerDragBatch::for_row(
+                                            &git_drag_root,
+                                            git_drag_generation,
+                                            &git_file_path,
+                                            git_drag_selection.as_ref(),
+                                        );
+                                        let git_drag_caption = if git_drag_payload.len() > 1 {
+                                            format!("Copy {} worktree files", git_drag_payload.len())
+                                        } else {
+                                            format!("Copy {}", display_name)
+                                        };
+                                        let native_drag_root = git_drag_root.clone();
+                                        let file_drop_parent = git_file_path.parent()
+                                            .unwrap_or(&git_drag_root).to_path_buf();
+                                        let external_file_drop_parent = file_drop_parent.clone();
                                         let stage_path = relative.clone();
                                         let unstage_path = relative.clone();
                                         div()
@@ -13274,14 +13490,31 @@ impl Render for Workbench {
                                                 .child(div().min_w(px(14.0)).text_xs()
                                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                                     .text_color(rgb(status_color)).child(status_label))
-                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     let modifiers = event.modifiers();
                                                     let multi = modifiers.control || modifiers.platform;
                                                     this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
+                                                    window.focus(&this.git_keyboard_focus, cx);
                                                     if !multi && !modifiers.shift {
                                                         this.open_git_sidebar_file_diff(relative.clone(), preview_area, cx);
                                                     }
                                                     cx.notify();
+                                                }))
+                                                .on_drag(git_drag_payload, move |_, _, _, cx| {
+                                                    cx.new(|_| TerminalTabDragPreview { label: git_drag_caption.clone() })
+                                                })
+                                                .external_drag_payload(move |drag: &ExplorerDragBatch, _, _| {
+                                                    let files = ExplorerFiles::new(&native_drag_root).ok()?;
+                                                    let entries = drag.external_entries(&files, git_drag_generation).ok()?;
+                                                    Some(gpui::ExternalDragPayload::Files(gpui::FileDragPaths::new(entries)))
+                                                })
+                                                .on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.drop_explorer_batch(drag, &file_drop_parent, cx);
+                                                }))
+                                                .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.import_explorer_drop(paths.paths().to_vec(), Some(external_file_drop_parent.clone()), cx);
                                                 }))
                                                 .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
                                             .when(can_stage, |row| row.child(sidebar_icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
@@ -16293,6 +16526,12 @@ fn main() {
                 KeyBinding::new("cmd-x", ExplorerCut, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-v", ExplorerPaste, Some("AleraGpuiExplorer")),
                 KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-c", GitCopyFiles, Some("AleraGpuiGit")),
+                KeyBinding::new("cmd-c", GitCopyFiles, Some("AleraGpuiGit")),
+                KeyBinding::new("ctrl-x", GitCutFiles, Some("AleraGpuiGit")),
+                KeyBinding::new("cmd-x", GitCutFiles, Some("AleraGpuiGit")),
+                KeyBinding::new("ctrl-v", GitPasteFiles, Some("AleraGpuiGit")),
+                KeyBinding::new("cmd-v", GitPasteFiles, Some("AleraGpuiGit")),
                 KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
                 KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
                 KeyBinding::new("f2", ExplorerRename, Some("AleraGpuiExplorer")),
@@ -16546,6 +16785,7 @@ fn main() {
                             git_original_active: false,
                             git_original_request: 0,
                             git_selected_changes: HashSet::new(),
+                            git_keyboard_focus: cx.focus_handle(),
                             git_selection_anchor: None,
                             git_discard_armed: None,
                             git_trash_preview: None,

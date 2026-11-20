@@ -31,6 +31,26 @@ impl ExplorerDragBatch {
         self.sources.len()
     }
 
+    /// Validate worktree objects again when the drag leaves the window.
+    /// A native drop defaults to copying rather than moving the originals.
+    pub fn external_entries(
+        &self,
+        files: &ExplorerFiles,
+        current_generation: u64,
+    ) -> io::Result<Vec<(PathBuf, bool)>> {
+        if current_generation != self.generation || files.root() != self.root {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Stale workspace drag"));
+        }
+        if self.sources.is_empty() || self.sources.len() > 120 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid drag size"));
+        }
+        self.sources.iter().map(|source| {
+            let checked = files.reveal_target(source)?;
+            let is_directory = checked.is_dir();
+            Ok((checked, is_directory))
+        }).collect()
+    }
+
     /// A clean file still has an active editor identity and original save
     /// target. Moving it underneath that editor would leave a stale path;
     /// fail closed until the file is closed (or tab relocation is supported).
@@ -124,5 +144,24 @@ mod tests {
         assert!(!drag.affects_open_files(&[root.join("other.txt")]));
         let single = ExplorerDragBatch::for_row(&root, 3, &child, &[root.join("other.txt")]);
         assert_eq!(single.sources, vec![child]);
+    }
+
+    #[test]
+    fn native_drag_checks_sources_at_os_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let folder = root.join("folder");
+        let file = root.join("file.txt");
+        fs::create_dir(&folder).unwrap();
+        fs::write(&file, "file").unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let drag = ExplorerDragBatch::for_row(&root, 7, &file, &[file.clone(), folder.clone()]);
+        assert_eq!(drag.external_entries(&files, 7).unwrap(), vec![(file.clone(), false), (folder, true)]);
+        assert!(drag.external_entries(&files, 8).is_err());
+        fs::remove_file(&file).unwrap();
+        assert!(drag.external_entries(&files, 7).is_err());
+        fs::create_dir(root.join(".git")).unwrap();
+        let git = ExplorerDragBatch::for_row(&root, 7, &root.join(".git"), &[]);
+        assert!(git.external_entries(&files, 7).is_err());
     }
 }

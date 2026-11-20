@@ -23,6 +23,7 @@ pub mod file_search;
 pub mod git_actions;
 pub mod git_branch_compare;
 pub mod git_external_open;
+pub mod git_file_interop;
 pub mod git_graph_layout;
 pub mod git_graph_render;
 pub mod git_graph_search;
@@ -39,6 +40,8 @@ pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;
 pub mod native_i18n;
+#[cfg(windows)]
+pub mod native_file_clipboard;
 pub mod native_modal;
 pub mod native_settings;
 pub mod native_shortcut_catalog;
