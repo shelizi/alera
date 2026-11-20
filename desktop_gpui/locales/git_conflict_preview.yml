@@ -125,3 +125,18 @@ _version: 2
   zh-TW: "F7 下一個 · Shift+F7 上一個 · Alt+U 展開／收合"
   zh-CN: "F7 下一个 · Shift+F7 上一个 · Alt+U 展开／折叠"
   ja: "F7 次へ · Shift+F7 前へ · Alt+U 展開／折りたたみ"
+"Expand this section":
+  en: "Expand this section"
+  zh-TW: "只展開這一段"
+  zh-CN: "仅展开这一段"
+  ja: "この範囲だけ展開"
+"Collapse this section":
+  en: "Collapse this section"
+  zh-TW: "只收合這一段"
+  zh-CN: "仅折叠这一段"
+  ja: "この範囲だけ折りたたむ"
+"unchanged lines shown":
+  en: "unchanged lines shown"
+  zh-TW: "行未變更內容已展開"
+  zh-CN: "行未更改内容已展开"
+  ja: "行の未変更部分を表示"

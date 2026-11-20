@@ -4,6 +4,7 @@ use super::*;
 use alera_gpui_desktop::git_conflict_compare::{
     preview_index_conflict, ConflictVersion, GitConflictComparison,
 };
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConflictSource {
@@ -21,16 +22,26 @@ pub(super) struct CenterConflictPreview {
     selected_change: Option<usize>,
     compact_version: u8,
     collapse_unchanged: bool,
+    /// Per-tab visual-only expansion of individual unchanged gaps.
+    expanded_gap_starts: BTreeSet<usize>,
     display_rows: Arc<Vec<ConflictDisplayRow>>,
     focus: Option<gpui::FocusHandle>,
 }
 
 /// The same compact row projection is used in all three virtual lists.
 /// Collapsed gaps are presentation only, never fake Git stage contents.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConflictDisplayRow {
     Line(usize),
-    Fold { hidden: usize },
+    Fold {
+        start: usize,
+        hidden: usize,
+    },
+    /// Keep a clickable header to re-collapse only this expanded gap.
+    ExpandedGap {
+        start: usize,
+        shown: usize,
+    },
 }
 
 const CONFLICT_CONTEXT_LINES: usize = 3;
@@ -39,6 +50,7 @@ const MIN_COLLAPSE_GAP: usize = 9;
 fn project_conflict_rows(
     snapshot: &GitConflictComparison,
     collapse: bool,
+    expanded_gaps: &BTreeSet<usize>,
 ) -> Arc<Vec<ConflictDisplayRow>> {
     let total = snapshot.aligned_rows.len();
     if !collapse {
@@ -77,11 +89,39 @@ fn project_conflict_rows(
         let hidden = index - start;
         if hidden < MIN_COLLAPSE_GAP {
             projection.extend((start..index).map(ConflictDisplayRow::Line));
+        } else if expanded_gaps.contains(&start) {
+            projection.push(ConflictDisplayRow::ExpandedGap {
+                start,
+                shown: hidden,
+            });
+            projection.extend((start..index).map(ConflictDisplayRow::Line));
         } else {
-            projection.push(ConflictDisplayRow::Fold { hidden });
+            projection.push(ConflictDisplayRow::Fold { start, hidden });
         }
     }
     Arc::new(projection)
+}
+
+/// Reject stale virtual row callbacks and arbitrary indices. Only an
+/// actual fold/header may toggle; underlying Git stages never change.
+fn toggle_conflict_gap_projection(
+    snapshot: &GitConflictComparison,
+    rows: &[ConflictDisplayRow],
+    opened: &mut BTreeSet<usize>,
+    start: usize,
+) -> Option<Arc<Vec<ConflictDisplayRow>>> {
+    let target = rows.iter().find(|row| {
+        matches!(row,
+            ConflictDisplayRow::Fold { start: row_start, .. }
+            | ConflictDisplayRow::ExpandedGap { start: row_start, .. } if *row_start == start
+        )
+    })?;
+    if matches!(target, ConflictDisplayRow::Fold { .. }) {
+        opened.insert(start);
+    } else {
+        opened.remove(&start);
+    }
+    Some(project_conflict_rows(snapshot, true, opened))
 }
 
 fn conflict_projected_anchor(rows: &[ConflictDisplayRow], anchor: usize) -> Option<usize> {
@@ -392,7 +432,11 @@ impl Workbench {
                             .as_ref()
                             .ok()
                             .map(|snapshot| {
-                                project_conflict_rows(snapshot, selection.collapse_unchanged)
+                                project_conflict_rows(
+                                    snapshot,
+                                    selection.collapse_unchanged,
+                                    &selection.expanded_gap_starts,
+                                )
                             })
                             .unwrap_or_else(|| Arc::new(Vec::new()));
                         selection.result = Some(result);
@@ -437,7 +481,13 @@ impl Workbench {
             selection.display_rows = result
                 .as_ref()
                 .ok()
-                .map(|snapshot| project_conflict_rows(snapshot, selection.collapse_unchanged))
+                .map(|snapshot| {
+                    project_conflict_rows(
+                        snapshot,
+                        selection.collapse_unchanged,
+                        &selection.expanded_gap_starts,
+                    )
+                })
                 .unwrap_or_else(|| Arc::new(Vec::new()));
             selection.result = Some(result);
         }
@@ -460,6 +510,7 @@ impl Workbench {
             selected_change: None,
             compact_version: 1,
             collapse_unchanged: true,
+            expanded_gap_starts: BTreeSet::new(),
             display_rows: Arc::new(Vec::new()),
             focus: Some(cx.focus_handle()),
         });
@@ -551,7 +602,11 @@ impl Workbench {
             return;
         };
         preview.collapse_unchanged = !preview.collapse_unchanged;
-        preview.display_rows = project_conflict_rows(snapshot, preview.collapse_unchanged);
+        preview.display_rows = project_conflict_rows(
+            snapshot,
+            preview.collapse_unchanged,
+            &preview.expanded_gap_starts,
+        );
         let selected_row = preview
             .selected_change
             .and_then(|index| preview.change_anchors.get(index))
@@ -566,8 +621,59 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Expand or collapse a single stable unchanged gap across all versions.
+    /// Only presentation state is changed; no file, index or Git action runs.
+    fn toggle_conflict_gap(
+        &mut self,
+        target: ConflictViewTarget,
+        start: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.workspace_generation;
+        let Some((preview, scrolls)) = self.conflict_view_mut(target) else {
+            return;
+        };
+        if preview.workspace_generation != generation || !preview.collapse_unchanged {
+            return;
+        }
+        let Some(Ok(snapshot)) = &preview.result else {
+            return;
+        };
+        let was_expanded = preview.expanded_gap_starts.contains(&start);
+        let Some(rows) = toggle_conflict_gap_projection(
+            snapshot,
+            &preview.display_rows,
+            &mut preview.expanded_gap_starts,
+            start,
+        ) else {
+            return;
+        };
+        preview.display_rows = rows;
+        let Some(position) = preview.display_rows.iter().position(|row| match row {
+            ConflictDisplayRow::Fold { start: gap, .. }
+            | ConflictDisplayRow::ExpandedGap { start: gap, .. } => *gap == start,
+            ConflictDisplayRow::Line(_) => false,
+        }) else {
+            return;
+        };
+        for (role, scroll) in scrolls.iter().enumerate() {
+            if conflict_version(snapshot, role as u8).is_some() {
+                scroll.scroll_to_item(
+                    position,
+                    if was_expanded {
+                        gpui::ScrollStrategy::Center
+                    } else {
+                        gpui::ScrollStrategy::Top
+                    },
+                );
+            }
+        }
+        cx.notify();
+    }
+
     fn conflict_version_pane(
         snapshot: Arc<GitConflictComparison>,
+        target: ConflictViewTarget,
         visible_rows: Arc<Vec<ConflictDisplayRow>>,
         selected_hunk: Option<std::ops::Range<usize>>,
         title: String,
@@ -606,7 +712,7 @@ impl Workbench {
                 gpui::uniform_list(
                     list_name,
                     count,
-                    cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
+                    cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
                         let Some(version) = conflict_version(&snapshot, role) else {
                             return Vec::new();
                         };
@@ -614,22 +720,49 @@ impl Workbench {
                             .filter_map(|index| visible_rows.get(index))
                             .map(|display| {
                                 let ConflictDisplayRow::Line(index) = display else {
-                                    let ConflictDisplayRow::Fold { hidden } = display else {
-                                        unreachable!();
+                                    let (start, count, expanded) = match *display {
+                                        ConflictDisplayRow::Fold { start, hidden } => {
+                                            (start, hidden, false)
+                                        }
+                                        ConflictDisplayRow::ExpandedGap { start, shown } => {
+                                            (start, shown, true)
+                                        }
+                                        ConflictDisplayRow::Line(_) => unreachable!(),
                                     };
+                                    let label = format!(
+                                        "··· {count} {} · {} ···",
+                                        tr(
+                                            locale,
+                                            if expanded {
+                                                "unchanged lines shown"
+                                            } else {
+                                                "unchanged lines hidden"
+                                            }
+                                        ),
+                                        tr(
+                                            locale,
+                                            if expanded {
+                                                "Collapse this section"
+                                            } else {
+                                                "Expand this section"
+                                            }
+                                        ),
+                                    );
                                     return div()
+                                        .id((list_name, start))
+                                        .cursor_pointer()
                                         .h(px(22.0))
                                         .w_full()
                                         .px_2()
                                         .flex()
                                         .items_center()
-                                        .bg(rgb(0x252c36))
+                                        .bg(rgb(if expanded { 0x293649 } else { 0x252c36 }))
                                         .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(format!(
-                                            "··· {hidden} {} ···",
-                                            tr(locale, "unchanged lines hidden")
-                                        ))
+                                        .text_color(rgb(TEXT))
+                                        .child(label)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.toggle_conflict_gap(target, start, cx);
+                                        }))
                                         .into_any_element();
                                 };
                                 let Some(aligned) = snapshot.aligned_rows.get(*index) else {
@@ -1065,6 +1198,7 @@ impl Workbench {
                     )
                     .child(Self::conflict_version_pane(
                         snapshot,
+                        target,
                         visible_rows.clone(),
                         selected_hunk.clone(),
                         tr(
@@ -1100,6 +1234,7 @@ impl Workbench {
                     .flex_row()
                     .child(Self::conflict_version_pane(
                         snapshot.clone(),
+                        target,
                         visible_rows.clone(),
                         selected_hunk.clone(),
                         tr(locale, "Base (stage 1)"),
@@ -1112,6 +1247,7 @@ impl Workbench {
                     ))
                     .child(Self::conflict_version_pane(
                         snapshot.clone(),
+                        target,
                         visible_rows.clone(),
                         selected_hunk.clone(),
                         tr(locale, "Current · Ours (stage 2)"),
@@ -1124,6 +1260,7 @@ impl Workbench {
                     ))
                     .child(Self::conflict_version_pane(
                         snapshot,
+                        target,
                         visible_rows,
                         selected_hunk,
                         tr(locale, "Incoming · Theirs (stage 3)"),
@@ -1173,15 +1310,15 @@ mod conflict_navigation_tests {
             Some(&text(theirs)),
         )
         .unwrap();
-        let expanded = project_conflict_rows(&snapshot, false);
-        let folded = project_conflict_rows(&snapshot, true);
+        let expanded = project_conflict_rows(&snapshot, false, &BTreeSet::new());
+        let folded = project_conflict_rows(&snapshot, true, &BTreeSet::new());
         assert_eq!(expanded.len(), snapshot.aligned_rows.len());
         assert!(
             folded.len() < expanded.len() / 2,
             "long context should fold heavily"
         );
         assert!(folded.iter().any(
-            |row| matches!(row, ConflictDisplayRow::Fold { hidden } if *hidden >= MIN_COLLAPSE_GAP)
+            |row| matches!(row, ConflictDisplayRow::Fold { hidden, .. } if *hidden >= MIN_COLLAPSE_GAP)
         ));
         let anchors = conflict_change_anchors(&snapshot);
         assert!(anchors.len() >= 2);
@@ -1218,8 +1355,8 @@ mod conflict_navigation_tests {
             )
             .unwrap(),
         ] {
-            let full = project_conflict_rows(&snapshot, false);
-            let folded = project_conflict_rows(&snapshot, true);
+            let full = project_conflict_rows(&snapshot, false, &BTreeSet::new());
+            let folded = project_conflict_rows(&snapshot, true, &BTreeSet::new());
             assert_eq!(full, folded);
             assert!(folded
                 .iter()
@@ -1243,7 +1380,7 @@ mod conflict_navigation_tests {
             Some(&text),
         )
         .unwrap();
-        let folded = project_conflict_rows(&snapshot, true);
+        let folded = project_conflict_rows(&snapshot, true, &BTreeSet::new());
         assert_eq!(folded.first(), Some(&ConflictDisplayRow::Line(0)));
         assert_eq!(folded.last(), Some(&ConflictDisplayRow::Line(99)));
         assert_eq!(
@@ -1251,9 +1388,89 @@ mod conflict_navigation_tests {
             7,
             "first and last 3 lines plus one fold marker"
         );
-        assert_eq!(folded[3], ConflictDisplayRow::Fold { hidden: 94 });
+        assert_eq!(
+            folded[3],
+            ConflictDisplayRow::Fold {
+                start: 3,
+                hidden: 94
+            }
+        );
         assert!(conflict_change_anchors(&snapshot).is_empty());
         assert!(active_conflict_hunk(&snapshot, &[], None).is_none());
+    }
+
+    #[test]
+    fn independent_fold_clicks_expand_only_the_selected_shared_gap_and_allow_recollapse() {
+        let mut base = (0..300)
+            .map(|index| format!("stable {index:03}"))
+            .collect::<Vec<_>>();
+        let mut ours = base.clone();
+        let mut theirs = base.clone();
+        for index in [70, 150, 230] {
+            base[index] = format!("base {index}");
+            ours[index] = format!("ours {index}");
+            theirs[index] = format!("theirs {index}");
+        }
+        let as_text = |lines: Vec<String>| format!("{}\n", lines.join("\n"));
+        let snapshot = GitConflictComparison::from_versions(
+            "several-hunks.txt".into(),
+            Some(&as_text(base)),
+            Some(&as_text(ours)),
+            Some(&as_text(theirs)),
+        )
+        .unwrap();
+        let mut opened = BTreeSet::new();
+        let folded = project_conflict_rows(&snapshot, true, &opened);
+        let gap_starts = folded
+            .iter()
+            .filter_map(|row| match row {
+                ConflictDisplayRow::Fold { start, .. } => Some(*start),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(gap_starts.len() >= 3);
+        let first = gap_starts[0];
+        let second = gap_starts[1];
+        let expanded = toggle_conflict_gap_projection(&snapshot, &folded, &mut opened, second)
+            .expect("clicked second folded region");
+        assert_eq!(opened.iter().copied().collect::<Vec<_>>(), vec![second]);
+        assert!(expanded.iter().any(|row| matches!(row,
+            ConflictDisplayRow::ExpandedGap { start, .. } if *start == second
+        )));
+        assert!(expanded.iter().any(|row| matches!(row,
+            ConflictDisplayRow::Fold { start, .. } if *start == first
+        )));
+        assert!(expanded.len() > folded.len());
+        let anchors = conflict_change_anchors(&snapshot);
+        for anchor in anchors {
+            let display = conflict_projected_anchor(&expanded, anchor).unwrap();
+            assert_eq!(expanded[display], ConflictDisplayRow::Line(anchor));
+        }
+        // Clicking the same expanded header collapses it without changing
+        // adjacent folds or any line data.
+        let restored = toggle_conflict_gap_projection(&snapshot, &expanded, &mut opened, second)
+            .expect("clicked expanded header");
+        assert_eq!(restored.as_ref(), folded.as_ref());
+        assert!(opened.is_empty());
+
+        let left_open =
+            toggle_conflict_gap_projection(&snapshot, &folded, &mut opened, first).unwrap();
+        let both_open =
+            toggle_conflict_gap_projection(&snapshot, &left_open, &mut opened, second).unwrap();
+        assert_eq!(opened.len(), 2);
+        assert!(both_open.iter().any(|row| matches!(row,
+            ConflictDisplayRow::ExpandedGap { start, .. } if *start == first
+        )));
+        assert!(both_open.iter().any(|row| matches!(row,
+            ConflictDisplayRow::ExpandedGap { start, .. } if *start == second
+        )));
+        assert!(
+            toggle_conflict_gap_projection(&snapshot, &both_open, &mut opened, usize::MAX)
+                .is_none()
+        );
+        assert_eq!(opened.len(), 2, "stale virtual row must not change state");
+        assert!(toggle_conflict_gap_projection(&snapshot, &both_open, &mut opened, 70).is_none());
+        assert_eq!(opened.len(), 2, "non-gap row must not change state");
     }
 
     #[test]
@@ -1334,7 +1551,8 @@ mod conflict_navigation_tests {
             selected_change: None,
             compact_version: 1,
             collapse_unchanged: true,
-            display_rows: project_conflict_rows(&snapshot, true),
+            expanded_gap_starts: BTreeSet::new(),
+            display_rows: project_conflict_rows(&snapshot, true, &BTreeSet::new()),
             focus: None,
             result: Some(Ok(snapshot)),
         }

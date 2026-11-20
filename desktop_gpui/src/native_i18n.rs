@@ -185,6 +185,9 @@ mod tests {
                 "Show all lines",
                 "Collapse unchanged lines",
                 "unchanged lines hidden",
+                "unchanged lines shown",
+                "Expand this section",
+                "Collapse this section",
                 "Long unchanged sections are folded",
                 "F7 next · Shift+F7 previous · Alt+U expand/collapse",
             ] {
