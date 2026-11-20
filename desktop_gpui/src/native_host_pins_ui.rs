@@ -17,7 +17,9 @@ impl Workbench {
             .iter()
             .filter_map(|tab| match &tab.identity {
                 WorkbenchTabIdentity::Host(target) => Some(target.clone()),
-                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => None,
+                WorkbenchTabIdentity::Editor { .. }
+                | WorkbenchTabIdentity::GitHistory
+                | WorkbenchTabIdentity::GitFileCompare(_) => None,
             })
             .collect();
         let attached_workspace_ids: Vec<String> = attached_targets

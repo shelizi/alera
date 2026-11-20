@@ -602,6 +602,7 @@ mod tests {
             "Side-by-side view",
             "Unified view",
             "Git file comparison",
+            "Pin comparison in workbench",
         ] {
             assert_eq!(tr(UiLocale::English, label), label);
             for locale in [

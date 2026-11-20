@@ -22,6 +22,7 @@ pub mod explorer_visibility;
 pub mod file_search;
 pub mod git_actions;
 pub mod git_branch_compare;
+pub mod git_compare_tabs;
 pub mod git_external_open;
 pub mod git_file_interop;
 pub mod git_file_revision_compare;

@@ -15,6 +15,8 @@ pub enum WorkbenchTabIdentity {
     },
     /// Workspace-local, read-only Git History view. Never a Host or editor owner.
     GitHistory,
+    /// A distinct immutable comparison snapshot, not an editor or Host owner.
+    GitFileCompare(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +25,7 @@ pub enum WorkbenchTabKind {
     Agent,
     Editor,
     GitHistory,
+    GitFileCompare,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

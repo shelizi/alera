@@ -80,6 +80,7 @@ use alera_gpui_desktop::git_inspect::{
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
+use alera_gpui_desktop::git_compare_tabs::GitFileCompareTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_actions, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
     GitSidebarOptions, GitSidebarSelectionItem, GitSidebarViewMode, SectionKey,
@@ -899,6 +900,11 @@ struct Workbench {
     git_file_compare_additions: usize,
     git_file_compare_deletions: usize,
     git_file_compare_clipped: bool,
+    /// Opt-in, immutable mixed workbench comparison tabs. No editor buffers
+    /// or Host PTY ownership is delegated to this view-only store.
+    git_compare_tabs: GitFileCompareTabs,
+    /// Explicitly selected view-only compare, independent of Editor/Host.
+    active_git_compare_tab: Option<u64>,
     /// A temporary, read-only center projection; never owns or replaces an
     /// Editor buffer, mixed tab or Host Terminal session.
     center_git_diff_source: Option<native_action_dialog_ui::GitDialogFileSource>,
@@ -1132,6 +1138,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.active_git_compare_tab = None;
         self.explorer_context_menu = None;
         self.git_original_active = false;
         self.explorer_selection = Some(path.to_path_buf());
@@ -2000,6 +2007,7 @@ impl Workbench {
     /// Focus the exact live editor tab `instance` in `pane` and make it the
     /// workbench's active mixed tab.
     fn focus_editor_instance(&mut self, pane: PaneSlot, instance: u64, cx: &mut Context<Self>) {
+        self.active_git_compare_tab = None;
         if let Some(owner) = self.editor_for_pane(pane) {
             owner.update(cx, |editor, cx| {
                 editor.activate_tab_instance(instance, cx);
@@ -4680,6 +4688,7 @@ impl Workbench {
                     Ok(_) => {
                         // Read-only Git versions do not enter NativeEditor at
                         // all and cannot become Save/Save As, draft or PTY tabs.
+                        view.active_git_compare_tab = None;
                         view.git_original_active = true;
                         view.explorer_preview_active = false;
                         view.center_view = CenterView::Editor;
@@ -5750,6 +5759,7 @@ impl Workbench {
     }
 
     fn open_editor(&mut self, cx: &mut Context<Self>) {
+        self.active_git_compare_tab = None;
         self.git_original_active = false;
         self.git_graph_center_open = false;
         let Some(path) = self.model.selected_path().map(PathBuf::from) else {
@@ -5884,6 +5894,7 @@ impl Workbench {
             cx.notify();
             return;
         }
+        self.active_git_compare_tab = None;
         self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
         let mut opened = false;
@@ -6307,6 +6318,8 @@ impl Workbench {
         self.git_history_sidebar_open = false;
         self.git_history_open = false;
         self.git_graph_center_open = false;
+        self.git_compare_tabs.reset();
+        self.active_git_compare_tab = None;
         self.git_branch_picker_mode = None;
         self.git_branch_picker_input.update(cx, |input, cx| input.clear(cx));
         self.mixed_tabs
@@ -8326,6 +8339,7 @@ impl Workbench {
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
         if self.terminals.open(&handle) {
+            self.active_git_compare_tab = None;
             self.explorer_preview_active = false;
             self.terminal_line_selection = None;
             self.center_view = CenterView::Terminal;
@@ -9533,6 +9547,8 @@ impl Workbench {
         // 6px Hook status dot and stopped label never move or get concealed.
         let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::GitHistory {
             icon(UiIcon::Graph, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
+        } else if tab.kind == WorkbenchTabKind::GitFileCompare {
+            icon(UiIcon::FileCode, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
         } else if tab.kind == WorkbenchTabKind::Editor {
             explorer_file_icon_element(
                 &tab.title, false, false, 12.0,
@@ -9753,6 +9769,24 @@ impl Workbench {
                 preferred = Some(WorkbenchTabIdentity::GitHistory);
             }
         }
+        for tab in self.git_compare_tabs.entries() {
+            observed.push(WorkbenchTab {
+                identity: WorkbenchTabIdentity::GitFileCompare(tab.instance),
+                kind: WorkbenchTabKind::GitFileCompare,
+                title: tab.title(),
+                dirty: false,
+                running: true,
+                agent_state: None,
+                interrupted: false,
+            });
+        }
+        if let Some(instance) = self.active_git_compare_tab {
+            if self.git_compare_tabs.get(instance).is_some() {
+                preferred = Some(WorkbenchTabIdentity::GitFileCompare(instance));
+            } else {
+                self.active_git_compare_tab = None;
+            }
+        }
         self.mixed_tabs
             .reconcile(self.workspace_generation, observed, preferred.clone());
         let live_tabs: Vec<_> = self
@@ -9907,6 +9941,9 @@ impl Workbench {
                 self.terminals.index_for_context(target).is_some()
             }
             WorkbenchTabIdentity::GitHistory => self.git_history_tab_open,
+            WorkbenchTabIdentity::GitFileCompare(instance) => {
+                self.git_compare_tabs.get(*instance).is_some()
+            }
             WorkbenchTabIdentity::Editor {
                 editor_epoch,
                 instance,
@@ -9937,6 +9974,7 @@ impl Workbench {
         }
         self.mixed_tab_context = None;
         self.git_graph_center_open = false;
+        self.active_git_compare_tab = None;
         self.explorer_preview_active = false;
         self.git_original_active = false;
         self.mixed_tabs.select(id);
@@ -9966,6 +10004,10 @@ impl Workbench {
                     self.git_history_open = true;
                     self.refresh_git_history(cx);
                 }
+            }
+            WorkbenchTabIdentity::GitFileCompare(instance) => {
+                self.active_git_compare_tab = Some(*instance);
+                self.clear_terminal_text_inputs(cx);
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 // A focused Editor has a different native text input owner;
@@ -10008,6 +10050,7 @@ impl Workbench {
         }
         self.terminals.activate(index);
         self.explorer_preview_active = false;
+        self.active_git_compare_tab = None;
         self.center_view = CenterView::Terminal;
         self.refresh_terminal_output(cx);
         self.save_mixed_pane_layout(cx);
@@ -10045,6 +10088,12 @@ impl Workbench {
                     self.git_history_cancel.store(true, Ordering::Release);
                     self.git_history_request = self.git_history_request.wrapping_add(1);
                     self.git_history_loading = false;
+                }
+            }
+            WorkbenchTabIdentity::GitFileCompare(instance) => {
+                self.git_compare_tabs.close(*instance);
+                if self.active_git_compare_tab == Some(*instance) {
+                    self.active_git_compare_tab = None;
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
@@ -10132,7 +10181,7 @@ impl Workbench {
             .tabs_in(destination)
             .contains(&drag.identity);
         if !source_in_destination {
-            let moved = if drag.identity == WorkbenchTabIdentity::GitHistory {
+            let moved = if matches!(drag.identity, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
                 self.mixed_panes.move_to(&drag.identity, destination)
             } else {
                 self.transfer_editor_to_pane(&drag.identity, destination, cx)
@@ -10181,7 +10230,7 @@ impl Workbench {
                 WorkbenchTabIdentity::Host(target) => {
                     self.toggle_host_tab_pinned(target.clone(), cx);
                 }
-                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => {
+                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) => {
                     let next = !self.mixed_tabs.is_pinned(&id);
                     if self.mixed_tabs.set_pinned(&id, next) {
                         self.save_mixed_pane_layout(cx);
@@ -10212,7 +10261,7 @@ impl Workbench {
             MixedContextAction::SecondPane => {
                 // Host stays in its Host-owned runtime; Editor transfers its
                 // existing EditorSession into an independent native viewport.
-                let moved = if id == WorkbenchTabIdentity::GitHistory {
+                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
                     self.mixed_panes.move_to(&id, PaneSlot::Secondary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx)
@@ -10223,7 +10272,7 @@ impl Workbench {
                 }
             }
             MixedContextAction::FirstPane => {
-                let moved = if id == WorkbenchTabIdentity::GitHistory {
+                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
                     self.mixed_panes.move_to(&id, PaneSlot::Primary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx)
@@ -11103,6 +11152,14 @@ impl Render for Workbench {
         let mixed_primary_active = self.mixed_panes.active_in(PaneSlot::Primary).cloned();
         let graph_in_primary = mixed_primary_active == Some(WorkbenchTabIdentity::GitHistory);
         let graph_in_secondary = mixed_secondary_active == Some(WorkbenchTabIdentity::GitHistory);
+        let compare_in_primary = match &mixed_primary_active {
+            Some(WorkbenchTabIdentity::GitFileCompare(instance)) => Some(*instance),
+            _ => None,
+        };
+        let compare_in_secondary = match &mixed_secondary_active {
+            Some(WorkbenchTabIdentity::GitFileCompare(instance)) => Some(*instance),
+            _ => None,
+        };
         let graph_surface_visible = graph_in_primary || graph_in_secondary;
         let mixed_has_secondary = self.mixed_panes.has_secondary();
         // Classic shows one independent mixed Tab strip per visible pane.
@@ -11155,7 +11212,8 @@ impl Render for Workbench {
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
             WorkbenchTabIdentity::Host(target) => Some(target.clone()),
-            WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => None,
+            WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
+            | WorkbenchTabIdentity::GitFileCompare(_) => None,
         });
         let mixed_secondary_key_target = mixed_secondary_host.clone();
         let mixed_secondary_vt_rows: Option<Vec<StyledRow>> =
@@ -11184,7 +11242,7 @@ impl Render for Workbench {
                         TerminalViewMode::Transcript => session.output.clone(),
                     }
                 }
-                WorkbenchTabIdentity::GitHistory => String::new(),
+                WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) => String::new(),
                 WorkbenchTabIdentity::Editor {
                     editor_epoch,
                     instance,
@@ -11285,7 +11343,9 @@ impl Render for Workbench {
         let showing_explorer_preview = !git_original_is_active
             && (self.explorer_preview_active || self.mixed_tabs.entries().is_empty())
             && self.model.active_document().is_some();
-        let center_is_editor = if git_original_is_active {
+        let center_is_editor = if compare_in_primary.is_some() {
+            false
+        } else if git_original_is_active {
             true
         } else if showing_explorer_preview {
             true
@@ -11441,7 +11501,8 @@ impl Render for Workbench {
                 .active_in(PaneSlot::Primary)
                 .and_then(|identity| match identity {
                     WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory => None,
+                    WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
+                    | WorkbenchTabIdentity::GitFileCompare(_) => None,
                 })
         } else {
             self.terminals.active_tab
@@ -14954,7 +15015,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(graph_in_primary || !show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || !show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -15038,6 +15099,8 @@ impl Render for Workbench {
                             .child(
                                 if graph_in_primary {
                                     self.render_center_git_graph(window, cx)
+                                } else if let Some(instance) = compare_in_primary {
+                                    self.render_git_file_compare_center_tab(instance, cx)
                                 } else if let Some(original) = active_git_original.clone() {
                                     div().id("git-original-readonly-view")
                                         .flex_1().min_h_0().flex().flex_col()
@@ -15066,6 +15129,7 @@ impl Render for Workbench {
                                         .when(!center_is_editor, |panel| panel.hidden())
                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                             if this.mixed_panes.focus_pane(PaneSlot::Primary) {
+                                                this.active_git_compare_tab = None;
                                                 this.center_view = CenterView::Editor;
                                                 this.save_mixed_pane_layout(cx);
                                                 cx.notify();
@@ -15094,7 +15158,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(graph_in_primary || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     // Match the VT viewport, including the 12px text inset,
@@ -15347,7 +15411,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(graph_in_primary || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
@@ -15536,6 +15600,8 @@ impl Render for Workbench {
                                             })
                                             .child(if graph_in_secondary {
                                                 self.render_center_git_graph(window, cx)
+                                            } else if let Some(instance) = compare_in_secondary {
+                                                self.render_git_file_compare_center_tab(instance, cx)
                                             } else if let Some(editor) = secondary_native_editor {
                                                 div()
                                                     .id("mixed-secondary-editor")
@@ -15543,6 +15609,7 @@ impl Render for Workbench {
                                                     .min_h_0()
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                         if this.mixed_panes.focus_pane(PaneSlot::Secondary) {
+                                                            this.active_git_compare_tab = None;
                                                             this.center_view = CenterView::Editor;
                                                             this.save_mixed_pane_layout(cx);
                                                             cx.notify();
@@ -17164,6 +17231,8 @@ fn main() {
                             git_file_compare_additions: 0,
                             git_file_compare_deletions: 0,
                             git_file_compare_clipped: false,
+                            git_compare_tabs: GitFileCompareTabs::default(),
+                            active_git_compare_tab: None,
                             center_git_diff_source: None,
                             center_git_diff_scroll: UniformListScrollHandle::new(),
                             center_git_diff_hunk: None,

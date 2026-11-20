@@ -5,7 +5,7 @@ use alera_gpui_desktop::git_file_revision_compare::{
     compare_file_with_git_reference, list_local_git_branches,
 };
 use alera_gpui_desktop::git_file_split_diff::{
-    align_git_file_patch, flatten_full_file_rows, GitDiffCell, GitDiffCellKind,
+    align_git_file_patch, flatten_full_file_rows, GitDiffCell, GitDiffCellKind, GitSplitDiffRow,
 };
 use alera_gpui_desktop::native_i18n::tr;
 
@@ -63,10 +63,22 @@ impl Workbench {
         } else {
             self.git_file_compare_rows.clone()
         };
+        self.render_git_file_split_rows(rows, full, false, "dialog".into(), cx)
+    }
+
+    fn render_git_file_split_rows(
+        &mut self,
+        rows: Arc<Vec<GitSplitDiffRow>>,
+        full: bool,
+        embedded: bool,
+        scope: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let count = rows.len();
         div()
-            .id("git-file-compare-split-table")
-            .h(px(418.0))
+            .id(format!("git-file-compare-split-table-{scope}"))
+            .when(embedded, |node| node.flex_1().min_h_0())
+            .when(!embedded, |node| node.h(px(418.0)))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -99,11 +111,10 @@ impl Workbench {
             )
             .child(
                 gpui::uniform_list(
-                    if full {
-                        "git-file-compare-virtual-full-rows"
-                    } else {
-                        "git-file-compare-virtual-split-rows"
-                    },
+                    format!(
+                        "git-compare-{scope}-{}-split",
+                        if full { "full" } else { "diff" }
+                    ),
                     count,
                     cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
                         range
@@ -142,11 +153,26 @@ impl Workbench {
     }
 
     fn render_git_file_full_unified(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows = self.git_file_compare_full_unified_rows.clone();
+        self.render_git_file_full_unified_rows(
+            self.git_file_compare_full_unified_rows.clone(),
+            false,
+            "dialog".into(),
+            cx,
+        )
+    }
+
+    fn render_git_file_full_unified_rows(
+        &mut self,
+        rows: Arc<Vec<GitDiffCell>>,
+        embedded: bool,
+        scope: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         if rows.is_empty() {
             return div()
-                .id("git-file-full-unified-empty")
-                .h(px(418.0))
+                .id(format!("git-file-full-unified-empty-{scope}"))
+                .when(embedded, |node| node.flex_1().min_h_0())
+                .when(!embedded, |node| node.h(px(418.0)))
                 .p_3()
                 .text_color(rgb(MUTED))
                 .child("Both files are empty")
@@ -154,8 +180,9 @@ impl Workbench {
         }
         let count = rows.len();
         div()
-            .id("git-file-full-unified-table")
-            .h(px(418.0))
+            .id(format!("git-file-full-unified-table-{scope}"))
+            .when(embedded, |node| node.flex_1().min_h_0())
+            .when(!embedded, |node| node.h(px(418.0)))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -174,7 +201,7 @@ impl Workbench {
             )
             .child(
                 gpui::uniform_list(
-                    "git-file-full-unified-virtual-rows",
+                    format!("git-compare-{scope}-full-unified"),
                     count,
                     cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
                         range
@@ -223,6 +250,243 @@ impl Workbench {
                 .w_full(),
             )
             .into_any_element()
+    }
+
+    /// A pinned comparison is a snapshot, not the live transient dialog.
+    /// Switching another tab cannot make this read a different Git revision
+    /// or silently change the file contents behind the user's inspection.
+    pub(super) fn render_git_file_compare_center_tab(
+        &mut self,
+        instance: u64,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(tab) = self.git_compare_tabs.get(instance).cloned() else {
+            return div()
+                .flex_1()
+                .min_h_0()
+                .p_4()
+                .text_color(rgb(MUTED))
+                .child("Git comparison was closed")
+                .into_any_element();
+        };
+        let generation = self.workspace_generation;
+        let full = tab.displayed_full();
+        let split = tab.split;
+        let scope = format!("pinned-{}", instance);
+        let content = if split {
+            self.render_git_file_split_rows(
+                if full {
+                    tab.full_rows.clone()
+                } else {
+                    tab.diff_rows.clone()
+                },
+                full,
+                true,
+                scope.clone(),
+                cx,
+            )
+        } else if full {
+            self.render_git_file_full_unified_rows(tab.full_unified_rows.clone(), true, scope, cx)
+        } else {
+            div()
+                .id("pinned-git-compare-unified-patch")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .bg(rgb(BG))
+                .p_3()
+                .font_family("Consolas")
+                .text_sm()
+                .text_color(rgb(TEXT))
+                .child(tab.comparison.patch.clone())
+                .into_any_element()
+        };
+        let locale = self.settings_menu_locale;
+        let ref_name = &tab.comparison.reference;
+        let reference = &tab.comparison.revision_oid;
+        let details = format!(
+            "{} · {} @ {} → worktree · +{} / -{} · {} · read-only{}",
+            tab.comparison.relative.display(),
+            ref_name,
+            &reference[..reference.len().min(10)],
+            tab.additions,
+            tab.deletions,
+            if full {
+                "Full file"
+            } else {
+                "Differences only"
+            },
+            if tab.diff_clipped { " · clipped" } else { "" },
+        );
+        div()
+            .id(format!("pinned-git-file-comparison-{instance}"))
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .h(px(42.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .bg(rgb(TOOLBAR))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .child(format!(
+                                "{} · {}",
+                                tr(locale, "Git file comparison"),
+                                tab.title()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id(format!("pinned-compare-content-toggle-{instance}"))
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(PANEL))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_xs()
+                            .text_color(rgb(if tab.full_available() { TEXT } else { MUTED }))
+                            .child(tr(
+                                locale,
+                                if full {
+                                    "Differences only"
+                                } else {
+                                    "Full file"
+                                },
+                            ))
+                            .when(tab.full_available(), |button| {
+                                button.cursor_pointer().on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        if view.workspace_generation == generation {
+                                            if let Some(tab) =
+                                                view.git_compare_tabs.get_mut(instance)
+                                            {
+                                                tab.set_full(!full);
+                                                cx.notify();
+                                            }
+                                        }
+                                    },
+                                ))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(format!("pinned-compare-layout-toggle-{instance}"))
+                            .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .bg(rgb(PANEL))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(tr(
+                                locale,
+                                if split {
+                                    "Unified view"
+                                } else {
+                                    "Side-by-side view"
+                                },
+                            ))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if view.workspace_generation == generation {
+                                    if let Some(tab) = view.git_compare_tabs.get_mut(instance) {
+                                        tab.split = !tab.split;
+                                        cx.notify();
+                                    }
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(details),
+            )
+            .when(tab.full_error.is_some(), |view| {
+                view.child(
+                    div()
+                        .flex_shrink_0()
+                        .px_3()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(format!(
+                            "Full file unavailable: {} · showing bounded diff only",
+                            tab.full_error.as_deref().unwrap_or("unknown")
+                        )),
+                )
+            })
+            .child(content)
+            .into_any_element()
+    }
+
+    /// Opening a pinned tab uses the exact successful dialog snapshot. It
+    /// never re-runs Git, stage, checkout, save or edits a NativeEditor buffer.
+    fn pin_git_file_comparison_snapshot(
+        &mut self,
+        generation: u64,
+        ticket: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_generation != generation || self.git_file_compare_ticket != ticket {
+            return;
+        }
+        let Some((_, Ok(diff))) = self
+            .git_file_compare_result
+            .as_ref()
+            .filter(|(current, _)| *current == ticket)
+        else {
+            return;
+        };
+        let comparison = diff.clone();
+        let id = match self.git_compare_tabs.open(comparison) {
+            Ok(id) => id,
+            Err(error) => {
+                self.model.set_status(error);
+                cx.notify();
+                return;
+            }
+        };
+        if let Some(tab) = self.git_compare_tabs.get_mut(id) {
+            tab.split = self.git_file_compare_split;
+            tab.set_full(self.git_file_compare_full);
+        }
+        let identity = WorkbenchTabIdentity::GitFileCompare(id);
+        self.active_git_compare_tab = Some(id);
+        self.git_graph_center_open = false;
+        self.git_original_active = false;
+        self.explorer_preview_active = false;
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.sync_mixed_tabs(cx);
+        self.mixed_tabs.select(&identity);
+        self.mixed_tabs.set_pinned(&identity, true);
+        self.mixed_panes.activate(&identity);
+        self.model
+            .set_status("Pinned an immutable Git comparison in the workbench; no files changed");
+        self.save_mixed_pane_layout(cx);
+        window.close_all_dialogs(cx);
+        cx.notify();
     }
 
     fn render_git_file_compare_dialog(
@@ -318,6 +582,26 @@ impl Workbench {
                             .text_color(rgb(TEXT))
                             .child(title),
                     )
+                    .when(valid, |bar| {
+                        bar.child(
+                            div()
+                                .id("git-file-compare-pin-to-workbench")
+                                .cursor_pointer()
+                                .px_2()
+                                .py_1()
+                                .bg(rgb(TOOLBAR))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_xs()
+                                .text_color(rgb(TEXT))
+                                .child(tr(locale, "Pin comparison in workbench"))
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.pin_git_file_comparison_snapshot(
+                                        generation, ticket, window, cx,
+                                    );
+                                })),
+                        )
+                    })
                     .when(valid, |bar| {
                         bar.child(
                             div()

@@ -22,6 +22,7 @@ impl Workbench {
     pub(super) fn open_center_git_graph(&mut self, cx: &mut Context<Self>) {
         self.git_history_tab_open = true;
         self.git_graph_center_open = true;
+        self.active_git_compare_tab = None;
         // Classic's main-area Graph starts with all reachable branch tips.
         // Keep an explicitly selected reference or favorites projection intact.
         let expand_all = self.git_history_options.selected_ref.is_none()

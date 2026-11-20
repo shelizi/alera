@@ -186,3 +186,8 @@ _version: 2
   zh-TW: "Git 檔案比較"
   zh-CN: "Git 文件比较"
   ja: "Git ファイル比較"
+"Pin comparison in workbench":
+  en: "Pin comparison in workbench"
+  zh-TW: "釘選比較到中央分頁"
+  zh-CN: "固定比较到中央标签页"
+  ja: "比較をワークベンチにピン留め"
