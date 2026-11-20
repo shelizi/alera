@@ -172,7 +172,7 @@ use gpui_kit::component::WindowExt as _;
 use native_components::{icon, icon_button, UiIcon};
 use native_review_links::repository_pull_requests_url;
 use native_text_references::{identifier_at_cursor, is_whole_identifier_hit};
-use native_ui_icons::{explorer_file_icon_element, tab_close_button};
+use native_ui_icons::{explorer_file_icon_element, sidebar_icon_button, tab_close_button};
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -761,6 +761,8 @@ struct Workbench {
     git_trash_loading: bool,
     git_trash_request: u64,
     git_sidebar_options: GitSidebarOptions,
+    /// Classic shows changed files first; side patch text is an optional detail.
+    git_sidebar_patch_expanded: bool,
     /// Keep infrequent Git/remote operations out of the primary Source Control workflow.
     git_advanced_actions_open: bool,
     git_history: Option<GitHistorySnapshot>,
@@ -4460,6 +4462,36 @@ impl Workbench {
         self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_file_diff_paging = None;
         self.load_git_file_diff_page(relative, area, 0, Vec::new(), cx);
+    }
+
+    /// Classic opens a selected Source Control file's diff in the workbench,
+    /// rather than forcing users to scroll through a tiny right-side excerpt.
+    /// The source ticket is recorded synchronously before the bounded page
+    /// finishes loading, so a stale response cannot replace a newer click.
+    fn open_git_sidebar_file_diff(
+        &mut self,
+        relative: PathBuf,
+        area: GitChangeArea,
+        cx: &mut Context<Self>,
+    ) {
+        self.preview_git_change(relative, Some(area), false, cx);
+        if let Some(paging) = &self.git_file_diff_paging {
+            self.center_git_diff_source = Some(native_action_dialog_ui::GitDialogFileSource {
+                workspace_generation: self.workspace_generation,
+                source_ticket: paging.source_ticket,
+                relative: paging.relative.clone(),
+                area: paging.area,
+            });
+            self.git_original_active = false;
+            self.center_git_diff_hunk = None;
+            self.center_git_diff_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        } else {
+            // Conflict resolution keeps the existing exact-area side preview.
+            self.center_git_diff_source = None;
+            self.git_sidebar_patch_expanded = true;
+        }
+        cx.notify();
     }
 
     fn change_git_file_diff_page(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -11901,18 +11933,57 @@ impl Render for Workbench {
                                             .flex()
                                             .gap_1()
                                             .child(
-                                                icon_button(("explorer-file-action", 0usize), UiIcon::NewFile, tr(self.settings_menu_locale, "New file"), false)
+                                                sidebar_icon_button(("explorer-file-action", 0usize), UiIcon::NewFile, tr(self.settings_menu_locale, "New file"), false)
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.begin_explorer_action(ExplorerAction::NewFile, window, cx);
                                                     })),
                                             )
                                             .child(
-                                                icon_button(("explorer-file-action", 1usize), UiIcon::NewFolder, tr(self.settings_menu_locale, "New folder"), false)
+                                                sidebar_icon_button(("explorer-file-action", 1usize), UiIcon::NewFolder, tr(self.settings_menu_locale, "New folder"), false)
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
                                                     })),
                                             )
-                                            .child({
+                                            // Default 315px width: expose Classic's seven icon
+                                            // controls in the same order, with the same actions.
+                                            // Narrower panels retain all functions in More.
+                                            .when(context_width >= 315.0, |toolbar| toolbar
+                                                .child(sidebar_icon_button("explorer-save-all", UiIcon::Save,
+                                                    tr(self.settings_menu_locale, "Save all editor files"), false)
+                                                    .on_click(cx.listener(|this, _, _, cx| this.save_all_editors(cx))))
+                                                .child(sidebar_icon_button("explorer-toggle-ignored",
+                                                    if self.explorer_visibility.show_ignored { UiIcon::Visible } else { UiIcon::Hidden },
+                                                    tr(self.settings_menu_locale, if self.explorer_visibility.show_ignored { "Hide ignored files" } else { "Show ignored files" }),
+                                                    self.explorer_visibility.show_ignored)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        let mut next = this.explorer_visibility;
+                                                        next.show_ignored = !next.show_ignored;
+                                                        this.update_explorer_visibility(next, cx);
+                                                    })))
+                                                .when(cfg!(windows), |toolbar| toolbar.child(
+                                                    sidebar_icon_button("explorer-toggle-hidden",
+                                                        if self.explorer_visibility.show_hidden { UiIcon::Visible } else { UiIcon::Hidden },
+                                                        tr(self.settings_menu_locale, if self.explorer_visibility.show_hidden { "Hide hidden items" } else { "Show hidden items" }),
+                                                        self.explorer_visibility.show_hidden)
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            let mut next = this.explorer_visibility;
+                                                            next.show_hidden = !next.show_hidden;
+                                                            this.update_explorer_visibility(next, cx);
+                                                        }))
+                                                ))
+                                                .child(sidebar_icon_button("explorer-collapse-all", UiIcon::CollapseAll,
+                                                    tr(self.settings_menu_locale, "Collapse all folders"), false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(tree) = &mut this.tree {
+                                                            if let Err(error) = tree.collapse_all() {
+                                                                this.model.set_status(tr(this.settings_menu_locale, "Collapse All failed: {error}").replace("{error}", &error.to_string()));
+                                                            }
+                                                        }
+                                                        this.tree_mode = true;
+                                                        cx.notify();
+                                                    })))
+                                            )
+                                            .child(if context_width < 315.0 {
                                                 let owner = cx.entity().downgrade();
                                                 let ignored = self.explorer_visibility.show_ignored;
                                                 let hidden = self.explorer_visibility.show_hidden;
@@ -11975,10 +12046,12 @@ impl Render for Workbench {
                                                                     cx.notify();
                                                                 });
                                                             }))
-                                                    })
+                                                    }).into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
                                             })
                                             .child(
-                                                icon_button("explorer-refresh", UiIcon::Refresh, tr(self.settings_menu_locale, "Refresh Explorer"), false)
+                                                sidebar_icon_button("explorer-refresh", UiIcon::Refresh, tr(self.settings_menu_locale, "Refresh Explorer"), false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.refresh_directory();
                                                         if let Some(tree) = &mut this.tree {
@@ -12633,7 +12706,9 @@ impl Render for Workbench {
                                     .items_center()
                                     .justify_between()
                                     .px_2()
-                                    .h(px(36.0))
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
                                     .child(
                                         div()
                                             .text_xs()
@@ -12645,15 +12720,18 @@ impl Render for Workbench {
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            .child(icon_button("git-graph-toggle", UiIcon::Graph, "Toggle Git Graph", git_graph_open)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.toggle_git_history(cx);
-                                                })))
-                                            .child(icon_button("git-graph-expand-center", UiIcon::Open,
-                                                "Open persistent Git History tab in workbench", false)
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.open_center_git_graph(cx);
-                                                })))
+                                            .child(icon_button("git-sidebar-flat-tree",
+                                                if git_tree_mode { UiIcon::File } else { UiIcon::Folder },
+                                                if git_tree_mode { "Show flat Git changes list" } else { "Show Git changes tree" },
+                                                git_tree_mode)
+                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_view(cx))))
+                                            .child(icon_button("git-sidebar-group-toggle", UiIcon::Graph,
+                                                if git_group_by_area { "Show all Git changes together" } else { "Group Git changes by stage" },
+                                                git_group_by_area)
+                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_group(cx))))
+                                            .child(icon_button("git-sidebar-collapse-all", UiIcon::CollapseAll,
+                                                "Collapse or expand all Git change groups", false)
+                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_collapse_all(cx))))
                                             .child(icon_button("git-refresh", UiIcon::GitRefresh, "Refresh Git status", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
@@ -12710,11 +12788,672 @@ impl Render for Workbench {
                                                 this.prepare_or_confirm_git_amend(cx);
                                             }))))
                             )
+                            .when(git_ai_generate_loading, |panel| panel.child(
+                                div().text_xs().text_color(rgb(MUTED))
+                                    .child("Generating with the Host-configured read-only Agent... Click Cancel to stop.")
+                            ))
+                            .when(git_ai_prompt_loading, |panel| panel.child(
+                                div().text_xs().text_color(rgb(MUTED))
+                                    .child("Preparing or checking staged AI prompt (no Agent started)...")
+                            ))
+                            .when_some(git_ai_prompt_preview, |panel, preview| {
+                                let excerpt: String = preview.prompt.chars().take(550).collect();
+                                let preview_note = format!(
+                                    "Staged AI prompt · {} file(s) · HEAD {} · {}",
+                                    preview.staged_files,
+                                    &preview.head_oid[..8],
+                                    if preview.patch_truncated { "patch truncated to budget" }
+                                    else { "bounded read-only diff" }
+                                );
+                                panel.child(div().flex().flex_col().gap_1()
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child(preview_note))
+                                    .child(div().id("git-ai-prompt-excerpt")
+                                        .max_h(px(110.0)).overflow_y_scroll()
+                                        .text_xs().text_color(rgb(MUTED))
+                                        .child(format!("{excerpt}…")))
+                                    .child(div().flex().items_center().gap_1()
+                                        .child(icon_button("git-ai-generate",
+                                            if git_ai_generate_loading { UiIcon::Close } else { UiIcon::Edit },
+                                            if git_ai_generate_loading {
+                                                "Cancel AI Commit generation and stop the Agent"
+                                            } else {
+                                                "Generate AI Commit with Classic Host settings (read-only Codex/Claude; does not commit)"
+                                            },
+                                            git_ai_generate_loading)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.generate_ai_commit_message(cx);
+                                            })))
+                                        .child(icon_button("git-ai-prompt-copy", UiIcon::Save,
+                                            "Verify staged index and copy full AI prompt to clipboard (no AI execution)", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.copy_staged_ai_prompt(cx);
+                                            })))
+                                        .child(icon_button("git-ai-prompt-close", UiIcon::Close,
+                                            "Dismiss staged AI prompt without copying", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.close_staged_ai_prompt(cx);
+                                            })))))
+                            })
+                            .child(
+                                div()
+                                    .id("git-advanced-actions-toggle")
+                                    .h(px(30.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child(icon(if self.git_advanced_actions_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                    .child(tr(self.settings_menu_locale, "Branch & remote actions"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.git_advanced_actions_open = !this.git_advanced_actions_open;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(self.render_kit_branch_dropdown(
+                                        "git-branch-dropdown",
+                                        "Choose local branch".into(),
+                                        cx,
+                                    ))
+                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden())
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(div().flex_1().min_w_0().child(git_branch_input))
+                                    .child(icon_button("git-switch-branch", UiIcon::Branch, "Switch to the specified local branch", false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                            this.run_git_action(GitUiAction::SwitchBranch(branch), cx);
+                                        })))
+                                    .child(icon_button("git-fetch-remote", UiIcon::GitFetch, "Fetch upstream branches (no working tree change)", false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.run_git_action(GitUiAction::Fetch, cx);
+                                        })))
+                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden()),
+                            )
+                            .child(div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(icon_button("git-compare-local", UiIcon::History, "Compare the selected branch with HEAD (read-only)", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                        this.git_merge_armed = None;
+                                        this.compare_git_branch_files(branch, CompareDirection::CurrentToSelected, cx);
+                                    })))
+                                .child(icon_button("git-merge-auto", if git_merge_armed { UiIcon::Check } else { UiIcon::GitMerge }, "Merge selected branch into HEAD (click twice to confirm)", git_merge_armed)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.git_action_busy { return; }
+                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                        if branch.is_empty() {
+                                            this.git_action_status = "Select a source branch before merging".into();
+                                        } else if this.git_merge_armed.as_deref() == Some(branch.as_str()) {
+                                            this.git_merge_armed = None;
+                                            this.run_git_action(GitUiAction::MergeWithoutConflicts(branch), cx);
+                                        } else {
+                                            this.git_sensitive_armed = None;
+                                            this.git_conflict_confirm_armed = false;
+                                            this.git_merge_armed = Some(branch.clone());
+                                            this.git_action_status = format!("Click Confirm Merge to merge {branch} into the current branch; merge conflicts will be refused without changing files");
+                                        }
+                                        cx.notify();
+                                    })))
+                                .child(icon_button("git-pull-ff-only", if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) { UiIcon::Check } else { UiIcon::GitPull }, "Pull current branch from upstream, fast-forward only (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
+                                    })))
+                                .child(icon_button("git-push-upstream", if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) { UiIcon::Check } else { UiIcon::GitPush }, "Push current branch to upstream without force (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PushUpstream))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
+                                    })))
+                                .child(icon_button("git-pull-selected-branch", UiIcon::GitPull,
+                                    "Pull selected branch without checkout (fast-forward only; confirm twice)", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_selected_branch_remote(true, cx);
+                                    })))
+                                .child(icon_button("git-push-selected-branch", UiIcon::GitPush,
+                                    "Push selected branch without checkout (no force; confirm twice)", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_selected_branch_remote(false, cx);
+                                    })))
+                                .child({
+                                    let owner = cx.entity().downgrade();
+                                    let armed = self.git_sensitive_armed;
+                                    let has_conflict_review = self.git_conflict_preview.is_some();
+                                    Button::new("git-more-actions")
+                                        .icon(IconName::Ellipsis)
+                                        .ghost()
+                                        .tooltip("More Git actions: stash and conflict review")
+                                        .dropdown_menu(move |menu, _, _| {
+                                            let save_owner = owner.clone();
+                                            let apply_owner = owner.clone();
+                                            let inspect_owner = owner.clone();
+                                            let ai_owner = owner.clone();
+                                            let mut menu = menu
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        if armed == Some(ConfirmGitAction::StashSave) {
+                                                            "Confirm stash tracked changes"
+                                                        } else {
+                                                            "Stash tracked changes"
+                                                        }
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        let _ = save_owner.update(cx, |view, cx| {
+                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
+                                                        });
+                                                    }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        if armed == Some(ConfirmGitAction::StashApply) {
+                                                            "Confirm apply latest stash"
+                                                        } else {
+                                                            "Apply latest stash"
+                                                        }
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        let _ = apply_owner.update(cx, |view, cx| {
+                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
+                                                        });
+                                                    }),
+                                                )
+                                                .separator()
+                                                .item(
+                                                    PopupMenuItem::new("Inspect merge conflicts")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = inspect_owner.update(cx, |view, cx| {
+                                                                view.preview_git_merge_conflicts(cx);
+                                                            });
+                                                        }),
+                                                )
+                                                .separator()
+                                                .item(
+                                                    PopupMenuItem::new("Preview staged AI Commit prompt (no AI run)")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = ai_owner.update(cx, |view, cx| {
+                                                                view.prepare_staged_ai_prompt(cx);
+                                                            });
+                                                        }),
+                                                );
+                                            if has_conflict_review {
+                                                let cancel_owner = owner.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new("Cancel conflict review")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = cancel_owner.update(cx, |view, cx| {
+                                                                view.git_conflict_preview = None;
+                                                                view.git_conflict_choices.clear();
+                                                                view.git_conflict_selected = None;
+                                                                view.git_conflict_confirm_armed = false;
+                                                                view.git_action_status = "Merge conflict review cancelled; no files changed".into();
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                );
+                                            }
+                                            menu
+                                        })
+                                })
+                                .when(!self.git_advanced_actions_open, |panel| panel.hidden())
+                            )
+                            .child(if git_conflict_count > 0 {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(div()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child(format!(
+                                            "Conflict choices: {git_conflict_choices_count}/{git_conflict_count} · WHOLE FILE, not individual hunks",
+                                        )))
+                                    .child(div()
+                                        .id("git-conflict-files-scroll")
+                                        .max_h(px(155.0))
+                                        .overflow_y_scroll()
+                                        .children(git_conflict_rows.into_iter().enumerate().map(|(index, (path, choice, selected))| {
+                                            let path_for_select = path.clone();
+                                            let path_for_ours = path.clone();
+                                            let path_for_theirs = path.clone();
+                                            div()
+                                                .id(("git-conflict-row", index))
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .py_1()
+                                                .child(div()
+                                                    .id(("git-conflict-preview-path", index))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                                    .child(format!("{} {}", if selected { "▸" } else { "·" }, path))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.git_conflict_selected = Some(path_for_select.clone());
+                                                        this.git_conflict_confirm_armed = false;
+                                                        cx.notify();
+                                                    })))
+                                                .child(div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_3()
+                                                    .child(div()
+                                                        .id(("git-conflict-pick-ours", index))
+                                                        .cursor_pointer()
+                                                        .text_xs()
+                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Ours) { TEXT } else { MUTED }))
+                                                        .child(if choice == Some(GitConflictChoice::Ours) { "● Ours" } else { "○ Ours" })
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.choose_git_conflict_side(path_for_ours.clone(), GitConflictChoice::Ours, cx);
+                                                        })))
+                                                    .child(div()
+                                                        .id(("git-conflict-pick-theirs", index))
+                                                        .cursor_pointer()
+                                                        .text_xs()
+                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Theirs) { TEXT } else { MUTED }))
+                                                        .child(if choice == Some(GitConflictChoice::Theirs) { "● Theirs" } else { "○ Theirs" })
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.choose_git_conflict_side(path_for_theirs.clone(), GitConflictChoice::Theirs, cx);
+                                                        })))
+                                                )
+                                        })))
+                                    .child(div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("Preview excerpts only (up to 1,800 characters per side); inspect entire file before choosing."))
+                                    .child(div()
+                                        .id("git-conflict-text-preview")
+                                        .max_h(px(132.0))
+                                        .overflow_y_scroll()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child(git_conflict_detail.unwrap_or_else(|| "Select a conflicted file to review its base, ours and theirs".into())))
+                                    .child(div()
+                                        .id("git-conflict-resolved-merge")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                        .child(if git_conflict_armed { "Confirm Resolved Merge" } else { "Merge selected sides" })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.confirm_git_conflict_merge(cx);
+                                        })))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
+                            .child(div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
+                            .child(div().px_2().py_1().text_xs().text_color(rgb(MUTED))
+                                .child(format!("{git_sidebar_matches} / {git_sidebar_total} changes")))
+                            .child(git_filter_input)
+                            .when(git_selected_count > 0, |panel| panel.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_xs()
+                                    .child(format!("{git_selected_count} selected"))
+                                    .when(!git_stage_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-stage-selected", UiIcon::GitStage, "Stage selected files", false)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_git_action(GitUiAction::StageMany(git_stage_paths.clone()), cx);
+                                            }))
+                                    ))
+                                    .when(!git_unstage_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-unstage-selected", UiIcon::GitUnstage, "Unstage selected files", false)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_git_action(GitUiAction::UnstageMany(git_unstage_paths.clone()), cx);
+                                            }))
+                                    ))
+                                    .when(!git_discard_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-discard-selected", if git_discard_confirm { UiIcon::Check } else { UiIcon::GitDiscard },
+                                            if git_discard_confirm { "Confirm Discard selected unstaged tracked files" } else { "Discard selected unstaged tracked changes (confirm)" },
+                                            git_discard_confirm)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.confirm_discard_git_paths(git_discard_paths.clone(), cx);
+                                            }))
+                                    ))
+                                    .child(icon_button("git-clear-selected", UiIcon::Close, "Clear Git selection", false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.git_selected_changes.clear();
+                                            this.git_selection_anchor = None;
+                                            cx.notify();
+                                        })))
+                            ))
+                            .child(
+                                div()
+                                    .id("git-change-list")
+                                    // A 135px file list hid nearly all changes behind a nested
+                                    // scrollbar. Let Source Control use the available sidebar
+                                    // height and keep the patch preview below the files.
+                                    .flex_1()
+                                    .min_h(px(240.0))
+                                    .max_h(px(640.0))
+                                    .overflow_y_scroll()
+                                    .when(git_sidebar_matches == 0, |list| list.child(
+                                        div().px_2().py_3().text_xs().text_color(rgb(MUTED))
+                                            .child(tr(self.settings_menu_locale, if git_sidebar_total == 0 {
+                                                "No changes"
+                                            } else {
+                                                "No matching files"
+                                            }))
+                                    ))
+                                    .children(git_sidebar_entries.into_iter().enumerate().map(|(i, entry)| {
+                                        let (change, depth) = match entry {
+                                            GitSidebarEntry::Section { key, total, matching, expanded } => {
+                                                let label = if let Some(area) = key { area.title() } else { "ALL CHANGES" };
+                                                let caption = if matching == total {
+                                                    format!("{label} ({total})")
+                                                } else {
+                                                    format!("{label} ({matching}/{total})")
+                                                };
+                                                let actions = section_actions(&git_all_changes, key);
+                                                let stage_paths = actions.stage;
+                                                let unstage_paths = actions.unstage;
+                                                return div().id(("git-group-section", i))
+                                                    .flex().items_center().gap_2().h(px(30.0)).px_2().text_xs()
+                                                    .cursor_pointer().text_color(rgb(TEXT))
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
+                                                    .when(!stage_paths.is_empty(), |row| row.child(
+                                                        sidebar_icon_button(("git-section-stage-all", i), UiIcon::GitStage,
+                                                            format!("Stage all {label} changes"), false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.run_git_action(GitUiAction::StageMany(stage_paths.clone()), cx);
+                                                            }))
+                                                    ))
+                                                    .when(!unstage_paths.is_empty(), |row| row.child(
+                                                        sidebar_icon_button(("git-section-unstage-all", i), UiIcon::GitUnstage,
+                                                            format!("Unstage all {label} changes"), false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                this.run_git_action(GitUiAction::UnstageMany(unstage_paths.clone()), cx);
+                                                            }))
+                                                    ))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.toggle_git_sidebar_section(key, cx);
+                                                    }))
+                                                    .into_any_element();
+                                            }
+                                            GitSidebarEntry::Folder { key, depth, total, matching, expanded } => {
+                                                let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                                let folder_icon = explorer_file_icon_element(
+                                                    &name, true, expanded, 16.0, MUTED,
+                                                );
+                                                let caption = if total == matching {
+                                                    format!("{name} ({total})")
+                                                } else {
+                                                    format!("{name} ({matching}/{total})")
+                                                };
+                                                return div().id(("git-group-folder", i))
+                                                    .flex().items_center().gap_2().h(px(28.0)).text_xs()
+                                                    .pl(px(8.0 + depth as f32 * 14.0))
+                                                    .cursor_pointer().text_color(rgb(MUTED))
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                    .child(folder_icon)
+                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.toggle_git_sidebar_folder(key.clone(), cx);
+                                                    }))
+                                                    .into_any_element();
+                                            }
+                                            GitSidebarEntry::File { change, depth } => (change, depth),
+                                        };
+                                        let selected = git_selected.contains(&change);
+                                        let clicked_row = change.clone();
+                                        let preview_area = change.area;
+                                        let menu_row = change.clone();
+                                        let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
+                                            self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
+                                        let visible_for_click = Arc::clone(&git_visible_rows);
+                                        let display_name = if git_tree_mode {
+                                            change.relative.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                                        } else {
+                                            change.relative.display().to_string()
+                                        };
+                                        let file_icon = explorer_file_icon_element(
+                                            &display_name, false, false, 16.0, MUTED,
+                                        );
+                                        let status_color = match change.label {
+                                            "A" | "?" | "U" => 0x77c79b,
+                                            "D" | "CONFLICT" => 0xe58d8d,
+                                            _ => 0xe7b96a,
+                                        };
+                                        let status_label = change.label;
+                                        let area_label = change.area.title();
+                                        let can_stage = change.area.can_stage();
+                                        let can_unstage = change.area.can_unstage();
+                                        let tooltip_path = change.relative.display().to_string();
+                                        let relative = change.relative;
+                                        let stage_path = relative.clone();
+                                        let unstage_path = relative.clone();
+                                        div()
+                                            .id(("git-change-file", i))
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .h(px(28.0))
+                                            .pl(px(8.0 + depth as f32 * 14.0))
+                                            .pr_1()
+                                            .text_xs()
+                                            .bg(rgb(if selected { ACTIVE } else { PANEL }))
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(div()
+                                                .id(("git-change-preview", i))
+                                                .flex_1()
+                                                .min_w_0()
+                                                .cursor_pointer()
+                                                .tooltip(move |window, cx| {
+                                                    gpui_kit::component::tooltip::Tooltip::new(tooltip_path.clone())
+                                                        .build(window, cx)
+                                                })
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(file_icon)
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(display_name))
+                                                .when(!git_group_by_area, |row| row.child(
+                                                    div().text_xs().text_color(rgb(MUTED)).child(area_label)
+                                                ))
+                                                .child(div().min_w(px(14.0)).text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(status_color)).child(status_label))
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                                    let modifiers = event.modifiers();
+                                                    let multi = modifiers.control || modifiers.platform;
+                                                    this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
+                                                    if !multi && !modifiers.shift {
+                                                        this.open_git_sidebar_file_diff(relative.clone(), preview_area, cx);
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                                .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
+                                            .when(can_stage, |row| row.child(sidebar_icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
+                                                }))))
+                                            .when(can_unstage, |row| row.child(sidebar_icon_button(("git-unstage-file", i), UiIcon::GitUnstage, "Unstage this file (keep working edits)", false)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
+                                                }))))
+                                            .into_any_element()
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("git-patch-preview-toggle")
+                                    .h(px(30.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .child(icon(if self.git_sidebar_patch_expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                    .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(tr(self.settings_menu_locale, "Patch Preview")))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.git_sidebar_patch_expanded = !this.git_sidebar_patch_expanded;
+                                        cx.notify();
+                                    })),
+                            )
+                            .when(self.git_sidebar_patch_expanded, |panel| panel.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(div().text_xs().text_color(rgb(MUTED))
+                                        .child(tr(self.settings_menu_locale, "Patch preview · read-only")))
+                                    .child(if git_diff_expand_available {
+                                        div()
+                                            .id("git-diff-expand")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Expand diff")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_kit_git_diff_dialog(window, cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Expand diff").into_any_element()
+                                    })
+                                    .child(if git_diff_expand_available && git_file_page.is_some() {
+                                        div()
+                                            .id("git-diff-open-center")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Center")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_center_git_diff(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().into_any_element()
+                                    }),
+                            )
+                            .child(if let Some((page, can_previous, can_next)) = git_file_page {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("Page {page} · live Git · 32 KiB/page")),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(if can_previous {
+                                                div()
+                                                    .id("git-diff-previous-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Previous")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(false, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Previous")
+                                                    .into_any_element()
+                                            })
+                                            .child(if can_next {
+                                                div()
+                                                    .id("git-diff-next-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Next")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(true, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Next")
+                                                    .into_any_element()
+                                            }),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .id("git-diff-scroll")
+                                    .max_h(px(170.0))
+                                    .overflow_y_scroll()
+                                    .text_xs()
+                                    .font_family(terminal_font_family.clone())
+                                    .text_color(rgb(MUTED))
+                                    .child(git_diff),
+                            ))
+                            // Classic docks Git History after the changed-file list.
+                            .child(
+                                div()
+                                    .id("git-history-footer-toggle")
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .mt_2()
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .child(icon(if git_graph_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                    .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(tr(self.settings_menu_locale, "Git History")))
+                                    .child(div().flex_1())
+                                    .child(icon_button("git-graph-expand-center", UiIcon::Open,
+                                        "Open persistent Git History tab in workbench", false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.open_center_git_graph(cx);
+                                        })))
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_history(cx))),
+                            )
                             .child(if git_graph_open {
                                 div()
                                     .id("git-graph-panel")
                                     .flex()
                                     .flex_col()
+                                    .max_h(px(460.0))
+                                    .overflow_y_scroll()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
                                     .child(div().flex().items_center().gap_1()
@@ -13221,626 +13960,6 @@ impl Render for Workbench {
                             } else {
                                 div().h(px(0.0)).into_any_element()
                             })
-                            .when(git_ai_generate_loading, |panel| panel.child(
-                                div().text_xs().text_color(rgb(MUTED))
-                                    .child("Generating with the Host-configured read-only Agent... Click Cancel to stop.")
-                            ))
-                            .when(git_ai_prompt_loading, |panel| panel.child(
-                                div().text_xs().text_color(rgb(MUTED))
-                                    .child("Preparing or checking staged AI prompt (no Agent started)...")
-                            ))
-                            .when_some(git_ai_prompt_preview, |panel, preview| {
-                                let excerpt: String = preview.prompt.chars().take(550).collect();
-                                let preview_note = format!(
-                                    "Staged AI prompt · {} file(s) · HEAD {} · {}",
-                                    preview.staged_files,
-                                    &preview.head_oid[..8],
-                                    if preview.patch_truncated { "patch truncated to budget" }
-                                    else { "bounded read-only diff" }
-                                );
-                                panel.child(div().flex().flex_col().gap_1()
-                                    .child(div().text_xs().text_color(rgb(TEXT)).child(preview_note))
-                                    .child(div().id("git-ai-prompt-excerpt")
-                                        .max_h(px(110.0)).overflow_y_scroll()
-                                        .text_xs().text_color(rgb(MUTED))
-                                        .child(format!("{excerpt}…")))
-                                    .child(div().flex().items_center().gap_1()
-                                        .child(icon_button("git-ai-generate",
-                                            if git_ai_generate_loading { UiIcon::Close } else { UiIcon::Edit },
-                                            if git_ai_generate_loading {
-                                                "Cancel AI Commit generation and stop the Agent"
-                                            } else {
-                                                "Generate AI Commit with Classic Host settings (read-only Codex/Claude; does not commit)"
-                                            },
-                                            git_ai_generate_loading)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.generate_ai_commit_message(cx);
-                                            })))
-                                        .child(icon_button("git-ai-prompt-copy", UiIcon::Save,
-                                            "Verify staged index and copy full AI prompt to clipboard (no AI execution)", false)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.copy_staged_ai_prompt(cx);
-                                            })))
-                                        .child(icon_button("git-ai-prompt-close", UiIcon::Close,
-                                            "Dismiss staged AI prompt without copying", false)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.close_staged_ai_prompt(cx);
-                                            })))))
-                            })
-                            .child(
-                                div()
-                                    .id("git-advanced-actions-toggle")
-                                    .h(px(30.0))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                    .text_xs()
-                                    .text_color(rgb(TEXT))
-                                    .child(icon(if self.git_advanced_actions_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
-                                    .child(tr(self.settings_menu_locale, "Branch & remote actions"))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.git_advanced_actions_open = !this.git_advanced_actions_open;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(self.render_kit_branch_dropdown(
-                                        "git-branch-dropdown",
-                                        "Choose local branch".into(),
-                                        cx,
-                                    ))
-                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden())
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(div().flex_1().min_w_0().child(git_branch_input))
-                                    .child(icon_button("git-switch-branch", UiIcon::Branch, "Switch to the specified local branch", false)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let branch = this.git_branch_input.read(cx).query().trim().to_owned();
-                                            this.run_git_action(GitUiAction::SwitchBranch(branch), cx);
-                                        })))
-                                    .child(icon_button("git-fetch-remote", UiIcon::GitFetch, "Fetch upstream branches (no working tree change)", false)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.run_git_action(GitUiAction::Fetch, cx);
-                                        })))
-                                    .when(!self.git_advanced_actions_open, |panel| panel.hidden()),
-                            )
-                            .child(div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(icon_button("git-compare-local", UiIcon::History, "Compare the selected branch with HEAD (read-only)", false)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
-                                        this.git_merge_armed = None;
-                                        this.compare_git_branch_files(branch, CompareDirection::CurrentToSelected, cx);
-                                    })))
-                                .child(icon_button("git-merge-auto", if git_merge_armed { UiIcon::Check } else { UiIcon::GitMerge }, "Merge selected branch into HEAD (click twice to confirm)", git_merge_armed)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        if this.git_action_busy { return; }
-                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
-                                        if branch.is_empty() {
-                                            this.git_action_status = "Select a source branch before merging".into();
-                                        } else if this.git_merge_armed.as_deref() == Some(branch.as_str()) {
-                                            this.git_merge_armed = None;
-                                            this.run_git_action(GitUiAction::MergeWithoutConflicts(branch), cx);
-                                        } else {
-                                            this.git_sensitive_armed = None;
-                                            this.git_conflict_confirm_armed = false;
-                                            this.git_merge_armed = Some(branch.clone());
-                                            this.git_action_status = format!("Click Confirm Merge to merge {branch} into the current branch; merge conflicts will be refused without changing files");
-                                        }
-                                        cx.notify();
-                                    })))
-                                .child(icon_button("git-pull-ff-only", if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) { UiIcon::Check } else { UiIcon::GitPull }, "Pull current branch from upstream, fast-forward only (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
-                                    })))
-                                .child(icon_button("git-push-upstream", if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) { UiIcon::Check } else { UiIcon::GitPush }, "Push current branch to upstream without force (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PushUpstream))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
-                                    })))
-                                .child(icon_button("git-pull-selected-branch", UiIcon::GitPull,
-                                    "Pull selected branch without checkout (fast-forward only; confirm twice)", false)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_selected_branch_remote(true, cx);
-                                    })))
-                                .child(icon_button("git-push-selected-branch", UiIcon::GitPush,
-                                    "Push selected branch without checkout (no force; confirm twice)", false)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_selected_branch_remote(false, cx);
-                                    })))
-                                .child({
-                                    let owner = cx.entity().downgrade();
-                                    let armed = self.git_sensitive_armed;
-                                    let has_conflict_review = self.git_conflict_preview.is_some();
-                                    Button::new("git-more-actions")
-                                        .icon(IconName::Ellipsis)
-                                        .ghost()
-                                        .tooltip("More Git actions: stash and conflict review")
-                                        .dropdown_menu(move |menu, _, _| {
-                                            let save_owner = owner.clone();
-                                            let apply_owner = owner.clone();
-                                            let inspect_owner = owner.clone();
-                                            let ai_owner = owner.clone();
-                                            let mut menu = menu
-                                                .item(
-                                                    PopupMenuItem::new(
-                                                        if armed == Some(ConfirmGitAction::StashSave) {
-                                                            "Confirm stash tracked changes"
-                                                        } else {
-                                                            "Stash tracked changes"
-                                                        }
-                                                    )
-                                                    .on_click(move |_, _, cx| {
-                                                        let _ = save_owner.update(cx, |view, cx| {
-                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
-                                                        });
-                                                    }),
-                                                )
-                                                .item(
-                                                    PopupMenuItem::new(
-                                                        if armed == Some(ConfirmGitAction::StashApply) {
-                                                            "Confirm apply latest stash"
-                                                        } else {
-                                                            "Apply latest stash"
-                                                        }
-                                                    )
-                                                    .on_click(move |_, _, cx| {
-                                                        let _ = apply_owner.update(cx, |view, cx| {
-                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
-                                                        });
-                                                    }),
-                                                )
-                                                .separator()
-                                                .item(
-                                                    PopupMenuItem::new("Inspect merge conflicts")
-                                                        .on_click(move |_, _, cx| {
-                                                            let _ = inspect_owner.update(cx, |view, cx| {
-                                                                view.preview_git_merge_conflicts(cx);
-                                                            });
-                                                        }),
-                                                )
-                                                .separator()
-                                                .item(
-                                                    PopupMenuItem::new("Preview staged AI Commit prompt (no AI run)")
-                                                        .on_click(move |_, _, cx| {
-                                                            let _ = ai_owner.update(cx, |view, cx| {
-                                                                view.prepare_staged_ai_prompt(cx);
-                                                            });
-                                                        }),
-                                                );
-                                            if has_conflict_review {
-                                                let cancel_owner = owner.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new("Cancel conflict review")
-                                                        .on_click(move |_, _, cx| {
-                                                            let _ = cancel_owner.update(cx, |view, cx| {
-                                                                view.git_conflict_preview = None;
-                                                                view.git_conflict_choices.clear();
-                                                                view.git_conflict_selected = None;
-                                                                view.git_conflict_confirm_armed = false;
-                                                                view.git_action_status = "Merge conflict review cancelled; no files changed".into();
-                                                                cx.notify();
-                                                            });
-                                                        }),
-                                                );
-                                            }
-                                            menu
-                                        })
-                                })
-                                .when(!self.git_advanced_actions_open, |panel| panel.hidden())
-                            )
-                            .child(if git_conflict_count > 0 {
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(div()
-                                        .text_xs()
-                                        .text_color(rgb(TEXT))
-                                        .child(format!(
-                                            "Conflict choices: {git_conflict_choices_count}/{git_conflict_count} · WHOLE FILE, not individual hunks",
-                                        )))
-                                    .child(div()
-                                        .id("git-conflict-files-scroll")
-                                        .max_h(px(155.0))
-                                        .overflow_y_scroll()
-                                        .children(git_conflict_rows.into_iter().enumerate().map(|(index, (path, choice, selected))| {
-                                            let path_for_select = path.clone();
-                                            let path_for_ours = path.clone();
-                                            let path_for_theirs = path.clone();
-                                            div()
-                                                .id(("git-conflict-row", index))
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1()
-                                                .py_1()
-                                                .child(div()
-                                                    .id(("git-conflict-preview-path", index))
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                    .child(format!("{} {}", if selected { "▸" } else { "·" }, path))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.git_conflict_selected = Some(path_for_select.clone());
-                                                        this.git_conflict_confirm_armed = false;
-                                                        cx.notify();
-                                                    })))
-                                                .child(div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_3()
-                                                    .child(div()
-                                                        .id(("git-conflict-pick-ours", index))
-                                                        .cursor_pointer()
-                                                        .text_xs()
-                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Ours) { TEXT } else { MUTED }))
-                                                        .child(if choice == Some(GitConflictChoice::Ours) { "● Ours" } else { "○ Ours" })
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.choose_git_conflict_side(path_for_ours.clone(), GitConflictChoice::Ours, cx);
-                                                        })))
-                                                    .child(div()
-                                                        .id(("git-conflict-pick-theirs", index))
-                                                        .cursor_pointer()
-                                                        .text_xs()
-                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Theirs) { TEXT } else { MUTED }))
-                                                        .child(if choice == Some(GitConflictChoice::Theirs) { "● Theirs" } else { "○ Theirs" })
-                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                            this.choose_git_conflict_side(path_for_theirs.clone(), GitConflictChoice::Theirs, cx);
-                                                        })))
-                                                )
-                                        })))
-                                    .child(div()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child("Preview excerpts only (up to 1,800 characters per side); inspect entire file before choosing."))
-                                    .child(div()
-                                        .id("git-conflict-text-preview")
-                                        .max_h(px(132.0))
-                                        .overflow_y_scroll()
-                                        .text_xs()
-                                        .text_color(rgb(TEXT))
-                                        .child(git_conflict_detail.unwrap_or_else(|| "Select a conflicted file to review its base, ours and theirs".into())))
-                                    .child(div()
-                                        .id("git-conflict-resolved-merge")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                        .child(if git_conflict_armed { "Confirm Resolved Merge" } else { "Merge selected sides" })
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.confirm_git_conflict_merge(cx);
-                                        })))
-                                    .into_any_element()
-                            } else {
-                                div().h(px(0.0)).into_any_element()
-                            })
-                            .child(div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
-                            .child(div().flex().items_center().gap_1().text_xs()
-                                .child(div().flex_1().min_w_0().text_color(rgb(MUTED))
-                                    .child(format!("{git_sidebar_matches} / {git_sidebar_total} changes")))
-                                .child(icon_button("git-sidebar-flat-tree", if git_tree_mode { UiIcon::File } else { UiIcon::Folder },
-                                    if git_tree_mode { "Show flat Git changes list" } else { "Show Git changes tree" }, git_tree_mode)
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_view(cx))))
-                                .child(icon_button("git-sidebar-group-toggle", UiIcon::Graph,
-                                    if git_group_by_area { "Show all Git changes together" } else { "Group Git changes by stage" },
-                                    git_group_by_area)
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_group(cx))))
-                                .child(icon_button("git-sidebar-collapse-all", UiIcon::CollapseAll,
-                                    "Collapse or expand all Git change groups", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_collapse_all(cx))))
-                                .child(icon_button("git-sidebar-refresh", UiIcon::GitRefresh,
-                                    "Refresh Git status", false)
-                                    .on_click(cx.listener(|this, _, _, cx| this.refresh_git(cx)))))
-                            .child(git_filter_input)
-                            .when(git_selected_count > 0, |panel| panel.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_xs()
-                                    .child(format!("{git_selected_count} selected"))
-                                    .when(!git_stage_paths.is_empty(), |bar| bar.child(
-                                        icon_button("git-stage-selected", UiIcon::GitStage, "Stage selected files", false)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.run_git_action(GitUiAction::StageMany(git_stage_paths.clone()), cx);
-                                            }))
-                                    ))
-                                    .when(!git_unstage_paths.is_empty(), |bar| bar.child(
-                                        icon_button("git-unstage-selected", UiIcon::GitUnstage, "Unstage selected files", false)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.run_git_action(GitUiAction::UnstageMany(git_unstage_paths.clone()), cx);
-                                            }))
-                                    ))
-                                    .when(!git_discard_paths.is_empty(), |bar| bar.child(
-                                        icon_button("git-discard-selected", if git_discard_confirm { UiIcon::Check } else { UiIcon::GitDiscard },
-                                            if git_discard_confirm { "Confirm Discard selected unstaged tracked files" } else { "Discard selected unstaged tracked changes (confirm)" },
-                                            git_discard_confirm)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.confirm_discard_git_paths(git_discard_paths.clone(), cx);
-                                            }))
-                                    ))
-                                    .child(icon_button("git-clear-selected", UiIcon::Close, "Clear Git selection", false)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.git_selected_changes.clear();
-                                            this.git_selection_anchor = None;
-                                            cx.notify();
-                                        })))
-                            ))
-                            .child(
-                                div()
-                                    .id("git-change-list")
-                                    // A 135px file list hid nearly all changes behind a nested
-                                    // scrollbar. Let Source Control use the available sidebar
-                                    // height and keep the patch preview below the files.
-                                    .flex_1()
-                                    .min_h(px(240.0))
-                                    .max_h(px(640.0))
-                                    .overflow_y_scroll()
-                                    .when(git_sidebar_matches == 0, |list| list.child(
-                                        div().px_2().py_3().text_xs().text_color(rgb(MUTED))
-                                            .child(if git_sidebar_total == 0 {
-                                                "No changes"
-                                            } else {
-                                                "No matching files"
-                                            })
-                                    ))
-                                    .children(git_sidebar_entries.into_iter().enumerate().map(|(i, entry)| {
-                                        let (change, depth) = match entry {
-                                            GitSidebarEntry::Section { key, total, matching, expanded } => {
-                                                let label = if let Some(area) = key { area.title() } else { "ALL CHANGES" };
-                                                let caption = if matching == total {
-                                                    format!("{label} ({total})")
-                                                } else {
-                                                    format!("{label} ({matching}/{total})")
-                                                };
-                                                let actions = section_actions(&git_all_changes, key);
-                                                let stage_paths = actions.stage;
-                                                let unstage_paths = actions.unstage;
-                                                return div().id(("git-group-section", i))
-                                                    .flex().items_center().gap_2().h(px(30.0)).px_2().text_xs()
-                                                    .cursor_pointer().text_color(rgb(TEXT))
-                                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
-                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
-                                                    .when(!stage_paths.is_empty(), |row| row.child(
-                                                        icon_button(("git-section-stage-all", i), UiIcon::GitStage,
-                                                            format!("Stage all {label} changes"), false)
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                cx.stop_propagation();
-                                                                this.run_git_action(GitUiAction::StageMany(stage_paths.clone()), cx);
-                                                            }))
-                                                    ))
-                                                    .when(!unstage_paths.is_empty(), |row| row.child(
-                                                        icon_button(("git-section-unstage-all", i), UiIcon::GitUnstage,
-                                                            format!("Unstage all {label} changes"), false)
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                cx.stop_propagation();
-                                                                this.run_git_action(GitUiAction::UnstageMany(unstage_paths.clone()), cx);
-                                                            }))
-                                                    ))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.toggle_git_sidebar_section(key, cx);
-                                                    }))
-                                                    .into_any_element();
-                                            }
-                                            GitSidebarEntry::Folder { key, depth, total, matching, expanded } => {
-                                                let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                                                let folder_icon = explorer_file_icon_element(
-                                                    &name, true, expanded, 16.0, MUTED,
-                                                );
-                                                let caption = if total == matching {
-                                                    format!("{name} ({total})")
-                                                } else {
-                                                    format!("{name} ({matching}/{total})")
-                                                };
-                                                return div().id(("git-group-folder", i))
-                                                    .flex().items_center().gap_2().h(px(28.0)).text_xs()
-                                                    .pl(px(8.0 + depth as f32 * 14.0))
-                                                    .cursor_pointer().text_color(rgb(MUTED))
-                                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
-                                                    .child(folder_icon)
-                                                    .child(div().flex_1().min_w_0().truncate().child(caption))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.toggle_git_sidebar_folder(key.clone(), cx);
-                                                    }))
-                                                    .into_any_element();
-                                            }
-                                            GitSidebarEntry::File { change, depth } => (change, depth),
-                                        };
-                                        let selected = git_selected.contains(&change);
-                                        let clicked_row = change.clone();
-                                        let preview_area = change.area;
-                                        let menu_row = change.clone();
-                                        let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
-                                            self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
-                                        let visible_for_click = Arc::clone(&git_visible_rows);
-                                        let display_name = if git_tree_mode {
-                                            change.relative.file_name().unwrap_or_default().to_string_lossy().into_owned()
-                                        } else {
-                                            change.relative.display().to_string()
-                                        };
-                                        let file_icon = explorer_file_icon_element(
-                                            &display_name, false, false, 16.0, MUTED,
-                                        );
-                                        let status_color = match change.label {
-                                            "A" | "?" | "U" => 0x77c79b,
-                                            "D" | "CONFLICT" => 0xe58d8d,
-                                            _ => 0xe7b96a,
-                                        };
-                                        let status_label = change.label;
-                                        let area_label = change.area.title();
-                                        let can_stage = change.area.can_stage();
-                                        let can_unstage = change.area.can_unstage();
-                                        let relative = change.relative;
-                                        let stage_path = relative.clone();
-                                        let unstage_path = relative.clone();
-                                        div()
-                                            .id(("git-change-file", i))
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .py_1()
-                                            .pl(px(8.0 + depth as f32 * 14.0))
-                                            .text_xs()
-                                            .bg(rgb(if selected { ACTIVE } else { PANEL }))
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(div()
-                                                .id(("git-change-preview", i))
-                                                .flex_1()
-                                                .min_w_0()
-                                                .cursor_pointer()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .child(file_icon)
-                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(display_name))
-                                                .when(!git_group_by_area, |row| row.child(
-                                                    div().text_xs().text_color(rgb(MUTED)).child(area_label)
-                                                ))
-                                                .child(div().min_w(px(14.0)).text_xs()
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(status_color)).child(status_label))
-                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                                                    let modifiers = event.modifiers();
-                                                    let multi = modifiers.control || modifiers.platform;
-                                                    this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
-                                                    if !multi && !modifiers.shift {
-                                                        this.preview_git_change(relative.clone(), Some(preview_area), false, cx);
-                                                    }
-                                                    cx.notify();
-                                                }))
-                                                .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
-                                            .when(can_stage, |row| row.child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
-                                                }))))
-                                            .when(can_unstage, |row| row.child(icon_button(("git-unstage-file", i), UiIcon::GitUnstage, "Unstage this file (keep working edits)", false)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
-                                                }))))
-                                            .into_any_element()
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(div().text_xs().text_color(rgb(MUTED)).child("Patch preview · read-only"))
-                                    .child(if git_diff_expand_available {
-                                        div()
-                                            .id("git-diff-expand")
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT))
-                                            .child("Expand diff")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.open_kit_git_diff_dialog(window, cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().text_xs().text_color(rgb(MUTED))
-                                            .child("Expand diff").into_any_element()
-                                    })
-                                    .child(if git_diff_expand_available && git_file_page.is_some() {
-                                        div()
-                                            .id("git-diff-open-center")
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT))
-                                            .child("Center")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.open_center_git_diff(cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().into_any_element()
-                                    }),
-                            )
-                            .child(if let Some((page, can_previous, can_next)) = git_file_page {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(format!("Page {page} · live Git · 32 KiB/page")),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(if can_previous {
-                                                div()
-                                                    .id("git-diff-previous-page")
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Previous")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.change_git_file_diff_page(false, cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("Previous")
-                                                    .into_any_element()
-                                            })
-                                            .child(if can_next {
-                                                div()
-                                                    .id("git-diff-next-page")
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Next")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.change_git_file_diff_page(true, cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("Next")
-                                                    .into_any_element()
-                                            }),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
-                            .child(
-                                div()
-                                    .id("git-diff-scroll")
-                                    .max_h(px(170.0))
-                                    .overflow_y_scroll()
-                                    .text_xs()
-                                    .font_family(terminal_font_family.clone())
-                                    .text_color(rgb(MUTED))
-                                    .child(git_diff),
-                            ),
                             )
                     )
                     .child(
@@ -16433,6 +16552,7 @@ fn main() {
                             git_trash_loading: false,
                             git_trash_request: 0,
                             git_sidebar_options: GitSidebarOptions::default(),
+                            git_sidebar_patch_expanded: false,
                             git_advanced_actions_open: false,
                             git_history: None,
                             git_graph_render_cache: None,

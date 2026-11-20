@@ -1,0 +1,43 @@
+# Native right-panel labels that are not yet in the generated Classic vocabulary.
+# Keep this hand-maintained file separate from generated ui.yml.
+_version: 2
+"Source Control":
+  en: "Source Control"
+  zh-TW: "版本控制"
+  zh-CN: "版本控制"
+  ja: "ソース管理"
+"Commit":
+  en: "Commit"
+  zh-TW: "提交"
+  zh-CN: "提交"
+  ja: "コミット"
+"Git History":
+  en: "Git History"
+  zh-TW: "Git 歷史紀錄"
+  zh-CN: "Git 历史记录"
+  ja: "Git 履歴"
+"Patch Preview":
+  en: "Patch Preview"
+  zh-TW: "差異預覽"
+  zh-CN: "差异预览"
+  ja: "差分プレビュー"
+"Branch & remote actions":
+  en: "Branch & remote actions"
+  zh-TW: "分支與遠端操作"
+  zh-CN: "分支与远端操作"
+  ja: "ブランチとリモート操作"
+"No changes":
+  en: "No changes"
+  zh-TW: "沒有變更"
+  zh-CN: "没有更改"
+  ja: "変更はありません"
+"No matching files":
+  en: "No matching files"
+  zh-TW: "沒有符合的檔案"
+  zh-CN: "没有匹配的文件"
+  ja: "一致するファイルがありません"
+"Patch preview · read-only":
+  en: "Patch preview · read-only"
+  zh-TW: "差異預覽 · 唯讀"
+  zh-CN: "差异预览 · 只读"
+  ja: "差分プレビュー · 読み取り専用"

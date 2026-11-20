@@ -30,6 +30,8 @@ pub enum UiIcon {
     ChevronRight,
     Refresh,
     CollapseAll,
+    Visible,
+    Hidden,
     Search,
     List,
     PullRequest,
@@ -81,6 +83,7 @@ impl UiIcon {
             Self::ChevronRight => '\u{eab6}',
             Self::Refresh => '\u{eb37}',
             Self::CollapseAll => '\u{eac5}',
+            Self::Visible | Self::Hidden => '\u{eb62}',
             Self::Search => '\u{ea6d}',
             Self::List => '\u{eb60}',
             Self::PullRequest => '\u{ea64}',
@@ -153,6 +156,8 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::ChevronRight => LucideIcon::ChevronRight,
         UiIcon::Refresh => LucideIcon::RefreshCw,
         UiIcon::CollapseAll => LucideIcon::ChevronsDownUp,
+        UiIcon::Visible => LucideIcon::Eye,
+        UiIcon::Hidden => LucideIcon::EyeOff,
         UiIcon::Search => LucideIcon::Search,
         UiIcon::List => LucideIcon::List,
         UiIcon::PullRequest => LucideIcon::GitPullRequest,
@@ -285,6 +290,27 @@ pub fn icon_button(
         .h(px(30.0))
         .p_0()
         .child(icon(icon_kind, 16.0, if active { TEXT } else { MUTED }));
+    if active {
+        button.secondary()
+    } else {
+        button.ghost()
+    }
+}
+
+/// Compact Classic toolbar action for the default 315px sidebar.
+pub fn sidebar_icon_button(
+    id: impl Into<ElementId>,
+    icon_kind: UiIcon,
+    label: impl Into<SharedString>,
+    active: bool,
+) -> Button {
+    let button = Button::new(id)
+        .tooltip(label)
+        .compact()
+        .w(px(26.0))
+        .h(px(26.0))
+        .p_0()
+        .child(icon(icon_kind, 15.0, if active { TEXT } else { MUTED }));
     if active {
         button.secondary()
     } else {

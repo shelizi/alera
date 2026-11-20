@@ -515,4 +515,29 @@ mod tests {
             "Alera-unknown-key-927"
         );
     }
+
+    #[test]
+    fn classic_right_sidebar_primary_controls_translate_in_every_locale() {
+        for source in [
+            "Source Control",
+            "Commit",
+            "Git History",
+            "Patch Preview",
+            "Branch & remote actions",
+            "No changes",
+            "No matching files",
+            "Patch preview · read-only",
+        ] {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                let localized = tr(locale, source);
+                assert_ne!(localized, source, "Missing {source} in {}", locale.tag());
+                assert!(!localized.trim().is_empty());
+            }
+        }
+    }
 }
