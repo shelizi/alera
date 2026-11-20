@@ -94,7 +94,32 @@ pub struct QuotaReading {
     pub value: String,
     pub remaining_percent: Option<f64>,
     pub reset: Option<String>,
+    pub detail: Option<String>,
     pub order: i32,
+}
+
+/// Native GPUI progress bar values from Claude's provider-reported monthly extra usage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeExtraUsageProgress {
+    pub used_fraction: f32,
+    pub spent_amount: f64,
+    pub limit_amount: f64,
+    pub remaining_amount: f64,
+    pub currency: String,
+}
+
+impl ClaudeExtraUsageProgress {
+    pub fn spent_text(&self) -> String {
+        format_quota_amount(self.spent_amount, &self.currency)
+    }
+
+    pub fn limit_text(&self) -> String {
+        format_quota_amount(self.limit_amount, &self.currency)
+    }
+
+    pub fn remaining_text(&self) -> String {
+        format_quota_amount(self.remaining_amount, &self.currency)
+    }
 }
 
 /// Classic's quota hover card uses the Host's Unix-millisecond reset time
@@ -141,7 +166,59 @@ fn unix_time_millis() -> i64 {
         .unwrap_or_default()
 }
 
+fn format_quota_amount(value: f64, currency: &str) -> String {
+    match currency {
+        "USD" => format!("US${value:.2}"),
+        "credits" => format!("{value:.2} credits"),
+        currency if !currency.is_empty() => format!("{currency} {value:.2}"),
+        _ => format!("{value:.2}"),
+    }
+}
+
+fn is_claude_extra_amount(provider: &str, label: &str) -> bool {
+    provider == "claude"
+        && (label.eq_ignore_ascii_case("Extra Usage")
+            || label.eq_ignore_ascii_case("Usage credits"))
+}
+
+fn claude_extra_remaining(amount: &QuotaAmount) -> Option<f64> {
+    amount
+        .remaining_amount
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .or_else(|| {
+            let (cap, used) = (amount.limit_amount?, amount.spent_amount?);
+            (cap.is_finite() && used.is_finite() && cap >= 0.0 && used >= 0.0)
+                .then(|| (cap - used).max(0.0))
+        })
+}
+
 impl QuotaSnapshot {
+    /// No progress bar without valid provider spending and positive monthly cap.
+    /// The bar measures used (not remaining) and clamps over-limit usage to 100%.
+    pub fn claude_extra_usage_progress(&self) -> Option<ClaudeExtraUsageProgress> {
+        if self.provider != "claude" {
+            return None;
+        }
+        self.amounts.iter().find_map(|amount| {
+            if !is_claude_extra_amount(&self.provider, &amount.label) {
+                return None;
+            }
+            let spent = amount
+                .spent_amount
+                .filter(|value| value.is_finite() && *value >= 0.0)?;
+            let limit = amount
+                .limit_amount
+                .filter(|value| value.is_finite() && *value > 0.0)?;
+            Some(ClaudeExtraUsageProgress {
+                used_fraction: (spent / limit).clamp(0.0, 1.0) as f32,
+                spent_amount: spent,
+                limit_amount: limit,
+                remaining_amount: (limit - spent).max(0.0),
+                currency: amount.currency.clone(),
+            })
+        })
+    }
+
     pub fn key(&self) -> String {
         format!("{}:{}", self.provider, self.account_id)
     }
@@ -204,31 +281,70 @@ impl QuotaSnapshot {
                     metric.reset_description.as_deref(),
                     now_millis,
                 ),
+                detail: None,
                 order: reading_order(&self.provider, &metric.label),
             });
         }
         for amount in &self.amounts {
-            let number = amount
-                .spent_amount
-                .or(amount.remaining_amount)
-                .or(amount.limit_amount)
-                .filter(|v| v.is_finite());
-            let value = match (number, amount.currency.as_str()) {
-                (Some(value), "USD") => format!("US${value:.2}"),
-                (Some(value), "credits") => format!("{value:.2} credits"),
-                (Some(value), currency) if !currency.is_empty() => format!("{currency} {value:.2}"),
-                _ => "-".into(),
+            let is_extra = is_claude_extra_amount(&self.provider, &amount.label);
+            let remaining = is_extra.then(|| claude_extra_remaining(amount)).flatten();
+            let number = if is_extra {
+                remaining
+            } else {
+                amount
+                    .spent_amount
+                    .or(amount.remaining_amount)
+                    .or(amount.limit_amount)
+                    .filter(|v| v.is_finite())
+            };
+            let value = number
+                .map(|number| format_quota_amount(number, &amount.currency))
+                .unwrap_or_else(|| "-".into());
+            let value = if is_extra && number.is_some() {
+                format!("{value} left")
+            } else {
+                value
+            };
+            let detail = if is_extra {
+                match (amount.spent_amount, amount.limit_amount) {
+                    (Some(used), Some(cap)) if used.is_finite() && cap.is_finite() => {
+                        Some(format!(
+                            "Extra Usage: {} / {} used",
+                            format_quota_amount(used, &amount.currency),
+                            format_quota_amount(cap, &amount.currency)
+                        ))
+                    }
+                    _ => Some("Extra Usage remaining balance unavailable from provider".into()),
+                }
+            } else {
+                None
+            };
+            let remaining_percent = if is_extra {
+                remaining.zip(amount.limit_amount).and_then(|(left, cap)| {
+                    (cap.is_finite() && cap > 0.0).then(|| (left / cap * 100.0).clamp(0.0, 100.0))
+                })
+            } else {
+                None
             };
             readings.push(QuotaReading {
-                label: short_label(&self.provider, &amount.label),
-                full_label: amount.label.clone(),
+                label: if is_extra {
+                    "Extra".into()
+                } else {
+                    short_label(&self.provider, &amount.label)
+                },
+                full_label: if is_extra {
+                    "Extra Usage".into()
+                } else {
+                    amount.label.clone()
+                },
                 value,
-                remaining_percent: None,
+                remaining_percent,
                 reset: quota_reset_text(
                     amount.resets_at,
                     amount.reset_description.as_deref(),
                     now_millis,
                 ),
+                detail,
                 order: 30,
             });
         }
@@ -674,6 +790,20 @@ mod tests {
         }
         assert_eq!(unique.len(), PROVIDERS.len());
         assert_eq!(snapshots.len(), 13);
+        let claude_default = snapshots
+            .iter()
+            .find(|s| s.provider == "claude" && s.account_id == "default")
+            .unwrap();
+        let default_extra = claude_default.claude_extra_usage_progress().unwrap();
+        assert!((default_extra.used_fraction as f64 - 0.0566).abs() < 0.00001);
+        assert_eq!(default_extra.remaining_text(), "US$47.17");
+        let claude_work = snapshots
+            .iter()
+            .find(|s| s.provider == "claude" && s.account_id == "work")
+            .unwrap();
+        let work_extra = claude_work.claude_extra_usage_progress().unwrap();
+        assert!((work_extra.used_fraction as f64 - 0.95).abs() < 0.00001);
+        assert_eq!(work_extra.remaining_text(), "US$2.50");
         let agy = snapshots.iter().find(|s| s.provider == "agy").unwrap();
         assert_eq!(agy.readings().len(), 5);
         assert_eq!(agy.readings()[0].label, "G·5H");
@@ -704,6 +834,76 @@ mod tests {
         assert_eq!(readings[0].value, "90%");
         assert_eq!(readings[4].label, "Ar·W");
         assert_eq!(readings[4].value, "1%");
+    }
+
+    #[test]
+    fn claude_extra_usage_remaining_is_distinct_from_amount_spent() {
+        for label in ["Usage credits", "Extra Usage"] {
+            let snapshots = parse_quota_snapshots(&json!({"snapshots": [{
+                "provider":"claude", "accountId":"default", "status":"ok",
+                "amounts":[{"label":label,"currency":"USD","spentAmount":2.83,"limitAmount":50.0}]
+            }]}))
+            .unwrap();
+            let readings = snapshots[0].readings();
+            assert_eq!(readings.len(), 1);
+            assert_eq!(readings[0].label, "Extra");
+            assert_eq!(readings[0].value, "US$47.17 left");
+            assert!(readings[0]
+                .detail
+                .as_ref()
+                .unwrap()
+                .contains("US$2.83 / US$50.00 used"));
+            assert!((readings[0].remaining_percent.unwrap() - 94.34).abs() < 0.00001);
+        }
+        let snapshots = parse_quota_snapshots(&json!({"snapshots": [{
+            "provider":"claude", "status":"ok",
+            "amounts":[{"label":"Extra Usage","currency":"USD","spentAmount":2.83}]
+        }]}))
+        .unwrap();
+        assert_eq!(snapshots[0].readings()[0].value, "-");
+        assert!(snapshots[0].readings()[0].remaining_percent.is_none());
+    }
+
+    #[test]
+    fn claude_extra_progress_requires_actual_spending_and_positive_monthly_cap() {
+        for label in ["Extra Usage", "Usage credits"] {
+            let snapshots = parse_quota_snapshots(&json!({"snapshots": [{
+                "provider":"claude", "status":"ok",
+                "amounts":[{"label":label,"currency":"USD","spentAmount":2.83,"limitAmount":50.0}]
+            }]}))
+            .unwrap();
+            let progress = snapshots[0].claude_extra_usage_progress().unwrap();
+            assert!((progress.used_fraction as f64 - 0.0566).abs() < 0.00001);
+            assert_eq!(progress.spent_text(), "US$2.83");
+            assert_eq!(progress.limit_text(), "US$50.00");
+            assert_eq!(progress.remaining_text(), "US$47.17");
+        }
+        for amount in [
+            json!({"label":"Extra Usage","currency":"USD","limitAmount":50.0}),
+            json!({"label":"Extra Usage","currency":"USD","spentAmount":2.83}),
+            json!({"label":"Extra Usage","currency":"USD","spentAmount":2.83,"limitAmount":0}),
+            json!({"label":"Extra Usage","currency":"USD","spentAmount":-1,"limitAmount":50}),
+        ] {
+            let snapshots = parse_quota_snapshots(&json!({"snapshots": [{
+                "provider":"claude","status":"ok","amounts":[amount]
+            }]}))
+            .unwrap();
+            assert!(snapshots[0].claude_extra_usage_progress().is_none());
+        }
+        let over = parse_quota_snapshots(&json!({"snapshots": [{
+            "provider":"claude","status":"ok",
+            "amounts":[{"label":"Extra Usage","currency":"USD","spentAmount":70,"limitAmount":50}]
+        }]}))
+        .unwrap();
+        let progress = over[0].claude_extra_usage_progress().unwrap();
+        assert_eq!(progress.used_fraction, 1.0);
+        assert_eq!(progress.remaining_text(), "US$0.00");
+        let unrelated = parse_quota_snapshots(&json!({"snapshots": [{
+            "provider":"opencode","status":"ok",
+            "amounts":[{"label":"Extra Usage","currency":"USD","spentAmount":10,"limitAmount":50}]
+        }]}))
+        .unwrap();
+        assert!(unrelated[0].claude_extra_usage_progress().is_none());
     }
 
     #[test]

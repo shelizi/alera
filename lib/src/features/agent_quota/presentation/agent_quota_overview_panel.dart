@@ -193,12 +193,14 @@ class const _QuotaOverviewRow({
                 for (final (index, reading) in readings.indexed) ...<Widget>[
                   if (index > 0) const SizedBox(width: AleraTokens.space6),
                   Tooltip(
-                    message: _quotaTooltipLine(
-                      label: reading.fullLabel,
-                      remainingPercent: reading.remainingPercent,
-                      resetsAt: reading.resetsAt,
-                      resetDescription: reading.resetDescription,
-                    ),
+                    message:
+                        reading.tooltipText ??
+                        _quotaTooltipLine(
+                          label: reading.fullLabel,
+                          remainingPercent: reading.remainingPercent,
+                          resetsAt: reading.resetsAt,
+                          resetDescription: reading.resetDescription,
+                        ),
                     waitDuration: AleraTokens.durationMid,
                     child: _QuotaReadingView(
                       reading: reading,

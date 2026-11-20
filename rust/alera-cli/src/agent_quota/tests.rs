@@ -194,9 +194,25 @@ fn maps_claude_oauth_usage_windows() {
 fn claude_extra_usage_maps_actual_usd_cents() {
     let raw = json!({"is_enabled":true,"used_credits":283,"monthly_limit":5000});
     let amount = map_claude_extra_usage(Some(&raw)).expect("native overage");
+    assert_eq!(amount.label, "Extra Usage");
     assert_eq!(amount.spent_amount, Some(2.83));
+    assert!((amount.remaining_amount.unwrap() - 47.17).abs() < 0.00001);
     assert_eq!(amount.limit_amount, Some(50.0));
     assert_eq!(amount.currency, "USD");
+    assert_eq!(
+        map_claude_extra_usage(Some(
+            &json!({"is_enabled":true,"used_credits":6000,"monthly_limit":5000})
+        ))
+        .unwrap()
+        .remaining_amount,
+        Some(0.0),
+    );
+    assert_eq!(
+        map_claude_extra_usage(Some(&json!({"is_enabled":true,"used_credits":1200})))
+            .unwrap()
+            .remaining_amount,
+        None,
+    );
     assert!(
         map_claude_extra_usage(Some(&json!({"is_enabled":false,"used_credits":400}))).is_none()
     );

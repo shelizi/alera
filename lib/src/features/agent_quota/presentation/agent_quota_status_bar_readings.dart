@@ -8,6 +8,8 @@ class const _QuotaReading({
   required final DateTime? resetsAt,
   required final String? resetDescription,
   final String? valueText,
+  final String? tooltipText,
+  final double? amountRemainingPercent,
 });
 
 class const _QuotaReadingView({
@@ -34,7 +36,12 @@ class const _QuotaReadingView({
           style: AleraTokens.monoStyle.copyWith(
             fontSize: 10,
             fontWeight: .w600,
-            color: _quotaColor(status, reading.remainingPercent),
+            color: _quotaColor(
+              status,
+              reading.valueText == null
+                  ? reading.remainingPercent
+                  : reading.amountRemainingPercent,
+            ),
           ),
         ),
       ],
@@ -54,15 +61,7 @@ List<_QuotaReading> _quotaReadings(AgentQuotaSnapshot snapshot) {
         resetDescription: window.resetDescription,
       ),
     for (final amount in snapshot.amounts)
-      _QuotaReading(
-        label: _shortWindowLabel(amount.label),
-        remainingPercent: 100,
-        order: 20,
-        fullLabel: amount.label,
-        resetsAt: amount.resetsAt,
-        resetDescription: amount.resetDescription,
-        valueText: _formatQuotaAmount(amount),
-      ),
+      _quotaAmountReading(snapshot.provider, amount),
     for (final bucket in snapshot.buckets)
       _QuotaReading(
         label: _bucketReadingLabel(snapshot.provider, bucket),
@@ -75,6 +74,96 @@ List<_QuotaReading> _quotaReadings(AgentQuotaSnapshot snapshot) {
   ];
   readings.sort((left, right) => left.order.compareTo(right.order));
   return readings;
+}
+
+bool _isClaudeExtraUsage(
+  AgentQuotaProviderId provider,
+  AgentQuotaAmount amount,
+) {
+  if (provider != AgentQuotaProviderId.claude) return false;
+  final label = amount.label.trim().toLowerCase();
+  // The prior Host version named the same provider field 'Usage credits'.
+  return label == 'extra usage' || label == 'usage credits';
+}
+
+double? _claudeExtraRemaining(AgentQuotaAmount amount) {
+  final direct = amount.remainingAmount;
+  if (direct != null && direct.isFinite && direct >= 0) return direct;
+  final spent = amount.spentAmount;
+  final limit = amount.limitAmount;
+  if (spent == null ||
+      limit == null ||
+      !spent.isFinite ||
+      !limit.isFinite ||
+      spent < 0 ||
+      limit < 0) {
+    return null;
+  }
+  return (limit - spent).clamp(0.0, double.infinity).toDouble();
+}
+
+_QuotaReading _quotaAmountReading(
+  AgentQuotaProviderId provider,
+  AgentQuotaAmount amount,
+) {
+  final isExtra = _isClaudeExtraUsage(provider, amount);
+  final remaining = isExtra ? _claudeExtraRemaining(amount) : null;
+  final limit = amount.limitAmount;
+  final double? remainingPercent =
+      isExtra &&
+          remaining != null &&
+          limit != null &&
+          limit.isFinite &&
+          limit > 0
+      ? (remaining / limit * 100).clamp(0.0, 100.0).toDouble()
+      : null;
+  return _QuotaReading(
+    label: isExtra ? 'Extra' : _shortWindowLabel(amount.label),
+    remainingPercent: 100,
+    order: 20,
+    fullLabel: isExtra ? 'Extra Usage' : amount.label,
+    resetsAt: amount.resetsAt,
+    resetDescription: amount.resetDescription,
+    valueText: isExtra
+        ? remaining == null
+              ? '—'
+              : '${_formatQuotaAmountValue(remaining, amount.currency)} left'
+        : _formatQuotaAmount(amount),
+    amountRemainingPercent: remainingPercent,
+    tooltipText: _quotaAmountTooltip(provider, amount),
+  );
+}
+
+String _quotaAmountTooltip(
+  AgentQuotaProviderId provider,
+  AgentQuotaAmount amount,
+) {
+  final isExtra = _isClaudeExtraUsage(provider, amount);
+  final parts = <String>[];
+  if (isExtra) {
+    final remaining = _claudeExtraRemaining(amount);
+    parts.add(
+      remaining == null
+          ? 'Remaining unavailable'
+          : '${_formatQuotaAmountValue(remaining, amount.currency)} left',
+    );
+  }
+  if (amount.spentAmount case final spent?) {
+    parts.add('Used: ${_formatQuotaAmountValue(spent, amount.currency)}');
+  }
+  if (amount.limitAmount case final limit?) {
+    parts.add('Limit: ${_formatQuotaAmountValue(limit, amount.currency)}');
+  }
+  final remainingAmount = amount.remainingAmount;
+  if (!isExtra && remainingAmount != null) {
+    parts.add(
+      'Remaining: ${_formatQuotaAmountValue(remainingAmount, amount.currency)}',
+    );
+  }
+  if (_resetText(amount.resetsAt, amount.resetDescription) case final reset?) {
+    parts.add(reset);
+  }
+  return '${isExtra ? "Extra Usage" : amount.label}: ${parts.join(" - ")}';
 }
 
 String _formatQuotaAmount(AgentQuotaAmount amount) {

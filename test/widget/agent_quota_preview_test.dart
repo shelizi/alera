@@ -76,8 +76,11 @@ void main() {
     );
     await tester.pump(AleraTokens.durationMid);
     await tester.pumpAndSettle();
+    expect(find.text('Extra'), findsOneWidget);
+    expect(find.text(r'US$47.17 left'), findsOneWidget);
     expect(find.text('99% Left'), findsOneWidget);
     expect(find.text('Resets in 4h 35m'), findsOneWidget);
+    expect(find.text(r'Remaining: US$47.17'), findsOneWidget);
     expect(find.text(r'US$2.83 / US$50.00'), findsOneWidget);
     expect(find.text('6% used'), findsOneWidget);
     expect(find.text('API equivalent preview'), findsOneWidget);
