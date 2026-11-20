@@ -381,6 +381,7 @@ class _WorkbenchSidebarRowBuilder(
     return _sortSidebarWorkspaces(
       workspaces,
       sortBy: prefs.workspaceSort,
+      manualOrder: prefs.workspaceOrder,
       pinMainOnRecent: pinMainOnRecent,
       activityOf: _activityOf,
       lastActivityOf: _lastActivityOf,
@@ -391,6 +392,7 @@ class _WorkbenchSidebarRowBuilder(
     return _sortSidebarProjects(
       projects,
       sortBy: prefs.projectSort,
+      manualOrder: prefs.projectOrder,
       workspacesFor: state.workspacesFor,
       workspaceVisible: _isWorkspaceVisible,
       activityOf: _activityOf,

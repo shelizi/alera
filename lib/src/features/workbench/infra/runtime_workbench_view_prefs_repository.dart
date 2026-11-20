@@ -35,6 +35,8 @@ class RuntimeWorkbenchViewPrefsRepository({
     othersSectionCollapsed: incoming.othersSectionCollapsed,
     projectSort: incoming.projectSort,
     workspaceSort: incoming.workspaceSort,
+    projectOrder: incoming.projectOrder,
+    workspaceOrder: incoming.workspaceOrder,
     selectedProjectIds: incoming.selectedProjectIds,
     selectedTagIds: incoming.selectedTagIds,
     collapsedProjectIds: incoming.collapsedProjectIds,
@@ -327,7 +329,8 @@ String _sharedPayloadFingerprint(Map<String, Object?> values) {
   return jsonEncode(<String, Object?>{
     for (final key in sortedKeys)
       key: switch (values[key]) {
-        final List items =>
+        final List items
+            when key != 'projectOrder' && key != 'workspaceOrder' =>
           (items.map((item) => item.toString()).toList()..sort()),
         final value => value,
       },
@@ -352,6 +355,8 @@ Map<String, Object?> _sharedJson(WorkbenchViewPrefs prefs) {
     'othersSectionCollapsed': prefs.othersSectionCollapsed,
     'projectSort': prefs.projectSort.name,
     'workspaceSort': prefs.workspaceSort.name,
+    'projectOrder': prefs.projectOrder,
+    'workspaceOrder': prefs.workspaceOrder,
     'selectedProjectIds': prefs.selectedProjectIds.toList(),
     'selectedTagIds': prefs.selectedTagIds.toList(),
     'collapsedProjectIds': prefs.collapsedProjectIds.toList(),
@@ -395,6 +400,8 @@ WorkbenchViewPrefs _mergeShared(
       shared['workspaceSort'],
       local.workspaceSort,
     ),
+    projectOrder: _stringList(shared['projectOrder']),
+    workspaceOrder: _stringList(shared['workspaceOrder']),
     selectedProjectIds: _stringSet(shared['selectedProjectIds']),
     selectedTagIds: _stringSet(shared['selectedTagIds']),
     collapsedProjectIds: _stringSet(shared['collapsedProjectIds']),
@@ -433,6 +440,12 @@ Set<String> _stringSet(Object? value) {
         if (item is String) item,
   };
 }
+
+List<String> _stringList(Object? value) => [
+  if (value is List)
+    for (final item in value)
+      if (item is String) item,
+];
 
 Map<String, Object?> _asMap(Object? value) {
   if (value is Map<String, Object?>) return value;

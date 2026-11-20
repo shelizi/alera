@@ -415,6 +415,20 @@ pub struct DesktopSettingsCommand {
 #[derive(Debug, Subcommand)]
 pub enum DesktopSettingsAction {
     Get,
+    /// Read only the two sidebar sort modes and their stable ID order.
+    SidebarOrderGet,
+    /// Rearrange one registered sidebar entry in shared Host prefs.
+    SidebarOrderMove {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        source_id: String,
+        #[arg(long)]
+        target_id: String,
+        /// JSON array of the visible sibling IDs, bounded and validated.
+        #[arg(long)]
+        visible_order: String,
+    },
     /// Read only Host-enabled Agent Hook switches (no Runtime settings,
     /// AI Assist data, provider credentials or change authority).
     AgentHooksGet,

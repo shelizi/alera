@@ -7,7 +7,7 @@ part 'workbench_view_prefs.mapper.dart';
 enum WorkbenchGroupBy { none, project, section }
 
 @MappableEnum()
-enum WorkbenchSortBy { name, recent, activity }
+enum WorkbenchSortBy { name, recent, activity, manual }
 
 @MappableEnum()
 enum WorkbenchContextPanelTab {
@@ -81,6 +81,8 @@ class const WorkbenchViewPrefs({
   required this.groupBy,
   required this.projectSort,
   required this.workspaceSort,
+  this.projectOrder = const <String>[],
+  this.workspaceOrder = const <String>[],
   required this.selectedProjectIds,
   required this.collapsedProjectIds,
   required this.expandedWorkspaceIds,
@@ -113,6 +115,10 @@ class const WorkbenchViewPrefs({
   final bool othersSectionCollapsed;
   final WorkbenchSortBy projectSort;
   final WorkbenchSortBy workspaceSort;
+
+  /// Shared persistent order for manual Project / Worktree sorting.
+  final List<String> projectOrder;
+  final List<String> workspaceOrder;
 
   /// Projects the user has explicitly added to the visibility filter. When the
   /// set is empty the sidebar shows every project; when non-empty it shows

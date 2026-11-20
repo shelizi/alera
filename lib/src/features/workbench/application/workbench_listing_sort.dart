@@ -3,12 +3,21 @@ part of 'workbench_listing.dart';
 List<Workspace> _sortSidebarWorkspaces(
   List<Workspace> workspaces, {
   required WorkbenchSortBy sortBy,
+  required List<String> manualOrder,
   required bool pinMainOnRecent,
   required AgentActivityRank? Function(Workspace) activityOf,
   required DateTime Function(Workspace) lastActivityOf,
 }) {
   final sorted = List<Workspace>.from(workspaces);
   switch (sortBy) {
+    case WorkbenchSortBy.manual:
+      final positions = <String, int>{
+        for (var i = 0; i < manualOrder.length; i++) manualOrder[i]: i,
+      };
+      sorted.sort(
+        (a, b) =>
+            _compareManualPositions(a.id, b.id, positions, a.name, b.name),
+      );
     case WorkbenchSortBy.name:
       sorted.sort((a, b) {
         if (a.isMain != b.isMain) {
@@ -48,6 +57,7 @@ List<Workspace> _sortSidebarWorkspaces(
 List<Project> _sortSidebarProjects(
   List<Project> projects, {
   required WorkbenchSortBy sortBy,
+  required List<String> manualOrder,
   required Iterable<Workspace> Function(String projectId) workspacesFor,
   required bool Function(Project, Workspace) workspaceVisible,
   required AgentActivityRank? Function(Workspace) activityOf,
@@ -55,6 +65,14 @@ List<Project> _sortSidebarProjects(
 }) {
   final sorted = List<Project>.from(projects);
   switch (sortBy) {
+    case WorkbenchSortBy.manual:
+      final positions = <String, int>{
+        for (var i = 0; i < manualOrder.length; i++) manualOrder[i]: i,
+      };
+      sorted.sort(
+        (a, b) =>
+            _compareManualPositions(a.id, b.id, positions, a.name, b.name),
+      );
     case WorkbenchSortBy.name:
       sorted.sort(
         (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -95,4 +113,20 @@ List<Project> _sortSidebarProjects(
       );
   }
   return sorted;
+}
+
+int _compareManualPositions(
+  String leftId,
+  String rightId,
+  Map<String, int> positions,
+  String leftName,
+  String rightName,
+) {
+  final left = positions[leftId];
+  final right = positions[rightId];
+  if (left != null && right != null) return left.compareTo(right);
+  if (left != null) return -1;
+  if (right != null) return 1;
+  final byName = leftName.toLowerCase().compareTo(rightName.toLowerCase());
+  return byName != 0 ? byName : leftId.compareTo(rightId);
 }

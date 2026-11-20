@@ -87,6 +87,31 @@ fn legacy_shared_view_prefs_show_all_workspaces() {
     assert!(!restored.show_active_workspaces_only);
 }
 
+#[test]
+fn legacy_shared_view_prefs_default_manual_order_to_empty() {
+    let mut encoded = serde_json::to_value(SharedWorkbenchViewPrefs::default()).unwrap();
+    let map = encoded.as_object_mut().unwrap();
+    map.remove("projectOrder");
+    map.remove("workspaceOrder");
+    let restored: SharedWorkbenchViewPrefs = serde_json::from_value(encoded).unwrap();
+    assert!(restored.project_order.is_empty());
+    assert!(restored.workspace_order.is_empty());
+}
+
+#[test]
+fn custom_sidebar_order_and_manual_sort_round_trip() {
+    let prefs = SharedWorkbenchViewPrefs {
+        project_sort: SharedWorkbenchSortBy::Manual,
+        workspace_sort: SharedWorkbenchSortBy::Manual,
+        project_order: vec!["b".into(), "a".into()],
+        workspace_order: vec!["w2".into(), "w1".into()],
+        ..SharedWorkbenchViewPrefs::default()
+    };
+    let round_trip: SharedWorkbenchViewPrefs =
+        serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+    assert_eq!(round_trip, prefs);
+}
+
 #[tokio::test]
 async fn workspace_activity_keeps_the_newest_timestamp() {
     let dir = tempfile::tempdir().unwrap();

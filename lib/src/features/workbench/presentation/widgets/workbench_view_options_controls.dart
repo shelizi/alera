@@ -109,11 +109,14 @@ class const _SortRow({
   required final String label,
   required final WorkbenchSortBy value,
   required final ValueChanged<WorkbenchSortBy> onChanged,
+  this.allowManual = true,
 }) extends StatelessWidget {
+  final bool allowManual;
   static const Map<WorkbenchSortBy, String> _labels = <WorkbenchSortBy, String>{
     WorkbenchSortBy.name: 'Name',
     WorkbenchSortBy.recent: 'Recent',
     WorkbenchSortBy.activity: 'Agent Activity',
+    WorkbenchSortBy.manual: 'Manual',
   };
 
   @override
@@ -129,7 +132,12 @@ class const _SortRow({
             ),
           ),
         ),
-        _SortPopupButton(value: value, labels: _labels, onChanged: onChanged),
+        _SortPopupButton(
+          value: value,
+          labels: _labels,
+          onChanged: onChanged,
+          allowManual: allowManual,
+        ),
       ],
     );
   }
@@ -139,7 +147,9 @@ class const _SortPopupButton({
   required final WorkbenchSortBy value,
   required final Map<WorkbenchSortBy, String> labels,
   required final ValueChanged<WorkbenchSortBy> onChanged,
+  this.allowManual = true,
 }) extends StatelessWidget {
+  final bool allowManual;
   Future<void> _openMenu(BuildContext context) async {
     final button = context.findRenderObject()! as RenderBox;
     final overlay =
@@ -161,11 +171,12 @@ class const _SortPopupButton({
       constraints: const BoxConstraints(minWidth: 160),
       items: <PopupMenuEntry<WorkbenchSortBy>>[
         for (final option in WorkbenchSortBy.values)
-          AleraDropdownEntry<WorkbenchSortBy>(
-            value: option,
-            label: labels[option] ?? option.name,
-            selected: option == value,
-          ),
+          if (allowManual || option != WorkbenchSortBy.manual)
+            AleraDropdownEntry<WorkbenchSortBy>(
+              value: option,
+              label: labels[option] ?? option.name,
+              selected: option == value,
+            ),
       ],
     );
     if (selected != null) {

@@ -264,6 +264,7 @@ class _WorkbenchViewOptionsPanelState
                   ),
                   const SizedBox(height: AleraTokens.space12),
                   _SortRow(
+                    allowManual: prefs.groupBy != WorkbenchGroupBy.section,
                     label: prefs.groupBy == WorkbenchGroupBy.project
                         ? 'Sort Projects By'
                         : prefs.groupBy == WorkbenchGroupBy.section

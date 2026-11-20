@@ -26,6 +26,7 @@ mod native_ui_theme;
 mod quick_open_ui;
 mod win_ime;
 use native_history_sync_ui::AgyAccountEdit;
+use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -118,6 +119,7 @@ use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
+use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
@@ -155,7 +157,7 @@ use alera_gpui_desktop::workbench_panes::{
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
-use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
+use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows_with_manual;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
     search_worktree_contents, worktree_hit_requires_switch, WorktreeContentMatch,
@@ -712,6 +714,8 @@ struct Workbench {
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
     runtime_catalog: Option<RuntimeCatalog>,
+    sidebar_order_prefs: Option<SidebarOrderPrefs>,
+    sidebar_order_busy: bool,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
     /// Explicit Settings-only selection; never changes the active workspace.
@@ -1190,9 +1194,10 @@ impl Workbench {
         let request = self.project_tree_request;
         self.project_tree_loading = true;
         cx.spawn(async move |view, cx| {
-            let (groups, runtime_result) = cx
+            let (mut groups, runtime_result, order_result) = cx
                 .background_spawn(async move {
-                    let runtime_result = bridge.map(|bridge| bridge.list_runtime_catalog());
+                    let runtime_result = bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
+                    let order_result = bridge.as_ref().map(|bridge| bridge.sidebar_order_snapshot());
                     let registered = runtime_result
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
@@ -1206,14 +1211,13 @@ impl Workbench {
                         .unwrap_or_default();
                     let groups =
                         collect_project_tree_with_registered(&saved, &recent, &registered, &active);
-                    (groups, runtime_result)
+                    (groups, runtime_result, order_result)
                 })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.project_tree_request != request {
                     return;
                 }
-                view.project_tree_groups = groups;
                 match runtime_result {
                     Some(Ok(catalog)) => {
                         view.runtime_catalog = Some(catalog);
@@ -1228,6 +1232,13 @@ impl Workbench {
                         view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
                     }
                 }
+                view.sidebar_order_prefs = order_result.and_then(Result::ok);
+                order_project_groups(
+                    &mut groups,
+                    view.runtime_catalog.as_ref(),
+                    view.sidebar_order_prefs.as_ref(),
+                );
+                view.project_tree_groups = groups;
                 view.project_tree_loading = false;
                 cx.notify();
             })
@@ -11444,6 +11455,14 @@ impl Render for Workbench {
         let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
+        let sidebar_order_prefs = self.sidebar_order_prefs.clone();
+        let sidebar_drag_generation = self.workspace_generation;
+        let visible_project_ids: Vec<String> = project_tree_rows
+            .iter()
+            .filter_map(|(_, group, _)| runtime_catalog.as_ref()
+                .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                .map(|project| project.id.clone()))
+            .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
         let sidebar_rename_input = self.sidebar_rename_input.clone();
@@ -16021,13 +16040,26 @@ impl Render for Workbench {
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
                                                     .map(|project| project.name.clone())
                                                     .unwrap_or_else(|| group.label.clone());
+                                                let project_drag_id = menu_project_id.clone().unwrap_or_default();
+                                                let project_drop_id = menu_project_id.clone();
+                                                let project_drop_visible_ids = visible_project_ids.clone();
+                                                let project_drag_caption = title.clone();
                                                 let show_all_worktrees = project_title_matches_search(
                                                     &group, runtime_catalog.as_ref(), &sidebar_search_query,
                                                 );
-                                                let rows = order_worktree_rows(
+                                                let rows = order_worktree_rows_with_manual(
                                                     &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
                                                     runtime_catalog.as_ref(),
+                                                    sidebar_order_prefs.as_ref()
+                                                        .filter(|prefs| prefs.workspace_sort == "manual")
+                                                        .map(|prefs| prefs.workspace_order.as_slice()),
                                                 );
+                                                let visible_worktree_ids: Vec<String> = rows.iter()
+                                                    .filter_map(|row| runtime_catalog.as_ref()
+                                                        .and_then(|catalog| catalog.workspaces.iter()
+                                                            .find(|workspace| workspace.path == row.entry.path))
+                                                        .map(|workspace| workspace.id.clone()))
+                                                    .collect();
                                                 let error = group.error;
                                                 div()
                                                     .id(("project-tree-group", index))
@@ -16068,6 +16100,22 @@ impl Render for Workbench {
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
                                                                     }))
+                                                                    .on_drag(
+                                                                        SidebarOrderDrag {
+                                                                            kind: SidebarOrderKind::Project,
+                                                                            id: project_drag_id,
+                                                                            generation: sidebar_drag_generation,
+                                                                        },
+                                                                        move |_, _, _, cx| cx.new(|_| TerminalTabDragPreview {
+                                                                            label: project_drag_caption.clone(),
+                                                                        }),
+                                                                    )
+                                                                    .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
+                                                                        this.drop_sidebar_order(
+                                                                            drag, SidebarOrderKind::Project, project_drop_id.clone(),
+                                                                            project_drop_visible_ids.clone(), cx,
+                                                                        );
+                                                                    }))
                                                                     .context_menu(Self::sidebar_project_context_menu(
                                                                         cx.entity().downgrade(), project_context_root, pinned,
                                                                         menu_project_id,
@@ -16093,6 +16141,9 @@ impl Render for Workbench {
                                                         let metadata = runtime_catalog.as_ref().and_then(|catalog|
                                                             catalog.workspaces.iter().find(|workspace| workspace.path == target)
                                                         );
+                                                        let workspace_drop_id = metadata.map(|workspace| workspace.id.clone());
+                                                        let workspace_drag_id = workspace_drop_id.clone().unwrap_or_default();
+                                                        let workspace_drop_visible = visible_worktree_ids.clone();
                                                         let label = metadata.map(|workspace| {
                                                             let mut text = workspace.name.clone();
                                                             if workspace.is_pinned { text.push_str(" ★"); }
@@ -16102,6 +16153,7 @@ impl Render for Workbench {
                                                         }).unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
                                                             if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
                                                         }));
+                                                        let workspace_drag_caption = label.clone();
                                                         div()
                                                             .id(("project-tree-worktree-container", index * 128 + child_index))
                                                             .flex().flex_col()
@@ -16127,6 +16179,22 @@ impl Render for Workbench {
                                                             ))
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
+                                                            }))
+                                                            .on_drag(
+                                                                SidebarOrderDrag {
+                                                                    kind: SidebarOrderKind::Workspace,
+                                                                    id: workspace_drag_id,
+                                                                    generation: sidebar_drag_generation,
+                                                                },
+                                                                move |_, _, _, cx| cx.new(|_| TerminalTabDragPreview {
+                                                                    label: workspace_drag_caption.clone(),
+                                                                }),
+                                                            )
+                                                            .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
+                                                                this.drop_sidebar_order(
+                                                                    drag, SidebarOrderKind::Workspace, workspace_drop_id.clone(),
+                                                                    workspace_drop_visible.clone(), cx,
+                                                                );
                                                             }))
                                                             .context_menu(Self::sidebar_workspace_context_menu(
                                                                 cx.entity().downgrade(), menu_root, menu_path,
@@ -17068,6 +17136,8 @@ fn main() {
                             saved_projects,
                             project_tree_groups: Vec::new(),
                             runtime_catalog: None,
+                            sidebar_order_prefs: None,
+                            sidebar_order_busy: false,
                             runtime_catalog_error: None,
                             project_settings_project_id: None,
                             project_settings_selected_project_id: None,

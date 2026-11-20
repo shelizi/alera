@@ -1,5 +1,27 @@
 part of 'project_workbench_sidebar.dart';
 
+enum _SidebarOrderKind { project, workspace }
+
+class const _SidebarOrderDrag({
+  required this.kind,
+  required this.id,
+  this.projectId,
+  this.parentId,
+  this.sectionId,
+  this.pinned = false,
+  this.archived = false,
+  this.pinnedCopy = false,
+}) {
+  final _SidebarOrderKind kind;
+  final String id;
+  final String? projectId;
+  final String? parentId;
+  final String? sectionId;
+  final bool pinned;
+  final bool archived;
+  final bool pinnedCopy;
+}
+
 class const _SidebarBody({
   required final WorkbenchState state,
   required final _WorkbenchSidebarCommands commands,
@@ -148,36 +170,43 @@ class const _SidebarBody({
       );
     }
     if (row is WorkbenchProjectHeaderRow) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AleraTokens.space8,
-          vertical: AleraTokens.space2,
-        ),
-        child: _TerminalTabProjectDropTarget(
-          project: row.project,
-          workspaces:
-              state.workspacesByProject[row.project.id] ?? const <Workspace>[],
-          onTransfer: onTransferTerminalTab,
-          child: _ProjectHeaderTile(
+      return _reorderableSidebarRow(
+        ref: ref,
+        rows: rows,
+        label: row.project.name,
+        target: _SidebarOrderDrag(kind: .project, id: row.project.id),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AleraTokens.space8,
+            vertical: AleraTokens.space2,
+          ),
+          child: _TerminalTabProjectDropTarget(
             project: row.project,
-            searchQuery: state.searchQuery,
-            expanded: !row.collapsed,
-            workspaceCount: row.workspaceCount,
-            agentCounts: row.agentCounts,
-            onToggle: () => commands.toggleProjectCollapsed(row.project.id),
-            onCreateWorkspace: row.project.supportsLinkedWorkspaces
-                ? () => onCreateWorkspace(row.project)
-                : null,
-            onRefreshWorktrees: row.project.supportsLinkedWorkspaces
-                ? () => unawaited(
-                    commands.reconcileProjectWorkspaces(row.project.id),
-                  )
-                : null,
-            onOpenProjectSettings: () =>
-                unawaited(onOpenProjectSettings(row.project)),
-            onSleepProject: () => unawaited(onSleepProject(row.project)),
-            onRenameProject: () => onRenameProject(row.project),
-            onRemoveProject: () => onRemoveProject(row.project),
+            workspaces:
+                state.workspacesByProject[row.project.id] ??
+                const <Workspace>[],
+            onTransfer: onTransferTerminalTab,
+            child: _ProjectHeaderTile(
+              project: row.project,
+              searchQuery: state.searchQuery,
+              expanded: !row.collapsed,
+              workspaceCount: row.workspaceCount,
+              agentCounts: row.agentCounts,
+              onToggle: () => commands.toggleProjectCollapsed(row.project.id),
+              onCreateWorkspace: row.project.supportsLinkedWorkspaces
+                  ? () => onCreateWorkspace(row.project)
+                  : null,
+              onRefreshWorktrees: row.project.supportsLinkedWorkspaces
+                  ? () => unawaited(
+                      commands.reconcileProjectWorkspaces(row.project.id),
+                    )
+                  : null,
+              onOpenProjectSettings: () =>
+                  unawaited(onOpenProjectSettings(row.project)),
+              onSleepProject: () => unawaited(onSleepProject(row.project)),
+              onRenameProject: () => onRenameProject(row.project),
+              onRemoveProject: () => onRemoveProject(row.project),
+            ),
           ),
         ),
       );
@@ -185,76 +214,175 @@ class const _SidebarBody({
     if (row is WorkbenchWorkspaceRow) {
       final leftPadding = _indentPadding(row.indent);
       final hasDescendants = _workspaceHasDescendants(state, row.workspace);
-      return Padding(
-        padding: EdgeInsets.only(left: leftPadding, right: AleraTokens.space8),
-        child: _WorkspaceRow(
-          project: row.project,
-          searchQuery: state.searchQuery,
-          workspace: row.workspace,
-          agentRuns: row.agentRuns,
-          agentRunGroups: row.agentRunGroups,
-          status: row.aggregateStatus,
-          hasTerminalTabs: row.hasTerminalTabs,
-          isActive: row.workspace.id == state.activeWorkspaceId,
-          activeTabId: state.activeTabIdByWorkspace[row.workspace.id],
-          showProject: row.showProjectChip,
-          expanded: row.expanded,
-          visibleChildCount: row.visibleChildCount,
-          childrenCollapsed: row.childrenCollapsed,
-          isPinnedCopy: row.isPinnedCopy,
-          onToggleChildren: row.hasVisibleChildren
-              ? () => commands.toggleParentWorkspaceCollapsed(row.workspace.id)
-              : null,
-          onTap: () => row.workspace.isArchived
-              ? unawaited(onRestoreWorkspace(row.workspace))
-              : unawaited(onOpenWorkspace(row.project, row.workspace)),
-          onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
-          onOpenExternally: (kind) =>
-              unawaited(onOpenWorkspaceExternally(row.workspace, kind)),
-          externalEditor: resolvedEditor,
-          installedExternalEditors: installedEditors,
-          onCopyPath: () => unawaited(onCopyWorkspacePath(row.workspace)),
-          onOpenInBrowser: () =>
-              unawaited(onOpenWorkspaceInBrowser(row.workspace)),
-          onOpenProjectSettings: () =>
-              unawaited(onOpenProjectSettings(row.project)),
-          onSleep: () => onSleepWorkspace(row.workspace),
-          onArchive: () => onArchiveWorkspace(row.workspace),
-          onRestore: () => onRestoreWorkspace(row.workspace),
-          onToggleExpanded: () =>
-              commands.toggleWorkspaceExpanded(row.workspace.id),
-          fileManagerLabel: fileManagerLabel,
-          onRename: () => onRenameWorkspace(row.workspace),
-          onSetPinned: () =>
-              onSetWorkspacePinned(row.workspace, !row.workspace.isPinned),
-          onPinWorkspaceTree: hasDescendants
-              ? () => onSetWorkspaceTreePinned(row.workspace, true)
-              : null,
-          onUnpinWorkspaceTree: hasDescendants
-              ? () => onSetWorkspaceTreePinned(row.workspace, false)
-              : null,
-          onManageTags: () => onManageWorkspaceTags(row.workspace),
-          onSetSection: state.supportsSections
-              ? () => commands.showWorkspaceSection(row.workspace)
-              : null,
-          onClearSection:
-              state.supportsSections && row.workspace.sectionId != null
-              ? () => commands.clearWorkspaceSection(row.workspace)
-              : null,
-          onSetParent: () => onSetWorkspaceParent(row.workspace),
-          onClearParent: row.workspace.hasParentWorkspace
-              ? () => onClearWorkspaceParent(row.workspace)
-              : null,
-          onSelectTerminal: onSelectTerminal,
-          onCloseTerminal: onCloseTerminal,
-          onTransferTerminalTab: onTransferTerminalTab,
-          onDelete: row.workspace.isMain
-              ? null
-              : () => onDeleteWorkspace(row.project, row.workspace),
+      return _reorderableSidebarRow(
+        ref: ref,
+        rows: rows,
+        label: row.workspace.name,
+        target: _SidebarOrderDrag(
+          kind: .workspace,
+          id: row.workspace.id,
+          projectId: row.project.id,
+          parentId: row.workspace.parentWorkspaceId,
+          sectionId: row.workspace.sectionId,
+          pinned: row.workspace.isPinned,
+          archived: row.workspace.isArchived,
+          pinnedCopy: row.isPinnedCopy,
+        ),
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: leftPadding,
+            right: AleraTokens.space8,
+          ),
+          child: _WorkspaceRow(
+            project: row.project,
+            searchQuery: state.searchQuery,
+            workspace: row.workspace,
+            agentRuns: row.agentRuns,
+            agentRunGroups: row.agentRunGroups,
+            status: row.aggregateStatus,
+            hasTerminalTabs: row.hasTerminalTabs,
+            isActive: row.workspace.id == state.activeWorkspaceId,
+            activeTabId: state.activeTabIdByWorkspace[row.workspace.id],
+            showProject: row.showProjectChip,
+            expanded: row.expanded,
+            visibleChildCount: row.visibleChildCount,
+            childrenCollapsed: row.childrenCollapsed,
+            isPinnedCopy: row.isPinnedCopy,
+            onToggleChildren: row.hasVisibleChildren
+                ? () =>
+                      commands.toggleParentWorkspaceCollapsed(row.workspace.id)
+                : null,
+            onTap: () => row.workspace.isArchived
+                ? unawaited(onRestoreWorkspace(row.workspace))
+                : unawaited(onOpenWorkspace(row.project, row.workspace)),
+            onOpenFolder: () => unawaited(onOpenWorkspaceFolder(row.workspace)),
+            onOpenExternally: (kind) =>
+                unawaited(onOpenWorkspaceExternally(row.workspace, kind)),
+            externalEditor: resolvedEditor,
+            installedExternalEditors: installedEditors,
+            onCopyPath: () => unawaited(onCopyWorkspacePath(row.workspace)),
+            onOpenInBrowser: () =>
+                unawaited(onOpenWorkspaceInBrowser(row.workspace)),
+            onOpenProjectSettings: () =>
+                unawaited(onOpenProjectSettings(row.project)),
+            onSleep: () => onSleepWorkspace(row.workspace),
+            onArchive: () => onArchiveWorkspace(row.workspace),
+            onRestore: () => onRestoreWorkspace(row.workspace),
+            onToggleExpanded: () =>
+                commands.toggleWorkspaceExpanded(row.workspace.id),
+            fileManagerLabel: fileManagerLabel,
+            onRename: () => onRenameWorkspace(row.workspace),
+            onSetPinned: () =>
+                onSetWorkspacePinned(row.workspace, !row.workspace.isPinned),
+            onPinWorkspaceTree: hasDescendants
+                ? () => onSetWorkspaceTreePinned(row.workspace, true)
+                : null,
+            onUnpinWorkspaceTree: hasDescendants
+                ? () => onSetWorkspaceTreePinned(row.workspace, false)
+                : null,
+            onManageTags: () => onManageWorkspaceTags(row.workspace),
+            onSetSection: state.supportsSections
+                ? () => commands.showWorkspaceSection(row.workspace)
+                : null,
+            onClearSection:
+                state.supportsSections && row.workspace.sectionId != null
+                ? () => commands.clearWorkspaceSection(row.workspace)
+                : null,
+            onSetParent: () => onSetWorkspaceParent(row.workspace),
+            onClearParent: row.workspace.hasParentWorkspace
+                ? () => onClearWorkspaceParent(row.workspace)
+                : null,
+            onSelectTerminal: onSelectTerminal,
+            onCloseTerminal: onCloseTerminal,
+            onTransferTerminalTab: onTransferTerminalTab,
+            onDelete: row.workspace.isMain
+                ? null
+                : () => onDeleteWorkspace(row.project, row.workspace),
+          ),
         ),
       );
     }
     return const SizedBox.shrink();
+  }
+
+  Widget _reorderableSidebarRow({
+    required WidgetRef ref,
+    required List<WorkbenchSidebarRow> rows,
+    required String label,
+    required _SidebarOrderDrag target,
+    required Widget child,
+  }) {
+    // No cross-project or cross-section moves: drag changes order only, never
+    // Workspace parentage, pin/archive state, checkout paths or live PTYs.
+    if (state.viewPrefs.groupBy != WorkbenchGroupBy.project ||
+        state.searchQuery.trim().isNotEmpty) {
+      return child;
+    }
+    bool accepts(_SidebarOrderDrag source) {
+      if (source.id == target.id || source.kind != target.kind) return false;
+      if (source.kind == _SidebarOrderKind.project) return true;
+      return source.projectId == target.projectId &&
+          source.parentId == target.parentId &&
+          source.sectionId == target.sectionId &&
+          source.pinned == target.pinned &&
+          source.archived == target.archived &&
+          source.pinnedCopy == target.pinnedCopy;
+    }
+
+    return DragTarget<_SidebarOrderDrag>(
+      onWillAcceptWithDetails: (details) => accepts(details.data),
+      onAcceptWithDetails: (details) {
+        if (!accepts(details.data)) return;
+        final controller = ref.read(workbenchControllerProvider.notifier);
+        if (target.kind == _SidebarOrderKind.project) {
+          controller.moveProjectInSidebar(
+            sourceId: details.data.id,
+            targetId: target.id,
+            visibleOrder: [
+              for (final row in rows)
+                if (row is WorkbenchProjectHeaderRow) row.project.id,
+            ],
+          );
+        } else {
+          controller.moveWorkspaceInSidebar(
+            sourceId: details.data.id,
+            targetId: target.id,
+            visibleOrder: [
+              for (final row in rows)
+                if (row is WorkbenchWorkspaceRow &&
+                    row.isPinnedCopy == target.pinnedCopy)
+                  row.workspace.id,
+            ],
+          );
+        }
+      },
+      builder: (context, candidates, _) => Draggable<_SidebarOrderDrag>(
+        data: target,
+        feedback: Material(
+          color: AleraTokens.surface,
+          borderRadius: BorderRadius.circular(AleraTokens.radiusLg),
+          elevation: 4,
+          child: Padding(
+            padding: const EdgeInsets.all(AleraTokens.space8),
+            child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          ),
+        ),
+        childWhenDragging: Opacity(opacity: 0.4, child: child),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: candidates.isNotEmpty
+                    ? AleraTokens.foreground
+                    : Colors.transparent,
+                width: 2,
+              ),
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
   }
 
   bool _workspaceHasDescendants(WorkbenchState state, Workspace workspace) {

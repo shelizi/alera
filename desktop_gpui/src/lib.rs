@@ -72,6 +72,7 @@ pub mod workbench_layout_store;
 pub mod workbench_panes;
 pub mod workbench_tabs;
 pub mod workspace_sidebar_order;
+pub mod sidebar_manual_order;
 pub mod workspace_tree;
 pub mod worktree_content_search;
 pub mod worktree_manager;
