@@ -41,6 +41,19 @@ impl ExplorerFiles {
         Ok(path)
     }
 
+    /// Native clipboard and OS drag transfer an entire folder outside Alera's
+    /// control. Audit all descendants up front so a selected folder cannot
+    /// accidentally expose `.git`, `.worktrees`, junctions or symlinks.
+    pub fn native_transfer_target(&self, candidate: &Path) -> io::Result<(PathBuf, bool)> {
+        let path = self.reveal_target(candidate)?;
+        let is_dir = path.is_dir();
+        if is_dir {
+            let mut remaining = MAX_RECURSIVE_ENTRIES;
+            self.audit_tree(&path, &mut remaining)?;
+        }
+        Ok((path, is_dir))
+    }
+
     /// Show an explicitly selected file or folder in the system file manager.
     /// The file is never opened/executed and no shell command is involved.
     pub fn reveal_in_file_manager(&self, candidate: &Path) -> io::Result<()> {
@@ -663,6 +676,12 @@ impl ExplorerClipboardBatch {
         // including conflicting basenames from two source directories.
         for clipboard in &self.entries {
             let source = files.existing(clipboard.source())?;
+            if source.is_dir() {
+                // Re-audit before any copy or move. Directory contents may
+                // have changed since the clipboard was captured.
+                let mut remaining = MAX_RECURSIVE_ENTRIES;
+                files.audit_tree(&source, &mut remaining)?;
+            }
             if destination_folder == source || destination_folder.starts_with(&source) {
                 return Err(forbidden("Cannot paste a folder into itself"));
             }

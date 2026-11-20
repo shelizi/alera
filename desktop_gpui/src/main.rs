@@ -81,7 +81,7 @@ use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_f
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_actions, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
-    GitSidebarOptions, GitSidebarViewMode, SectionKey,
+    GitSidebarOptions, GitSidebarSelectionItem, GitSidebarViewMode, SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
 use alera_gpui_desktop::history_sync_bridge::{
@@ -518,6 +518,15 @@ enum GitChangeMenuAction {
     CopyPath,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitFolderMenuAction {
+    Copy,
+    Cut,
+    Paste,
+    Reveal,
+    CopyPath,
+}
+
 #[derive(Clone, Copy)]
 enum MixedContextAction {
     Focus,
@@ -763,8 +772,9 @@ struct Workbench {
     git_original_active: bool,
     git_original_request: u64,
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
+    git_selected_folders: HashSet<FolderKey>,
     git_keyboard_focus: gpui::FocusHandle,
-    git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
+    git_selection_anchor: Option<GitSidebarSelectionItem>,
     git_discard_armed: Option<Vec<PathBuf>>,
     git_trash_preview: Option<Vec<GitUntrackedTrashCandidate>>,
     git_trash_loading: bool,
@@ -2037,6 +2047,7 @@ impl Workbench {
     /// accidental batch Stage/Unstage/Discard.
     fn clear_git_change_selection(&mut self) {
         self.git_selected_changes.clear();
+        self.git_selected_folders.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
     }
@@ -2099,43 +2110,74 @@ impl Workbench {
         cx.notify();
     }
 
-    fn select_git_change(
+    fn git_sidebar_item_selected(&self, item: &GitSidebarSelectionItem) -> bool {
+        match item {
+            GitSidebarSelectionItem::File(row) => self.git_selected_changes.contains(row),
+            GitSidebarSelectionItem::Folder(key) => self.git_selected_folders.contains(key),
+        }
+    }
+
+    fn select_git_sidebar_item(
         &mut self,
-        row: alera_gpui_desktop::git_inspect::GitChangeRow,
-        visible: &[alera_gpui_desktop::git_inspect::GitChangeRow],
+        row: GitSidebarSelectionItem,
+        visible: &[GitSidebarSelectionItem],
         toggle: bool,
         shift: bool,
     ) {
         if !visible.contains(&row) {
             return;
         }
+        self.git_discard_armed = None;
         if shift {
-            if let Some(anchor) = self.git_selection_anchor.as_ref() {
-                if anchor.area == row.area {
-                    if let (Some(from), Some(to)) = (
-                        visible.iter().position(|entry| entry == anchor),
-                        visible.iter().position(|entry| entry == &row),
-                    ) {
-                        if !toggle {
-                            self.git_selected_changes.clear();
+            if let Some(anchor) = self.git_selection_anchor.as_ref().filter(|anchor| {
+                self.git_sidebar_options.grouping == GitSidebarGroupMode::Unified
+                    || match (*anchor, &row) {
+                        (GitSidebarSelectionItem::File(a), GitSidebarSelectionItem::File(b)) => a.area == b.area,
+                        (GitSidebarSelectionItem::Folder((a, _)), GitSidebarSelectionItem::Folder((b, _))) => a == b,
+                        (GitSidebarSelectionItem::File(a), GitSidebarSelectionItem::Folder((b, _)))
+                        | (GitSidebarSelectionItem::Folder((b, _)), GitSidebarSelectionItem::File(a)) => *b == Some(a.area),
+                    }
+            }) {
+                if let (Some(from), Some(to)) = (
+                    visible.iter().position(|entry| entry == anchor),
+                    visible.iter().position(|entry| entry == &row),
+                ) {
+                    if !toggle {
+                        self.git_selected_changes.clear();
+                        self.git_selected_folders.clear();
+                    }
+                    for entry in &visible[from.min(to)..=from.max(to)] {
+                        if self.git_selected_changes.len() + self.git_selected_folders.len() >= 120 {
+                            break;
                         }
-                        for entry in &visible[from.min(to)..=from.max(to)] {
-                            if entry.area == row.area && self.git_selected_changes.len() < 120 {
-                                self.git_selected_changes.insert(entry.clone());
+                        match entry {
+                            GitSidebarSelectionItem::File(file) => {
+                                self.git_selected_changes.insert(file.clone());
+                            }
+                            GitSidebarSelectionItem::Folder(folder) => {
+                                self.git_selected_folders.insert(folder.clone());
                             }
                         }
-                        return;
                     }
+                    return;
                 }
             }
         }
-        if toggle {
-            if !self.git_selected_changes.remove(&row) && self.git_selected_changes.len() < 120 {
-                self.git_selected_changes.insert(row.clone());
-            }
-        } else {
+        if !toggle {
             self.git_selected_changes.clear();
-            self.git_selected_changes.insert(row.clone());
+            self.git_selected_folders.clear();
+        }
+        let was_selected = self.git_sidebar_item_selected(&row);
+        if toggle && was_selected {
+            match &row {
+                GitSidebarSelectionItem::File(file) => { self.git_selected_changes.remove(file); }
+                GitSidebarSelectionItem::Folder(folder) => { self.git_selected_folders.remove(folder); }
+            }
+        } else if self.git_selected_changes.len() + self.git_selected_folders.len() < 120 {
+            match &row {
+                GitSidebarSelectionItem::File(file) => { self.git_selected_changes.insert(file.clone()); }
+                GitSidebarSelectionItem::Folder(folder) => { self.git_selected_folders.insert(folder.clone()); }
+            }
         }
         self.git_selection_anchor = Some(row);
     }
@@ -2145,24 +2187,25 @@ impl Workbench {
     /// non-overwriting, workspace-bound Copy/Cut clipboard.
     fn set_git_file_clipboard(
         &mut self,
-        clicked: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
+        clicked: Option<GitSidebarSelectionItem>,
         mode: ExplorerClipboardMode,
         cx: &mut Context<Self>,
     ) {
         let mut options = self.git_sidebar_options.clone();
         options.filter = self.git_filter_input.read(cx).query().to_owned();
         let visible = self.git_snapshot.as_ref()
-            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_files())
+            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items())
             .unwrap_or_default();
         let row = clicked.filter(|item| visible.contains(item))
-            .or_else(|| self.git_selection_anchor.clone().filter(|item| visible.contains(item)))
-            .or_else(|| visible.iter().find(|item| self.git_selected_changes.contains(*item)).cloned());
+            .or_else(|| self.git_selection_anchor.clone().filter(|item| visible.contains(item) && self.git_sidebar_item_selected(item)))
+            .or_else(|| visible.iter().find(|item| self.git_sidebar_item_selected(item)).cloned());
         let Some(row) = row else {
-            self.model.set_status("Select a visible Git file first");
+            self.model.set_status("Select a visible Git file or folder first");
             cx.notify();
             return;
         };
-        let paths = selected_worktree_paths(self.model.root(), &row, &self.git_selected_changes, &visible);
+        let paths = selected_worktree_paths(self.model.root(), &row,
+            &self.git_selected_changes, &self.git_selected_folders, &visible);
         // An OS file-manager Cut can move the file without involving Alera.
         // Therefore refuse to expose a live Editor tab to native Cut at all.
         if mode == ExplorerClipboardMode::Cut {
@@ -2174,42 +2217,52 @@ impl Workbench {
                 return;
             }
         }
-        let result = ExplorerFiles::new(self.model.root())
-            .and_then(|files| ExplorerClipboardBatch::capture(&files, &paths, mode));
+        let result = ExplorerFiles::new(self.model.root()).and_then(|files| {
+            let clipboard = ExplorerClipboardBatch::capture(&files, &paths, mode)?;
+            for source in clipboard.source_paths() {
+                files.native_transfer_target(&source)?;
+            }
+            Ok(clipboard)
+        });
         match result {
             Ok(clipboard) => {
                 let count = clipboard.len();
+                // The batch removes children already covered by a selected
+                // directory. The OS clipboard must receive the same paths.
+                let native_paths = clipboard.source_paths();
                 self.explorer_clipboard = Some(clipboard);
                 #[cfg(windows)]
-                let native_message = match alera_gpui_desktop::native_file_clipboard::write_native_files(&paths, mode) {
+                let native_message = match alera_gpui_desktop::native_file_clipboard::write_native_files(&native_paths, mode) {
                     Ok(()) => "; Windows Explorer clipboard ready",
                     Err(error) => {
-                        self.model.set_status(format!("{count} Git file(s) in Alera clipboard, but Windows clipboard failed: {error}"));
+                        self.model.set_status(format!("{count} Git item(s) in Alera clipboard, but Windows clipboard failed: {error}"));
                         cx.notify();
                         return;
                     }
                 };
                 #[cfg(not(windows))]
+                let _ = native_paths;
+                #[cfg(not(windows))]
                 let native_message = "; internal Alera clipboard ready";
-                self.model.set_status(format!("{} {count} worktree file(s){native_message}",
+                self.model.set_status(format!("{} {count} worktree item(s){native_message}",
                     if mode == ExplorerClipboardMode::Copy { "Copied" } else { "Cut" }));
             }
             Err(error) => self.model.set_status(format!(
-                "Git file Copy/Cut refused: {error} (deleted files cannot be exported)"
+                "Git file/folder Copy/Cut refused: {error} (missing items cannot be exported)"
             )),
         }
         cx.notify();
     }
 
     fn paste_git_at_selection(&mut self, cx: &mut Context<Self>) {
-        let relative = self.git_selection_anchor.as_ref()
-            .filter(|row| self.git_selected_changes.contains(*row))
-            .map(|row| row.relative.clone());
-        let hovered = relative.map(|path| {
-            let target = self.model.root().join(path);
-            if target.is_file() { target } else {
-                target.parent().unwrap_or(self.model.root()).to_path_buf()
-            }
+        let hovered = self.git_selection_anchor.as_ref()
+            .filter(|row| self.git_sidebar_item_selected(row))
+            .map(|row| match row {
+                GitSidebarSelectionItem::Folder((_, path)) => self.model.root().join(path),
+                GitSidebarSelectionItem::File(file) => {
+                    self.model.root().join(&file.relative).parent()
+                        .unwrap_or(self.model.root()).to_path_buf()
+                }
         });
         self.paste_git_file_clipboard(hovered, cx);
     }
@@ -2292,6 +2345,47 @@ impl Workbench {
             }).ok();
         }).detach();
         cx.notify();
+    }
+
+    fn run_git_folder_menu_action(
+        &mut self,
+        key: FolderKey,
+        action: GitFolderMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        // The menu can outlive a filter/section transition; never operate
+        // on an invisible Git folder or infer a different target.
+        let mut options = self.git_sidebar_options.clone();
+        options.filter = self.git_filter_input.read(cx).query().to_owned();
+        let visible = self.git_snapshot.as_ref()
+            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items())
+            .unwrap_or_default();
+        let item = GitSidebarSelectionItem::Folder(key.clone());
+        if !visible.contains(&item) {
+            self.model.set_status("Git folder changed; refresh before continuing");
+            cx.notify();
+            return;
+        }
+        let folder = self.model.root().join(&key.1);
+        match action {
+            GitFolderMenuAction::Copy => self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Copy, cx),
+            GitFolderMenuAction::Cut => self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Cut, cx),
+            GitFolderMenuAction::Paste => self.paste_git_file_clipboard(Some(folder), cx),
+            GitFolderMenuAction::Reveal => {
+                let result = ExplorerFiles::new(self.model.root())
+                    .and_then(|files| files.reveal_in_file_manager(&folder));
+                self.model.set_status(match result {
+                    Ok(()) => "Revealed Git worktree folder in system file manager".into(),
+                    Err(error) => format!("Cannot reveal worktree folder: {error}"),
+                });
+                cx.notify();
+            }
+            GitFolderMenuAction::CopyPath => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                    key.1.to_string_lossy().into_owned(),
+                ));
+            }
+        }
     }
 
     fn run_git_change_menu_action(
@@ -2389,10 +2483,10 @@ impl Workbench {
                 ));
             }
             GitChangeMenuAction::CopyFiles => {
-                self.set_git_file_clipboard(Some(row), ExplorerClipboardMode::Copy, cx);
+                self.set_git_file_clipboard(Some(GitSidebarSelectionItem::File(row)), ExplorerClipboardMode::Copy, cx);
             }
             GitChangeMenuAction::CutFiles => {
-                self.set_git_file_clipboard(Some(row), ExplorerClipboardMode::Cut, cx);
+                self.set_git_file_clipboard(Some(GitSidebarSelectionItem::File(row)), ExplorerClipboardMode::Cut, cx);
             }
             GitChangeMenuAction::PasteFiles => {
                 let path = self.model.root().join(&row.relative);
@@ -3972,6 +4066,7 @@ impl Workbench {
                         view.git_conflict_confirm_armed = false;
                         view.git_snapshot = None;
                         view.git_selected_changes.clear();
+                        view.git_selected_folders.clear();
                         view.git_selection_anchor = None;
                         view.refresh_git(cx);
                         if view.git_history_open {
@@ -6145,6 +6240,7 @@ impl Workbench {
         self.git_original_active = false;
         self.git_original_request = self.git_original_request.wrapping_add(1);
         self.git_selected_changes.clear();
+        self.git_selected_folders.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
         self.git_branch_delete_armed = None;
@@ -11551,26 +11647,26 @@ impl Render for Workbench {
         let git_sidebar_layout = layout_git_sidebar(&git_all_changes, &git_sidebar_options);
         let git_sidebar_matches = git_sidebar_layout.matches;
         let git_sidebar_total = git_sidebar_layout.total;
+        let git_visible_items = Arc::new(git_sidebar_layout.visible_items());
         let git_sidebar_entries = git_sidebar_layout.entries;
         let git_changes = git_sidebar_entries
             .iter()
             .filter_map(|entry| entry.file().cloned())
             .collect::<Vec<_>>();
-        let git_visible_rows = Arc::new(git_changes.clone());
         let git_tree_mode = self.git_sidebar_options.view == GitSidebarViewMode::Tree;
         let git_group_by_area = self.git_sidebar_options.grouping == GitSidebarGroupMode::ByArea;
         let git_selected = self.git_selected_changes.clone();
+        let git_selected_folders = self.git_selected_folders.clone();
         let git_drag_root = workspace_root.clone();
         let git_drag_generation = self.workspace_generation;
-        let git_drag_selection = Arc::new({
-            let mut paths = git_changes.iter()
-                .filter(|row| git_selected.contains(*row))
-                .map(|row| workspace_root.join(&row.relative))
-                .collect::<Vec<_>>();
-            paths.sort();
-            paths.dedup();
-            paths
-        });
+        let git_drag_selection = Arc::new(git_visible_items.iter()
+            .find(|item| match item {
+                GitSidebarSelectionItem::File(file) => git_selected.contains(file),
+                GitSidebarSelectionItem::Folder(folder) => git_selected_folders.contains(folder),
+            })
+            .map(|item| selected_worktree_paths(&git_drag_root, item,
+                &git_selected, &git_selected_folders, git_visible_items.as_ref()))
+            .unwrap_or_default());
         let mut git_stage_paths = Vec::new();
         let mut git_unstage_paths = Vec::new();
         let mut git_discard_paths = Vec::new();
@@ -11596,9 +11692,12 @@ impl Render for Workbench {
         git_discard_paths.dedup();
         let git_discard_confirm = !git_discard_paths.is_empty()
             && self.git_discard_armed.as_ref() == Some(&git_discard_paths);
-        let git_selected_count = git_changes
+        let git_selected_count = git_visible_items
             .iter()
-            .filter(|row| git_selected.contains(*row))
+            .filter(|item| match item {
+                GitSidebarSelectionItem::File(file) => git_selected.contains(file),
+                GitSidebarSelectionItem::Folder(folder) => git_selected_folders.contains(folder),
+            })
             .count();
         let git_action_busy = self.git_action_busy;
         let git_sensitive_armed = self.git_sensitive_armed;
@@ -13307,6 +13406,7 @@ impl Render for Workbench {
                                     .child(icon_button("git-clear-selected", UiIcon::Close, "Clear Git selection", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.git_selected_changes.clear();
+                                            this.git_selected_folders.clear();
                                             this.git_selection_anchor = None;
                                             cx.notify();
                                         })))
@@ -13384,6 +13484,21 @@ impl Render for Workbench {
                                                 let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
                                                 let folder_drop_target = git_drag_root.join(&key.1);
                                                 let external_folder_target = folder_drop_target.clone();
+                                                let folder_selected = git_selected_folders.contains(&key);
+                                                let folder_for_click = key.clone();
+                                                let folder_for_toggle = key.clone();
+                                                let folder_for_menu = key.clone();
+                                                let folder_visible = Arc::clone(&git_visible_items);
+                                                let folder_drag = ExplorerDragBatch::for_row(
+                                                    &git_drag_root, git_drag_generation,
+                                                    &folder_drop_target, git_drag_selection.as_ref(),
+                                                );
+                                                let folder_drag_caption = if folder_drag.len() > 1 {
+                                                    format!("Copy {} worktree items", folder_drag.len())
+                                                } else {
+                                                    format!("Copy folder {name}")
+                                                };
+                                                let folder_native_root = git_drag_root.clone();
                                                 let folder_icon = explorer_file_icon_element(
                                                     &name, true, expanded, 16.0, MUTED,
                                                 );
@@ -13396,13 +13511,35 @@ impl Render for Workbench {
                                                     .flex().items_center().gap_2().h(px(28.0)).text_xs()
                                                     .pl(px(8.0 + depth as f32 * 14.0))
                                                     .cursor_pointer().text_color(rgb(MUTED))
+                                                    .bg(rgb(if folder_selected { ACTIVE } else { PANEL }))
                                                     .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                    .child(div().id(("git-folder-toggle", i))
+                                                        .cursor_pointer()
+                                                        .child(icon(if expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            cx.stop_propagation();
+                                                            this.toggle_git_sidebar_folder(folder_for_toggle.clone(), cx);
+                                                        })))
                                                     .child(folder_icon)
                                                     .child(div().flex_1().min_w_0().truncate().child(caption))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.toggle_git_sidebar_folder(key.clone(), cx);
+                                                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                                        let modifiers = event.modifiers();
+                                                        this.select_git_sidebar_item(
+                                                            GitSidebarSelectionItem::Folder(folder_for_click.clone()),
+                                                            folder_visible.as_ref(),
+                                                            modifiers.control || modifiers.platform, modifiers.shift,
+                                                        );
+                                                        window.focus(&this.git_keyboard_focus, cx);
+                                                        cx.notify();
                                                     }))
+                                                    .on_drag(folder_drag, move |_, _, _, cx| {
+                                                        cx.new(|_| TerminalTabDragPreview { label: folder_drag_caption.clone() })
+                                                    })
+                                                    .external_drag_payload(move |drag: &ExplorerDragBatch, _, _| {
+                                                        let files = ExplorerFiles::new(&folder_native_root).ok()?;
+                                                        let entries = drag.external_entries(&files, git_drag_generation).ok()?;
+                                                        Some(gpui::ExternalDragPayload::Files(gpui::FileDragPaths::new(entries)))
+                                                    })
                                                     .on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
                                                         cx.stop_propagation();
                                                         this.drop_explorer_batch(drag, &folder_drop_target, cx);
@@ -13411,6 +13548,7 @@ impl Render for Workbench {
                                                         cx.stop_propagation();
                                                         this.import_explorer_drop(paths.paths().to_vec(), Some(external_folder_target.clone()), cx);
                                                     }))
+                                                    .context_menu(Self::kit_git_folder_menu(cx.entity().downgrade(), folder_for_menu))
                                                     .into_any_element();
                                             }
                                             GitSidebarEntry::File { change, depth } => (change, depth),
@@ -13421,7 +13559,7 @@ impl Render for Workbench {
                                         let menu_row = change.clone();
                                         let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
                                             self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
-                                        let visible_for_click = Arc::clone(&git_visible_rows);
+                                        let visible_for_click = Arc::clone(&git_visible_items);
                                         let display_name = if git_tree_mode {
                                             change.relative.file_name().unwrap_or_default().to_string_lossy().into_owned()
                                         } else {
@@ -13449,7 +13587,7 @@ impl Render for Workbench {
                                             git_drag_selection.as_ref(),
                                         );
                                         let git_drag_caption = if git_drag_payload.len() > 1 {
-                                            format!("Copy {} worktree files", git_drag_payload.len())
+                                            format!("Copy {} worktree items", git_drag_payload.len())
                                         } else {
                                             format!("Copy {}", display_name)
                                         };
@@ -13493,7 +13631,7 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     let modifiers = event.modifiers();
                                                     let multi = modifiers.control || modifiers.platform;
-                                                    this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
+                                                    this.select_git_sidebar_item(GitSidebarSelectionItem::File(clicked_row.clone()), visible_for_click.as_ref(), multi, modifiers.shift);
                                                     window.focus(&this.git_keyboard_focus, cx);
                                                     if !multi && !modifiers.shift {
                                                         this.open_git_sidebar_file_diff(relative.clone(), preview_area, cx);
@@ -16785,6 +16923,7 @@ fn main() {
                             git_original_active: false,
                             git_original_request: 0,
                             git_selected_changes: HashSet::new(),
+                            git_selected_folders: HashSet::new(),
                             git_keyboard_focus: cx.focus_handle(),
                             git_selection_anchor: None,
                             git_discard_armed: None,

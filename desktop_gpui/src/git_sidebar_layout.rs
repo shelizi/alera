@@ -9,6 +9,24 @@ use std::path::{Path, PathBuf};
 pub type SectionKey = Option<GitChangeArea>;
 pub type FolderKey = (SectionKey, PathBuf);
 
+/// A selectable filesystem row in the Git tree. Sections are not selectable;
+/// folder keys retain their Git section so identical paths in staged and
+/// unstaged groups can be highlighted independently.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GitSidebarSelectionItem {
+    Folder(FolderKey),
+    File(GitChangeRow),
+}
+
+impl GitSidebarSelectionItem {
+    pub fn relative_path(&self) -> &Path {
+        match self {
+            Self::Folder((_, path)) => path,
+            Self::File(row) => &row.relative,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitSidebarGroupMode {
     ByArea,
@@ -107,6 +125,23 @@ pub fn section_actions(all: &[GitChangeRow], section: SectionKey) -> GitSidebarS
 }
 
 impl GitSidebarLayout {
+    /// Only rendered folder/file rows are selectable. Collapsed children are
+    /// deliberately omitted so Shift selection cannot act on hidden rows.
+    pub fn visible_items(&self) -> Vec<GitSidebarSelectionItem> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                GitSidebarEntry::Folder { key, .. } => {
+                    Some(GitSidebarSelectionItem::Folder(key.clone()))
+                }
+                GitSidebarEntry::File { change, .. } => {
+                    Some(GitSidebarSelectionItem::File(change.clone()))
+                }
+                GitSidebarEntry::Section { .. } => None,
+            })
+            .collect()
+    }
+
     /// Rows in actual rendered order only. Shift selection must not traverse
     /// invisible rows in collapsed sections/folders.
     pub fn visible_files(&self) -> Vec<GitChangeRow> {
@@ -372,6 +407,15 @@ mod tests {
         opts.collapsed_folders
             .insert((Some(GitChangeArea::Changes), PathBuf::from("src/ui")));
         let collapsed = layout_git_sidebar(&all, &opts);
+        let selected = collapsed.visible_items();
+        assert!(selected.contains(&GitSidebarSelectionItem::Folder((
+            Some(GitChangeArea::Changes),
+            PathBuf::from("src/ui")
+        ))));
+        assert!(!selected.contains(&GitSidebarSelectionItem::File(file(
+            GitChangeArea::Changes,
+            "src/ui/main.rs"
+        ))));
         assert!(collapsed
             .visible_files()
             .iter()

@@ -656,6 +656,36 @@ impl Workbench {
         }
     }
 
+    /// File-system operations on Git tree folders use the same guarded
+    /// clipboard as regular Git files. Expand/collapse is a separate action.
+    pub(super) fn kit_git_folder_menu(
+        owner: gpui::WeakEntity<Self>,
+        folder: FolderKey,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu + 'static {
+        move |mut menu, _, _| {
+            for (label, action) in [
+                ("Copy worktree folder / selected items", GitFolderMenuAction::Copy),
+                ("Cut worktree folder / selected items", GitFolderMenuAction::Cut),
+                ("Paste into this folder", GitFolderMenuAction::Paste),
+                ("Reveal folder in file manager", GitFolderMenuAction::Reveal),
+                ("Copy relative folder path", GitFolderMenuAction::CopyPath),
+            ] {
+                let owner = owner.clone();
+                let folder = folder.clone();
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.run_git_folder_menu_action(folder.clone(), action, cx);
+                    });
+                }));
+            }
+            menu
+        }
+    }
+
     /// Classic-style Git Graph branch context menu. Keep presentation in
     /// GPUI Kit and route every action through Workbench's existing handlers.
     /// Git file actions live in GPUI Kit's contextual menu rather than a

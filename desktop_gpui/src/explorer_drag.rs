@@ -39,16 +39,21 @@ impl ExplorerDragBatch {
         current_generation: u64,
     ) -> io::Result<Vec<(PathBuf, bool)>> {
         if current_generation != self.generation || files.root() != self.root {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Stale workspace drag"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Stale workspace drag",
+            ));
         }
         if self.sources.is_empty() || self.sources.len() > 120 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid drag size"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid drag size",
+            ));
         }
-        self.sources.iter().map(|source| {
-            let checked = files.reveal_target(source)?;
-            let is_directory = checked.is_dir();
-            Ok((checked, is_directory))
-        }).collect()
+        self.sources
+            .iter()
+            .map(|source| files.native_transfer_target(source))
+            .collect()
     }
 
     /// A clean file still has an active editor identity and original save
@@ -86,6 +91,19 @@ impl ExplorerDragBatch {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn native_folder_drag_refuses_nested_git_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let folder = root.join("src");
+        fs::create_dir(&folder).unwrap();
+        fs::create_dir(folder.join(".git")).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let drag = ExplorerDragBatch::for_row(&root, 1, &folder, &[]);
+        assert!(drag.external_entries(&files, 1).is_err());
+        assert!(folder.exists());
+    }
 
     #[test]
     fn group_drag_moves_only_selected_top_level_items() {
@@ -156,7 +174,10 @@ mod tests {
         fs::write(&file, "file").unwrap();
         let files = ExplorerFiles::new(&root).unwrap();
         let drag = ExplorerDragBatch::for_row(&root, 7, &file, &[file.clone(), folder.clone()]);
-        assert_eq!(drag.external_entries(&files, 7).unwrap(), vec![(file.clone(), false), (folder, true)]);
+        assert_eq!(
+            drag.external_entries(&files, 7).unwrap(),
+            vec![(file.clone(), false), (folder, true)]
+        );
         assert!(drag.external_entries(&files, 8).is_err());
         fs::remove_file(&file).unwrap();
         assert!(drag.external_entries(&files, 7).is_err());
