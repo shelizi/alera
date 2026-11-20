@@ -6,6 +6,9 @@ use std::mem;
 const MAX_DIFF_BYTES: usize = 128 * 1024 + 160;
 const MAX_ROWS: usize = 8192;
 const MAX_CELL_CHARS: usize = 2048;
+/// The same virtual-row ceiling applies to the full-file projection: if the
+/// file will not fit, the caller must retain the bounded Diff-only preview.
+pub const MAX_FULL_FILE_LINES: usize = MAX_ROWS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitDiffCellKind {
@@ -210,6 +213,211 @@ pub fn align_git_file_patch(patch: &str) -> GitSplitDiffView {
     out
 }
 
+/// Parse a unified hunk's next *physical* old/new line. A zero-count range
+/// represents an insertion/deletion boundary *after* the numbered line; its
+/// next physical line is therefore start+1, including the -0,0 start case.
+fn full_file_hunk_cursors(header: &str) -> Option<(usize, usize)> {
+    let ranges = header.strip_prefix("@@ ")?.split_once(" @@")?.0;
+    let (old, new) = ranges.split_once(' ')?;
+    let parse = |range: &str, sign: char| {
+        let range = range.strip_prefix(sign)?;
+        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+        let start: usize = start.parse().ok()?;
+        let count: usize = count.parse().ok()?;
+        if count == 0 {
+            start.checked_add(1)
+        } else {
+            Some(start)
+        }
+    };
+    Some((parse(old, '-')?, parse(new, '+')?))
+}
+
+fn append_unchanged_gap(
+    out: &mut GitSplitDiffView,
+    old_lines: &[&str],
+    new_lines: &[&str],
+    old_cursor: &mut usize,
+    new_cursor: &mut usize,
+    old_until: usize,
+    new_until: usize,
+) -> Result<(), String> {
+    if old_until < *old_cursor || new_until < *new_cursor {
+        return Err("Git hunk cursor moved backwards".into());
+    }
+    let old_gap = old_until - *old_cursor;
+    if old_gap != new_until - *new_cursor {
+        return Err("Git full-file comparison has inconsistent hunk line positions".into());
+    }
+    for _ in 0..old_gap {
+        if out.rows.len() >= MAX_FULL_FILE_LINES {
+            return Err("Full-file comparison exceeds 8,192 rows; use Differences only".into());
+        }
+        let old_text = old_lines
+            .get(*old_cursor - 1)
+            .ok_or("Committed file changed while building the preview")?;
+        let new_text = new_lines
+            .get(*new_cursor - 1)
+            .ok_or("Working file changed while building the preview")?;
+        if old_text != new_text {
+            return Err("Unchanged lines differ; reopen the Git comparison".into());
+        }
+        let text = clip_cell(old_text, &mut out.clipped);
+        out.rows.push(GitSplitDiffRow::paired(
+            Some(GitDiffCell {
+                line: *old_cursor,
+                text: text.clone(),
+                kind: GitDiffCellKind::Context,
+            }),
+            Some(GitDiffCell {
+                line: *new_cursor,
+                text,
+                kind: GitDiffCellKind::Context,
+            }),
+        ));
+        *old_cursor += 1;
+        *new_cursor += 1;
+    }
+    Ok(())
+}
+
+/// Expand a *complete* single-file Git patch back into an aligned full-file
+/// projection. Identical regions outside hunks come from checked source
+/// snapshots rather than being guessed from 3 context lines.
+///
+/// Fail closed on truncated/mismatched patches so "Full file" never silently
+/// presents an incomplete or incorrect source document.
+pub fn expand_git_patch_to_full_file(
+    patch: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Result<GitSplitDiffView, String> {
+    let old_lines = old_text.lines().collect::<Vec<_>>();
+    let new_lines = new_text.lines().collect::<Vec<_>>();
+    if old_lines.len() > MAX_FULL_FILE_LINES || new_lines.len() > MAX_FULL_FILE_LINES {
+        return Err("Full-file preview exceeds 8,192 lines; use Differences only".into());
+    }
+    let changes = align_git_file_patch(patch);
+    if changes.clipped {
+        return Err("Git patch was clipped; full-file alignment is unavailable".into());
+    }
+    let mut out = GitSplitDiffView::default();
+    let (mut old_cursor, mut new_cursor) = (1usize, 1usize);
+    let mut had_hunk = false;
+    for row in changes.rows {
+        if let Some(header) = row.label {
+            if let Some((old_start, new_start)) = full_file_hunk_cursors(&header) {
+                had_hunk = true;
+                append_unchanged_gap(
+                    &mut out,
+                    &old_lines,
+                    &new_lines,
+                    &mut old_cursor,
+                    &mut new_cursor,
+                    old_start,
+                    new_start,
+                )?;
+            }
+            // Hunk metadata and \No newline sentinels aren't file contents.
+            continue;
+        }
+        if out.rows.len() >= MAX_FULL_FILE_LINES {
+            return Err("Full-file comparison exceeds 8,192 rows; use Differences only".into());
+        }
+        for cell in [&row.old, &row.new].into_iter().flatten() {
+            let (lines, cursor) = if cell.kind == GitDiffCellKind::Removed {
+                (&old_lines, &mut old_cursor)
+            } else if cell.kind == GitDiffCellKind::Added {
+                (&new_lines, &mut new_cursor)
+            } else {
+                // Context pairs are validated separately below.
+                continue;
+            };
+            if cell.line != *cursor || lines.get(*cursor - 1).is_none_or(|line| *line != cell.text)
+            {
+                return Err("Diff contents differ from full-file source; reopen comparison".into());
+            }
+            *cursor += 1;
+        }
+        // For context rows, both sides advance, and are verified against
+        // their respective original snapshots including Unicode and CRLF.
+        if row
+            .old
+            .as_ref()
+            .is_some_and(|c| c.kind == GitDiffCellKind::Context)
+        {
+            for (cell, lines, cursor) in [
+                (row.old.as_ref(), &old_lines, &mut old_cursor),
+                (row.new.as_ref(), &new_lines, &mut new_cursor),
+            ] {
+                let cell = cell.ok_or("Missing peer context line in Git diff")?;
+                if cell.kind != GitDiffCellKind::Context
+                    || cell.line != *cursor
+                    || lines.get(*cursor - 1).is_none_or(|text| *text != cell.text)
+                {
+                    return Err("Git context changed while building full-file preview".into());
+                }
+                *cursor += 1;
+            }
+        }
+        out.additions += usize::from(
+            row.new
+                .as_ref()
+                .is_some_and(|c| c.kind == GitDiffCellKind::Added),
+        );
+        out.deletions += usize::from(
+            row.old
+                .as_ref()
+                .is_some_and(|c| c.kind == GitDiffCellKind::Removed),
+        );
+        out.rows.push(row);
+    }
+    if !had_hunk && old_lines != new_lines {
+        return Err("File contents differ but Git returned no complete text hunk".into());
+    }
+    append_unchanged_gap(
+        &mut out,
+        &old_lines,
+        &new_lines,
+        &mut old_cursor,
+        &mut new_cursor,
+        old_lines.len() + 1,
+        new_lines.len() + 1,
+    )?;
+    if out.clipped {
+        return Err("Full-file preview contains clipped lines; use Differences only".into());
+    }
+    if out.rows.is_empty() {
+        out.rows
+            .push(GitSplitDiffRow::label("Both files are empty"));
+    }
+    Ok(out)
+}
+
+/// A full-file unified viewport uses the same verified source rows, without
+/// recreating or re-diffing files. Replacements become old then new lines.
+pub fn flatten_full_file_rows(full: &GitSplitDiffView) -> Vec<GitDiffCell> {
+    let mut out = Vec::with_capacity(full.rows.len());
+    for row in &full.rows {
+        match (&row.old, &row.new) {
+            (Some(old), Some(new))
+                if old.kind == GitDiffCellKind::Context && new.kind == GitDiffCellKind::Context =>
+            {
+                out.push(new.clone());
+            }
+            (old, new) => {
+                if let Some(old) = old {
+                    out.push(old.clone());
+                }
+                if let Some(new) = new {
+                    out.push(new.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +511,100 @@ mod tests {
             .old
             .as_ref()
             .is_some_and(|cell| cell.text.contains("[display line clipped]"))));
+    }
+
+    #[test]
+    fn full_file_includes_unmodified_prefix_suffix_and_middle() {
+        let old = "start\nsame1\nwas\nsame2\nsame3\nsame4\nend\n";
+        let new = "start\nsame1\nnow\nsame2\nsame3\nsame4\nend\n";
+        let patch =
+            "diff --git a/a b/a\n@@ -2,5 +2,5 @@\n same1\n-was\n+now\n same2\n same3\n same4\n";
+        let full = expand_git_patch_to_full_file(patch, old, new).unwrap();
+        assert_eq!(full.rows.len(), 7);
+        assert_eq!((full.additions, full.deletions), (1, 1));
+        assert_eq!(full.rows[0].old.as_ref().unwrap().text, "start");
+        assert_eq!(full.rows[6].new.as_ref().unwrap().text, "end");
+        assert_eq!(full.rows[2].old.as_ref().unwrap().text, "was");
+        assert_eq!(full.rows[2].new.as_ref().unwrap().text, "now");
+        assert!(full.rows.iter().all(|r| r.label.is_none()));
+        let flat = flatten_full_file_rows(&full);
+        assert_eq!(flat.len(), 8);
+        assert_eq!(flat[2].kind, GitDiffCellKind::Removed);
+        assert_eq!(flat[3].kind, GitDiffCellKind::Added);
+        assert_eq!(flat[7].text, "end");
+    }
+
+    #[test]
+    fn full_file_handles_far_apart_hunks_and_zero_count_boundaries() {
+        let mut old = (1..=24).map(|i| format!("line {i}")).collect::<Vec<_>>();
+        let mut new = old.clone();
+        old[3] = "old fourth".into();
+        new[3] = "new fourth".into();
+        old[20] = "old twenty-one".into();
+        new[20] = "new twenty-one".into();
+        let old_text = format!("{}\n", old.join("\n"));
+        let new_text = format!("{}\n", new.join("\n"));
+        let patch = "@@ -3,3 +3,3 @@\n line 3\n-old fourth\n+new fourth\n line 5\n@@ -20,3 +20,3 @@\n line 20\n-old twenty-one\n+new twenty-one\n line 22\n";
+        let full = expand_git_patch_to_full_file(patch, &old_text, &new_text).unwrap();
+        assert_eq!(full.rows.len(), 24);
+        assert_eq!((full.additions, full.deletions), (2, 2));
+        assert_eq!(full.rows[11].old.as_ref().unwrap().text, "line 12");
+
+        let old = "first\nthird\n";
+        let new = "first\nsecond\nthird\n";
+        let patch = "@@ -1,0 +2 @@\n+second\n";
+        let full = expand_git_patch_to_full_file(patch, old, new).unwrap();
+        assert_eq!(full.rows.len(), 3);
+        assert!(full.rows[1].old.is_none());
+        assert_eq!(full.rows[1].new.as_ref().unwrap().line, 2);
+        let deleted = expand_git_patch_to_full_file("@@ -2 +1,0 @@\n-second\n", new, old).unwrap();
+        assert_eq!(deleted.rows.len(), 3);
+        assert!(deleted.rows[1].new.is_none());
+    }
+
+    #[test]
+    fn unchanged_full_file_and_deleted_file_keep_every_line() {
+        let text = "第一行\r\n第二行\r\n";
+        let view = expand_git_patch_to_full_file(
+            "No differences between HEAD and the current working file.",
+            text,
+            text,
+        )
+        .unwrap();
+        assert_eq!(view.rows.len(), 2);
+        assert_eq!(view.rows[1].old.as_ref().unwrap().text, "第二行");
+        assert_eq!((view.additions, view.deletions), (0, 0));
+        let deleted = expand_git_patch_to_full_file(
+            "@@ -1,2 +0,0 @@\n-第一行\n-第二行\n",
+            "第一行\n第二行\n",
+            "",
+        )
+        .unwrap();
+        assert_eq!(deleted.rows.len(), 2);
+        assert!(deleted.rows.iter().all(|row| row.new.is_none()));
+    }
+
+    #[test]
+    fn full_file_refuses_partial_or_inconsistent_views() {
+        assert!(expand_git_patch_to_full_file(
+            "@@ -2 +2 @@\n-old\n+new\n",
+            "first\nold\n",
+            "first\nwrong\n"
+        )
+        .is_err());
+        assert!(expand_git_patch_to_full_file(
+            "@@ -1 +1 @@\n-old\n+new\n… Comparison truncated at 128 KiB. No files were modified.",
+            "old\n",
+            "new\n",
+        )
+        .is_err());
+        assert!(expand_git_patch_to_full_file("", "alpha\n", "beta\n").is_err());
+        assert!(expand_git_patch_to_full_file(
+            "",
+            &"hello\n".repeat(MAX_FULL_FILE_LINES + 1),
+            &"hello\n".repeat(MAX_FULL_FILE_LINES + 1),
+        )
+        .is_err());
     }
 
     #[test]

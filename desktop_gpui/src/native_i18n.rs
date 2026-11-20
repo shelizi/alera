@@ -594,4 +594,23 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn git_file_compare_layout_and_content_controls_have_four_locales() {
+        for label in [
+            "Full file",
+            "Differences only",
+            "Side-by-side view",
+            "Unified view",
+            "Git file comparison",
+        ] {
+            assert_eq!(tr(UiLocale::English, label), label);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(tr(locale, label), label, "{label} missing in {}", locale.tag());
+            }
+        }
+    }
 }

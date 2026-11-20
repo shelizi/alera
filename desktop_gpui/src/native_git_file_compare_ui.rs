@@ -4,7 +4,9 @@ use super::*;
 use alera_gpui_desktop::git_file_revision_compare::{
     compare_file_with_git_reference, list_local_git_branches,
 };
-use alera_gpui_desktop::git_file_split_diff::{align_git_file_patch, GitDiffCell, GitDiffCellKind};
+use alera_gpui_desktop::git_file_split_diff::{
+    align_git_file_patch, flatten_full_file_rows, GitDiffCell, GitDiffCellKind,
+};
 use alera_gpui_desktop::native_i18n::tr;
 
 fn render_git_compare_cell(cell: Option<&GitDiffCell>) -> gpui::AnyElement {
@@ -51,8 +53,16 @@ fn render_git_compare_cell(cell: Option<&GitDiffCell>) -> gpui::AnyElement {
 }
 
 impl Workbench {
-    fn render_git_file_split_table(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows = self.git_file_compare_rows.clone();
+    fn render_git_file_split_table(
+        &mut self,
+        full: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let rows = if full {
+            self.git_file_compare_full_rows.clone()
+        } else {
+            self.git_file_compare_rows.clone()
+        };
         let count = rows.len();
         div()
             .id("git-file-compare-split-table")
@@ -89,7 +99,11 @@ impl Workbench {
             )
             .child(
                 gpui::uniform_list(
-                    "git-file-compare-virtual-split-rows",
+                    if full {
+                        "git-file-compare-virtual-full-rows"
+                    } else {
+                        "git-file-compare-virtual-split-rows"
+                    },
                     count,
                     cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
                         range
@@ -116,6 +130,90 @@ impl Workbench {
                                         .child(render_git_compare_cell(row.new.as_ref()))
                                         .into_any_element()
                                 }
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .flex_1()
+                .min_h_0()
+                .w_full(),
+            )
+            .into_any_element()
+    }
+
+    fn render_git_file_full_unified(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let rows = self.git_file_compare_full_unified_rows.clone();
+        if rows.is_empty() {
+            return div()
+                .id("git-file-full-unified-empty")
+                .h(px(418.0))
+                .p_3()
+                .text_color(rgb(MUTED))
+                .child("Both files are empty")
+                .into_any_element();
+        }
+        let count = rows.len();
+        div()
+            .id("git-file-full-unified-table")
+            .h(px(418.0))
+            .flex()
+            .flex_col()
+            .bg(rgb(BG))
+            .child(
+                div()
+                    .h(px(28.0))
+                    .flex()
+                    .items_center()
+                    .px_3()
+                    .bg(rgb(TOOLBAR))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Complete file · old deletions and new additions · read-only"),
+            )
+            .child(
+                gpui::uniform_list(
+                    "git-file-full-unified-virtual-rows",
+                    count,
+                    cx.processor(move |_, range: std::ops::Range<usize>, _, _| {
+                        range
+                            .filter_map(|index| rows.get(index))
+                            .map(|cell| {
+                                let (marker, background) = match cell.kind {
+                                    GitDiffCellKind::Context => (" ", BG),
+                                    GitDiffCellKind::Removed => ("-", 0x3a282d),
+                                    GitDiffCellKind::Added => ("+", 0x183b30),
+                                };
+                                div()
+                                    .h(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .bg(rgb(background))
+                                    .font_family("Consolas")
+                                    .text_sm()
+                                    .child(
+                                        div()
+                                            .w(px(48.0))
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .justify_end()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(cell.line.to_string()),
+                                    )
+                                    .child(div().w(px(10.0)).text_color(rgb(MUTED)).child(marker))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_color(rgb(TEXT))
+                                            .child(cell.text.clone()),
+                                    )
+                                    .into_any_element()
                             })
                             .collect::<Vec<_>>()
                     }),
@@ -179,8 +277,14 @@ impl Workbench {
             ),
         };
         let split = self.git_file_compare_split;
+        let full_available = valid && self.git_file_compare_full_error.is_none();
+        let full = self.git_file_compare_full && full_available;
+        let full_error = self.git_file_compare_full_error.clone();
+        let locale = self.settings_menu_locale;
         let displayed = if valid && split {
-            self.render_git_file_split_table(cx)
+            self.render_git_file_split_table(full, cx)
+        } else if valid && full {
+            self.render_git_file_full_unified(cx)
         } else {
             div()
                 .id("git-file-compare-unified-patch")
@@ -217,6 +321,40 @@ impl Workbench {
                     .when(valid, |bar| {
                         bar.child(
                             div()
+                                .id("git-file-compare-content-toggle")
+                                .px_2()
+                                .py_1()
+                                .bg(rgb(TOOLBAR))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .text_xs()
+                                .text_color(rgb(if full_available { TEXT } else { MUTED }))
+                                .child(tr(
+                                    locale,
+                                    if full {
+                                        "Differences only"
+                                    } else {
+                                        "Full file"
+                                    },
+                                ))
+                                .when(full_available, |toggle| {
+                                    toggle.cursor_pointer().on_click(cx.listener(
+                                        move |view, _, _, cx| {
+                                            if view.workspace_generation == generation
+                                                && view.git_file_compare_ticket == ticket
+                                            {
+                                                view.git_file_compare_full =
+                                                    !view.git_file_compare_full;
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
+                                }),
+                        )
+                    })
+                    .when(valid, |bar| {
+                        bar.child(
+                            div()
                                 .id("git-file-compare-layout-toggle")
                                 .cursor_pointer()
                                 .px_2()
@@ -226,11 +364,14 @@ impl Workbench {
                                 .border_color(rgb(BORDER))
                                 .text_xs()
                                 .text_color(rgb(TEXT))
-                                .child(if split {
-                                    "Unified view"
-                                } else {
-                                    "Side-by-side view"
-                                })
+                                .child(tr(
+                                    locale,
+                                    if split {
+                                        "Unified view"
+                                    } else {
+                                        "Side-by-side view"
+                                    },
+                                ))
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     if view.workspace_generation == generation
                                         && view.git_file_compare_ticket == ticket
@@ -242,12 +383,20 @@ impl Workbench {
                         )
                     }),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(format!("{detail} · Changed sections only · no Git writes")),
-            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{detail} · {} · no Git writes",
+                if full {
+                    "Complete file"
+                } else {
+                    "Changed sections only"
+                }
+            )))
+            .when(valid && !full_available, |panel| {
+                panel.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                    "Full file unavailable: {}. Differences preview remains available.",
+                    full_error.unwrap_or_else(|| "Source unavailable".to_owned())
+                )))
+            })
             .child(displayed)
             .into_any_element()
     }
@@ -266,7 +415,11 @@ impl Workbench {
         let label = branch.clone().unwrap_or_else(|| "HEAD".to_owned());
         self.git_file_compare_result = None;
         self.git_file_compare_split = true;
+        self.git_file_compare_full = true;
         self.git_file_compare_rows = Arc::new(Vec::new());
+        self.git_file_compare_full_rows = Arc::new(Vec::new());
+        self.git_file_compare_full_unified_rows = Arc::new(Vec::new());
+        self.git_file_compare_full_error = None;
         self.git_file_compare_additions = 0;
         self.git_file_compare_deletions = 0;
         self.git_file_compare_clipped = false;
@@ -276,6 +429,7 @@ impl Workbench {
         ));
         let owner = cx.entity().downgrade();
         let dialog_path = relative.display().to_string();
+        let locale = self.settings_menu_locale;
         window.open_dialog(cx, move |dialog, _, cx| {
             let content = owner
                 .upgrade()
@@ -292,7 +446,7 @@ impl Workbench {
                 })
                 .unwrap_or_else(|| div().p_4().child("Workspace closed").into_any_element());
             dialog
-                .title("Git file comparison")
+                .title(tr(locale, "Git file comparison"))
                 .w(px(1050.))
                 .centered()
                 .on_cancel(|_, _, _| true)
@@ -300,7 +454,7 @@ impl Workbench {
                 .child(content)
         });
         cx.spawn(async move |view, cx| {
-            let (result, aligned) = cx
+            let (result, aligned, full_flat) = cx
                 .background_spawn(async move {
                     let result =
                         compare_file_with_git_reference(&root, &relative, branch.as_deref());
@@ -308,7 +462,12 @@ impl Workbench {
                         .as_ref()
                         .ok()
                         .map(|diff| align_git_file_patch(&diff.patch));
-                    (result, aligned)
+                    let full_flat = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|diff| diff.full_file.as_ref().ok())
+                        .map(flatten_full_file_rows);
+                    (result, aligned, full_flat)
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -321,6 +480,19 @@ impl Workbench {
                     view.git_file_compare_deletions = aligned.deletions;
                     view.git_file_compare_clipped = aligned.clipped;
                     view.git_file_compare_rows = Arc::new(aligned.rows);
+                }
+                if let Ok(diff) = &result {
+                    match &diff.full_file {
+                        Ok(full) => {
+                            view.git_file_compare_full_rows = Arc::new(full.rows.clone());
+                            view.git_file_compare_full_unified_rows =
+                                Arc::new(full_flat.unwrap_or_default());
+                        }
+                        Err(error) => {
+                            view.git_file_compare_full_error = Some(error.clone());
+                            view.git_file_compare_full = false;
+                        }
+                    }
                 }
                 view.model.set_status(match &result {
                     Ok(diff) => format!(

@@ -161,3 +161,28 @@ _version: 2
   zh-TW: "與指定分支比較"
   zh-CN: "与指定分支比较"
   ja: "ブランチと比較"
+"Full file":
+  en: "Full file"
+  zh-TW: "完整檔案"
+  zh-CN: "完整文件"
+  ja: "ファイル全体"
+"Differences only":
+  en: "Differences only"
+  zh-TW: "僅差異內容"
+  zh-CN: "仅差异内容"
+  ja: "差分のみ"
+"Side-by-side view":
+  en: "Side-by-side view"
+  zh-TW: "左右雙欄"
+  zh-CN: "左右双栏"
+  ja: "左右並列表示"
+"Unified view":
+  en: "Unified view"
+  zh-TW: "單欄檢視"
+  zh-CN: "单栏查看"
+  ja: "統合表示"
+"Git file comparison":
+  en: "Git file comparison"
+  zh-TW: "Git 檔案比較"
+  zh-CN: "Git 文件比较"
+  ja: "Git ファイル比較"

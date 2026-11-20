@@ -1,11 +1,13 @@
 //! Exact, read-only per-file comparison with a committed Git ref.
 //! Unlike Stage/Unstage, this compares the selected ref's tree against the
 //! whole working file, without touching HEAD, index, files or worktrees.
+use crate::git_file_split_diff::{expand_git_patch_to_full_file, GitSplitDiffView};
 use git2::{BranchType, DiffFormat, DiffOptions, Repository};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_COMPARE_BYTES: usize = 128 * 1024;
+const MAX_FULL_FILE_BYTES: u64 = 256 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct GitFileRevisionComparison {
@@ -13,6 +15,64 @@ pub struct GitFileRevisionComparison {
     pub reference: String,
     pub revision_oid: String,
     pub patch: String,
+    /// A separately bounded, verified full-file projection. Diff-only
+    /// remains available even when the source is binary, huge or stale.
+    pub full_file: Result<GitSplitDiffView, String>,
+}
+
+fn read_full_file_projection(
+    repo: &Repository,
+    workdir: &Path,
+    relative: &Path,
+    entry: &git2::TreeEntry<'_>,
+    patch: &str,
+) -> Result<GitSplitDiffView, String> {
+    // Git symlinks are stored as blobs: do not reinterpret their target path
+    // as a regular text document just because TreeEntry.kind() is Blob.
+    if entry.filemode() == 0o120000 {
+        return Err("Full-file text preview is unavailable for Git symlinks".into());
+    }
+    let old_blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+    let old_bytes = old_blob.content();
+    if old_bytes.len() as u64 > MAX_FULL_FILE_BYTES {
+        return Err("Committed file exceeds 256 KiB full-file preview limit".into());
+    }
+    if old_blob.is_binary() || old_bytes.contains(&0) {
+        return Err("Committed file is binary; use Differences only".into());
+    }
+    let old_text = std::str::from_utf8(old_bytes)
+        .map_err(|_| "Committed file is not UTF-8; use Differences only")?;
+    let path = workdir.join(relative);
+    let new_bytes = match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("Full-file preview requires a regular working file".into());
+            }
+            if metadata.len() > MAX_FULL_FILE_BYTES {
+                return Err("Working file exceeds 256 KiB full-file preview limit".into());
+            }
+            // A nested directory can be a symlink even when the final file
+            // is not. Keep every read inside the canonical repository root.
+            let canonical = dunce::canonicalize(&path).map_err(|e| e.to_string())?;
+            let root = dunce::canonicalize(workdir).map_err(|e| e.to_string())?;
+            if !canonical.starts_with(&root) {
+                return Err("Full-file target escapes the current Git worktree".into());
+            }
+            let bytes = fs::read(canonical).map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > MAX_FULL_FILE_BYTES {
+                return Err("Working file grew beyond 256 KiB preview limit".into());
+            }
+            bytes
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.to_string()),
+    };
+    if new_bytes.contains(&0) {
+        return Err("Working file is binary; use Differences only".into());
+    }
+    let new_text = std::str::from_utf8(&new_bytes)
+        .map_err(|_| "Working file is not UTF-8; use Differences only")?;
+    expand_git_patch_to_full_file(patch, old_text, new_text)
 }
 
 fn valid_relative(path: &Path) -> bool {
@@ -161,11 +221,13 @@ pub fn compare_file_with_git_reference(
     if patch.is_empty() {
         patch = format!("No differences between {reference} and the current working file.");
     }
+    let full_file = read_full_file_projection(&repo, workdir, relative, &entry, &patch);
     Ok(GitFileRevisionComparison {
         relative: relative.to_path_buf(),
         reference,
         revision_oid: commit.id().to_string(),
         patch,
+        full_file,
     })
 }
 
@@ -211,6 +273,10 @@ mod tests {
         assert!(result.patch.contains("-base"), "{}", result.patch);
         assert!(result.patch.contains("+working"), "{}", result.patch);
         assert!(!result.patch.contains("+staged"));
+        let full = result.full_file.unwrap();
+        assert_eq!(full.rows.len(), 1);
+        assert_eq!(full.rows[0].old.as_ref().unwrap().text, "base");
+        assert_eq!(full.rows[0].new.as_ref().unwrap().text, "working");
         assert_eq!(fs::read(repo.path().join("index")).unwrap(), index_before);
     }
 
@@ -236,6 +302,9 @@ mod tests {
                 .unwrap();
         assert!(result.patch.contains("-original"));
         assert!(result.patch.contains("+current"));
+        let full = result.full_file.unwrap();
+        assert_eq!(full.rows[0].old.as_ref().unwrap().text, "original");
+        assert_eq!(full.rows[0].new.as_ref().unwrap().text, "current");
         assert_eq!(repo.head().unwrap().target().unwrap(), original_head);
         assert_eq!(
             repo.find_branch("reference", BranchType::Local)
@@ -262,6 +331,10 @@ mod tests {
             compare_file_with_git_reference(tmp.path(), Path::new("a[1].txt"), None).unwrap();
         assert!(result.patch.contains("-old"));
         assert!(!result.patch.contains("a1.txt"), "{}", result.patch);
+        let full = result.full_file.unwrap();
+        assert_eq!(full.rows.len(), 1);
+        assert_eq!(full.rows[0].old.as_ref().unwrap().text, "old");
+        assert!(full.rows[0].new.is_none());
         assert!(compare_file_with_git_reference(tmp.path(), Path::new("../escape"), None).is_err());
         assert!(compare_file_with_git_reference(tmp.path(), Path::new("/escape"), None).is_err());
         assert!(compare_file_with_git_reference(
@@ -271,5 +344,27 @@ mod tests {
         )
         .is_err());
         assert!(compare_file_with_git_reference(tmp.path(), Path::new("a1.txt"), None).is_err());
+    }
+
+    #[test]
+    fn unchanged_and_large_full_file_fallback_does_not_break_patch_preview() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", false)
+            .unwrap();
+        commit_file(&repo, "a.txt", "第一行\n第二行\n", "baseline");
+        let unchanged =
+            compare_file_with_git_reference(tmp.path(), Path::new("a.txt"), None).unwrap();
+        let full = unchanged.full_file.unwrap();
+        assert_eq!(full.rows.len(), 2);
+        assert_eq!(full.rows[1].new.as_ref().unwrap().text, "第二行");
+        let huge = "x".repeat(MAX_FULL_FILE_BYTES as usize + 1);
+        fs::write(tmp.path().join("a.txt"), huge).unwrap();
+        let bounded =
+            compare_file_with_git_reference(tmp.path(), Path::new("a.txt"), None).unwrap();
+        assert!(bounded.full_file.is_err());
+        assert!(!bounded.patch.is_empty());
     }
 }
