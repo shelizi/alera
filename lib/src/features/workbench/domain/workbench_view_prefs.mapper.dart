@@ -83,6 +83,8 @@ class WorkbenchSortByMapper extends EnumMapper<WorkbenchSortBy> {
         return WorkbenchSortBy.recent;
       case r'activity':
         return WorkbenchSortBy.activity;
+      case r'manual':
+        return WorkbenchSortBy.manual;
       default:
         throw MapperException.unknownEnumValue(value);
     }
@@ -97,6 +99,8 @@ class WorkbenchSortByMapper extends EnumMapper<WorkbenchSortBy> {
         return r'recent';
       case WorkbenchSortBy.activity:
         return r'activity';
+      case WorkbenchSortBy.manual:
+        return r'manual';
     }
   }
 }
@@ -562,6 +566,13 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
       v.workspaceSort;
   static const Field<WorkbenchViewPrefs, WorkbenchSortBy> _f$workspaceSort =
       Field('workspaceSort', _$workspaceSort);
+  static List<String> _$projectOrder(WorkbenchViewPrefs v) => v.projectOrder;
+  static const Field<WorkbenchViewPrefs, List<String>> _f$projectOrder =
+      Field('projectOrder', _$projectOrder, opt: true, def: const <String>[]);
+  static List<String> _$workspaceOrder(WorkbenchViewPrefs v) =>
+      v.workspaceOrder;
+  static const Field<WorkbenchViewPrefs, List<String>> _f$workspaceOrder =
+      Field('workspaceOrder', _$workspaceOrder, opt: true, def: const <String>[]);
   static Set<String> _$selectedProjectIds(WorkbenchViewPrefs v) =>
       v.selectedProjectIds;
   static const Field<WorkbenchViewPrefs, Set<String>> _f$selectedProjectIds =
@@ -777,6 +788,8 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
     #groupBy: _f$groupBy,
     #projectSort: _f$projectSort,
     #workspaceSort: _f$workspaceSort,
+    #projectOrder: _f$projectOrder,
+    #workspaceOrder: _f$workspaceOrder,
     #selectedProjectIds: _f$selectedProjectIds,
     #collapsedProjectIds: _f$collapsedProjectIds,
     #expandedWorkspaceIds: _f$expandedWorkspaceIds,
@@ -814,6 +827,8 @@ class WorkbenchViewPrefsMapper extends ClassMapperBase<WorkbenchViewPrefs> {
       groupBy: data.dec(_f$groupBy),
       projectSort: data.dec(_f$projectSort),
       workspaceSort: data.dec(_f$workspaceSort),
+      projectOrder: data.dec(_f$projectOrder),
+      workspaceOrder: data.dec(_f$workspaceOrder),
       selectedProjectIds: data.dec(_f$selectedProjectIds),
       collapsedProjectIds: data.dec(_f$collapsedProjectIds),
       expandedWorkspaceIds: data.dec(_f$expandedWorkspaceIds),
@@ -931,6 +946,8 @@ abstract class WorkbenchViewPrefsCopyWith<
     WorkbenchGroupBy? groupBy,
     WorkbenchSortBy? projectSort,
     WorkbenchSortBy? workspaceSort,
+    List<String>? projectOrder,
+    List<String>? workspaceOrder,
     Set<String>? selectedProjectIds,
     Set<String>? collapsedProjectIds,
     Set<String>? expandedWorkspaceIds,
@@ -997,6 +1014,8 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     WorkbenchGroupBy? groupBy,
     WorkbenchSortBy? projectSort,
     WorkbenchSortBy? workspaceSort,
+    List<String>? projectOrder,
+    List<String>? workspaceOrder,
     Set<String>? selectedProjectIds,
     Set<String>? collapsedProjectIds,
     Set<String>? expandedWorkspaceIds,
@@ -1032,6 +1051,8 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
       if (groupBy != null) #groupBy: groupBy,
       if (projectSort != null) #projectSort: projectSort,
       if (workspaceSort != null) #workspaceSort: workspaceSort,
+      if (projectOrder != null) #projectOrder: projectOrder,
+      if (workspaceOrder != null) #workspaceOrder: workspaceOrder,
       if (selectedProjectIds != null) #selectedProjectIds: selectedProjectIds,
       if (collapsedProjectIds != null)
         #collapsedProjectIds: collapsedProjectIds,
@@ -1089,6 +1110,8 @@ class _WorkbenchViewPrefsCopyWithImpl<$R, $Out>
     groupBy: data.get(#groupBy, or: $value.groupBy),
     projectSort: data.get(#projectSort, or: $value.projectSort),
     workspaceSort: data.get(#workspaceSort, or: $value.workspaceSort),
+    projectOrder: data.get(#projectOrder, or: $value.projectOrder),
+    workspaceOrder: data.get(#workspaceOrder, or: $value.workspaceOrder),
     selectedProjectIds: data.get(
       #selectedProjectIds,
       or: $value.selectedProjectIds,

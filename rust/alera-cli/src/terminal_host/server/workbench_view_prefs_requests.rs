@@ -47,6 +47,8 @@ impl<'a> WorkbenchViewPrefsRequestHandler<'a> {
                 "sectionSort",
                 "collapsedSectionIds",
                 "othersSectionCollapsed",
+                "projectOrder",
+                "workspaceOrder",
             ] {
                 if !prefs.contains_key(key) {
                     prefs.insert(key.to_string(), current_json[key].clone());
@@ -91,6 +93,8 @@ mod tests {
             "othersSectionCollapsed": true,
             "projectSort": "name",
             "workspaceSort": "name",
+            "projectOrder": ["project-b", "project-a"],
+            "workspaceOrder": ["worktree-b", "worktree-a"],
             "workspaceKindFilter": "all"
         });
         let saved = handler
@@ -105,6 +109,8 @@ mod tests {
             "sectionSort",
             "collapsedSectionIds",
             "othersSectionCollapsed",
+            "projectOrder",
+            "workspaceOrder",
         ] {
             legacy.as_object_mut().unwrap().remove(field);
         }
@@ -122,6 +128,14 @@ mod tests {
         assert_eq!(updated["prefs"]["sectionSort"], "recent");
         assert_eq!(updated["prefs"]["collapsedSectionIds"], json!(["section"]));
         assert_eq!(updated["prefs"]["othersSectionCollapsed"], true);
+        assert_eq!(
+            updated["prefs"]["projectOrder"],
+            json!(["project-b", "project-a"])
+        );
+        assert_eq!(
+            updated["prefs"]["workspaceOrder"],
+            json!(["worktree-b", "worktree-a"])
+        );
         assert_eq!(handler.get().await.unwrap(), updated);
     }
 }

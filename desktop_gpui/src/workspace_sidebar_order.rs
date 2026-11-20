@@ -18,6 +18,16 @@ pub fn order_worktree_rows(
     entries: &[WorktreeEntry],
     catalog: Option<&RuntimeCatalog>,
 ) -> Vec<SidebarWorktreeRow> {
+    order_worktree_rows_with_manual(entries, catalog, None)
+}
+
+/// Custom ordering applies within one section/pin/archive group and retains
+/// parent-child hierarchy. IDs resolve through the Host RuntimeCatalog.
+pub fn order_worktree_rows_with_manual(
+    entries: &[WorktreeEntry],
+    catalog: Option<&RuntimeCatalog>,
+    manual_order: Option<&[String]>,
+) -> Vec<SidebarWorktreeRow> {
     const LIMIT: usize = 96;
     let entries: Vec<WorktreeEntry> = entries.iter().take(LIMIT).cloned().collect();
     let mut nodes: Vec<(
@@ -65,9 +75,38 @@ pub fn order_worktree_rows(
     }
 
     let mut indices: Vec<usize> = (0..nodes.len()).collect();
+    let positions: HashMap<&str, usize> = manual_order
+        .into_iter()
+        .flat_map(|ids| {
+            ids.iter()
+                .enumerate()
+                .map(|(index, id)| (id.as_str(), index))
+        })
+        .collect();
     indices.sort_by(|&a, &b| {
         let x = &nodes[a];
         let y = &nodes[b];
+        if manual_order.is_some() {
+            // A drag changes order only, not Project, section, pin, archive,
+            // or parent membership; keep those grouping boundaries stable.
+            let group_x = (x.5, !x.4, x.2.as_deref().unwrap_or("~"));
+            let group_y = (y.5, !y.4, y.2.as_deref().unwrap_or("~"));
+            let by_group = group_x.cmp(&group_y);
+            if !by_group.is_eq() {
+                return by_group;
+            }
+            let rank = |entry: &WorktreeEntry| {
+                id_by_path
+                    .get(&entry.path)
+                    .and_then(|id| positions.get(id.as_str()).copied())
+                    .unwrap_or(usize::MAX)
+            };
+            let by_manual = rank(&x.0).cmp(&rank(&y.0));
+            if !by_manual.is_eq() {
+                return by_manual;
+            }
+            return x.3.to_lowercase().cmp(&y.3.to_lowercase());
+        }
         let sort_key = |node: &(
             WorktreeEntry,
             Option<String>,
@@ -269,5 +308,32 @@ mod tests {
         assert_eq!(rows[0].section_header.as_deref(), Some("Feature"));
         assert_eq!(rows[1].entry.path, PathBuf::from("U"));
         assert_eq!(rows[1].section_header.as_deref(), Some("Other workspaces"));
+    }
+
+    #[test]
+    fn manual_order_repositions_main_and_children_without_losing_hierarchy() {
+        let mut catalog = RuntimeCatalog::default();
+        catalog.workspaces.push(workspace("M", "main", None));
+        catalog.workspaces.push(workspace("A", "a", None));
+        catalog.workspaces.push(workspace("B", "b", None));
+        catalog.workspaces.push(workspace("C", "child", Some("a")));
+        let order = vec!["b".into(), "a".into(), "child".into(), "main".into()];
+        let rows = order_worktree_rows_with_manual(
+            &[
+                git_entry("M", true),
+                git_entry("C", false),
+                git_entry("A", false),
+                git_entry("B", false),
+            ],
+            Some(&catalog),
+            Some(&order),
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.entry.path.to_string_lossy().to_string())
+                .collect::<Vec<_>>(),
+            vec!["B", "A", "C", "M"]
+        );
+        assert_eq!(rows[2].depth, 1);
     }
 }

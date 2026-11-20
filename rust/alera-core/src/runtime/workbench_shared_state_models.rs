@@ -16,6 +16,7 @@ pub enum SharedWorkbenchSortBy {
     Name,
     Recent,
     Activity,
+    Manual,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -39,6 +40,10 @@ pub struct SharedWorkbenchViewPrefs {
     pub others_section_collapsed: bool,
     pub project_sort: SharedWorkbenchSortBy,
     pub workspace_sort: SharedWorkbenchSortBy,
+    #[serde(default)]
+    pub project_order: Vec<String>,
+    #[serde(default)]
+    pub workspace_order: Vec<String>,
     #[serde(default)]
     pub selected_project_ids: Vec<String>,
     #[serde(default)]
@@ -71,6 +76,8 @@ impl Default for SharedWorkbenchViewPrefs {
             others_section_collapsed: false,
             project_sort: SharedWorkbenchSortBy::Name,
             workspace_sort: SharedWorkbenchSortBy::Name,
+            project_order: Vec::new(),
+            workspace_order: Vec::new(),
             selected_project_ids: Vec::new(),
             selected_tag_ids: Vec::new(),
             collapsed_project_ids: Vec::new(),

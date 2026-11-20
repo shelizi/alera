@@ -6,6 +6,7 @@ part 'alera_localizations_dynamic.dart';
 part 'alera_localizations_dynamic_ja.dart';
 part 'alera_localizations_dynamic_zh_cn.dart';
 part 'alera_localizations_git_history.dart';
+part 'alera_localizations_sidebar_reorder.dart';
 part 'alera_localizations_tab_menu.dart';
 part 'alera_localizations_ja_agents.dart';
 part 'alera_localizations_ja_parity_1.dart';
@@ -134,18 +135,21 @@ class AleraLocalizations {
       _AleraTranslationTable.english => source,
       _AleraTranslationTable.traditionalChinese =>
         _traditionalChinese[source] ??
+            _traditionalChineseSidebarReorder[source] ??
             _traditionalChineseTabMenu[source] ??
             _traditionalChineseSettingsExtra[source] ??
             _translateDynamicTraditionalChinese(source) ??
             source,
       _AleraTranslationTable.simplifiedChinese =>
         _simplifiedChinese[source] ??
+            _simplifiedChineseSidebarReorder[source] ??
             _simplifiedChineseTabMenu[source] ??
             _simplifiedChineseSettingsExtra[source] ??
             _translateDynamicSimplifiedChinese(source) ??
             source,
       _AleraTranslationTable.japanese =>
         _japanese[source] ??
+            _japaneseSidebarReorder[source] ??
             _japaneseTabMenu[source] ??
             _japaneseSettingsExtra[source] ??
             _translateDynamicJapanese(source) ??

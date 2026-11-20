@@ -2,6 +2,7 @@
 //! No RPC token parsing, direct SQLite access, host startup, or PTY spawning.
 //! The CLI owns authentication, version negotiation and request semantics.
 use crate::host_tab_pins::{parse_pin_readback, parse_pin_snapshot, HostTabPinSnapshot};
+use crate::sidebar_manual_order::SidebarOrderPrefs;
 use alera_core::child_process::windowless_command;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -736,6 +737,44 @@ impl RuntimeCliBridge {
         ])?;
         validate_desktop_settings_cas_readback(path, next, &snapshot)?;
         Ok(snapshot)
+    }
+
+    /// Read only the Host-owned manual Project/Worktree order. No local shadow.
+    pub fn sidebar_order_snapshot(&self) -> io::Result<SidebarOrderPrefs> {
+        let response = self.desktop_settings_command(&[OsString::from("sidebar-order-get")])?;
+        SidebarOrderPrefs::from_json(&response)
+    }
+
+    pub fn move_sidebar_order(
+        &self,
+        kind: &str,
+        source_id: &str,
+        target_id: &str,
+        visible_order: &[String],
+    ) -> io::Result<SidebarOrderPrefs> {
+        if !matches!(kind, "project" | "workspace")
+            || source_id.is_empty()
+            || source_id == target_id
+            || visible_order.len() > 512
+            || !visible_order.iter().any(|id| id == source_id)
+            || !visible_order.iter().any(|id| id == target_id)
+        {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid sidebar drag"));
+        }
+        let encoded = serde_json::to_string(visible_order)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
+        let response = self.desktop_settings_command(&[
+            OsString::from("sidebar-order-move"),
+            OsString::from("--kind"),
+            OsString::from(kind),
+            OsString::from("--source-id"),
+            OsString::from(source_id),
+            OsString::from("--target-id"),
+            OsString::from(target_id),
+            OsString::from("--visible-order"),
+            OsString::from(encoded),
+        ])?;
+        SidebarOrderPrefs::from_json(&response)
     }
 
     fn desktop_settings_command(&self, args: &[OsString]) -> io::Result<Value> {
@@ -1981,6 +2020,8 @@ fn validate_desktop_settings_cas_readback(
 
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
+        Some("sidebar-order-get" | "sidebar-order-move") =>
+            SidebarOrderPrefs::from_json(response).is_ok(),
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
         Some("agent-hooks-cas") => parse_versioned_agent_hook_settings(response).is_ok(),
         Some("pin-list") => response.is_array(),

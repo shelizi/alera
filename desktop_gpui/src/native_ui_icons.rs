@@ -34,6 +34,7 @@ pub enum UiIcon {
     Hidden,
     Search,
     List,
+    GripVertical,
     PullRequest,
     Edit,
     Delete,
@@ -86,6 +87,7 @@ impl UiIcon {
             Self::Visible | Self::Hidden => '\u{eb62}',
             Self::Search => '\u{ea6d}',
             Self::List => '\u{eb60}',
+            Self::GripVertical => '\u{eb60}',
             Self::PullRequest => '\u{ea64}',
             Self::Edit => '\u{ea73}',
             Self::Delete => '\u{ea81}',
@@ -160,6 +162,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::Hidden => LucideIcon::EyeOff,
         UiIcon::Search => LucideIcon::Search,
         UiIcon::List => LucideIcon::List,
+        UiIcon::GripVertical => LucideIcon::GripVertical,
         UiIcon::PullRequest => LucideIcon::GitPullRequest,
         UiIcon::Edit => LucideIcon::Pencil,
         UiIcon::Delete => LucideIcon::Trash, // GPUI Kit 0.9's Trash SVG is Classic's trash2 shape.

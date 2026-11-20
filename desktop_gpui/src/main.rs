@@ -26,6 +26,8 @@ mod native_ui_theme;
 mod quick_open_ui;
 mod win_ime;
 use native_history_sync_ui::AgyAccountEdit;
+use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
+use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -118,6 +120,7 @@ use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
+use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
@@ -155,7 +158,7 @@ use alera_gpui_desktop::workbench_panes::{
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
-use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
+use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows_with_manual;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
     search_worktree_contents, worktree_hit_requires_switch, WorktreeContentMatch,
@@ -182,7 +185,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Share the exact 16px Classic brand mark across native re-renders without
@@ -712,6 +715,9 @@ struct Workbench {
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
     runtime_catalog: Option<RuntimeCatalog>,
+    sidebar_order_prefs: Option<SidebarOrderPrefs>,
+    sidebar_order_busy: bool,
+    sidebar_reorder_hold: Arc<Mutex<SidebarReorderHoldGate>>,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
     /// Explicit Settings-only selection; never changes the active workspace.
@@ -1192,9 +1198,10 @@ impl Workbench {
         let request = self.project_tree_request;
         self.project_tree_loading = true;
         cx.spawn(async move |view, cx| {
-            let (groups, runtime_result) = cx
+            let (mut groups, runtime_result, order_result) = cx
                 .background_spawn(async move {
-                    let runtime_result = bridge.map(|bridge| bridge.list_runtime_catalog());
+                    let runtime_result = bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
+                    let order_result = bridge.as_ref().map(|bridge| bridge.sidebar_order_snapshot());
                     let registered = runtime_result
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
@@ -1208,14 +1215,13 @@ impl Workbench {
                         .unwrap_or_default();
                     let groups =
                         collect_project_tree_with_registered(&saved, &recent, &registered, &active);
-                    (groups, runtime_result)
+                    (groups, runtime_result, order_result)
                 })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.project_tree_request != request {
                     return;
                 }
-                view.project_tree_groups = groups;
                 match runtime_result {
                     Some(Ok(catalog)) => {
                         view.runtime_catalog = Some(catalog);
@@ -1230,6 +1236,13 @@ impl Workbench {
                         view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
                     }
                 }
+                view.sidebar_order_prefs = order_result.and_then(Result::ok);
+                order_project_groups(
+                    &mut groups,
+                    view.runtime_catalog.as_ref(),
+                    view.sidebar_order_prefs.as_ref(),
+                );
+                view.project_tree_groups = groups;
                 view.project_tree_loading = false;
                 cx.notify();
             })
@@ -11488,6 +11501,16 @@ impl Render for Workbench {
         let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
+        let sidebar_order_prefs = self.sidebar_order_prefs.clone();
+        let sidebar_reorder_hold = self.sidebar_reorder_hold.clone();
+        let sidebar_reorder_hint = tr(self.settings_menu_locale, "Hold the handle for 0.5s to reorder");
+        let sidebar_drag_generation = self.workspace_generation;
+        let visible_project_ids: Vec<String> = project_tree_rows
+            .iter()
+            .filter_map(|(_, group, _)| runtime_catalog.as_ref()
+                .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                .map(|project| project.id.clone()))
+            .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
         let sidebar_rename_input = self.sidebar_rename_input.clone();
@@ -16069,13 +16092,35 @@ impl Render for Workbench {
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
                                                     .map(|project| project.name.clone())
                                                     .unwrap_or_else(|| group.label.clone());
+                                                let project_drag_id = menu_project_id.clone().unwrap_or_default();
+                                                let project_drop_id = menu_project_id.clone();
+                                                let project_drop_visible_ids = visible_project_ids.clone();
+                                                let project_drag_caption = title.clone();
+                                                let project_hold_key = format!("project:{project_drag_id}");
+                                                let project_press_key = project_hold_key.clone();
+                                                let project_preview_key = project_hold_key.clone();
+                                                let project_press_gate = sidebar_reorder_hold.clone();
+                                                let project_preview_gate = sidebar_reorder_hold.clone();
+                                                let project_drag_gate = sidebar_reorder_hold.clone();
+                                                let project_hint = sidebar_reorder_hint.clone();
+                                                let project_preview_hint = sidebar_reorder_hint.clone();
+                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active;
                                                 let show_all_worktrees = project_title_matches_search(
                                                     &group, runtime_catalog.as_ref(), &sidebar_search_query,
                                                 );
-                                                let rows = order_worktree_rows(
+                                                let rows = order_worktree_rows_with_manual(
                                                     &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
                                                     runtime_catalog.as_ref(),
+                                                    sidebar_order_prefs.as_ref()
+                                                        .filter(|prefs| prefs.workspace_sort == "manual")
+                                                        .map(|prefs| prefs.workspace_order.as_slice()),
                                                 );
+                                                let visible_worktree_ids: Vec<String> = rows.iter()
+                                                    .filter_map(|row| runtime_catalog.as_ref()
+                                                        .and_then(|catalog| catalog.workspaces.iter()
+                                                            .find(|workspace| workspace.path == row.entry.path))
+                                                        .map(|workspace| workspace.id.clone()))
+                                                    .collect();
                                                 let error = group.error;
                                                 div()
                                                     .id(("project-tree-group", index))
@@ -16116,12 +16161,53 @@ impl Render for Workbench {
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
                                                                     }))
+                                                                    .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
+                                                                        this.drop_sidebar_order(
+                                                                            drag, SidebarOrderKind::Project, project_drop_id.clone(),
+                                                                            project_drop_visible_ids.clone(), cx,
+                                                                        );
+                                                                    }))
                                                                     .context_menu(Self::sidebar_project_context_menu(
                                                                         cx.entity().downgrade(), project_context_root, pinned,
                                                                         menu_project_id,
                                                                         project_remove_armed,
-                                                                    )),
-                                                            ),
+                                                                    ))
+                                                            .when(can_reorder_project, |row| row.child(
+                                                                div()
+                                                                    .id(("project-reorder-grip", index))
+                                                                    .w(px(26.0)).h(px(28.0))
+                                                                    .flex().items_center().justify_center()
+                                                                    .rounded_md()
+                                                                    .hover(|style| style.bg(rgb(ELEVATED)))
+                                                                    .tooltip(move |window, cx| {
+                                                                        gpui_kit::component::tooltip::Tooltip::new(project_hint.clone()).build(window, cx)
+                                                                    })
+                                                                    .child(icon(UiIcon::GripVertical, 14.0, MUTED))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |_, _, _, _| {
+                                                                        if let Ok(mut gate) = project_press_gate.lock() {
+                                                                            gate.press(&project_press_key, Instant::now());
+                                                                        }
+                                                                    }))
+                                                                    .on_drag(
+                                                                        SidebarOrderDrag {
+                                                                            kind: SidebarOrderKind::Project,
+                                                                            id: project_drag_id,
+                                                                            generation: sidebar_drag_generation,
+                                                                            hold: project_drag_gate,
+                                                                        },
+                                                                        move |_, _, _, cx| {
+                                                                            let ready = project_preview_gate.lock()
+                                                                                .map(|mut gate| gate.drag_started(&project_preview_key, Instant::now()))
+                                                                                .unwrap_or(false);
+                                                                            let caption = if ready {
+                                                                                format!("↕ {}", project_drag_caption)
+                                                                            } else {
+                                                                                project_preview_hint.clone()
+                                                                            };
+                                                                            cx.new(|_| TerminalTabDragPreview { label: caption })
+                                                                        },
+                                                                    ),
+                                                            ))),
                                                     )
                                                     .children(rows.into_iter()
                                                         .filter(|row| !sidebar_search_active || show_all_worktrees
@@ -16141,6 +16227,9 @@ impl Render for Workbench {
                                                         let metadata = runtime_catalog.as_ref().and_then(|catalog|
                                                             catalog.workspaces.iter().find(|workspace| workspace.path == target)
                                                         );
+                                                        let workspace_drop_id = metadata.map(|workspace| workspace.id.clone());
+                                                        let workspace_drag_id = workspace_drop_id.clone().unwrap_or_default();
+                                                        let workspace_drop_visible = visible_worktree_ids.clone();
                                                         let label = metadata.map(|workspace| {
                                                             let mut text = workspace.name.clone();
                                                             if workspace.is_pinned { text.push_str(" ★"); }
@@ -16150,6 +16239,16 @@ impl Render for Workbench {
                                                         }).unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
                                                             if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
                                                         }));
+                                                        let workspace_drag_caption = label.clone();
+                                                        let workspace_hold_key = format!("workspace:{workspace_drag_id}");
+                                                        let workspace_press_key = workspace_hold_key.clone();
+                                                        let workspace_preview_key = workspace_hold_key.clone();
+                                                        let workspace_press_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_preview_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_drag_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_hint = sidebar_reorder_hint.clone();
+                                                        let workspace_preview_hint = sidebar_reorder_hint.clone();
+                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active;
                                                         div()
                                                             .id(("project-tree-worktree-container", index * 128 + child_index))
                                                             .flex().flex_col()
@@ -16158,8 +16257,9 @@ impl Render for Workbench {
                                                                     .text_color(rgb(MUTED))
                                                                     .child(section).into_any_element()
                                                             } else { div().h(px(0.0)).into_any_element() })
-                                                            .child(div()
+                                                            .child(div().flex().items_center().child(div()
                                                             .id(("project-tree-worktree", index * 128 + child_index))
+                                                            .flex_1().min_w_0()
                                                             .pl(px(16.0 + depth.min(8) as f32 * 14.0))
                                                             .py_1()
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
@@ -16176,10 +16276,52 @@ impl Render for Workbench {
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
                                                             }))
+                                                            .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
+                                                                this.drop_sidebar_order(
+                                                                    drag, SidebarOrderKind::Workspace, workspace_drop_id.clone(),
+                                                                    workspace_drop_visible.clone(), cx,
+                                                                );
+                                                            }))
                                                             .context_menu(Self::sidebar_workspace_context_menu(
                                                                 cx.entity().downgrade(), menu_root, menu_path,
                                                                 metadata.cloned(), menu_catalog, menu_confirmation,
                                                                 menu_selected_parent, active,
+                                                            )))
+                                                            .when(can_reorder_workspace, |row| row.child(
+                                                                div()
+                                                                    .id(("workspace-reorder-grip", index * 128 + child_index))
+                                                                    .w(px(26.0)).h(px(27.0))
+                                                                    .flex().items_center().justify_center()
+                                                                    .rounded_md()
+                                                                    .hover(|style| style.bg(rgb(ELEVATED)))
+                                                                    .tooltip(move |window, cx| {
+                                                                        gpui_kit::component::tooltip::Tooltip::new(workspace_hint.clone()).build(window, cx)
+                                                                    })
+                                                                    .child(icon(UiIcon::GripVertical, 14.0, MUTED))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |_, _, _, _| {
+                                                                        if let Ok(mut gate) = workspace_press_gate.lock() {
+                                                                            gate.press(&workspace_press_key, Instant::now());
+                                                                        }
+                                                                    }))
+                                                                    .on_drag(
+                                                                        SidebarOrderDrag {
+                                                                            kind: SidebarOrderKind::Workspace,
+                                                                            id: workspace_drag_id,
+                                                                            generation: sidebar_drag_generation,
+                                                                            hold: workspace_drag_gate,
+                                                                        },
+                                                                        move |_, _, _, cx| {
+                                                                            let ready = workspace_preview_gate.lock()
+                                                                                .map(|mut gate| gate.drag_started(&workspace_preview_key, Instant::now()))
+                                                                                .unwrap_or(false);
+                                                                            let caption = if ready {
+                                                                                format!("↕ {}", workspace_drag_caption)
+                                                                            } else {
+                                                                                workspace_preview_hint.clone()
+                                                                            };
+                                                                            cx.new(|_| TerminalTabDragPreview { label: caption })
+                                                                        },
+                                                                    ),
                                                             )))
                                                     }))
                                                     .child(if let Some(error) = error {
@@ -17116,6 +17258,9 @@ fn main() {
                             saved_projects,
                             project_tree_groups: Vec::new(),
                             runtime_catalog: None,
+                            sidebar_order_prefs: None,
+                            sidebar_order_busy: false,
+                            sidebar_reorder_hold: Arc::new(Mutex::new(SidebarReorderHoldGate::default())),
                             runtime_catalog_error: None,
                             project_settings_project_id: None,
                             project_settings_selected_project_id: None,

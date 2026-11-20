@@ -1,5 +1,10 @@
 # Native mixed-pane Tab tooltips and Explorer empty states.
 _version: 2
+"Hold the handle for 0.5s to reorder":
+  en: "Hold the handle for 0.5s to reorder"
+  zh-TW: "長按把手 0.5 秒，再拖曳排序"
+  zh-CN: "长按把手 0.5 秒，再拖动排序"
+  ja: "ハンドルを0.5秒長押しして並べ替え"
 "Editing":
   en: "Editing"
   zh-TW: "正在編輯"

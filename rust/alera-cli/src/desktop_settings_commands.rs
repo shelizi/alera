@@ -46,7 +46,20 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     }) else {
         return print_error("Existing Alera Runtime Host is not running");
     };
+    if matches!(
+        &command.action,
+        DesktopSettingsAction::SidebarOrderGet | DesktopSettingsAction::SidebarOrderMove { .. }
+    ) {
+        return crate::sidebar_order_commands::run(
+            &mut client,
+            &command.action,
+            command.output.json,
+        )
+        .await;
+    }
     let (request, payload) = match command.action {
+        DesktopSettingsAction::SidebarOrderGet
+        | DesktopSettingsAction::SidebarOrderMove { .. } => unreachable!("handled above"),
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
         DesktopSettingsAction::AgentHooksGet => ("runtimeSettings.get", json!({})),
         DesktopSettingsAction::AgentHooksCas {

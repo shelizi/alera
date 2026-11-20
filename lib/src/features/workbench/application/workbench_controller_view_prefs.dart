@@ -63,6 +63,53 @@ mixin _WorkbenchControllerViewPrefs
     _updateViewPrefs(state.viewPrefs.copyWith(workspaceSort: sort));
   }
 
+  /// Rearrange stable IDs only, never Git checkout paths or parent relations.
+  void moveProjectInSidebar({
+    required String sourceId,
+    required String targetId,
+    required List<String> visibleOrder,
+  }) {
+    final prefs = state.viewPrefs;
+    final next = moveSidebarOrderId(
+      savedOrder: prefs.projectOrder,
+      visibleOrder: visibleOrder,
+      knownIds: state.projects.map((project) => project.id),
+      sourceId: sourceId,
+      targetId: targetId,
+      isManual: prefs.projectSort == WorkbenchSortBy.manual,
+    );
+    if (next == null) return;
+    _updateViewPrefs(
+      prefs.copyWith(projectSort: WorkbenchSortBy.manual, projectOrder: next),
+    );
+  }
+
+  void moveWorkspaceInSidebar({
+    required String sourceId,
+    required String targetId,
+    required List<String> visibleOrder,
+  }) {
+    final prefs = state.viewPrefs;
+    final next = moveSidebarOrderId(
+      savedOrder: prefs.workspaceOrder,
+      visibleOrder: visibleOrder,
+      knownIds: [
+        for (final group in state.workspacesByProject.values)
+          for (final workspace in group) workspace.id,
+      ],
+      sourceId: sourceId,
+      targetId: targetId,
+      isManual: prefs.workspaceSort == WorkbenchSortBy.manual,
+    );
+    if (next == null) return;
+    _updateViewPrefs(
+      prefs.copyWith(
+        workspaceSort: WorkbenchSortBy.manual,
+        workspaceOrder: next,
+      ),
+    );
+  }
+
   void setWorkspaceKindFilter(WorkspaceKindFilter filter) {
     if (state.viewPrefs.workspaceKindFilter == filter) {
       return;

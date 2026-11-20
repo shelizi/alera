@@ -3,6 +3,20 @@
 use super::*;
 use alera_gpui_desktop::runtime_catalog::{RuntimeCatalog, RuntimeWorkspace};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SidebarOrderKind {
+    Project,
+    Workspace,
+}
+
+#[derive(Clone)]
+pub(super) struct SidebarOrderDrag {
+    pub kind: SidebarOrderKind,
+    pub id: String,
+    pub generation: u64,
+    pub hold: Arc<Mutex<SidebarReorderHoldGate>>,
+}
+
 #[derive(Clone)]
 pub(super) enum SidebarWorkspaceAction {
     Pin {
@@ -39,6 +53,111 @@ pub(super) enum SidebarWorkspaceAction {
 }
 
 impl Workbench {
+    pub(super) fn drop_sidebar_order(
+        &mut self,
+        drag: &SidebarOrderDrag,
+        target_kind: SidebarOrderKind,
+        target_id: Option<String>,
+        visible_ids: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target_id) = target_id else { return };
+        let source_key = format!(
+            "{}:{}",
+            if drag.kind == SidebarOrderKind::Project { "project" } else { "workspace" },
+            drag.id
+        );
+        let hold_completed = drag.hold.lock()
+            .map(|mut hold| hold.consume_drop(&source_key))
+            .unwrap_or(false);
+        if !hold_completed {
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Hold the handle for 0.5s to reorder",
+            ));
+            cx.notify();
+            return;
+        }
+        if drag.generation != self.workspace_generation
+            || drag.kind != target_kind
+            || drag.id == target_id
+            || self.sidebar_order_busy
+            || !self.sidebar_search_input.read(cx).query().trim().is_empty()
+        {
+            return;
+        }
+        let Some(catalog) = self.runtime_catalog.as_ref() else {
+            self.model.set_status("Classic Runtime Host catalog unavailable; sorting disabled");
+            cx.notify();
+            return;
+        };
+        let valid = match target_kind {
+            SidebarOrderKind::Project => {
+                catalog.projects.iter().any(|project| project.id == drag.id)
+                    && catalog.projects.iter().any(|project| project.id == target_id)
+            }
+            SidebarOrderKind::Workspace => {
+                let source = catalog.workspaces.iter().find(|workspace| workspace.id == drag.id);
+                let target = catalog.workspaces.iter().find(|workspace| workspace.id == target_id);
+                match (source, target) {
+                    (Some(source), Some(target)) => {
+                        source.project_id == target.project_id
+                            && source.parent_workspace_id == target.parent_workspace_id
+                            && source.section_id == target.section_id
+                            && source.is_pinned == target.is_pinned
+                            && source.is_archived == target.is_archived
+                    }
+                    _ => false,
+                }
+            }
+        };
+        if !valid {
+            self.model.set_status("Reorder only within the same Project and Worktree group");
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model.set_status("Classic Runtime Host CLI unavailable");
+            cx.notify();
+            return;
+        };
+        let kind = match target_kind {
+            SidebarOrderKind::Project => "project",
+            SidebarOrderKind::Workspace => "workspace",
+        };
+        let source = drag.id.clone();
+        let generation = self.workspace_generation;
+        self.sidebar_order_busy = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.move_sidebar_order(kind, &source, &target_id, &visible_ids)
+            }).await;
+            view.update(cx, |view, cx| {
+                view.sidebar_order_busy = false;
+                if view.workspace_generation != generation {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(prefs) => {
+                        view.sidebar_order_prefs = Some(prefs);
+                        order_project_groups(
+                            &mut view.project_tree_groups,
+                            view.runtime_catalog.as_ref(),
+                            view.sidebar_order_prefs.as_ref(),
+                        );
+                        view.model.set_status("Project / Worktree manual order saved to shared Host");
+                        view.refresh_project_tree(cx);
+                    }
+                    Err(error) => {
+                        view.model.set_status(format!("Sidebar order not saved: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
     fn begin_sidebar_workspace_action(
         &mut self,
         action: SidebarWorkspaceAction,

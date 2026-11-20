@@ -45,6 +45,9 @@ extension _SectionListing on _WorkbenchSidebarRowBuilder {
           b.name.toLowerCase(),
         ),
         WorkbenchSortBy.recent => b.updatedAt.compareTo(a.updatedAt),
+        WorkbenchSortBy.manual => a.name.toLowerCase().compareTo(
+          b.name.toLowerCase(),
+        ),
         WorkbenchSortBy.activity => compareByAgentActivity(
           aActivity: ranks[a.id],
           aName: a.name,
