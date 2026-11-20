@@ -248,6 +248,7 @@ mod quota_ui_tests {
             value: "19%".into(),
             remaining_percent: Some(19.0),
             reset: None,
+            detail: None,
             order: 1,
         };
         assert_eq!(quota_reading_color("ok", &reading), AGENT_BLOCKED);
@@ -1331,6 +1332,11 @@ impl Workbench {
                                         quota_reading_element(&snapshot.status, reading, true)
                                     })),
                             )
+                            .children(readings.iter().filter_map(|reading| {
+                                reading.detail.as_ref().map(|detail| {
+                                    div().text_xs().text_color(rgb(MUTED)).child(detail.clone())
+                                })
+                            }))
                             .children(readings.into_iter().filter_map(|reading| {
                                 reading.reset.map(|reset| {
                                     div()

@@ -174,7 +174,11 @@ class const _QuotaHoverReading({
     if (entry.amount != null &&
         (entry.provider == AgentQuotaProviderId.claude ||
             entry.provider == AgentQuotaProviderId.codex)) {
-      return _QuotaNativeAmountReading(amount: entry.amount!, status: status);
+      return _QuotaNativeAmountReading(
+        amount: entry.amount!,
+        provider: entry.provider,
+        status: status,
+      );
     }
     final color = _quotaColor(status, entry.remainingPercent);
     final label = _quotaHoverLabel(entry.provider, entry.label);
@@ -232,15 +236,22 @@ class const _QuotaHoverReading({
 }
 
 class _QuotaNativeAmountReading extends StatelessWidget {
-  const _QuotaNativeAmountReading({required this.amount, required this.status});
+  const _QuotaNativeAmountReading({
+    required this.amount,
+    required this.provider,
+    required this.status,
+  });
 
   final AgentQuotaAmount amount;
+  final AgentQuotaProviderId provider;
   final AgentQuotaStatus status;
 
   @override
   Widget build(BuildContext context) {
     final spent = amount.spentAmount;
     final limit = amount.limitAmount;
+    final isExtra = _isClaudeExtraUsage(provider, amount);
+    final extraRemaining = isExtra ? _claudeExtraRemaining(amount) : null;
     // Only derive the bar ratio from provider-reported amounts. No token or
     // model-price estimate is used to manufacture an actual billed cost.
     final usedFraction = spent != null && limit != null && limit > 0
@@ -262,12 +273,25 @@ class _QuotaNativeAmountReading extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text(
-          amount.label,
+          isExtra ? 'Extra Usage' : amount.label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: AleraTokens.foregroundMuted,
             fontWeight: FontWeight.w500,
           ),
         ),
+        if (isExtra) ...<Widget>[
+          const SizedBox(height: AleraTokens.space4),
+          Text(
+            extraRemaining == null
+                ? 'Remaining unavailable'
+                : 'Remaining: ${_formatQuotaAmountValue(extraRemaining, amount.currency)}',
+            style: AleraTokens.monoStyle.copyWith(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
         if (usedFraction != null) ...<Widget>[
           const SizedBox(height: AleraTokens.space6),
           LinearProgressIndicator(

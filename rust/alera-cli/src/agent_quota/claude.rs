@@ -437,11 +437,14 @@ fn map_claude_extra_usage(value: Option<&Value>) -> Option<QuotaAmount> {
     if spent.is_none() && limit.is_none() {
         return None;
     }
+    // Claude reports extra usage and the monthly cap, not a remaining balance.
+    // Only calculate a balance when both provider values are available.
+    let remaining = limit.zip(spent).map(|(cap, used)| (cap - used).max(0.0));
     Some(QuotaAmount {
-        label: "Usage credits".to_string(),
+        label: "Extra Usage".to_string(),
         currency: "USD".to_string(),
         spent_amount: spent,
-        remaining_amount: None,
+        remaining_amount: remaining,
         limit_amount: limit,
         resets_at: value.get("resets_at").and_then(claude_reset_millis),
         reset_description: None,

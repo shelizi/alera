@@ -345,6 +345,9 @@ String _quotaTooltip(
       ),
     );
   }
+  for (final amount in snapshot.amounts) {
+    lines.add(_quotaAmountTooltip(snapshot.provider, amount));
+  }
   if (snapshot.error case final error?) {
     lines.add('Error: ${_normalizeQuotaText(error)}');
   } else if (!snapshot.hasUsage) {
