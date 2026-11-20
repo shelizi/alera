@@ -110,6 +110,7 @@ mod tests {
         let root = PathBuf::from("C:/repo");
         let snapshot = GitSnapshot {
             branch: "feature".into(),
+            upstream: None,
             repository_root: root.clone(),
             truncated: false,
             changed_files: vec![
@@ -163,6 +164,7 @@ mod tests {
             .is_none());
         let snapshot = GitSnapshot {
             branch: "feature".into(),
+            upstream: None,
             repository_root: PathBuf::from("C:/repo"),
             truncated: true,
             changed_files: vec![

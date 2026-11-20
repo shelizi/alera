@@ -21,6 +21,51 @@ _version: 2
   zh-TW: "開啟 Git Graph（中央大圖）"
   zh-CN: "打开 Git Graph（中央大图）"
   ja: "Git Graph を中央に大きく表示"
+"All Changes":
+  en: "All Changes"
+  zh-TW: "所有變更"
+  zh-CN: "所有更改"
+  ja: "すべての変更"
+"Stage All":
+  en: "Stage All"
+  zh-TW: "全部暫存"
+  zh-CN: "全部暂存"
+  ja: "すべてステージ"
+"Fetch":
+  en: "Fetch"
+  zh-TW: "擷取遠端"
+  zh-CN: "获取远端"
+  ja: "フェッチ"
+"Pull (fast-forward)":
+  en: "Pull (fast-forward)"
+  zh-TW: "拉取（僅快轉）"
+  zh-CN: "拉取（仅快进）"
+  ja: "プル（早送りのみ）"
+"Confirm Pull":
+  en: "Confirm Pull"
+  zh-TW: "確認拉取"
+  zh-CN: "确认拉取"
+  ja: "プルを確定"
+"Push":
+  en: "Push"
+  zh-TW: "推送"
+  zh-CN: "推送"
+  ja: "プッシュ"
+"Confirm Push":
+  en: "Confirm Push"
+  zh-TW: "確認推送"
+  zh-CN: "确认推送"
+  ja: "プッシュを確定"
+"Review diverged branches":
+  en: "Review diverged branches"
+  zh-TW: "檢視分歧的分支"
+  zh-CN: "查看分叉的分支"
+  ja: "分岐したブランチを確認"
+"Git status loading":
+  en: "Git status loading"
+  zh-TW: "正在載入 Git 狀態"
+  zh-CN: "正在加载 Git 状态"
+  ja: "Git 状態を読み込み中"
 "Display options":
   en: "Display options"
   zh-TW: "顯示選項"

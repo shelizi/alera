@@ -6,6 +6,9 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_CHANGES: usize = 120;
 const MAX_PATCH_BYTES: usize = 32 * 1024;
+const MAX_ALL_CHANGES_BYTES: usize = 24 * 1024;
+const MAX_ALL_CHANGES_FILES: usize = 48;
+pub const ALL_CHANGES_PREVIEW_PATH: &str = "__alera_read_only_all_changes__";
 const MAX_PAGED_DIFF_LINES: usize = 100_000;
 
 /// One bounded, read-only slice of a file's current Git patch. Cursors count
@@ -100,9 +103,62 @@ pub struct GitChangeRow {
     pub area: GitChangeArea,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitUpstreamState {
+    pub name: String,
+    pub ahead: usize,
+    pub behind: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitPrimaryAction {
+    Commit,
+    StageAll,
+    Fetch,
+    Pull,
+    Push,
+    ReviewDivergence,
+}
+
+/// Classic precedence, using only the already captured local index/upstream snapshot.
+/// Never label diverged histories as safe to automatically sync.
+pub fn classic_primary_action(
+    snapshot: Option<&GitSnapshot>,
+    message: &str,
+    busy: bool,
+) -> Option<GitPrimaryAction> {
+    let snapshot = snapshot.filter(|_| !busy)?;
+    let changes = snapshot.visible_rows("");
+    let conflicts = changes.iter().any(|row| row.area == GitChangeArea::Conflicts);
+    let staged = changes.iter().any(|row| row.area == GitChangeArea::Staged);
+    let stageable = changes.iter().any(|row| row.area.can_stage());
+    if !conflicts && staged && !message.trim().is_empty() {
+        return Some(GitPrimaryAction::Commit);
+    }
+    if conflicts {
+        return Some(GitPrimaryAction::Fetch);
+    }
+    if let Some(upstream) = &snapshot.upstream {
+        if upstream.ahead > 0 && upstream.behind > 0 {
+            return Some(GitPrimaryAction::ReviewDivergence);
+        }
+        if upstream.behind > 0 {
+            return Some(GitPrimaryAction::Pull);
+        }
+        if upstream.ahead > 0 {
+            return Some(GitPrimaryAction::Push);
+        }
+    }
+    if stageable && !snapshot.truncated {
+        return Some(GitPrimaryAction::StageAll);
+    }
+    Some(GitPrimaryAction::Fetch)
+}
+
 #[derive(Debug, Clone)]
 pub struct GitSnapshot {
     pub branch: String,
+    pub upstream: Option<GitUpstreamState>,
     pub changed_files: Vec<GitChange>,
     pub truncated: bool,
     pub repository_root: PathBuf,
@@ -139,13 +195,29 @@ impl GitSnapshot {
             }
         }
         changed_files.sort_by(|a, b| a.relative.cmp(&b.relative));
-        let branch = repo
-            .head()
-            .ok()
+        let head = repo.head().ok();
+        let branch = head
+            .as_ref()
             .and_then(|head| head.shorthand().ok().map(str::to_string))
             .unwrap_or_else(|| "(detached or unborn HEAD)".to_string());
+        // No network access or implicit Git writes: compare exact fetched refs.
+        // If a configured upstream cannot be resolved locally, fail closed to Fetch.
+        let upstream = head
+            .as_ref()
+            .filter(|head| head.is_branch())
+            .and_then(|head| head.shorthand().ok())
+            .and_then(|name| repo.find_branch(name, git2::BranchType::Local).ok())
+            .and_then(|local| local.upstream().ok())
+            .and_then(|tracking| {
+                let name = tracking.name().ok().flatten()?.to_owned();
+                let local_oid = head.as_ref()?.target()?;
+                let upstream_oid = tracking.get().peel_to_commit().ok()?.id();
+                let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid).ok()?;
+                Some(GitUpstreamState { name, ahead, behind })
+            });
         Ok(Self {
             branch,
+            upstream,
             changed_files,
             truncated,
             repository_root: root,
@@ -205,6 +277,184 @@ impl GitSnapshot {
                 .then_with(|| a.relative.cmp(&b.relative))
         });
         rows
+    }
+}
+
+/// A bounded, *fresh* multi-file working-tree/index preview for Classic's
+/// "All Changes" entry. It does not stage, discard, checkout or resolve files.
+/// Conflicted paths are listed without fabricating a two-way patch.
+pub fn read_all_changes_diff(workspace: &Path) -> Result<GitPatchPage, String> {
+    let snapshot = GitSnapshot::load(workspace)?;
+    let rows = snapshot.visible_rows("");
+    let mut text = format!(
+        "All Changes · {} · {} Git area(s) · read-only\n\n",
+        snapshot.branch,
+        rows.len()
+    );
+    let mut clipped = snapshot.truncated || rows.len() > MAX_ALL_CHANGES_FILES;
+    for row in rows.iter().take(MAX_ALL_CHANGES_FILES) {
+        let header = format!(
+            "\n# {} · {}\n",
+            row.area.title(),
+            row.relative.display()
+        );
+        if text.len() + header.len() + 256 >= MAX_ALL_CHANGES_BYTES {
+            clipped = true;
+            break;
+        }
+        text.push_str(&header);
+        if row.area == GitChangeArea::Conflicts {
+            text.push_str("Merge conflict: open this file in Source Control for Base/Ours/Theirs.\n");
+            continue;
+        }
+        let patch = match read_file_diff_page_for_area(workspace, &row.relative, row.area, 0) {
+            Ok(page) => page,
+            Err(error) => {
+                text.push_str(&format!("Read-only preview unavailable: {error}\n"));
+                continue;
+            }
+        };
+        let budget = MAX_ALL_CHANGES_BYTES.saturating_sub(text.len() + 160);
+        let visible = patch.text.len().min(budget).min(4096);
+        let visible = patch.text.floor_char_boundary(visible);
+        text.push_str(&patch.text[..visible]);
+        if visible < patch.text.len() || patch.next_line.is_some() || patch.clipped_long_line {
+            text.push_str("\n... file preview limited; click its row for paged full Diff\n");
+        }
+    }
+    if clipped {
+        text.push_str("\n... All Changes preview limited; use Source Control files for the remainder\n");
+    }
+    Ok(GitPatchPage {
+        text,
+        start_line: 0,
+        next_line: None,
+        clipped_long_line: clipped,
+    })
+}
+
+#[cfg(test)]
+mod classic_source_control_parity_tests {
+    use super::*;
+    use git2::Status;
+
+    fn snapshot(
+        statuses: &[Status],
+        tracking: Option<(usize, usize)>,
+        truncated: bool,
+    ) -> GitSnapshot {
+        GitSnapshot {
+            branch: "main".into(),
+            upstream: tracking.map(|(ahead, behind)| GitUpstreamState {
+                name: "origin/main".into(),
+                ahead,
+                behind,
+            }),
+            changed_files: statuses
+                .iter()
+                .enumerate()
+                .map(|(index, status)| GitChange {
+                    relative: PathBuf::from(format!("file-{index}.txt")),
+                    label: "M",
+                    status: *status,
+                })
+                .collect(),
+            truncated,
+            repository_root: PathBuf::from("test-repo"),
+        }
+    }
+
+    #[test]
+    fn adaptive_actions_follow_classic_with_safe_divergence_review() {
+        use GitPrimaryAction::*;
+        assert_eq!(classic_primary_action(None, "message", false), None);
+        let staged = snapshot(&[Status::INDEX_MODIFIED], None, false);
+        assert_eq!(classic_primary_action(Some(&staged), "  ", false), Some(Fetch));
+        assert_eq!(classic_primary_action(Some(&staged), "message", false), Some(Commit));
+        assert_eq!(classic_primary_action(Some(&staged), "message", true), None);
+        let conflicts = snapshot(&[Status::CONFLICTED, Status::INDEX_MODIFIED], None, false);
+        assert_eq!(classic_primary_action(Some(&conflicts), "message", false), Some(Fetch));
+        let stageable = snapshot(&[Status::WT_MODIFIED, Status::WT_NEW], None, false);
+        assert_eq!(classic_primary_action(Some(&stageable), "", false), Some(StageAll));
+        let limited = snapshot(&[Status::WT_MODIFIED], None, true);
+        assert_eq!(classic_primary_action(Some(&limited), "", false), Some(Fetch));
+        for (ahead, behind, expected) in [
+            (0, 0, Fetch),
+            (0, 3, Pull),
+            (2, 0, Push),
+            (2, 3, ReviewDivergence),
+        ] {
+            let repo = snapshot(&[], Some((ahead, behind)), false);
+            assert_eq!(classic_primary_action(Some(&repo), "", false), Some(expected));
+        }
+    }
+
+    #[test]
+    fn fetched_local_upstream_ahead_status_is_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let relative = Path::new("tracked.txt");
+        fs::write(dir.path().join(relative), "first\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("QA", "qa@example.invalid").unwrap();
+        let initial = repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[]).unwrap();
+        drop(tree);
+        drop(index);
+        let branch_name = repo.head().unwrap().shorthand().unwrap().to_owned();
+        repo.remote("origin", "https://example.invalid/repo").unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch_name}"), initial, true, "QA remote")
+            .unwrap();
+        repo.find_branch(&branch_name, git2::BranchType::Local).unwrap()
+            .set_upstream(Some(&format!("origin/{branch_name}"))).unwrap();
+        let before_head = repo.head().unwrap().target();
+        let before_index = fs::read(repo.path().join("index")).unwrap();
+        let state = GitSnapshot::load(dir.path()).unwrap();
+        assert_eq!(state.upstream.as_ref().map(|track| (track.ahead, track.behind)), Some((0, 0)));
+        assert_eq!(repo.head().unwrap().target(), before_head);
+        assert_eq!(fs::read(repo.path().join("index")).unwrap(), before_index);
+        fs::write(dir.path().join(relative), "second\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        index.write().unwrap();
+        let next_tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.find_commit(initial).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "second", &next_tree, &[&parent]).unwrap();
+        drop(next_tree);
+        drop(index);
+        let ahead = GitSnapshot::load(dir.path()).unwrap();
+        assert_eq!(ahead.upstream.as_ref().map(|track| (track.ahead, track.behind)), Some((1, 0)));
+    }
+
+    #[test]
+    fn all_changes_preview_is_bounded_and_never_writes_git_or_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let file = dir.path().join("a.txt");
+        fs::write(&file, "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("QA", "qa@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[]).unwrap();
+        drop(tree);
+        drop(index);
+        fs::write(&file, "modified\n").unwrap();
+        fs::write(dir.path().join("untracked.txt"), "new\n").unwrap();
+        let before_head = repo.head().unwrap().target();
+        let before_index = fs::read(repo.path().join("index")).unwrap();
+        let before_file = fs::read(&file).unwrap();
+        let result = read_all_changes_diff(dir.path()).unwrap();
+        assert!(result.text.contains("a.txt"));
+        assert!(result.text.contains("untracked.txt"));
+        assert!(result.text.contains("read-only"));
+        assert!(result.text.len() <= MAX_ALL_CHANGES_BYTES + 200);
+        assert_eq!(repo.head().unwrap().target(), before_head);
+        assert_eq!(fs::read(repo.path().join("index")).unwrap(), before_index);
+        assert_eq!(fs::read(&file).unwrap(), before_file);
     }
 }
 

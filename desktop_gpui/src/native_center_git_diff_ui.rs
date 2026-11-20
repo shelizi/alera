@@ -229,10 +229,16 @@ impl Workbench {
             && !self.git_diff_loading
             && paging
                 .is_some_and(|page| page.next_line.is_some() && page.previous_starts.len() < 31);
+        let all_changes = self.center_git_diff_source.as_ref().is_some_and(|source| {
+            source.area.is_none()
+                && source.relative == std::path::Path::new(ALL_CHANGES_PREVIEW_PATH)
+        });
         let status = if !valid {
             "Git file or Workspace changed; close this preview and select a file again".to_owned()
         } else if self.git_diff_loading {
             "Reading next read-only Git page…".to_owned()
+        } else if all_changes {
+            "All Changes · current Git index/worktree · bounded 24 KiB read-only preview · no Stage/Commit writes".to_owned()
         } else {
             format!("Page {page_index} · live Git · 32 KiB/page · no Stage/Commit writes")
         };
@@ -273,17 +279,21 @@ impl Workbench {
                             .text_sm()
                             .text_color(rgb(TEXT))
                             .truncate()
-                            .child(format!(
-                                "Git Diff · {} · {}",
-                                self.center_git_diff_source
-                                    .as_ref()
-                                    .map(|source| source.area.map_or("AUTO", GitChangeArea::title))
-                                    .unwrap_or("UNKNOWN"),
-                                self.center_git_diff_source
-                                    .as_ref()
-                                    .map(|source| source.relative.display().to_string())
-                                    .unwrap_or_default(),
-                            )),
+                            .child(if all_changes {
+                                tr(self.settings_menu_locale, "All Changes").to_owned()
+                            } else {
+                                format!(
+                                    "Git Diff · {} · {}",
+                                    self.center_git_diff_source
+                                        .as_ref()
+                                        .map(|source| source.area.map_or("AUTO", GitChangeArea::title))
+                                        .unwrap_or("UNKNOWN"),
+                                    self.center_git_diff_source
+                                        .as_ref()
+                                        .map(|source| source.relative.display().to_string())
+                                        .unwrap_or_default(),
+                                )
+                            }),
                     )
                     .child(
                         div()

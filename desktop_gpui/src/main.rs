@@ -78,8 +78,9 @@ use alera_gpui_desktop::git_history::{
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
-    git_history_file_filter, read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
-    GitRefreshGate, GitSnapshot,
+    classic_primary_action, git_history_file_filter, read_all_changes_diff, read_file_diff,
+    read_file_diff_for_area, read_git_original_for_area, GitChangeArea, GitPrimaryAction,
+    GitRefreshGate, GitSnapshot, ALL_CHANGES_PREVIEW_PATH,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
@@ -4052,6 +4053,111 @@ impl Workbench {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Classic primary action: check the current Git snapshot again on click.
+    fn run_classic_primary_git_action(&mut self, cx: &mut Context<Self>) {
+        let message = self.git_commit_input.read(cx).query().trim().to_owned();
+        let action = classic_primary_action(
+            self.git_snapshot.as_ref(),
+            &message,
+            self.git_action_busy || self.git_loading,
+        );
+        match action {
+            Some(GitPrimaryAction::Commit) => {
+                self.run_git_action(GitUiAction::Commit(message), cx);
+            }
+            Some(GitPrimaryAction::StageAll) => {
+                let Some(snapshot) = self.git_snapshot.as_ref() else { return };
+                if snapshot.truncated {
+                    self.git_action_status = "Git status is limited; stage files individually".into();
+                    cx.notify();
+                    return;
+                }
+                let mut paths = snapshot.visible_rows("").into_iter()
+                    .filter(|row| row.area.can_stage())
+                    .map(|row| row.relative)
+                    .collect::<Vec<_>>();
+                paths.sort();
+                paths.dedup();
+                if !paths.is_empty() {
+                    self.run_git_action(GitUiAction::StageMany(paths), cx);
+                }
+            }
+            Some(GitPrimaryAction::Fetch) => self.run_git_action(GitUiAction::Fetch, cx),
+            Some(GitPrimaryAction::Pull) => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
+            }
+            Some(GitPrimaryAction::Push) => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
+            }
+            Some(GitPrimaryAction::ReviewDivergence) => {
+                self.git_action_status = "Local and upstream history diverged. Review in Git Graph; no automatic merge, rebase or push.".into();
+                self.open_center_git_graph(cx);
+                cx.notify();
+            }
+            None => {}
+        }
+    }
+
+    /// Reopen a fresh, bounded, read-only all-area patch in the virtual center
+    /// Diff instead of silently staging or editing any Source Control file.
+    fn open_git_all_changes_diff(&mut self, cx: &mut Context<Self>) {
+        if self.git_loading || self.git_snapshot.is_none() {
+            self.git_action_status = "Load Source Control before opening All Changes".into();
+            cx.notify();
+            return;
+        }
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        let relative = PathBuf::from(ALL_CHANGES_PREVIEW_PATH);
+        self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+        self.center_git_conflict = None;
+        self.git_file_diff_paging = Some(GitFileDiffPaging {
+            relative: relative.clone(),
+            area: None,
+            source_ticket: ticket,
+            start_line: 0,
+            next_line: None,
+            previous_starts: Vec::new(),
+        });
+        self.center_git_diff_source = Some(native_action_dialog_ui::GitDialogFileSource {
+            workspace_generation: generation,
+            source_ticket: ticket,
+            relative,
+            area: None,
+        });
+        self.git_original_active = false;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
+        self.center_git_diff_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        self.git_diff = None;
+        self.git_diff_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move { read_all_changes_diff(&root) }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_diff_loading = false;
+                match result {
+                    Ok(page) => {
+                        view.center_git_diff_rows = Arc::new(
+                            native_center_git_diff_ui::center_git_diff_rows(&page.text),
+                        );
+                        view.git_diff = Some(page.text);
+                    }
+                    Err(error) => {
+                        view.center_git_diff_rows = Arc::new(Vec::new());
+                        view.git_diff = Some(format!("All Changes unavailable: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
         cx.notify();
     }
 
@@ -12008,6 +12114,11 @@ impl Render for Workbench {
         let git_sensitive_armed = self.git_sensitive_armed;
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
+        let git_primary_action = classic_primary_action(
+            self.git_snapshot.as_ref(),
+            self.git_commit_input.read(cx).query(),
+            git_action_busy || self.git_loading,
+        );
         let git_commit_draft_loading = self.git_commit_draft_loading;
         let git_ai_prompt_preview = self.git_ai_prompt_preview.clone();
         let git_ai_prompt_loading = self.git_ai_prompt_loading;
@@ -13369,6 +13480,28 @@ impl Render for Workbench {
                                                 }))),
                                     ),
                             )
+                            // Classic's All Changes opens one bounded, read-only multi-file
+                            // patch in the central workbench, not an editor or Git writer.
+                            .child(
+                                div()
+                                    .id("git-open-all-changes")
+                                    .h(px(32.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .child(icon(UiIcon::Files, 15.0, TEXT))
+                                    .child(div().flex_1().min_w_0().text_sm()
+                                        .child(tr(self.settings_menu_locale, "All Changes")))
+                                    .child(icon(UiIcon::Open, 13.0, MUTED))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_git_all_changes_diff(cx);
+                                    })),
+                            )
                             // Keep the large Git Graph entry near the Source Control header.
                             // The footer History action sits below a potentially long file list.
                             .child(
@@ -13428,12 +13561,21 @@ impl Render for Workbench {
                                     .gap_1()
                                     .child(div().w_full().min_w_0().child(git_commit_input))
                                     .child(div().flex().items_center().gap_1()
-                                        .child(div().flex_1().min_w_0().child(Button::new("git-commit-submit")
-                                            .label(tr(self.settings_menu_locale, "Commit"))
+                                        .child(div().flex_1().min_w_0().child(Button::new("git-primary-action")
+                                            .label(tr(self.settings_menu_locale, match git_primary_action {
+                                                Some(GitPrimaryAction::Commit) => "Commit",
+                                                Some(GitPrimaryAction::StageAll) => "Stage All",
+                                                Some(GitPrimaryAction::Fetch) => "Fetch",
+                                                Some(GitPrimaryAction::Pull) if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) => "Confirm Pull",
+                                                Some(GitPrimaryAction::Pull) => "Pull (fast-forward)",
+                                                Some(GitPrimaryAction::Push) if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) => "Confirm Push",
+                                                Some(GitPrimaryAction::Push) => "Push",
+                                                Some(GitPrimaryAction::ReviewDivergence) => "Review diverged branches",
+                                                None => "Git status loading",
+                                            }))
                                             .primary()
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                let message = this.git_commit_input.read(cx).query().trim().to_owned();
-                                                this.run_git_action(GitUiAction::Commit(message), cx);
+                                                this.run_classic_primary_git_action(cx);
                                             }))))
                                         // Classic keeps Commit as the only main action.
                                         // Preserve draft and amend safely behind a labeled menu.
@@ -17356,6 +17498,14 @@ fn main() {
                         });
                         cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify())
                             .detach();
+                        // GPUI only repaints an observed child by default. The
+                        // Classic primary action label depends on message text:
+                        // refresh the parent whenever the commit input changes.
+                        let git_commit_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Commit message", cx)
+                        });
+                        cx.observe(&git_commit_input, |_: &mut Workbench, _, cx| cx.notify())
+                            .detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -17554,8 +17704,7 @@ fn main() {
                             git_amend_preview: None,
                             git_amend_loading: false,
                             git_amend_request: 0,
-                            git_commit_input: cx
-                                .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
+                            git_commit_input,
                             git_commit_draft_loading: false,
                             git_commit_draft_request: 0,
                             git_ai_prompt_preview: None,
