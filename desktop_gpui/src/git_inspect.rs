@@ -237,6 +237,20 @@ fn safe_relative(path: &Path) -> bool {
     path.components().all(|c| matches!(c, Component::Normal(_))) && !path.as_os_str().is_empty()
 }
 
+/// Git history can include deleted files, so do not canonicalize or require
+/// the worktree target to exist. Refuse traversal/absolute/non-Unicode paths
+/// before handing a pathspec to the read-only History view.
+pub fn git_history_file_filter(relative: &Path) -> Result<String, String> {
+    if !safe_relative(relative) {
+        return Err("Unsafe Git history path".into());
+    }
+    let path = relative
+        .to_str()
+        .ok_or_else(|| "Git history path must be Unicode".to_owned())?
+        .replace('\\', "/");
+    Ok(path)
+}
+
 fn classify(status: git2::Status) -> &'static str {
     use git2::Status;
     if status.contains(Status::CONFLICTED) {
@@ -812,6 +826,20 @@ fn append_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleted_file_history_filter_is_lexical_and_cannot_escape_workspace() {
+        // Deleted files no longer exist on disk, but their Git history is valid.
+        assert_eq!(
+            git_history_file_filter(Path::new("docs/deleted file.md")).unwrap(),
+            "docs/deleted file.md"
+        );
+        assert!(git_history_file_filter(Path::new("../outside.txt")).is_err());
+        assert!(git_history_file_filter(Path::new("docs/../outside.txt")).is_err());
+        assert!(git_history_file_filter(Path::new("./file.txt")).is_err());
+        assert!(git_history_file_filter(Path::new("")).is_err());
+        assert!(git_history_file_filter(Path::new("/outside.txt")).is_err());
+    }
 
     #[test]
     fn refresh_gate_queues_manual_refresh_and_coalesces_many_requests() {

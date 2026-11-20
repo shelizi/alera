@@ -74,7 +74,7 @@ use alera_gpui_desktop::git_history::{
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
-    read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
+    git_history_file_filter, read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
     GitRefreshGate, GitSnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
@@ -504,6 +504,8 @@ enum ExplorerAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitChangeMenuAction {
     Preview,
+    History,
+    AddToGitIgnore,
     Original,
     OpenWorkingFile,
     OpenExternal,
@@ -562,6 +564,7 @@ enum ExplorerMenuAction {
     Clipboard(ExplorerClipboardMode),
     Paste,
     OpenInAlera,
+    OpenDefaultApplication,
     RevealInFileManager,
     ViewCurrentGitDiff,
     CopyAbsolutePath,
@@ -585,6 +588,7 @@ impl ExplorerMenuAction {
             Self::Clipboard(ExplorerClipboardMode::Cut) => "Cut selection",
             Self::Paste => "Paste",
             Self::OpenInAlera => "Open in Alera",
+            Self::OpenDefaultApplication => "Open with Default Application",
             Self::RevealInFileManager => "Show in file manager",
             Self::ViewCurrentGitDiff => "View current Git changes",
             Self::CopyAbsolutePath => "Copy path",
@@ -1507,6 +1511,34 @@ impl Workbench {
                 if let Some(path) = self.explorer_selection.clone() {
                     self.click_explorer_file(&path, true, window, cx);
                 }
+            }
+            ExplorerMenuAction::OpenDefaultApplication => {
+                let Some(path) = self.explorer_selection.as_ref()
+                    .filter(|path| path.is_file())
+                    .and_then(|path| path.strip_prefix(self.model.root()).ok())
+                    .map(Path::to_path_buf)
+                else {
+                    self.model.set_status("Select an existing file to open externally");
+                    cx.notify();
+                    return;
+                };
+                let root = self.model.root().to_path_buf();
+                let generation = self.workspace_generation;
+                cx.spawn(async move |view, cx| {
+                    let result = cx.background_spawn(async move {
+                        alera_gpui_desktop::git_external_open::launch_default_application_file(
+                            &root, &path,
+                        )
+                    }).await;
+                    view.update(cx, |view, cx| {
+                        if view.workspace_generation != generation { return; }
+                        view.model.set_status(match result {
+                            Ok(()) => "Opened file with system default application".into(),
+                            Err(error) => format!("Default application refused: {error}"),
+                        });
+                        cx.notify();
+                    }).ok();
+                }).detach();
             }
             ExplorerMenuAction::RevealInFileManager => {
                 let result = self
@@ -2431,6 +2463,36 @@ impl Workbench {
             GitChangeMenuAction::Preview => {
                 self.preview_git_change(row.relative, Some(row.area), false, cx)
             }
+            GitChangeMenuAction::History => {
+                self.open_git_change_file_history(&row.relative, cx);
+            }
+            GitChangeMenuAction::AddToGitIgnore if row.area == GitChangeArea::Untracked => {
+                if self.git_action_busy {
+                    self.git_action_status = "Finish the current Git operation first".into();
+                    cx.notify();
+                    return;
+                }
+                let root = self.model.root().to_path_buf();
+                let relative = row.relative.clone();
+                let generation = self.workspace_generation;
+                cx.spawn(async move |view, cx| {
+                    let result = cx.background_spawn(async move {
+                        alera_gpui_desktop::git_ignore::add_untracked_file_to_gitignore(
+                            &root, &relative,
+                        )
+                    }).await;
+                    view.update(cx, |view, cx| {
+                        if view.workspace_generation != generation { return; }
+                        view.git_action_status = match result {
+                            Ok(true) => "Added file to .gitignore".into(),
+                            Ok(false) => "Already in .gitignore".into(),
+                            Err(error) => format!("Add to .gitignore refused: {error}"),
+                        };
+                        view.refresh_git(cx);
+                        cx.notify();
+                    }).ok();
+                }).detach();
+            }
             GitChangeMenuAction::Original
                 if matches!(row.area, GitChangeArea::Staged | GitChangeArea::Changes) =>
             {
@@ -2819,6 +2881,28 @@ impl Workbench {
         self.refresh_git_history(cx);
         self.model
             .set_status("Loading selected Explorer item Git history…");
+        cx.notify();
+    }
+
+    /// A right-side Git row is still a valid History target when its worktree
+    /// file has been deleted. Only normal relative pathspecs are accepted.
+    fn open_git_change_file_history(&mut self, relative: &Path, cx: &mut Context<Self>) {
+        let path = match git_history_file_filter(relative) {
+            Ok(path) => path,
+            Err(error) => {
+                self.git_action_status = format!("Git file history refused: {error}");
+                cx.notify();
+                return;
+            }
+        };
+        self.git_history_options.file_path = Some(path);
+        self.git_history_options.git_diff_root = None;
+        self.git_history_options.selected_ref = None;
+        self.git_history_options.favorites_only = false;
+        self.git_history_open = true;
+        self.git_history_sidebar_open = true;
+        self.refresh_git_history(cx);
+        self.model.set_status("Loading selected Git file history…");
         cx.notify();
     }
 

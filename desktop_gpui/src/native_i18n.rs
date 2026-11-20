@@ -540,4 +540,41 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn right_git_file_folder_context_actions_have_four_locales() {
+        for label in [
+            "Open with Default Application",
+            "Preview changes",
+            "Open worktree file in Alera",
+            "Open worktree file externally",
+            "Copy worktree file(s)",
+            "Cut worktree file(s)",
+            "Paste into containing folder",
+            "Reveal worktree file in file manager",
+            "Open Git original in read-only tab (HEAD / Index)",
+            "View File History",
+            "Add to .gitignore",
+            "Stage selected",
+            "Unstage selected",
+            "Move untracked file(s) to Recycle Bin (confirm)",
+            "Confirm Discard unstaged changes",
+            "Discard unstaged changes (confirm)",
+            "Copy worktree folder / selected items",
+            "Cut worktree folder / selected items",
+            "Paste into this folder",
+            "Reveal folder in file manager",
+            "Copy relative folder path",
+        ] {
+            assert_eq!(tr(UiLocale::English, label), label);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                let localized = tr(locale, label);
+                assert_ne!(localized, label, "{label} missing in {}", locale.tag());
+                assert!(!localized.trim().is_empty());
+            }
+        }
+    }
 }

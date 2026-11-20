@@ -33,6 +33,17 @@ pub fn launch_external_file(root: &Path, relative: &Path) -> Result<(), String> 
         return Ok(());
     }
 
+    launch_os_registered_application(&target)
+}
+
+/// Classic's "Open with Default Application" bypasses the separately
+/// configured external editor and always uses the OS file association.
+pub fn launch_default_application_file(root: &Path, relative: &Path) -> Result<(), String> {
+    let target = checked_workspace_file(root, relative)?;
+    launch_os_registered_application(&target)
+}
+
+fn launch_os_registered_application(target: &Path) -> Result<(), String> {
     // With no configured editor, use the OS-registered application for this
     // exact file path. FFI arguments are separate strings; no shell parsing.
     #[cfg(target_os = "windows")]
@@ -259,6 +270,16 @@ pub fn launch_mcp_external_editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_application_open_rejects_missing_and_escaping_paths_without_launching() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("exists.txt"), "file").unwrap();
+        assert!(launch_default_application_file(dir.path(), Path::new("missing.txt")).is_err());
+        assert!(launch_default_application_file(dir.path(), Path::new("../outside.txt")).is_err());
+        assert!(launch_default_application_file(dir.path(), Path::new(".")).is_err());
+    }
+
     #[test]
     fn mcp_external_editor_executable_ignores_relative_search_paths() {
         let folder = tempfile::tempdir().unwrap();

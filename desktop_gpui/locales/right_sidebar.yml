@@ -41,3 +41,108 @@ _version: 2
   zh-TW: "差異預覽 · 唯讀"
   zh-CN: "差异预览 · 只读"
   ja: "差分プレビュー · 読み取り専用"
+"Open with Default Application":
+  en: "Open with Default Application"
+  zh-TW: "使用系統預設程式開啟"
+  zh-CN: "使用系统默认程序打开"
+  ja: "既定のアプリで開く"
+"Preview changes":
+  en: "Preview changes"
+  zh-TW: "預覽變更"
+  zh-CN: "预览更改"
+  ja: "変更をプレビュー"
+"Open worktree file in Alera":
+  en: "Open worktree file in Alera"
+  zh-TW: "在 Alera 開啟工作區檔案"
+  zh-CN: "在 Alera 打开工作区文件"
+  ja: "作業ツリーファイルを Alera で開く"
+"Open worktree file externally":
+  en: "Open worktree file externally"
+  zh-TW: "使用外部程式開啟工作區檔案"
+  zh-CN: "使用外部程序打开工作区文件"
+  ja: "作業ツリーファイルを外部アプリで開く"
+"Copy worktree file(s)":
+  en: "Copy worktree file(s)"
+  zh-TW: "複製工作區檔案"
+  zh-CN: "复制工作区文件"
+  ja: "作業ツリーファイルをコピー"
+"Cut worktree file(s)":
+  en: "Cut worktree file(s)"
+  zh-TW: "剪下工作區檔案"
+  zh-CN: "剪切工作区文件"
+  ja: "作業ツリーファイルを切り取り"
+"Paste into containing folder":
+  en: "Paste into containing folder"
+  zh-TW: "貼到所在資料夾"
+  zh-CN: "粘贴到所在文件夹"
+  ja: "親フォルダーに貼り付け"
+"Reveal worktree file in file manager":
+  en: "Reveal worktree file in file manager"
+  zh-TW: "在檔案管理員中顯示檔案"
+  zh-CN: "在文件管理器中显示文件"
+  ja: "ファイルマネージャーで表示"
+"Open Git original in read-only tab (HEAD / Index)":
+  en: "Open Git original in read-only tab (HEAD / Index)"
+  zh-TW: "在唯讀分頁開啟 Git 原始檔（HEAD／索引）"
+  zh-CN: "在只读标签页打开 Git 原始文件（HEAD／索引）"
+  ja: "Git の元ファイルを読み取り専用タブで開く（HEAD／Index）"
+"View File History":
+  en: "View File History"
+  zh-TW: "檢視檔案歷史紀錄"
+  zh-CN: "查看文件历史记录"
+  ja: "ファイルの履歴を表示"
+"Add to .gitignore":
+  en: "Add to .gitignore"
+  zh-TW: "加入 .gitignore"
+  zh-CN: "添加到 .gitignore"
+  ja: ".gitignore に追加"
+"Stage selected":
+  en: "Stage selected"
+  zh-TW: "暫存所選項目"
+  zh-CN: "暂存所选项目"
+  ja: "選択項目をステージ"
+"Unstage selected":
+  en: "Unstage selected"
+  zh-TW: "取消暫存所選項目"
+  zh-CN: "取消暂存所选项目"
+  ja: "選択項目をステージ解除"
+"Move untracked file(s) to Recycle Bin (confirm)":
+  en: "Move untracked file(s) to Recycle Bin (confirm)"
+  zh-TW: "將未追蹤檔案移至資源回收筒（需確認）"
+  zh-CN: "将未跟踪文件移至回收站（需确认）"
+  ja: "未追跡ファイルをゴミ箱へ（要確認）"
+"Confirm Discard unstaged changes":
+  en: "Confirm Discard unstaged changes"
+  zh-TW: "確認捨棄未暫存的變更"
+  zh-CN: "确认丢弃未暂存的更改"
+  ja: "未ステージの変更を破棄することを確認"
+"Discard unstaged changes (confirm)":
+  en: "Discard unstaged changes (confirm)"
+  zh-TW: "捨棄未暫存的變更（需確認）"
+  zh-CN: "丢弃未暂存的更改（需确认）"
+  ja: "未ステージの変更を破棄（要確認）"
+"Copy worktree folder / selected items":
+  en: "Copy worktree folder / selected items"
+  zh-TW: "複製工作區資料夾／所選項目"
+  zh-CN: "复制工作区文件夹／所选项目"
+  ja: "作業ツリーフォルダー／選択項目をコピー"
+"Cut worktree folder / selected items":
+  en: "Cut worktree folder / selected items"
+  zh-TW: "剪下工作區資料夾／所選項目"
+  zh-CN: "剪切工作区文件夹／所选项目"
+  ja: "作業ツリーフォルダー／選択項目を切り取り"
+"Paste into this folder":
+  en: "Paste into this folder"
+  zh-TW: "貼到此資料夾"
+  zh-CN: "粘贴到此文件夹"
+  ja: "このフォルダーに貼り付け"
+"Reveal folder in file manager":
+  en: "Reveal folder in file manager"
+  zh-TW: "在檔案管理員中顯示資料夾"
+  zh-CN: "在文件管理器中显示文件夹"
+  ja: "ファイルマネージャーでフォルダーを表示"
+"Copy relative folder path":
+  en: "Copy relative folder path"
+  zh-TW: "複製資料夾相對路徑"
+  zh-CN: "复制文件夹相对路径"
+  ja: "フォルダーの相対パスをコピー"

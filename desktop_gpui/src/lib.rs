@@ -28,6 +28,7 @@ pub mod git_graph_layout;
 pub mod git_graph_render;
 pub mod git_graph_search;
 pub mod git_history;
+pub mod git_ignore;
 pub mod git_inspect;
 pub mod git_original_tabs;
 pub mod git_sidebar_layout;

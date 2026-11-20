@@ -634,6 +634,7 @@ impl Workbench {
             if path.is_file() {
                 actions.extend([
                     ExplorerMenuAction::OpenInAlera,
+                    ExplorerMenuAction::OpenDefaultApplication,
                     ExplorerMenuAction::ViewCurrentGitDiff,
                     ExplorerMenuAction::GitHistory,
                 ]);
@@ -666,7 +667,11 @@ impl Workbench {
         &mut Window,
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, _, cx| {
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             for (label, action) in [
                 ("Copy worktree folder / selected items", GitFolderMenuAction::Copy),
                 ("Cut worktree folder / selected items", GitFolderMenuAction::Cut),
@@ -676,7 +681,7 @@ impl Workbench {
             ] {
                 let owner = owner.clone();
                 let folder = folder.clone();
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(move |_, _, cx| {
                     let _ = owner.update(cx, |view, cx| {
                         view.run_git_folder_menu_action(folder.clone(), action, cx);
                     });
@@ -701,7 +706,11 @@ impl Workbench {
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, _, cx| {
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             let mut actions = vec![
                 ("Preview changes", GitChangeMenuAction::Preview),
                 (
@@ -728,6 +737,13 @@ impl Workbench {
                     GitChangeMenuAction::Original,
                 ));
             }
+            // Git paths can be tracked even after deletion; unlike Explorer,
+            // the History action must not require an existing worktree file.
+            if row.area != alera_gpui_desktop::git_inspect::GitChangeArea::Untracked {
+                actions.push(("View File History", GitChangeMenuAction::History));
+            } else {
+                actions.push(("Add to .gitignore", GitChangeMenuAction::AddToGitIgnore));
+            }
             if row.area.can_stage() {
                 actions.push(("Stage selected", GitChangeMenuAction::Stage));
             }
@@ -753,7 +769,7 @@ impl Workbench {
             for (label, action) in actions {
                 let owner = owner.clone();
                 let row = row.clone();
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(move |_, _, cx| {
                     let _ = owner.update(cx, |view, cx| {
                         view.run_git_change_menu_action(row.clone(), action, cx);
                     });
