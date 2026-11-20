@@ -333,14 +333,27 @@ jobs:
       - name: Publish release
         run: |
           set -euo pipefail
+          # Reuse unchanged mobile tags; Android APK is still attached to desktop.
+          # Never move an existing mobile tag or release.
+          publish_mobile_release=true
           for release_tag in "$TAG" "$MOBILE_TAG"; do
             existing_sha="$(git ls-remote origin "refs/tags/$release_tag" "refs/tags/$release_tag^{}" | tail -n 1 | cut -f 1)"
+            if [[ "$release_tag" == "$MOBILE_TAG" && -n "$existing_sha" && "$existing_sha" != "$TARGET_SHA" ]]; then
+              echo "Keeping existing mobile tag $MOBILE_TAG at $existing_sha without republishing it."
+              publish_mobile_release=false
+              continue
+            fi
             if [[ -n "$existing_sha" && "$existing_sha" != "$TARGET_SHA" ]]; then
               echo "::error::Tag $release_tag points at another commit; bump its product version."
               exit 1
             fi
             if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               if [[ "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
+                if [[ "$release_tag" == "$MOBILE_TAG" ]]; then
+                  echo "Existing public mobile release $MOBILE_TAG remains unchanged."
+                  publish_mobile_release=false
+                  continue
+                fi
                 echo "::error::Release $release_tag is already public; bump its product version."
                 exit 1
               fi
@@ -352,17 +365,21 @@ jobs:
             fi
           done
           bash tool/release/upload_release_assets.sh "$TAG" "$GITHUB_REPOSITORY" dist/*
-          bash tool/release/upload_release_assets.sh "$MOBILE_TAG" "$GITHUB_REPOSITORY" dist/*-android.apk dist/*-android.apk.sha256
+          if [[ "$publish_mobile_release" == "true" ]]; then
+            bash tool/release/upload_release_assets.sh "$MOBILE_TAG" "$GITHUB_REPOSITORY" dist/*-android.apk dist/*-android.apk.sha256
+          fi
           # Publish only once every asset is attached, so nobody sees a partial release.
           for asset in dist/*; do
             name="$(basename "$asset")"
             gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
               --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing asset $name"; exit 1; }
           done
-          for asset in dist/*-android.apk dist/*-android.apk.sha256; do
-            name="$(basename "$asset")"
-            gh release view "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-              --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing mobile asset $name"; exit 1; }
-          done
-          gh release edit "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          if [[ "$publish_mobile_release" == "true" ]]; then
+            for asset in dist/*-android.apk dist/*-android.apk.sha256; do
+              name="$(basename "$asset")"
+              gh release view "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+                --jq ".assets[].name" | grep -Fxq "$name" || { echo "::error::Missing mobile asset $name"; exit 1; }
+            done
+            gh release edit "$MOBILE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          fi
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
