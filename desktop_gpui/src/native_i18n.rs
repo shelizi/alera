@@ -145,6 +145,29 @@ mod tests {
         }
     }
     #[test]
+    fn three_way_git_conflict_labels_are_localized_in_every_ui_language() {
+        for locale in UiLocale::ALL {
+            for source in [
+                "Merge conflict",
+                "Close Preview",
+                "Base (stage 1)",
+                "Current · Ours (stage 2)",
+                "Incoming · Theirs (stage 3)",
+                "changed line(s)",
+                "Git index stages 1/2/3 · read-only snapshot · no resolving or staging",
+                "Simulated merge index · read-only snapshot · no file or index changes",
+                "Click a conflict file to open full three-way Base / Ours / Theirs read-only preview.",
+            ] {
+                let value = tr(locale, source);
+                assert!(!value.is_empty(), "Missing {}: {}", locale.tag(), source);
+                if locale != UiLocale::English {
+                    assert_ne!(value, source, "Missing {}: {}", locale.tag(), source);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn inner_split_terminal_header_is_localized_in_every_ui_language() {
         let source = include_str!("main.rs");
         let focus = source.split_once(r#".id("terminal-secondary-focus")"#).unwrap().1

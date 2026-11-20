@@ -1,0 +1,67 @@
+# Native GPUI three-way merge conflict preview.
+_version: 2
+"Merge conflict":
+  en: "Merge conflict"
+  zh-TW: "合併衝突"
+  zh-CN: "合并冲突"
+  ja: "マージ競合"
+"Close Preview":
+  en: "Close Preview"
+  zh-TW: "關閉預覽"
+  zh-CN: "关闭预览"
+  ja: "プレビューを閉じる"
+"Base (stage 1)":
+  en: "Base (stage 1)"
+  zh-TW: "共同基底（階段 1）"
+  zh-CN: "共同基底（阶段 1）"
+  ja: "共通の祖先（ステージ 1）"
+"Current · Ours (stage 2)":
+  en: "Current · Ours (stage 2)"
+  zh-TW: "目前版本 · Ours（階段 2）"
+  zh-CN: "当前版本 · Ours（阶段 2）"
+  ja: "現在の版 · Ours（ステージ 2）"
+"Incoming · Theirs (stage 3)":
+  en: "Incoming · Theirs (stage 3)"
+  zh-TW: "傳入版本 · Theirs（階段 3）"
+  zh-CN: "传入版本 · Theirs（阶段 3）"
+  ja: "取り込み側 · Theirs（ステージ 3）"
+"changed line(s)":
+  en: "changed line(s)"
+  zh-TW: "行變更"
+  zh-CN: "行更改"
+  ja: "行変更"
+"Git index stages 1/2/3 · read-only snapshot · no resolving or staging":
+  en: "Git index stages 1/2/3 · read-only snapshot · no resolving or staging"
+  zh-TW: "Git 索引階段 1／2／3 · 唯讀快照 · 不解決衝突、不加入暫存"
+  zh-CN: "Git 索引阶段 1／2／3 · 只读快照 · 不解决冲突、不暂存"
+  ja: "Git インデックスのステージ 1/2/3 · 読み取り専用 · 解決・ステージングなし"
+"Simulated merge index · read-only snapshot · no file or index changes":
+  en: "Simulated merge index · read-only snapshot · no file or index changes"
+  zh-TW: "模擬合併索引 · 唯讀快照 · 不變更檔案或 Git 索引"
+  zh-CN: "模拟合并索引 · 只读快照 · 不更改文件或 Git 索引"
+  ja: "シミュレーション結果 · 読み取り専用 · ファイルとインデックスは変更しません"
+"Reading Git conflict stages (read-only)…":
+  en: "Reading Git conflict stages (read-only)…"
+  zh-TW: "正在唯讀讀取 Git 衝突版本…"
+  zh-CN: "正在只读读取 Git 冲突版本…"
+  ja: "Git の競合バージョンを読み取り専用で取得中…"
+"Cannot preview conflict":
+  en: "Cannot preview conflict"
+  zh-TW: "無法預覽衝突"
+  zh-CN: "无法预览冲突"
+  ja: "競合をプレビューできません"
+"(empty file)":
+  en: "(empty file)"
+  zh-TW: "（空白檔案）"
+  zh-CN: "（空文件）"
+  ja: "（空のファイル）"
+"(no stage: file absent/deleted)":
+  en: "(no stage: file absent/deleted)"
+  zh-TW: "（無此版本：檔案不存在或已刪除）"
+  zh-CN: "（无此版本：文件不存在或已删除）"
+  ja: "（このステージにファイルがありません／削除済み）"
+"Click a conflict file to open full three-way Base / Ours / Theirs read-only preview.":
+  en: "Click a conflict file to open full three-way Base / Ours / Theirs read-only preview."
+  zh-TW: "點選衝突檔，在中央開啟共同基底／目前／傳入三方唯讀比較。"
+  zh-CN: "点击冲突文件，在中央打开共同基底／当前／传入三方只读比较。"
+  ja: "競合ファイルを選ぶと、中央に Base／Ours／Theirs の読み取り専用比較を表示します。"

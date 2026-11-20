@@ -478,6 +478,8 @@ impl Workbench {
         self.explorer_preview_active = false;
         self.center_git_diff_source = None;
         self.center_git_diff_hunk = None;
+        self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+        self.center_git_conflict = None;
         self.sync_mixed_tabs(cx);
         self.mixed_tabs.select(&identity);
         self.mixed_tabs.set_pinned(&identity, true);

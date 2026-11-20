@@ -164,6 +164,8 @@ impl Workbench {
             cx.notify();
             return;
         };
+        self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+        self.center_git_conflict = None;
         self.center_git_diff_source = Some(GitDialogFileSource {
             workspace_generation: self.workspace_generation,
             source_ticket: paging.source_ticket,

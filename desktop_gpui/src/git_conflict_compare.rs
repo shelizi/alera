@@ -1,0 +1,407 @@
+//! Immutable, bounded three-way Git conflict projections.
+//! Reads only Git index stages (or an already computed in-memory merge plan);
+//! no checkout, Git action, worktree write or index mutation is performed.
+use git2::{IndexEntry, Repository};
+use similar::{ChangeTag, TextDiff};
+use std::ops::Range;
+use std::path::{Component, Path, PathBuf};
+
+const MAX_STAGE_BYTES: usize = 64 * 1024;
+const MAX_STAGE_LINES: usize = 4096;
+const MAX_DISPLAY_LINE_CHARS: usize = 2048;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConflictLine {
+    pub number: usize,
+    pub text: String,
+    /// UTF-8 byte offsets suitable for GPUI StyledText highlights.
+    pub highlights: Vec<Range<usize>>,
+    pub changed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConflictVersion {
+    pub lines: Vec<ConflictLine>,
+    pub changed_lines: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitConflictComparison {
+    pub relative: PathBuf,
+    pub base: Option<ConflictVersion>,
+    pub ours: Option<ConflictVersion>,
+    pub theirs: Option<ConflictVersion>,
+}
+
+fn line_texts(text: &str) -> Vec<&str> {
+    text.lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect()
+}
+
+fn merged_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    spans.retain(|range| range.start < range.end);
+    spans.sort_by_key(|range| (range.start, range.end));
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for span in spans {
+        if let Some(last) = merged.last_mut() {
+            if span.start <= last.end {
+                last.end = last.end.max(span.end);
+                continue;
+            }
+        }
+        merged.push(span);
+    }
+    merged
+}
+
+fn inline_spans(old: Option<&str>, new: &str) -> Vec<Range<usize>> {
+    let Some(old) = old else {
+        return (!new.is_empty())
+            .then_some(0..new.len())
+            .into_iter()
+            .collect();
+    };
+    if old == new {
+        return Vec::new();
+    }
+    let mut offset = 0;
+    let mut spans = Vec::new();
+    for change in TextDiff::from_chars(old, new).iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => {}
+            ChangeTag::Equal => offset += change.value().len(),
+            ChangeTag::Insert => {
+                let start = offset;
+                offset += change.value().len();
+                spans.push(start..offset);
+            }
+        }
+    }
+    // A deletion-only edit still needs a visible changed-line marker. Avoid
+    // pretending that unchanged characters were inserted into the file.
+    merged_spans(spans)
+}
+
+fn build_version(text: &str, reference: Option<&str>) -> ConflictVersion {
+    let original = line_texts(text);
+    let mut lines = original
+        .iter()
+        .enumerate()
+        .map(|(i, line)| ConflictLine {
+            number: i + 1,
+            text: (*line).to_owned(),
+            highlights: Vec::new(),
+            changed: false,
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(reference) = reference {
+        let base = line_texts(reference);
+        let diff = TextDiff::from_lines(reference, text);
+        for op in diff.ops() {
+            if op.tag() == similar::DiffTag::Equal {
+                continue;
+            }
+            for index in op.new_range() {
+                let old_index = op.old_range().start + index - op.new_range().start;
+                let old = (old_index < op.old_range().end)
+                    .then(|| base.get(old_index).copied())
+                    .flatten();
+                if let Some(line) = lines.get_mut(index) {
+                    line.changed = true;
+                    line.highlights = merged_spans(
+                        line.highlights
+                            .iter()
+                            .cloned()
+                            .chain(inline_spans(old, &line.text))
+                            .collect(),
+                    );
+                }
+            }
+        }
+    } else {
+        for line in &mut lines {
+            line.changed = true;
+            line.highlights = inline_spans(None, &line.text);
+        }
+    }
+    let changed_lines = lines.iter().filter(|line| line.changed).count();
+    ConflictVersion {
+        lines,
+        changed_lines,
+    }
+}
+
+fn valid_stage_text(text: &str) -> Result<(), String> {
+    if text.len() > MAX_STAGE_BYTES || text.contains('\0') {
+        return Err("Binary or oversized Git conflict stage; use a dedicated merge tool".into());
+    }
+    if text.lines().count() > MAX_STAGE_LINES
+        || text
+            .lines()
+            .any(|line| line.chars().count() > MAX_DISPLAY_LINE_CHARS)
+    {
+        return Err(
+            "Conflict text exceeds safe preview limits (4,096 lines / 2,048 chars per line)".into(),
+        );
+    }
+    Ok(())
+}
+
+impl GitConflictComparison {
+    /// Build an independent snapshot from either a simulated merge's index
+    /// stages or the current unresolved index. No reference to Git is retained.
+    pub fn from_versions(
+        relative: PathBuf,
+        base: Option<&str>,
+        ours: Option<&str>,
+        theirs: Option<&str>,
+    ) -> Result<Self, String> {
+        if !relative
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+            || relative.as_os_str().is_empty()
+        {
+            return Err("Git conflict preview requires a relative file path".into());
+        }
+        if ours.is_none() && theirs.is_none() {
+            return Err("Git conflict has no readable side".into());
+        }
+        for text in [base, ours, theirs].into_iter().flatten() {
+            valid_stage_text(text)?;
+        }
+        // Base highlights show text removed or changed on either branch.
+        let mut base_version = base.map(|text| build_version(text, ours));
+        if let (Some(version), Some(text), Some(incoming)) = (&mut base_version, base, theirs) {
+            let incoming_diff = build_version(text, Some(incoming));
+            for (line, other) in version.lines.iter_mut().zip(incoming_diff.lines) {
+                line.changed |= other.changed;
+                line.highlights = merged_spans(
+                    line.highlights
+                        .iter()
+                        .cloned()
+                        .chain(other.highlights)
+                        .collect(),
+                );
+            }
+            version.changed_lines = version.lines.iter().filter(|line| line.changed).count();
+        } else if let (Some(version), None) = (&mut base_version, theirs) {
+            for line in &mut version.lines {
+                line.changed = true;
+                line.highlights = inline_spans(None, &line.text);
+            }
+            version.changed_lines = version.lines.len();
+        }
+        Ok(Self {
+            relative,
+            base: base_version,
+            ours: ours.map(|text| build_version(text, base)),
+            theirs: theirs.map(|text| build_version(text, base)),
+        })
+    }
+}
+
+fn read_stage(repo: &Repository, entry: Option<&IndexEntry>) -> Result<Option<String>, String> {
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    if entry.mode != 0o100644 && entry.mode != 0o100755 {
+        return Err("Symlink and submodule conflicts require a dedicated merge tool".into());
+    }
+    let blob = repo
+        .find_blob(entry.id)
+        .map_err(|error| error.to_string())?;
+    let content = blob.content();
+    if content.len() > MAX_STAGE_BYTES || content.contains(&0) {
+        return Err("Binary or oversized Git conflict stage; use a dedicated merge tool".into());
+    }
+    let text = std::str::from_utf8(content)
+        .map_err(|_| "Non-UTF-8 Git conflict stage; use a dedicated merge tool".to_string())?;
+    valid_stage_text(text)?;
+    Ok(Some(text.to_owned()))
+}
+
+/// Read only index conflict stages 1/2/3, never the conflict markers in the
+/// worktree. This works even while MERGE_HEAD/CHERRY_PICK_HEAD is present.
+pub fn preview_index_conflict(
+    root: &Path,
+    relative: &Path,
+) -> Result<GitConflictComparison, String> {
+    if relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err("Select a relative conflicted file path".into());
+    }
+    let repo = Repository::open(root).map_err(|error| error.to_string())?;
+    let index = repo.index().map_err(|error| error.to_string())?;
+    let requested = relative.to_string_lossy().replace('\\', "/");
+    for entry in index.conflicts().map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let candidate = entry
+            .our
+            .as_ref()
+            .or(entry.their.as_ref())
+            .or(entry.ancestor.as_ref())
+            .ok_or("Git index conflict has no stage entries")?;
+        if candidate.path != requested.as_bytes() {
+            continue;
+        }
+        for stage in [&entry.ancestor, &entry.our, &entry.their]
+            .into_iter()
+            .flatten()
+        {
+            if stage.path != candidate.path {
+                return Err("Renamed conflict paths require a dedicated merge tool".into());
+            }
+        }
+        let base = read_stage(&repo, entry.ancestor.as_ref())?;
+        let ours = read_stage(&repo, entry.our.as_ref())?;
+        let theirs = read_stage(&repo, entry.their.as_ref())?;
+        return GitConflictComparison::from_versions(
+            relative.to_path_buf(),
+            base.as_deref(),
+            ours.as_deref(),
+            theirs.as_deref(),
+        );
+    }
+    Err("Selected file has no unresolved Git index stages; refresh Source Control".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn inline_highlights_are_byte_safe_for_unicode_and_only_mark_changed_fragments() {
+        let item = GitConflictComparison::from_versions(
+            "src/demo.rs".into(),
+            Some("prefix 中文 old suffix\ncommon\n"),
+            Some("prefix 中文 新 suffix\ncommon\n"),
+            Some("prefix 中文 theirs suffix\ncommon\n"),
+        )
+        .unwrap();
+        let ours = &item.ours.unwrap().lines[0];
+        assert!(ours.changed);
+        assert!(!ours.highlights.is_empty());
+        for span in &ours.highlights {
+            assert!(ours.text.is_char_boundary(span.start));
+            assert!(ours.text.is_char_boundary(span.end));
+        }
+        let marked = ours
+            .highlights
+            .iter()
+            .map(|s| &ours.text[s.clone()])
+            .collect::<String>();
+        assert!(marked.contains('新'));
+        assert!(!marked.contains("prefix"));
+        assert!(!item.theirs.unwrap().lines[1].changed);
+        assert_eq!(item.base.unwrap().changed_lines, 1);
+    }
+
+    #[test]
+    fn add_add_and_delete_modify_support_missing_stages_without_fake_contents() {
+        let added = GitConflictComparison::from_versions(
+            "new.txt".into(),
+            None,
+            Some("ours\n"),
+            Some("theirs\n"),
+        )
+        .unwrap();
+        assert!(added.base.is_none());
+        assert!(added.ours.unwrap().lines[0].changed);
+        let deleted = GitConflictComparison::from_versions(
+            "removed.txt".into(),
+            Some("old\n"),
+            None,
+            Some("incoming\n"),
+        )
+        .unwrap();
+        assert!(deleted.ours.is_none());
+        assert_eq!(deleted.base.unwrap().changed_lines, 1);
+        assert!(GitConflictComparison::from_versions(
+            "../escape".into(),
+            None,
+            Some("x"),
+            Some("y")
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reads_real_merge_stages_without_changing_head_index_or_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", false)
+            .unwrap();
+        let path = temp.path().join("conflict.txt");
+        fs::write(&path, "common\nbase\n").unwrap();
+        let sig = git2::Signature::now("Conflict Test", "test@example.invalid").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("conflict.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        index.write().unwrap();
+        let base_oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let base = repo.find_commit(base_oid).unwrap();
+        fs::write(&path, "common\nours\n").unwrap();
+        index.add_path(Path::new("conflict.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        index.write().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "ours", &tree, &[&base])
+            .unwrap();
+        drop(tree);
+        let base_tree = base.tree().unwrap();
+        let mut builder = repo.treebuilder(Some(&base_tree)).unwrap();
+        builder
+            .insert(
+                "conflict.txt",
+                repo.blob(b"common\ntheirs\n").unwrap(),
+                0o100644,
+            )
+            .unwrap();
+        let their_tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let their_oid = repo
+            .commit(None, &sig, &sig, "theirs", &their_tree, &[&base])
+            .unwrap();
+        let annotated = repo.find_annotated_commit(their_oid).unwrap();
+        let (analysis, _) = repo.merge_analysis(&[&annotated]).unwrap();
+        assert!(analysis.is_normal());
+        repo.merge(&[&annotated], None, None).unwrap();
+        assert!(repo.index().unwrap().has_conflicts());
+        let before_head = repo.head().unwrap().target();
+        let before_index = fs::read(repo.path().join("index")).unwrap();
+        let before_worktree = fs::read(&path).unwrap();
+        let snapshot = preview_index_conflict(temp.path(), Path::new("conflict.txt")).unwrap();
+        assert_eq!(snapshot.base.unwrap().lines[1].text, "base");
+        assert_eq!(snapshot.ours.unwrap().lines[1].text, "ours");
+        assert_eq!(snapshot.theirs.unwrap().lines[1].text, "theirs");
+        assert_eq!(repo.head().unwrap().target(), before_head);
+        assert_eq!(fs::read(repo.path().join("index")).unwrap(), before_index);
+        assert_eq!(fs::read(&path).unwrap(), before_worktree);
+        assert!(preview_index_conflict(temp.path(), Path::new("../outside.txt")).is_err());
+    }
+
+    #[test]
+    fn binary_and_giant_stages_refuse_preview() {
+        assert!(GitConflictComparison::from_versions(
+            "a.txt".into(),
+            None,
+            Some("x\0y"),
+            Some("z")
+        )
+        .is_err());
+        let huge = "x".repeat(MAX_STAGE_BYTES + 1);
+        assert!(
+            GitConflictComparison::from_versions("a.txt".into(), None, Some(&huge), Some("z"))
+                .is_err()
+        );
+    }
+}

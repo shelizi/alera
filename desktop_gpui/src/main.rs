@@ -6,6 +6,7 @@ mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
 mod native_git_favorites_ui;
+mod native_git_conflict_ui;
 mod native_git_file_compare_ui;
 mod native_git_graph_center_ui;
 mod native_git_graph_compare_ui;
@@ -913,6 +914,11 @@ struct Workbench {
     /// Parsed once on each bounded Git page response, shared with visible
     /// virtual-list renders while Terminal/Host UI events keep arriving.
     center_git_diff_rows: Arc<Vec<native_center_git_diff_ui::CenterGitDiffRow>>,
+    /// Temporary three-way snapshot from unresolved stages or a planned merge.
+    /// It never owns an EditorDocument or exposes Git mutation controls.
+    center_git_conflict: Option<native_git_conflict_ui::CenterConflictPreview>,
+    center_git_conflict_request: u64,
+    center_git_conflict_scroll: [UniformListScrollHandle; 3],
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
@@ -1129,6 +1135,10 @@ impl Workbench {
             &mut self.center_git_diff_hunk,
             &mut self.git_original_active,
         );
+        if pane == PaneSlot::Primary {
+            self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+            self.center_git_conflict = None;
+        }
     }
 
     fn click_explorer_file(
@@ -3898,6 +3908,8 @@ impl Workbench {
                 });
                 match result {
                     Ok(_) => {
+                        view.center_git_conflict_request = view.center_git_conflict_request.wrapping_add(1);
+                        view.center_git_conflict = None;
                         view.git_original_active = true;
                         view.explorer_preview_active = false;
                         view.center_view = CenterView::Editor;
@@ -4688,6 +4700,8 @@ impl Workbench {
                     Ok(_) => {
                         // Read-only Git versions do not enter NativeEditor at
                         // all and cannot become Save/Save As, draft or PTY tabs.
+                        view.center_git_conflict_request = view.center_git_conflict_request.wrapping_add(1);
+                        view.center_git_conflict = None;
                         view.active_git_compare_tab = None;
                         view.git_original_active = true;
                         view.explorer_preview_active = false;
@@ -4847,6 +4861,12 @@ impl Workbench {
         area: GitChangeArea,
         cx: &mut Context<Self>,
     ) {
+        if area == GitChangeArea::Conflicts {
+            self.open_index_git_conflict(relative, cx);
+            return;
+        }
+        self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+        self.center_git_conflict = None;
         self.preview_git_change(relative, Some(area), false, cx);
         if let Some(paging) = &self.git_file_diff_paging {
             self.center_git_diff_source = Some(native_action_dialog_ui::GitDialogFileSource {
@@ -6471,6 +6491,8 @@ impl Workbench {
         self.center_git_diff_source = None;
         self.center_git_diff_hunk = None;
         self.center_git_diff_rows = Arc::new(Vec::new());
+        self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+        self.center_git_conflict = None;
         // Agent profiles are Host-owned, but selection and an in-flight
         // launch response must never attach to a different GPUI workspace.
         self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
@@ -9971,6 +9993,8 @@ impl Workbench {
         if self.mixed_panes.tabs_in(PaneSlot::Primary).contains(id) {
             self.center_git_diff_source = None;
             self.center_git_diff_hunk = None;
+            self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+            self.center_git_conflict = None;
         }
         self.mixed_tab_context = None;
         self.git_graph_center_open = false;
@@ -11614,7 +11638,8 @@ impl Render for Workbench {
                 && !native_center_git_diff_ui::should_show_center_git_diff_view(
                     git_original_is_active,
                     self.center_git_diff_is_current(),
-                ),
+                )
+                && !self.center_git_conflict_visible(),
         );
         let split_width = mixed_has_secondary && mixed_split_horizontal;
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
@@ -12161,6 +12186,7 @@ impl Render for Workbench {
             git_original_is_active,
             self.center_git_diff_is_current(),
         );
+        let show_center_git_conflict = self.center_git_conflict_visible();
 
         div()
             .size_full()
@@ -13503,7 +13529,7 @@ impl Render for Workbench {
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         this.git_conflict_selected = Some(path_for_select.clone());
                                                         this.git_conflict_confirm_armed = false;
-                                                        cx.notify();
+                                                        this.open_planned_git_conflict(path_for_select.clone(), cx);
                                                     })))
                                                 .child(div()
                                                     .flex()
@@ -13532,7 +13558,7 @@ impl Render for Workbench {
                                     .child(div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child("Preview excerpts only (up to 1,800 characters per side); inspect entire file before choosing."))
+                                        .child(tr(self.settings_menu_locale, "Click a conflict file to open full three-way Base / Ours / Theirs read-only preview.")))
                                     .child(div()
                                         .id("git-conflict-text-preview")
                                         .max_h(px(132.0))
@@ -15015,7 +15041,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(graph_in_primary || compare_in_primary.is_some() || !show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || !show_editor_toolbar || show_center_git_diff || show_center_git_conflict, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -15093,11 +15119,13 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
-                                            .when(!center_is_editor && !show_center_git_diff, |pane| {
+                                            .when(!center_is_editor && !show_center_git_diff && !show_center_git_conflict, |pane| {
                                                 pane.bg(rgb(TERMINAL_DEFAULT_BG))
                                             })
                             .child(
-                                if graph_in_primary {
+                                if show_center_git_conflict {
+                                    self.render_center_git_conflict(cx)
+                                } else if graph_in_primary {
                                     self.render_center_git_graph(window, cx)
                                 } else if let Some(instance) = compare_in_primary {
                                     self.render_git_file_compare_center_tab(instance, cx)
@@ -15158,7 +15186,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     // Match the VT viewport, including the 12px text inset,
@@ -15411,7 +15439,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
@@ -17237,6 +17265,13 @@ fn main() {
                             center_git_diff_scroll: UniformListScrollHandle::new(),
                             center_git_diff_hunk: None,
                             center_git_diff_rows: Arc::new(Vec::new()),
+                            center_git_conflict: None,
+                            center_git_conflict_request: 0,
+                            center_git_conflict_scroll: [
+                                UniformListScrollHandle::new(),
+                                UniformListScrollHandle::new(),
+                                UniformListScrollHandle::new(),
+                            ],
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),
