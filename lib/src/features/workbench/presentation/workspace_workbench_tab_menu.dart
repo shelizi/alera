@@ -59,6 +59,8 @@ Future<void> showWorkspaceTabContextMenu(
   OpenExternalTerminalCallback? onOpenExternalTerminal,
   WorkspaceTabDetachedMenuActions? detachedActions,
 }) async {
+  // Capture locale before awaiting actions that may dispose the source window.
+  final translations = context.aleraLocalizations;
   final overlay =
       Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
   final tabIndex = groupTabs.indexWhere((candidate) => candidate.id == tab.id);
@@ -162,7 +164,10 @@ Future<void> showWorkspaceTabContextMenu(
       if (filePath != null && workspaceFolderOpener != null)
         AleraDropdownEntry<_TabMenuAction>(
           value: .revealInFileManager,
-          label: 'Reveal in ${workspaceFolderOpener.fileManagerLabel}',
+          label: translations.translateTemplate('Reveal in {fileManager}', {
+            'fileManager': workspaceFolderOpener.fileManagerLabel,
+          }),
+          localizeLabel: false,
           leading: const Icon(AleraIcons.copyFiles, size: 16),
         ),
       if (canCompareWithGit) ...<PopupMenuEntry<_TabMenuAction>>[
@@ -224,7 +229,8 @@ Future<void> showWorkspaceTabContextMenu(
           ref.read(agentTitleAvailableProvider).value == true)
         AleraDropdownEntry<_TabMenuAction>(
           value: .generateTitle,
-          label: agentTitleActionLabel(tab.payload),
+          label: translations.translate(agentTitleActionLabel(tab.payload)),
+          localizeLabel: false,
           enabled: !isAgentTitleGenerating(tab.payload),
           leading: const Icon(AleraIcons.ai, size: 16),
         ),
@@ -245,7 +251,9 @@ Future<void> showWorkspaceTabContextMenu(
     case _TabMenuAction.moveToMainWindow:
       if (!await detachedActions!.onMoveToMainWindow()) {
         AleraToast.publish(
-          message: 'Could not move the tab back to the main window.',
+          message: translations.translate(
+            'Could not move the tab back to the main window.',
+          ),
           tone: AleraToastTone.error,
         );
       }
@@ -311,17 +319,20 @@ Future<void> showWorkspaceTabContextMenu(
         await ref.read(agentTitleServiceProvider).generate(tab);
       } on Object catch (error) {
         AleraToast.publish(
-          message: 'Could not generate title: $error',
+          message: translations.translateTemplate(
+            'Could not generate title: {error}',
+            {'error': '$error'},
+          ),
           tone: .error,
         );
       }
     case _TabMenuAction.changeTitle:
       final title = await showRenameDialog(
         context,
-        title: 'Change Terminal Title',
-        labelText: 'Terminal Title',
+        title: translations.translate('Change Terminal Title'),
+        labelText: translations.translate('Terminal Title'),
         initialValue: terminalSession?.displayTitle ?? _workspaceTabTitle(tab),
-        confirmLabel: 'Change Title',
+        confirmLabel: translations.translate('Change Title'),
       );
       if (title != null) {
         onRename(title);
@@ -333,7 +344,7 @@ Future<void> showWorkspaceTabContextMenu(
       if (detached != null) {
         if (!await detached.onMoveToNewWindow()) {
           AleraToast.publish(
-            message: 'Could not open detached window.',
+            message: translations.translate('Could not open detached window.'),
             tone: AleraToastTone.error,
           );
         }
@@ -344,7 +355,9 @@ Future<void> showWorkspaceTabContextMenu(
       if (!sharesSession &&
           ref.read(editorSessionRegistryProvider).isDirty(tab.id)) {
         AleraToast.publish(
-          message: 'Save this file before moving it to a new window.',
+          message: translations.translate(
+            'Save this file before moving it to a new window.',
+          ),
           tone: AleraToastTone.error,
         );
         return;
@@ -356,7 +369,7 @@ Future<void> showWorkspaceTabContextMenu(
         final created = await detachedTabWindows.detach(descriptor);
         if (!created) {
           AleraToast.publish(
-            message: 'Could not open detached window.',
+            message: translations.translate('Could not open detached window.'),
             tone: AleraToastTone.error,
           );
         } else if (!sharesSession && tab.kind == WorkspaceTabKind.terminal) {
@@ -364,7 +377,10 @@ Future<void> showWorkspaceTabContextMenu(
         }
       } on Object catch (error) {
         AleraToast.publish(
-          message: 'Could not open detached window: $error',
+          message: translations.translateTemplate(
+            'Could not open detached window: {error}',
+            {'error': '$error'},
+          ),
           tone: AleraToastTone.error,
         );
       }
@@ -392,7 +408,8 @@ Future<void> _openWorkspaceTabFileWithDefaultApplication(
   AleraToast.show(
     context,
     message:
-        result.message ?? 'Could not open item with the default application.',
+        result.message ??
+        context.tr('Could not open item with the default application.'),
     tone: .error,
   );
 }
@@ -417,7 +434,8 @@ Future<void> _revealWorkspaceTabFile(
   }
   AleraToast.show(
     context,
-    message: result.message ?? 'Could not reveal item in file manager.',
+    message:
+        result.message ?? context.tr('Could not reveal item in file manager.'),
     tone: .error,
   );
 }

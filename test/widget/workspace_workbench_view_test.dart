@@ -36,6 +36,7 @@ part 'workspace_workbench_view_helper_test_cases.dart';
 part 'workspace_workbench_view_pane_test_cases.dart';
 part 'workspace_workbench_view_tab_drop_test_cases.dart';
 part 'workspace_workbench_view_tab_test_cases.dart';
+part 'workspace_workbench_view_tab_i18n_test_cases.dart';
 part 'workspace_workbench_view_tab_chip_test_cases.dart';
 part 'workspace_workbench_view_preview_tab_test_cases.dart';
 part 'workspace_workbench_view_test_harness.dart';
@@ -71,6 +72,7 @@ void main() {
 
     _registerWorkspaceWorkbenchViewPaneTests();
     _registerWorkspaceWorkbenchViewTabTests();
+    _registerWorkspaceWorkbenchViewTabI18nTests();
     _registerWorkspaceWorkbenchViewTabChipTests();
     _registerWorkspaceWorkbenchViewPreviewTabTests();
     _registerWorkspaceWorkbenchViewTabDropTests();
