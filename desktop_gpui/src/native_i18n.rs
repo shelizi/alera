@@ -577,4 +577,21 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn git_file_revision_compare_actions_have_four_locales() {
+        for label in [
+            "Compare With Latest Git Revision",
+            "Compare With Branch...",
+            "Compare With Branch",
+        ] {
+            assert_eq!(tr(UiLocale::English, label), label);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(tr(locale, label), label, "{label} missing in {}", locale.tag());
+            }
+        }
+    }
 }

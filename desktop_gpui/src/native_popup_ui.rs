@@ -637,6 +637,8 @@ impl Workbench {
                     ExplorerMenuAction::OpenDefaultApplication,
                     ExplorerMenuAction::ViewCurrentGitDiff,
                     ExplorerMenuAction::GitHistory,
+                    ExplorerMenuAction::CompareLatestRevision,
+                    ExplorerMenuAction::CompareWithBranch,
                 ]);
             }
             actions.push(ExplorerMenuAction::File(ExplorerAction::Rename));
@@ -741,6 +743,8 @@ impl Workbench {
             // the History action must not require an existing worktree file.
             if row.area != alera_gpui_desktop::git_inspect::GitChangeArea::Untracked {
                 actions.push(("View File History", GitChangeMenuAction::History));
+                actions.push(("Compare With Latest Git Revision", GitChangeMenuAction::CompareLatestRevision));
+                actions.push(("Compare With Branch...", GitChangeMenuAction::CompareWithBranch));
             } else {
                 actions.push(("Add to .gitignore", GitChangeMenuAction::AddToGitIgnore));
             }
@@ -769,9 +773,9 @@ impl Workbench {
             for (label, action) in actions {
                 let owner = owner.clone();
                 let row = row.clone();
-                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(move |_, _, cx| {
+                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
-                        view.run_git_change_menu_action(row.clone(), action, cx);
+                        view.run_git_change_menu_action(row.clone(), action, window, cx);
                     });
                 }));
             }

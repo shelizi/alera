@@ -146,3 +146,18 @@ _version: 2
   zh-TW: "複製資料夾相對路徑"
   zh-CN: "复制文件夹相对路径"
   ja: "フォルダーの相対パスをコピー"
+"Compare With Latest Git Revision":
+  en: "Compare With Latest Git Revision"
+  zh-TW: "與最新 Git 版本比較"
+  zh-CN: "与最新 Git 版本比较"
+  ja: "最新の Git リビジョンと比較"
+"Compare With Branch...":
+  en: "Compare With Branch..."
+  zh-TW: "與指定分支比較…"
+  zh-CN: "与指定分支比较…"
+  ja: "ブランチと比較…"
+"Compare With Branch":
+  en: "Compare With Branch"
+  zh-TW: "與指定分支比較"
+  zh-CN: "与指定分支比较"
+  ja: "ブランチと比較"

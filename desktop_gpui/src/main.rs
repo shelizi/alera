@@ -6,6 +6,7 @@ mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
 mod native_git_favorites_ui;
+mod native_git_file_compare_ui;
 mod native_git_graph_center_ui;
 mod native_git_graph_compare_ui;
 mod native_git_graph_rows_ui;
@@ -505,6 +506,8 @@ enum ExplorerAction {
 enum GitChangeMenuAction {
     Preview,
     History,
+    CompareLatestRevision,
+    CompareWithBranch,
     AddToGitIgnore,
     Original,
     OpenWorkingFile,
@@ -572,6 +575,8 @@ enum ExplorerMenuAction {
     CollapseFolder,
     Refresh,
     GitHistory,
+    CompareLatestRevision,
+    CompareWithBranch,
 }
 
 impl ExplorerMenuAction {
@@ -596,6 +601,8 @@ impl ExplorerMenuAction {
             Self::CollapseFolder => "Collapse folder",
             Self::Refresh => "Refresh",
             Self::GitHistory => "File / folder Git history",
+            Self::CompareLatestRevision => "Compare With Latest Git Revision",
+            Self::CompareWithBranch => "Compare With Branch...",
         }
     }
 }
@@ -880,6 +887,8 @@ struct Workbench {
     git_diff_loading: bool,
     git_diff_request: u64,
     git_file_diff_paging: Option<GitFileDiffPaging>,
+    git_file_compare_ticket: u64,
+    git_file_compare_result: Option<(u64, Result<alera_gpui_desktop::git_file_revision_compare::GitFileRevisionComparison, String>)>,
     /// A temporary, read-only center projection; never owns or replaces an
     /// Editor buffer, mixed tab or Host Terminal session.
     center_git_diff_source: Option<native_action_dialog_ui::GitDialogFileSource>,
@@ -1641,6 +1650,19 @@ impl Workbench {
                 cx.notify();
             }
             ExplorerMenuAction::GitHistory => self.open_explorer_selection_history(cx),
+            ExplorerMenuAction::CompareLatestRevision | ExplorerMenuAction::CompareWithBranch => {
+                let relative = self.explorer_selection.as_ref()
+                    .filter(|path| path.is_file())
+                    .and_then(|path| path.strip_prefix(self.model.root()).ok())
+                    .map(Path::to_path_buf);
+                if let Some(relative) = relative {
+                    if action == ExplorerMenuAction::CompareLatestRevision {
+                        self.open_git_file_revision_comparison(relative, None, window, cx);
+                    } else {
+                        self.open_git_file_branch_picker(relative, window, cx);
+                    }
+                }
+            }
         }
     }
 
@@ -2424,6 +2446,7 @@ impl Workbench {
         &mut self,
         row: alera_gpui_desktop::git_inspect::GitChangeRow,
         action: GitChangeMenuAction,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // Recompute the current visible set at click time. A menu opened
@@ -2465,6 +2488,12 @@ impl Workbench {
             }
             GitChangeMenuAction::History => {
                 self.open_git_change_file_history(&row.relative, cx);
+            }
+            GitChangeMenuAction::CompareLatestRevision => {
+                self.open_git_file_revision_comparison(row.relative, None, window, cx);
+            }
+            GitChangeMenuAction::CompareWithBranch => {
+                self.open_git_file_branch_picker(row.relative, window, cx);
             }
             GitChangeMenuAction::AddToGitIgnore if row.area == GitChangeArea::Untracked => {
                 if self.git_action_busy {
@@ -17114,6 +17143,8 @@ fn main() {
                             git_diff_loading: false,
                             git_diff_request: 0,
                             git_file_diff_paging: None,
+                            git_file_compare_ticket: 0,
+                            git_file_compare_result: None,
                             center_git_diff_source: None,
                             center_git_diff_scroll: UniformListScrollHandle::new(),
                             center_git_diff_hunk: None,
