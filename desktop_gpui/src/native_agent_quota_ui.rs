@@ -3,7 +3,8 @@
 use super::*;
 use alera_gpui_desktop::agent_quota::{
     mark_failed_quota_refresh, merge_quota_snapshots, parse_agent_usage_summary,
-    parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label, QuotaReading,
+    parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label,
+    ClaudeExtraUsageProgress, QuotaReading,
 };
 use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_i18n::tr;
@@ -348,9 +349,13 @@ mod quota_ui_tests {
 }
 
 fn quota_reading_color(status: &str, reading: &QuotaReading) -> u32 {
+    quota_remaining_color(status, reading.remaining_percent)
+}
+
+fn quota_remaining_color(status: &str, remaining_percent: Option<f64>) -> u32 {
     match status {
         "stale" => alera_gpui_desktop::visual_tokens::FAINT,
-        "ok" => match reading.remaining_percent {
+        "ok" => match remaining_percent {
             Some(value) if value.is_finite() && value < 20.0 => AGENT_BLOCKED,
             Some(value) if value.is_finite() && value < 50.0 => AGENT_WAITING,
             Some(value) if value.is_finite() => AGENT_DONE,
@@ -396,6 +401,74 @@ fn quota_reading_element(status: &str, reading: &QuotaReading, detailed: bool) -
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(quota_reading_color(status, reading)))
                 .child(reading.value.clone()),
+        )
+        .into_any_element()
+}
+
+/// The fill tracks actual extra spend (not remaining), like Classic.
+/// Unknown or invalid spending/cap does not render this element at all.
+fn claude_extra_usage_progress_element(
+    status: &str,
+    progress: &ClaudeExtraUsageProgress,
+) -> gpui::AnyElement {
+    let used_percentage = progress.spent_amount / progress.limit_amount * 100.0;
+    let remaining_percentage = (1.0 - progress.used_fraction as f64) * 100.0;
+    let color = quota_remaining_color(status, Some(remaining_percentage));
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .mt_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .text_xs()
+                .child(
+                    div()
+                        .text_color(rgb(MUTED))
+                        .child(format!("Used {}", progress.spent_text())),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(MUTED))
+                        .child(format!("Monthly limit {}", progress.limit_text())),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(px(7.0))
+                .rounded_full()
+                .overflow_hidden()
+                .bg(rgb(BORDER))
+                .child(
+                    div()
+                        .w(gpui::relative(progress.used_fraction))
+                        .h_full()
+                        .rounded_full()
+                        .bg(rgb(color)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .text_xs()
+                .child(
+                    div()
+                        .text_color(rgb(MUTED))
+                        .child(format!("{used_percentage:.2}% used")),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(color))
+                        .child(format!("{} remaining", progress.remaining_text())),
+                ),
         )
         .into_any_element()
 }
@@ -1210,6 +1283,7 @@ impl Workbench {
                         let pin_key = snapshot.pin_key();
                         let pinned = !unpinned.iter().any(|key| key == &pin_key);
                         let readings = snapshot.readings();
+                        let extra_progress = snapshot.claude_extra_usage_progress();
                         let status_text = if snapshot.status == "ok" {
                             snapshot
                                 .data_quality
@@ -1328,15 +1402,39 @@ impl Workbench {
                                     .flex_wrap()
                                     .items_center()
                                     .gap_2()
-                                    .children(readings.iter().map(|reading| {
-                                        quota_reading_element(&snapshot.status, reading, true)
-                                    })),
+                                    .children(
+                                        readings
+                                            .iter()
+                                            .filter(|reading| {
+                                                extra_progress.is_none() || reading.label != "Extra"
+                                            })
+                                            .map(|reading| {
+                                                quota_reading_element(
+                                                    &snapshot.status,
+                                                    reading,
+                                                    true,
+                                                )
+                                            }),
+                                    ),
                             )
-                            .children(readings.iter().filter_map(|reading| {
-                                reading.detail.as_ref().map(|detail| {
-                                    div().text_xs().text_color(rgb(MUTED)).child(detail.clone())
-                                })
+                            .children(extra_progress.iter().map(|progress| {
+                                claude_extra_usage_progress_element(&snapshot.status, progress)
                             }))
+                            .children(
+                                readings
+                                    .iter()
+                                    .filter(|reading| {
+                                        extra_progress.is_none() || reading.label != "Extra"
+                                    })
+                                    .filter_map(|reading| {
+                                        reading.detail.as_ref().map(|detail| {
+                                            div()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child(detail.clone())
+                                        })
+                                    }),
+                            )
                             .children(readings.into_iter().filter_map(|reading| {
                                 reading.reset.map(|reset| {
                                     div()
