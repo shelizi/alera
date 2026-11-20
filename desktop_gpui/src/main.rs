@@ -27,6 +27,7 @@ mod quick_open_ui;
 mod win_ime;
 use native_history_sync_ui::AgyAccountEdit;
 use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
+use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -184,7 +185,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// Share the exact 16px Classic brand mark across native re-renders without
@@ -716,6 +717,7 @@ struct Workbench {
     runtime_catalog: Option<RuntimeCatalog>,
     sidebar_order_prefs: Option<SidebarOrderPrefs>,
     sidebar_order_busy: bool,
+    sidebar_reorder_hold: Arc<Mutex<SidebarReorderHoldGate>>,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
     /// Explicit Settings-only selection; never changes the active workspace.
@@ -11456,6 +11458,8 @@ impl Render for Workbench {
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
         let sidebar_order_prefs = self.sidebar_order_prefs.clone();
+        let sidebar_reorder_hold = self.sidebar_reorder_hold.clone();
+        let sidebar_reorder_hint = tr(self.settings_menu_locale, "Hold the handle for 0.5s to reorder");
         let sidebar_drag_generation = self.workspace_generation;
         let visible_project_ids: Vec<String> = project_tree_rows
             .iter()
@@ -16044,6 +16048,15 @@ impl Render for Workbench {
                                                 let project_drop_id = menu_project_id.clone();
                                                 let project_drop_visible_ids = visible_project_ids.clone();
                                                 let project_drag_caption = title.clone();
+                                                let project_hold_key = format!("project:{project_drag_id}");
+                                                let project_press_key = project_hold_key.clone();
+                                                let project_preview_key = project_hold_key.clone();
+                                                let project_press_gate = sidebar_reorder_hold.clone();
+                                                let project_preview_gate = sidebar_reorder_hold.clone();
+                                                let project_drag_gate = sidebar_reorder_hold.clone();
+                                                let project_hint = sidebar_reorder_hint.clone();
+                                                let project_preview_hint = sidebar_reorder_hint.clone();
+                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active;
                                                 let show_all_worktrees = project_title_matches_search(
                                                     &group, runtime_catalog.as_ref(), &sidebar_search_query,
                                                 );
@@ -16100,16 +16113,6 @@ impl Render for Workbench {
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
                                                                     }))
-                                                                    .on_drag(
-                                                                        SidebarOrderDrag {
-                                                                            kind: SidebarOrderKind::Project,
-                                                                            id: project_drag_id,
-                                                                            generation: sidebar_drag_generation,
-                                                                        },
-                                                                        move |_, _, _, cx| cx.new(|_| TerminalTabDragPreview {
-                                                                            label: project_drag_caption.clone(),
-                                                                        }),
-                                                                    )
                                                                     .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
                                                                         this.drop_sidebar_order(
                                                                             drag, SidebarOrderKind::Project, project_drop_id.clone(),
@@ -16120,8 +16123,43 @@ impl Render for Workbench {
                                                                         cx.entity().downgrade(), project_context_root, pinned,
                                                                         menu_project_id,
                                                                         project_remove_armed,
-                                                                    )),
-                                                            ),
+                                                                    ))
+                                                            .when(can_reorder_project, |row| row.child(
+                                                                div()
+                                                                    .id(("project-reorder-grip", index))
+                                                                    .w(px(26.0)).h(px(28.0))
+                                                                    .flex().items_center().justify_center()
+                                                                    .rounded_md()
+                                                                    .hover(|style| style.bg(rgb(ELEVATED)))
+                                                                    .tooltip(move |window, cx| {
+                                                                        gpui_kit::component::tooltip::Tooltip::new(project_hint.clone()).build(window, cx)
+                                                                    })
+                                                                    .child(icon(UiIcon::GripVertical, 14.0, MUTED))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |_, _, _, _| {
+                                                                        if let Ok(mut gate) = project_press_gate.lock() {
+                                                                            gate.press(&project_press_key, Instant::now());
+                                                                        }
+                                                                    }))
+                                                                    .on_drag(
+                                                                        SidebarOrderDrag {
+                                                                            kind: SidebarOrderKind::Project,
+                                                                            id: project_drag_id,
+                                                                            generation: sidebar_drag_generation,
+                                                                            hold: project_drag_gate,
+                                                                        },
+                                                                        move |_, _, _, cx| {
+                                                                            let ready = project_preview_gate.lock()
+                                                                                .map(|mut gate| gate.drag_started(&project_preview_key, Instant::now()))
+                                                                                .unwrap_or(false);
+                                                                            let caption = if ready {
+                                                                                format!("↕ {}", project_drag_caption)
+                                                                            } else {
+                                                                                project_preview_hint.clone()
+                                                                            };
+                                                                            cx.new(|_| TerminalTabDragPreview { label: caption })
+                                                                        },
+                                                                    ),
+                                                            ))),
                                                     )
                                                     .children(rows.into_iter()
                                                         .filter(|row| !sidebar_search_active || show_all_worktrees
@@ -16154,6 +16192,15 @@ impl Render for Workbench {
                                                             if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
                                                         }));
                                                         let workspace_drag_caption = label.clone();
+                                                        let workspace_hold_key = format!("workspace:{workspace_drag_id}");
+                                                        let workspace_press_key = workspace_hold_key.clone();
+                                                        let workspace_preview_key = workspace_hold_key.clone();
+                                                        let workspace_press_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_preview_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_drag_gate = sidebar_reorder_hold.clone();
+                                                        let workspace_hint = sidebar_reorder_hint.clone();
+                                                        let workspace_preview_hint = sidebar_reorder_hint.clone();
+                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active;
                                                         div()
                                                             .id(("project-tree-worktree-container", index * 128 + child_index))
                                                             .flex().flex_col()
@@ -16162,8 +16209,9 @@ impl Render for Workbench {
                                                                     .text_color(rgb(MUTED))
                                                                     .child(section).into_any_element()
                                                             } else { div().h(px(0.0)).into_any_element() })
-                                                            .child(div()
+                                                            .child(div().flex().items_center().child(div()
                                                             .id(("project-tree-worktree", index * 128 + child_index))
+                                                            .flex_1().min_w_0()
                                                             .pl(px(16.0 + depth.min(8) as f32 * 14.0))
                                                             .py_1()
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
@@ -16180,16 +16228,6 @@ impl Render for Workbench {
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
                                                             }))
-                                                            .on_drag(
-                                                                SidebarOrderDrag {
-                                                                    kind: SidebarOrderKind::Workspace,
-                                                                    id: workspace_drag_id,
-                                                                    generation: sidebar_drag_generation,
-                                                                },
-                                                                move |_, _, _, cx| cx.new(|_| TerminalTabDragPreview {
-                                                                    label: workspace_drag_caption.clone(),
-                                                                }),
-                                                            )
                                                             .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
                                                                 this.drop_sidebar_order(
                                                                     drag, SidebarOrderKind::Workspace, workspace_drop_id.clone(),
@@ -16200,6 +16238,42 @@ impl Render for Workbench {
                                                                 cx.entity().downgrade(), menu_root, menu_path,
                                                                 metadata.cloned(), menu_catalog, menu_confirmation,
                                                                 menu_selected_parent, active,
+                                                            )))
+                                                            .when(can_reorder_workspace, |row| row.child(
+                                                                div()
+                                                                    .id(("workspace-reorder-grip", index * 128 + child_index))
+                                                                    .w(px(26.0)).h(px(27.0))
+                                                                    .flex().items_center().justify_center()
+                                                                    .rounded_md()
+                                                                    .hover(|style| style.bg(rgb(ELEVATED)))
+                                                                    .tooltip(move |window, cx| {
+                                                                        gpui_kit::component::tooltip::Tooltip::new(workspace_hint.clone()).build(window, cx)
+                                                                    })
+                                                                    .child(icon(UiIcon::GripVertical, 14.0, MUTED))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |_, _, _, _| {
+                                                                        if let Ok(mut gate) = workspace_press_gate.lock() {
+                                                                            gate.press(&workspace_press_key, Instant::now());
+                                                                        }
+                                                                    }))
+                                                                    .on_drag(
+                                                                        SidebarOrderDrag {
+                                                                            kind: SidebarOrderKind::Workspace,
+                                                                            id: workspace_drag_id,
+                                                                            generation: sidebar_drag_generation,
+                                                                            hold: workspace_drag_gate,
+                                                                        },
+                                                                        move |_, _, _, cx| {
+                                                                            let ready = workspace_preview_gate.lock()
+                                                                                .map(|mut gate| gate.drag_started(&workspace_preview_key, Instant::now()))
+                                                                                .unwrap_or(false);
+                                                                            let caption = if ready {
+                                                                                format!("↕ {}", workspace_drag_caption)
+                                                                            } else {
+                                                                                workspace_preview_hint.clone()
+                                                                            };
+                                                                            cx.new(|_| TerminalTabDragPreview { label: caption })
+                                                                        },
+                                                                    ),
                                                             )))
                                                     }))
                                                     .child(if let Some(error) = error {
@@ -17138,6 +17212,7 @@ fn main() {
                             runtime_catalog: None,
                             sidebar_order_prefs: None,
                             sidebar_order_busy: false,
+                            sidebar_reorder_hold: Arc::new(Mutex::new(SidebarReorderHoldGate::default())),
                             runtime_catalog_error: None,
                             project_settings_project_id: None,
                             project_settings_selected_project_id: None,

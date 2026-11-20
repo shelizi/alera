@@ -22,6 +22,100 @@ class const _SidebarOrderDrag({
   final bool pinnedCopy;
 }
 
+/// The row itself remains a normal click target. Only its visible grip can
+/// initiate reordering, and Flutter requires the full long-press timeout
+/// before a drag avatar appears.
+class _SidebarReorderHandle extends StatefulWidget {
+  const _SidebarReorderHandle({required this.drag, required this.label});
+
+  final _SidebarOrderDrag drag;
+  final String label;
+
+  @override
+  State<_SidebarReorderHandle> createState() => _SidebarReorderHandleState();
+}
+
+class _SidebarReorderHandleState extends State<_SidebarReorderHandle> {
+  static const holdDelay = Duration(milliseconds: 500);
+  bool _hovering = false;
+  bool _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = context.tr('Hold the handle for 0.5s to reorder');
+    return Tooltip(
+      message: hint,
+      waitDuration: const Duration(milliseconds: 350),
+      // Tooltip's own long-press recognizer must not compete with the
+      // actual LongPressDraggable on touchscreens.
+      triggerMode: TooltipTriggerMode.tap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: LongPressDraggable<_SidebarOrderDrag>(
+          key: ValueKey(
+            'sidebar-reorder-handle:${widget.drag.kind}:${widget.drag.id}',
+          ),
+          data: widget.drag,
+          delay: holdDelay,
+          onDragStarted: () => setState(() => _dragging = true),
+          onDragEnd: (_) {
+            if (mounted) setState(() => _dragging = false);
+          },
+          feedback: Transform.scale(
+            scale: 1.035,
+            child: Material(
+              color: AleraTokens.surface,
+              elevation: 7,
+              borderRadius: BorderRadius.circular(AleraTokens.radiusLg),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space12,
+                  vertical: AleraTokens.space8,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.drag_indicator, size: 17),
+                    const SizedBox(width: AleraTokens.space8),
+                    Text(
+                      widget.label,
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          childWhenDragging: const SizedBox(width: 24, height: 28),
+          child: Semantics(
+            label: hint,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 24,
+              height: 28,
+              decoration: BoxDecoration(
+                color: _hovering || _dragging
+                    ? AleraTokens.surface
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+              ),
+              child: Icon(
+                Icons.drag_indicator,
+                size: 17,
+                color: _hovering || _dragging
+                    ? AleraTokens.foreground
+                    : AleraTokens.foregroundFaint,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class const _SidebarBody({
   required final WorkbenchState state,
   required final _WorkbenchSidebarCommands commands,
@@ -356,30 +450,26 @@ class const _SidebarBody({
           );
         }
       },
-      builder: (context, candidates, _) => Draggable<_SidebarOrderDrag>(
-        data: target,
-        feedback: Material(
-          color: AleraTokens.surface,
-          borderRadius: BorderRadius.circular(AleraTokens.radiusLg),
-          elevation: 4,
-          child: Padding(
-            padding: const EdgeInsets.all(AleraTokens.space8),
-            child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
-          ),
-        ),
-        childWhenDragging: Opacity(opacity: 0.4, child: child),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            border: Border(
-              top: BorderSide(
-                color: candidates.isNotEmpty
-                    ? AleraTokens.foreground
-                    : Colors.transparent,
-                width: 2,
-              ),
+      builder: (context, candidates, _) => AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        decoration: BoxDecoration(
+          color: candidates.isNotEmpty
+              ? AleraTokens.surface
+              : Colors.transparent,
+          border: Border(
+            top: BorderSide(
+              color: candidates.isNotEmpty
+                  ? AleraTokens.foreground
+                  : Colors.transparent,
+              width: 2,
             ),
           ),
-          child: child,
+        ),
+        child: Row(
+          children: [
+            Expanded(child: child),
+            _SidebarReorderHandle(drag: target, label: label),
+          ],
         ),
       ),
     );

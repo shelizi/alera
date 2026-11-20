@@ -126,6 +126,24 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_long_press_reorder_hint_is_localized_in_all_four_languages() {
+        let source = "Hold the handle for 0.5s to reorder";
+        assert_eq!(tr(UiLocale::English, source), source);
+        assert_eq!(
+            tr(UiLocale::TraditionalChinese, source),
+            "長按把手 0.5 秒，再拖曳排序"
+        );
+        assert_eq!(
+            tr(UiLocale::SimplifiedChinese, source),
+            "长按把手 0.5 秒，再拖动排序"
+        );
+        assert_eq!(
+            tr(UiLocale::Japanese, source),
+            "ハンドルを0.5秒長押しして並べ替え"
+        );
+    }
+
+    #[test]
     fn s04_shared_settings_operational_labels_have_real_translations() {
         let examples = [
             ("Not available in GPUI yet", "GPUI 尚未提供"),

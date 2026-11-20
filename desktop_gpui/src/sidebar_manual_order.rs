@@ -5,6 +5,60 @@ use crate::runtime_catalog::RuntimeCatalog;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, ErrorKind};
+use std::time::{Duration, Instant};
+
+/// A drag can only start after a stationary 500ms press on the visible grip.
+/// A quick drag attempt is rejected for the entire gesture, even if the user
+/// continues holding while moving. This prevents accidental reorders.
+pub const SIDEBAR_REORDER_HOLD: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Default)]
+pub struct SidebarReorderHoldGate {
+    source_key: Option<String>,
+    pressed_at: Option<Instant>,
+    drag_accepted: bool,
+    drag_rejected: bool,
+}
+
+impl SidebarReorderHoldGate {
+    pub fn press(&mut self, source_key: &str, now: Instant) {
+        self.source_key = Some(source_key.to_owned());
+        self.pressed_at = Some(now);
+        self.drag_accepted = false;
+        self.drag_rejected = false;
+    }
+
+    pub fn drag_started(&mut self, source_key: &str, now: Instant) -> bool {
+        if self.source_key.as_deref() != Some(source_key) || self.drag_rejected {
+            return false;
+        }
+        if self.drag_accepted {
+            return true;
+        }
+        let held = self.pressed_at.is_some_and(|at| {
+            now.checked_duration_since(at)
+                .is_some_and(|elapsed| elapsed >= SIDEBAR_REORDER_HOLD)
+        });
+        if !held {
+            self.drag_rejected = true;
+            return false;
+        }
+        self.drag_accepted = true;
+        true
+    }
+
+    /// Consume a successful drag once. A stale/fast/other-row drop cannot
+    /// update the shared Host order.
+    pub fn consume_drop(&mut self, source_key: &str) -> bool {
+        if self.source_key.as_deref() != Some(source_key) || !self.drag_accepted {
+            return false;
+        }
+        self.drag_accepted = false;
+        self.source_key = None;
+        self.pressed_at = None;
+        true
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SidebarOrderPrefs {
@@ -121,6 +175,34 @@ mod tests {
     use super::*;
     use crate::runtime_catalog::RuntimeProject;
     use std::path::PathBuf;
+
+    #[test]
+    fn long_press_requires_full_delay_before_first_drag_move() {
+        let now = Instant::now();
+        let mut gate = SidebarReorderHoldGate::default();
+        gate.press("project:a", now);
+        assert!(!gate.drag_started("project:a", now + Duration::from_millis(490)));
+        assert!(!gate.drag_started("project:a", now + Duration::from_secs(1)));
+        assert!(!gate.consume_drop("project:a"));
+        gate.press("project:a", now + Duration::from_secs(2));
+        assert!(gate.drag_started("project:a", now + Duration::from_millis(2500)));
+        assert!(gate.consume_drop("project:a"));
+        assert!(
+            !gate.consume_drop("project:a"),
+            "one drag cannot save twice"
+        );
+    }
+
+    #[test]
+    fn unrelated_row_cannot_consume_long_press_or_drop() {
+        let now = Instant::now();
+        let mut gate = SidebarReorderHoldGate::default();
+        gate.press("project:a", now);
+        assert!(!gate.drag_started("workspace:a", now + Duration::from_secs(1)));
+        assert!(gate.drag_started("project:a", now + Duration::from_secs(1)));
+        assert!(!gate.consume_drop("workspace:a"));
+        assert!(gate.consume_drop("project:a"));
+    }
 
     fn group(root: &str) -> ProjectTreeGroup {
         ProjectTreeGroup {

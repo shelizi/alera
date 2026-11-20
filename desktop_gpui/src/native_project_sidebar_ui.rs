@@ -14,6 +14,7 @@ pub(super) struct SidebarOrderDrag {
     pub kind: SidebarOrderKind,
     pub id: String,
     pub generation: u64,
+    pub hold: Arc<Mutex<SidebarReorderHoldGate>>,
 }
 
 #[derive(Clone)]
@@ -61,6 +62,22 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         let Some(target_id) = target_id else { return };
+        let source_key = format!(
+            "{}:{}",
+            if drag.kind == SidebarOrderKind::Project { "project" } else { "workspace" },
+            drag.id
+        );
+        let hold_completed = drag.hold.lock()
+            .map(|mut hold| hold.consume_drop(&source_key))
+            .unwrap_or(false);
+        if !hold_completed {
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Hold the handle for 0.5s to reorder",
+            ));
+            cx.notify();
+            return;
+        }
         if drag.generation != self.workspace_generation
             || drag.kind != target_kind
             || drag.id == target_id
