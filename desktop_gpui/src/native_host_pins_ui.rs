@@ -19,7 +19,8 @@ impl Workbench {
                 WorkbenchTabIdentity::Host(target) => Some(target.clone()),
                 WorkbenchTabIdentity::Editor { .. }
                 | WorkbenchTabIdentity::GitHistory
-                | WorkbenchTabIdentity::GitFileCompare(_) => None,
+                | WorkbenchTabIdentity::GitFileCompare(_)
+                | WorkbenchTabIdentity::GitConflictCompare(_) => None,
             })
             .collect();
         let attached_workspace_ids: Vec<String> = attached_targets

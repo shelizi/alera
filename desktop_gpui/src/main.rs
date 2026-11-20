@@ -919,6 +919,8 @@ struct Workbench {
     center_git_conflict: Option<native_git_conflict_ui::CenterConflictPreview>,
     center_git_conflict_request: u64,
     center_git_conflict_scroll: [UniformListScrollHandle; 3],
+    pinned_conflict_tabs: native_git_conflict_ui::PinnedConflictTabs,
+    active_pinned_conflict: Option<u64>,
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
@@ -6340,6 +6342,8 @@ impl Workbench {
         self.git_graph_center_open = false;
         self.git_compare_tabs.reset();
         self.active_git_compare_tab = None;
+        self.pinned_conflict_tabs.reset();
+        self.active_pinned_conflict = None;
         self.git_branch_picker_mode = None;
         self.git_branch_picker_input.update(cx, |input, cx| input.clear(cx));
         self.mixed_tabs
@@ -9569,7 +9573,7 @@ impl Workbench {
         // 6px Hook status dot and stopped label never move or get concealed.
         let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::GitHistory {
             icon(UiIcon::Graph, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
-        } else if tab.kind == WorkbenchTabKind::GitFileCompare {
+        } else if matches!(tab.kind, WorkbenchTabKind::GitFileCompare | WorkbenchTabKind::GitConflictCompare) {
             icon(UiIcon::FileCode, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
         } else if tab.kind == WorkbenchTabKind::Editor {
             explorer_file_icon_element(
@@ -9802,11 +9806,29 @@ impl Workbench {
                 interrupted: false,
             });
         }
+        for tab in self.pinned_conflict_tabs.entries() {
+            observed.push(WorkbenchTab {
+                identity: WorkbenchTabIdentity::GitConflictCompare(tab.instance),
+                kind: WorkbenchTabKind::GitConflictCompare,
+                title: tab.title(),
+                dirty: false,
+                running: true,
+                agent_state: None,
+                interrupted: false,
+            });
+        }
         if let Some(instance) = self.active_git_compare_tab {
             if self.git_compare_tabs.get(instance).is_some() {
                 preferred = Some(WorkbenchTabIdentity::GitFileCompare(instance));
             } else {
                 self.active_git_compare_tab = None;
+            }
+        }
+        if let Some(instance) = self.active_pinned_conflict {
+            if self.pinned_conflict_tabs.get(instance).is_some() {
+                preferred = Some(WorkbenchTabIdentity::GitConflictCompare(instance));
+            } else {
+                self.active_pinned_conflict = None;
             }
         }
         self.mixed_tabs
@@ -9966,6 +9988,9 @@ impl Workbench {
             WorkbenchTabIdentity::GitFileCompare(instance) => {
                 self.git_compare_tabs.get(*instance).is_some()
             }
+            WorkbenchTabIdentity::GitConflictCompare(instance) => {
+                self.pinned_conflict_tabs.get(*instance).is_some()
+            }
             WorkbenchTabIdentity::Editor {
                 editor_epoch,
                 instance,
@@ -9999,6 +10024,7 @@ impl Workbench {
         self.mixed_tab_context = None;
         self.git_graph_center_open = false;
         self.active_git_compare_tab = None;
+        self.active_pinned_conflict = None;
         self.explorer_preview_active = false;
         self.git_original_active = false;
         self.mixed_tabs.select(id);
@@ -10031,6 +10057,10 @@ impl Workbench {
             }
             WorkbenchTabIdentity::GitFileCompare(instance) => {
                 self.active_git_compare_tab = Some(*instance);
+                self.clear_terminal_text_inputs(cx);
+            }
+            WorkbenchTabIdentity::GitConflictCompare(instance) => {
+                self.active_pinned_conflict = Some(*instance);
                 self.clear_terminal_text_inputs(cx);
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
@@ -10120,6 +10150,12 @@ impl Workbench {
                     self.active_git_compare_tab = None;
                 }
             }
+            WorkbenchTabIdentity::GitConflictCompare(instance) => {
+                self.pinned_conflict_tabs.close(*instance);
+                if self.active_pinned_conflict == Some(*instance) {
+                    self.active_pinned_conflict = None;
+                }
+            }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 if let Some((slot, editor)) = self.editor_for_instance(*instance, cx) {
                     let closed =
@@ -10205,7 +10241,7 @@ impl Workbench {
             .tabs_in(destination)
             .contains(&drag.identity);
         if !source_in_destination {
-            let moved = if matches!(drag.identity, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
+            let moved = if matches!(drag.identity, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
                 self.mixed_panes.move_to(&drag.identity, destination)
             } else {
                 self.transfer_editor_to_pane(&drag.identity, destination, cx)
@@ -10254,7 +10290,7 @@ impl Workbench {
                 WorkbenchTabIdentity::Host(target) => {
                     self.toggle_host_tab_pinned(target.clone(), cx);
                 }
-                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) => {
+                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => {
                     let next = !self.mixed_tabs.is_pinned(&id);
                     if self.mixed_tabs.set_pinned(&id, next) {
                         self.save_mixed_pane_layout(cx);
@@ -10285,7 +10321,7 @@ impl Workbench {
             MixedContextAction::SecondPane => {
                 // Host stays in its Host-owned runtime; Editor transfers its
                 // existing EditorSession into an independent native viewport.
-                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
+                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
                     self.mixed_panes.move_to(&id, PaneSlot::Secondary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx)
@@ -10296,7 +10332,7 @@ impl Workbench {
                 }
             }
             MixedContextAction::FirstPane => {
-                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_)) {
+                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
                     self.mixed_panes.move_to(&id, PaneSlot::Primary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx)
@@ -11184,6 +11220,14 @@ impl Render for Workbench {
             Some(WorkbenchTabIdentity::GitFileCompare(instance)) => Some(*instance),
             _ => None,
         };
+        let conflict_in_primary = match &mixed_primary_active {
+            Some(WorkbenchTabIdentity::GitConflictCompare(instance)) => Some(*instance),
+            _ => None,
+        };
+        let conflict_in_secondary = match &mixed_secondary_active {
+            Some(WorkbenchTabIdentity::GitConflictCompare(instance)) => Some(*instance),
+            _ => None,
+        };
         let graph_surface_visible = graph_in_primary || graph_in_secondary;
         let mixed_has_secondary = self.mixed_panes.has_secondary();
         // Classic shows one independent mixed Tab strip per visible pane.
@@ -11237,7 +11281,7 @@ impl Render for Workbench {
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
             WorkbenchTabIdentity::Host(target) => Some(target.clone()),
             WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
-            | WorkbenchTabIdentity::GitFileCompare(_) => None,
+            | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => None,
         });
         let mixed_secondary_key_target = mixed_secondary_host.clone();
         let mixed_secondary_vt_rows: Option<Vec<StyledRow>> =
@@ -11266,7 +11310,7 @@ impl Render for Workbench {
                         TerminalViewMode::Transcript => session.output.clone(),
                     }
                 }
-                WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) => String::new(),
+                WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => String::new(),
                 WorkbenchTabIdentity::Editor {
                     editor_epoch,
                     instance,
@@ -11526,7 +11570,7 @@ impl Render for Workbench {
                 .and_then(|identity| match identity {
                     WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
                     WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
-                    | WorkbenchTabIdentity::GitFileCompare(_) => None,
+                    | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => None,
                 })
         } else {
             self.terminals.active_tab
@@ -15041,7 +15085,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(graph_in_primary || compare_in_primary.is_some() || !show_editor_toolbar || show_center_git_diff || show_center_git_conflict, |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || conflict_in_primary.is_some() || !show_editor_toolbar || show_center_git_diff || show_center_git_conflict, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -15119,12 +15163,14 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
-                                            .when(!center_is_editor && !show_center_git_diff && !show_center_git_conflict, |pane| {
+                                            .when(!center_is_editor && !show_center_git_diff && !show_center_git_conflict && conflict_in_primary.is_none(), |pane| {
                                                 pane.bg(rgb(TERMINAL_DEFAULT_BG))
                                             })
                             .child(
                                 if show_center_git_conflict {
                                     self.render_center_git_conflict(window, cx)
+                                } else if let Some(instance) = conflict_in_primary {
+                                    self.render_pinned_git_conflict(instance, window, cx)
                                 } else if graph_in_primary {
                                     self.render_center_git_graph(window, cx)
                                 } else if let Some(instance) = compare_in_primary {
@@ -15186,7 +15232,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || conflict_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     // Match the VT viewport, including the 12px text inset,
@@ -15439,7 +15485,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(graph_in_primary || compare_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
+                                    .when(graph_in_primary || compare_in_primary.is_some() || conflict_in_primary.is_some() || native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff || show_center_git_conflict), |panel| panel.hidden())
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
@@ -15628,6 +15674,8 @@ impl Render for Workbench {
                                             })
                                             .child(if graph_in_secondary {
                                                 self.render_center_git_graph(window, cx)
+                                            } else if let Some(instance) = conflict_in_secondary {
+                                                self.render_pinned_git_conflict(instance, window, cx)
                                             } else if let Some(instance) = compare_in_secondary {
                                                 self.render_git_file_compare_center_tab(instance, cx)
                                             } else if let Some(editor) = secondary_native_editor {
@@ -17272,6 +17320,8 @@ fn main() {
                                 UniformListScrollHandle::new(),
                                 UniformListScrollHandle::new(),
                             ],
+                            pinned_conflict_tabs: native_git_conflict_ui::PinnedConflictTabs::default(),
+                            active_pinned_conflict: None,
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),

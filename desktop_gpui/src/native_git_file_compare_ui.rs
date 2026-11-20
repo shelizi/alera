@@ -473,6 +473,7 @@ impl Workbench {
         }
         let identity = WorkbenchTabIdentity::GitFileCompare(id);
         self.active_git_compare_tab = Some(id);
+        self.active_pinned_conflict = None;
         self.git_graph_center_open = false;
         self.git_original_active = false;
         self.explorer_preview_active = false;

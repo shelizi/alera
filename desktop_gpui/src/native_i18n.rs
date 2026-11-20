@@ -163,6 +163,7 @@ mod tests {
                 "Base version",
                 "Ours version",
                 "Theirs version",
+                "Pin conflict comparison to workspace tab",
             ] {
                 let value = tr(locale, source);
                 assert!(!value.is_empty(), "Missing {}: {}", locale.tag(), source);

@@ -660,6 +660,25 @@ mod tests {
     }
 
     #[test]
+    fn read_only_conflict_tab_can_share_split_with_other_git_diff_and_closing_collapses_pane() {
+        let compare = WorkbenchTabIdentity::GitFileCompare(1);
+        let conflict = WorkbenchTabIdentity::GitConflictCompare(1);
+        let second_conflict = WorkbenchTabIdentity::GitConflictCompare(2);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[compare.clone(), conflict.clone(), second_conflict.clone()]);
+        assert!(panes.split_with(&conflict));
+        assert_unique(&panes);
+        assert_eq!(panes.active_in(PaneSlot::Secondary), Some(&conflict));
+        assert!(panes.activate(&second_conflict));
+        assert_eq!(panes.active_in(PaneSlot::Primary), Some(&second_conflict));
+        assert!(panes.activate(&conflict));
+        panes.reconcile(&[compare.clone(), second_conflict.clone()]);
+        assert!(!panes.has_secondary());
+        assert_eq!(panes.focused_pane(), PaneSlot::Primary);
+        expect(&panes, PaneSlot::Primary, &[compare, second_conflict]);
+    }
+
+    #[test]
     fn restored_host_pane_positions_require_running_exact_three_part_identity() {
         let left = host("left");
         let right = host("right");

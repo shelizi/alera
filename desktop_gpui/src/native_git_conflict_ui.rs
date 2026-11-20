@@ -11,6 +11,7 @@ enum ConflictSource {
     PlannedMerge,
 }
 
+#[derive(Clone)]
 pub(super) struct CenterConflictPreview {
     workspace_generation: u64,
     path: PathBuf,
@@ -21,26 +22,103 @@ pub(super) struct CenterConflictPreview {
     compact_version: u8,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConflictViewTarget {
+    Transient,
+    Pinned(u64),
+}
+
+const MAX_PINNED_CONFLICTS: usize = 8;
+
+pub(super) struct PinnedConflictTab {
+    pub(super) instance: u64,
+    preview: CenterConflictPreview,
+    scroll: [UniformListScrollHandle; 3],
+}
+
+impl PinnedConflictTab {
+    pub(super) fn title(&self) -> String {
+        let name = self
+            .preview
+            .path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.preview.path.display().to_string());
+        format!("{name} · 3-way")
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PinnedConflictTabs {
+    tabs: Vec<PinnedConflictTab>,
+    next_instance: u64,
+}
+
+impl PinnedConflictTabs {
+    pub(super) fn entries(&self) -> &[PinnedConflictTab] {
+        &self.tabs
+    }
+    pub(super) fn get(&self, instance: u64) -> Option<&PinnedConflictTab> {
+        self.tabs.iter().find(|item| item.instance == instance)
+    }
+    fn get_mut(&mut self, instance: u64) -> Option<&mut PinnedConflictTab> {
+        self.tabs.iter_mut().find(|item| item.instance == instance)
+    }
+    pub(super) fn close(&mut self, instance: u64) -> bool {
+        let len = self.tabs.len();
+        self.tabs.retain(|item| item.instance != instance);
+        self.tabs.len() != len
+    }
+    pub(super) fn reset(&mut self) {
+        self.tabs.clear();
+        // Keep the counter: a stale id from another workspace cannot rebind.
+    }
+    fn open(&mut self, preview: &CenterConflictPreview) -> Result<u64, String> {
+        let Some(Ok(snapshot)) = preview.result.as_ref() else {
+            return Err("Wait for the complete read-only conflict snapshot before pinning".into());
+        };
+        if let Some(existing) = self.tabs.iter().find(|item| {
+            item.preview.source == preview.source
+                && item.preview.path == preview.path
+                && item.preview.result.as_ref().is_some_and(|result| {
+                    result
+                        .as_ref()
+                        .is_ok_and(|saved| saved.as_ref() == snapshot.as_ref())
+                })
+        }) {
+            return Ok(existing.instance);
+        }
+        if self.tabs.len() >= MAX_PINNED_CONFLICTS {
+            return Err("Close an older three-way comparison tab first (limit 8)".into());
+        }
+        self.next_instance = self.next_instance.wrapping_add(1);
+        if self.next_instance == 0 {
+            self.next_instance = 1;
+        }
+        let id = self.next_instance;
+        self.tabs.push(PinnedConflictTab {
+            instance: id,
+            preview: preview.clone(),
+            scroll: [
+                UniformListScrollHandle::new(),
+                UniformListScrollHandle::new(),
+                UniformListScrollHandle::new(),
+            ],
+        });
+        Ok(id)
+    }
+}
+
 /// Consecutive changed lines make one navigation target. Use only the
 /// immutable, bounded conflict snapshot; never query or mutate Git in render.
 fn conflict_change_anchors(snapshot: &GitConflictComparison) -> Vec<usize> {
-    let versions = [&snapshot.base, &snapshot.ours, &snapshot.theirs];
-    let longest = versions
-        .iter()
-        .filter_map(|item| item.as_ref().map(|version| version.lines.len()))
-        .max()
-        .unwrap_or(0);
-    let mut changed = vec![false; longest];
-    for version in versions.into_iter().flatten() {
-        for (index, line) in version.lines.iter().enumerate() {
-            changed[index] |= line.changed;
-        }
-    }
-    changed
+    snapshot
+        .aligned_rows
         .iter()
         .enumerate()
-        .filter_map(|(index, value)| {
-            (*value && (index == 0 || !changed[index - 1])).then_some(index)
+        .filter_map(|(index, row)| {
+            (row.changed && (index == 0 || !snapshot.aligned_rows[index - 1].changed))
+                .then_some(index)
         })
         .collect()
 }
@@ -63,6 +141,75 @@ fn compact_conflict_layout(usable_width: f32) -> bool {
 }
 
 impl Workbench {
+    fn conflict_view(
+        &self,
+        target: ConflictViewTarget,
+    ) -> Option<(&CenterConflictPreview, &[UniformListScrollHandle; 3])> {
+        match target {
+            ConflictViewTarget::Transient => Some((
+                self.center_git_conflict.as_ref()?,
+                &self.center_git_conflict_scroll,
+            )),
+            ConflictViewTarget::Pinned(instance) => {
+                let tab = self.pinned_conflict_tabs.get(instance)?;
+                Some((&tab.preview, &tab.scroll))
+            }
+        }
+    }
+
+    fn conflict_view_mut(
+        &mut self,
+        target: ConflictViewTarget,
+    ) -> Option<(&mut CenterConflictPreview, &[UniformListScrollHandle; 3])> {
+        match target {
+            ConflictViewTarget::Transient => Some((
+                self.center_git_conflict.as_mut()?,
+                &self.center_git_conflict_scroll,
+            )),
+            ConflictViewTarget::Pinned(instance) => {
+                let tab = self.pinned_conflict_tabs.get_mut(instance)?;
+                Some((&mut tab.preview, &tab.scroll))
+            }
+        }
+    }
+
+    fn pin_center_git_conflict(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.center_git_conflict.as_ref() else {
+            return;
+        };
+        if preview.workspace_generation != self.workspace_generation {
+            return;
+        }
+        match self.pinned_conflict_tabs.open(preview) {
+            Ok(instance) => {
+                self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
+                self.center_git_conflict = None;
+                self.active_pinned_conflict = Some(instance);
+                self.git_original_active = false;
+                self.active_git_compare_tab = None;
+                self.git_graph_center_open = false;
+                self.mixed_panes.focus_pane(PaneSlot::Primary);
+                self.sync_mixed_tabs(cx);
+                let identity = WorkbenchTabIdentity::GitConflictCompare(instance);
+                self.mixed_tabs.select(&identity);
+                self.mixed_tabs.set_pinned(&identity, true);
+                self.mixed_panes.activate(&identity);
+                self.save_mixed_pane_layout(cx);
+            }
+            Err(error) => self.model.set_status(error),
+        }
+        cx.notify();
+    }
+
+    fn close_conflict_view(&mut self, target: ConflictViewTarget, cx: &mut Context<Self>) {
+        match target {
+            ConflictViewTarget::Transient => self.close_center_git_conflict(cx),
+            ConflictViewTarget::Pinned(instance) => {
+                self.close_mixed_tab(&WorkbenchTabIdentity::GitConflictCompare(instance), cx)
+            }
+        }
+    }
+
     fn close_center_git_conflict(&mut self, cx: &mut Context<Self>) {
         self.center_git_conflict_request = self.center_git_conflict_request.wrapping_add(1);
         self.center_git_conflict = None;
@@ -166,6 +313,7 @@ impl Workbench {
         self.center_git_diff_hunk = None;
         self.git_original_active = false;
         self.active_git_compare_tab = None;
+        self.active_pinned_conflict = None;
         self.git_graph_center_open = false;
         for scroll in &self.center_git_conflict_scroll {
             scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
@@ -175,11 +323,17 @@ impl Workbench {
 
     /// Jump all three bounded virtual lists to the same changed region.
     /// Wheel scrolling remains independent when lines have shifted.
-    fn jump_center_conflict_change(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let Some(preview) = self.center_git_conflict.as_mut() else {
+    fn jump_center_conflict_change(
+        &mut self,
+        target: ConflictViewTarget,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.workspace_generation;
+        let Some((preview, scrolls)) = self.conflict_view_mut(target) else {
             return;
         };
-        if preview.workspace_generation != self.workspace_generation {
+        if preview.workspace_generation != generation {
             return;
         }
         let Some(next) = adjacent_conflict_change(
@@ -194,11 +348,11 @@ impl Workbench {
         };
         preview.selected_change = Some(next);
         let anchor = preview.change_anchors[next];
-        for (index, scroll) in self.center_git_conflict_scroll.iter().enumerate() {
+        for (index, scroll) in scrolls.iter().enumerate() {
             if let Some(version) = conflict_version(snapshot, index as u8) {
-                if !version.lines.is_empty() {
+                if !version.lines.is_empty() && !snapshot.aligned_rows.is_empty() {
                     scroll.scroll_to_item(
-                        anchor.min(version.lines.len() - 1),
+                        anchor.min(snapshot.aligned_rows.len() - 1),
                         gpui::ScrollStrategy::Center,
                     );
                 }
@@ -207,8 +361,13 @@ impl Workbench {
         cx.notify();
     }
 
-    fn select_center_conflict_version(&mut self, role: u8, cx: &mut Context<Self>) {
-        let Some(preview) = self.center_git_conflict.as_mut() else {
+    fn select_center_conflict_version(
+        &mut self,
+        target: ConflictViewTarget,
+        role: u8,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((preview, scrolls)) = self.conflict_view_mut(target) else {
             return;
         };
         if role > 2 {
@@ -217,10 +376,10 @@ impl Workbench {
         preview.compact_version = role;
         if let (Some(Ok(snapshot)), Some(change)) = (&preview.result, preview.selected_change) {
             if let Some(version) = conflict_version(snapshot, role) {
-                if !version.lines.is_empty() {
-                    let anchor = preview.change_anchors[change].min(version.lines.len() - 1);
-                    self.center_git_conflict_scroll[usize::from(role)]
-                        .scroll_to_item(anchor, gpui::ScrollStrategy::Center);
+                if !version.lines.is_empty() && !snapshot.aligned_rows.is_empty() {
+                    let anchor =
+                        preview.change_anchors[change].min(snapshot.aligned_rows.len() - 1);
+                    scrolls[usize::from(role)].scroll_to_item(anchor, gpui::ScrollStrategy::Center);
                 }
             }
         }
@@ -238,7 +397,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let version = conflict_version(&snapshot, role);
-        let count = version.map_or(0, |version| version.lines.len());
+        let count = snapshot.aligned_rows.len();
         let changed = version.map_or(0, |version| version.changed_lines);
         let present = version.is_some();
         div()
@@ -270,8 +429,17 @@ impl Workbench {
                             return Vec::new();
                         };
                         range
-                            .filter_map(|index| version.lines.get(index))
-                            .map(|line| {
+                            .filter_map(|index| snapshot.aligned_rows.get(index))
+                            .map(|aligned| {
+                                let Some(line) = aligned.indices[usize::from(role)]
+                                    .and_then(|index| version.lines.get(index))
+                                else {
+                                    return div()
+                                        .h(px(22.0))
+                                        .w_full()
+                                        .bg(rgb(if aligned.changed { 0x20262e } else { BG }))
+                                        .into_any_element();
+                                };
                                 let spans = line.highlights.iter().cloned().map(|span| {
                                     (
                                         span,
@@ -349,7 +517,25 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let Some(preview) = self.center_git_conflict.as_ref() else {
+        self.render_git_conflict_view(ConflictViewTarget::Transient, window, cx)
+    }
+
+    pub(super) fn render_pinned_git_conflict(
+        &mut self,
+        instance: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        self.render_git_conflict_view(ConflictViewTarget::Pinned(instance), window, cx)
+    }
+
+    fn render_git_conflict_view(
+        &mut self,
+        target: ConflictViewTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some((preview, scrolls)) = self.conflict_view(target) else {
             return div().into_any_element();
         };
         let locale = self.settings_menu_locale;
@@ -436,11 +622,36 @@ impl Workbench {
                             .cursor_pointer()
                             .text_sm()
                             .text_color(rgb(TEXT))
-                            .child(tr(locale, "Close Preview"))
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.close_center_git_conflict(cx);
+                            .child(tr(
+                                locale,
+                                if target == ConflictViewTarget::Transient {
+                                    "Close Preview"
+                                } else {
+                                    "Close tab"
+                                },
+                            ))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.close_conflict_view(target, cx);
                             })),
                     ),
+            )
+            .when(
+                target == ConflictViewTarget::Transient && matches!(result.as_ref(), Some(Ok(_))),
+                |outer| {
+                    outer.child(
+                        div()
+                            .id("pin-three-way-conflict-to-tab")
+                            .cursor_pointer()
+                            .px_3()
+                            .py_2()
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .child(tr(locale, "Pin conflict comparison to workspace tab"))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.pin_center_git_conflict(cx);
+                            })),
+                    )
+                },
             )
             .child(
                 div()
@@ -472,8 +683,8 @@ impl Workbench {
                             .text_sm()
                             .text_color(rgb(TEXT))
                             .child(tr(locale, "Previous difference"))
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.jump_center_conflict_change(false, cx);
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.jump_center_conflict_change(target, false, cx);
                             }))
                             .into_any_element()
                     } else {
@@ -490,8 +701,8 @@ impl Workbench {
                             .text_sm()
                             .text_color(rgb(TEXT))
                             .child(tr(locale, "Next difference"))
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.jump_center_conflict_change(true, cx);
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.jump_center_conflict_change(target, true, cx);
                             }))
                             .into_any_element()
                     } else {
@@ -563,7 +774,7 @@ impl Workbench {
                                     .text_color(rgb(if selected { TEXT } else { MUTED }))
                                     .child(label)
                                     .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.select_center_conflict_version(role, cx);
+                                        view.select_center_conflict_version(target, role, cx);
                                     }))
                             })),
                     )
@@ -588,7 +799,7 @@ impl Workbench {
                             1 => "conflict-ours-lines",
                             _ => "conflict-theirs-lines",
                         },
-                        &self.center_git_conflict_scroll[usize::from(selected_role)],
+                        &scrolls[usize::from(selected_role)],
                         locale,
                         cx,
                     ))
@@ -606,7 +817,7 @@ impl Workbench {
                         0,
                         0x425b88,
                         "conflict-base-lines",
-                        &self.center_git_conflict_scroll[0],
+                        &scrolls[0],
                         locale,
                         cx,
                     ))
@@ -616,7 +827,7 @@ impl Workbench {
                         1,
                         0x765b34,
                         "conflict-ours-lines",
-                        &self.center_git_conflict_scroll[1],
+                        &scrolls[1],
                         locale,
                         cx,
                     ))
@@ -626,7 +837,7 @@ impl Workbench {
                         2,
                         0x28684f,
                         "conflict-theirs-lines",
-                        &self.center_git_conflict_scroll[2],
+                        &scrolls[2],
                         locale,
                         cx,
                     ))
@@ -707,5 +918,81 @@ mod conflict_navigation_tests {
         assert!(!compact_conflict_layout(900.0));
         assert!(compact_conflict_layout(899.0));
         assert!(compact_conflict_layout(340.0));
+    }
+
+    fn preview(path: &str, value: &str) -> CenterConflictPreview {
+        let snapshot = Arc::new(
+            GitConflictComparison::from_versions(
+                path.into(),
+                Some("base\n"),
+                Some(value),
+                Some("theirs\n"),
+            )
+            .unwrap(),
+        );
+        CenterConflictPreview {
+            workspace_generation: 7,
+            path: path.into(),
+            source: ConflictSource::UnresolvedIndex,
+            change_anchors: conflict_change_anchors(&snapshot),
+            selected_change: None,
+            compact_version: 1,
+            result: Some(Ok(snapshot)),
+        }
+    }
+
+    #[test]
+    fn pinned_three_way_snapshot_deduplicates_only_identical_versions_and_stays_immutable() {
+        let mut tabs = PinnedConflictTabs::default();
+        let a = preview("src/sample.rs", "ours\n");
+        let first = tabs.open(&a).unwrap();
+        assert_eq!(
+            tabs.open(&preview("src/sample.rs", "ours\n")).unwrap(),
+            first
+        );
+        let different = tabs.open(&preview("src/sample.rs", "modified\n")).unwrap();
+        assert_ne!(first, different);
+        assert_eq!(tabs.entries().len(), 2);
+        assert_eq!(tabs.get(first).unwrap().title(), "sample.rs · 3-way");
+        assert_eq!(
+            tabs.get(first)
+                .unwrap()
+                .preview
+                .result
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .ours
+                .as_ref()
+                .unwrap()
+                .lines[0]
+                .text,
+            "ours"
+        );
+        assert!(tabs.close(first));
+        assert!(tabs.get(first).is_none());
+        tabs.reset();
+        let next = tabs.open(&a).unwrap();
+        assert_ne!(
+            next, first,
+            "old mixed-tab identity cannot rebind after workspace switch"
+        );
+    }
+
+    #[test]
+    fn pinned_conflicts_have_a_bound_and_never_accept_loading_or_failed_previews() {
+        let mut tabs = PinnedConflictTabs::default();
+        let mut not_loaded = preview("wait.txt", "ours\n");
+        not_loaded.result = None;
+        assert!(tabs.open(&not_loaded).is_err());
+        not_loaded.result = Some(Err("unknown".into()));
+        assert!(tabs.open(&not_loaded).is_err());
+        for index in 0..MAX_PINNED_CONFLICTS {
+            tabs.open(&preview(&format!("{index}.txt"), "ours\n"))
+                .unwrap();
+        }
+        assert!(tabs.open(&preview("overflow.txt", "ours\n")).is_err());
+        assert_eq!(tabs.entries().len(), MAX_PINNED_CONFLICTS);
     }
 }

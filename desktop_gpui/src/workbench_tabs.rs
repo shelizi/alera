@@ -17,6 +17,9 @@ pub enum WorkbenchTabIdentity {
     GitHistory,
     /// A distinct immutable comparison snapshot, not an editor or Host owner.
     GitFileCompare(u64),
+    /// A pinned, immutable Base/Ours/Theirs conflict view. Never a Git action,
+    /// editor document, or Host-owned terminal.
+    GitConflictCompare(u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +29,7 @@ pub enum WorkbenchTabKind {
     Editor,
     GitHistory,
     GitFileCompare,
+    GitConflictCompare,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

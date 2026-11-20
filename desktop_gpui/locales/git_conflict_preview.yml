@@ -95,3 +95,8 @@ _version: 2
   zh-TW: "傳入版本"
   zh-CN: "传入版本"
   ja: "取り込み側"
+"Pin conflict comparison to workspace tab":
+  en: "Pin conflict comparison to workspace tab"
+  zh-TW: "釘選衝突比較到工作區分頁"
+  zh-CN: "固定冲突比较到工作区标签页"
+  ja: "競合比較をワークスペースのタブに固定"

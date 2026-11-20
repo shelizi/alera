@@ -31,6 +31,146 @@ pub struct GitConflictComparison {
     pub base: Option<ConflictVersion>,
     pub ours: Option<ConflictVersion>,
     pub theirs: Option<ConflictVersion>,
+    /// Shared visual row coordinates for all three versions. A None cell is
+    /// deliberate padding, not an invented line or Git index stage.
+    pub aligned_rows: Vec<ConflictAlignedRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConflictAlignedRow {
+    /// Indices into base / ours / theirs ConflictVersion.lines respectively.
+    pub indices: [Option<usize>; 3],
+    pub changed: bool,
+}
+
+struct SideLineMap {
+    per_reference: Vec<Option<usize>>,
+    inserted_before: Vec<Vec<usize>>,
+}
+
+/// Match one side to a stable reference line by line. Insertions get their
+/// own visual rows before the next reference line; deletions occupy a blank
+/// cell opposite the reference instead of shifting all later line numbers.
+fn map_side_lines(reference: &[ConflictLine], side: Option<&ConflictVersion>) -> SideLineMap {
+    let mut map = SideLineMap {
+        per_reference: vec![None; reference.len()],
+        inserted_before: vec![Vec::new(); reference.len() + 1],
+    };
+    let Some(side) = side else {
+        return map;
+    };
+    let base_text = reference
+        .iter()
+        .map(|line| format!("{}\n", line.text))
+        .collect::<String>();
+    let side_text = side
+        .lines
+        .iter()
+        .map(|line| format!("{}\n", line.text))
+        .collect::<String>();
+    for op in TextDiff::from_lines(&base_text, &side_text).ops() {
+        let old = op.old_range();
+        let new = op.new_range();
+        match op.tag() {
+            similar::DiffTag::Equal => {
+                for (base, side) in old.zip(new) {
+                    map.per_reference[base] = Some(side);
+                }
+            }
+            similar::DiffTag::Delete => {}
+            similar::DiffTag::Insert => {
+                map.inserted_before[old.start].extend(new);
+            }
+            similar::DiffTag::Replace => {
+                let paired = old.len().min(new.len());
+                for offset in 0..paired {
+                    map.per_reference[old.start + offset] = Some(new.start + offset);
+                }
+                map.inserted_before[old.end].extend((new.start + paired)..new.end);
+            }
+        }
+    }
+    map
+}
+
+fn build_aligned_rows(
+    base: Option<&ConflictVersion>,
+    ours: Option<&ConflictVersion>,
+    theirs: Option<&ConflictVersion>,
+) -> Vec<ConflictAlignedRow> {
+    // Add/add has no stage 1. Use Ours as a reference without manufacturing
+    // base content; this also handles either side being absent or empty.
+    if base.is_none() {
+        let Some(reference) = ours.or(theirs) else {
+            return Vec::new();
+        };
+        let reference_is_ours = ours.is_some();
+        let other = if reference_is_ours { theirs } else { ours };
+        let other_map = map_side_lines(&reference.lines, other);
+        let mut rows = Vec::new();
+        for gap in 0..=reference.lines.len() {
+            for inserted in &other_map.inserted_before[gap] {
+                rows.push(ConflictAlignedRow {
+                    indices: [
+                        None,
+                        (!reference_is_ours).then_some(*inserted),
+                        reference_is_ours.then_some(*inserted),
+                    ],
+                    changed: true,
+                });
+            }
+            if gap < reference.lines.len() {
+                let other_index = other_map.per_reference[gap];
+                rows.push(ConflictAlignedRow {
+                    indices: [
+                        None,
+                        if reference_is_ours {
+                            Some(gap)
+                        } else {
+                            other_index
+                        },
+                        if reference_is_ours {
+                            other_index
+                        } else {
+                            Some(gap)
+                        },
+                    ],
+                    changed: true,
+                });
+            }
+        }
+        return rows;
+    }
+    let base = base.expect("base checked above");
+    let ours_map = map_side_lines(&base.lines, ours);
+    let theirs_map = map_side_lines(&base.lines, theirs);
+    let mut rows = Vec::new();
+    for gap in 0..=base.lines.len() {
+        let our_inserts = &ours_map.inserted_before[gap];
+        let their_inserts = &theirs_map.inserted_before[gap];
+        for index in 0..our_inserts.len().max(their_inserts.len()) {
+            rows.push(ConflictAlignedRow {
+                indices: [
+                    None,
+                    our_inserts.get(index).copied(),
+                    their_inserts.get(index).copied(),
+                ],
+                changed: true,
+            });
+        }
+        if gap < base.lines.len() {
+            let our_index = ours_map.per_reference[gap];
+            let their_index = theirs_map.per_reference[gap];
+            let changed = base.lines[gap].changed
+                || our_index.is_none_or(|index| ours.is_some_and(|v| v.lines[index].changed))
+                || their_index.is_none_or(|index| theirs.is_some_and(|v| v.lines[index].changed));
+            rows.push(ConflictAlignedRow {
+                indices: [Some(gap), our_index, their_index],
+                changed,
+            });
+        }
+    }
+    rows
 }
 
 fn line_texts(text: &str) -> Vec<&str> {
@@ -193,11 +333,19 @@ impl GitConflictComparison {
             }
             version.changed_lines = version.lines.len();
         }
+        let ours_version = ours.map(|text| build_version(text, base));
+        let theirs_version = theirs.map(|text| build_version(text, base));
+        let aligned_rows = build_aligned_rows(
+            base_version.as_ref(),
+            ours_version.as_ref(),
+            theirs_version.as_ref(),
+        );
         Ok(Self {
             relative,
             base: base_version,
-            ours: ours.map(|text| build_version(text, base)),
-            theirs: theirs.map(|text| build_version(text, base)),
+            ours: ours_version,
+            theirs: theirs_version,
+            aligned_rows,
         })
     }
 }
@@ -274,6 +422,86 @@ pub fn preview_index_conflict(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn aligned_rows_keep_common_lines_at_same_visual_row_after_independent_inserts() {
+        let view = GitConflictComparison::from_versions(
+            "src/fixture.txt".into(),
+            Some("header\ncommon b\ncommon c\ntail\n"),
+            Some("header\nOURS INSERT\ncommon b\ncommon c\ntail\n"),
+            Some("header\ncommon b\ncommon c\nTHEIRS INSERT\ntail\n"),
+        )
+        .unwrap();
+        let positions = view
+            .aligned_rows
+            .iter()
+            .map(|row| row.indices)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            positions,
+            vec![
+                [Some(0), Some(0), Some(0)],
+                [None, Some(1), None],
+                [Some(1), Some(2), Some(1)],
+                [Some(2), Some(3), Some(2)],
+                [None, None, Some(3)],
+                [Some(3), Some(4), Some(4)],
+            ]
+        );
+        assert_eq!(
+            view.aligned_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, row)| row.changed.then_some(i))
+                .collect::<Vec<_>>(),
+            vec![1, 4]
+        );
+    }
+
+    #[test]
+    fn aligned_rows_preserve_deletions_and_real_unicode_line_numbers() {
+        let view = GitConflictComparison::from_versions(
+            "文檔.txt".into(),
+            Some("開頭\n刪除這行\n共同內容\n結尾\n"),
+            Some("開頭\n共同內容\n結尾\n"),
+            Some("開頭\n刪除這行\n共同內容\n傳入新增\n結尾\n"),
+        )
+        .unwrap();
+        let positions = view
+            .aligned_rows
+            .iter()
+            .map(|row| row.indices)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            positions,
+            vec![
+                [Some(0), Some(0), Some(0)],
+                [Some(1), None, Some(1)],
+                [Some(2), Some(1), Some(2)],
+                [None, None, Some(3)],
+                [Some(3), Some(2), Some(4)],
+            ]
+        );
+        assert_eq!(view.ours.as_ref().unwrap().lines[1].number, 2);
+        assert_eq!(view.theirs.as_ref().unwrap().lines[4].number, 5);
+        assert!(view.aligned_rows[1].changed);
+        assert!(!view.aligned_rows[2].changed);
+    }
+
+    #[test]
+    fn add_add_with_no_base_aligns_existing_sides_and_keeps_stage_one_missing() {
+        let view = GitConflictComparison::from_versions(
+            "new.txt".into(),
+            None,
+            Some("first\nOURS ONLY\nlast\n"),
+            Some("first\nlast\n"),
+        )
+        .unwrap();
+        assert!(view.base.is_none());
+        assert_eq!(view.aligned_rows.len(), 3);
+        assert_eq!(view.aligned_rows[1].indices, [None, Some(1), None]);
+        assert_eq!(view.aligned_rows[2].indices, [None, Some(2), Some(1)]);
+    }
 
     #[test]
     fn inline_highlights_are_byte_safe_for_unicode_and_only_mark_changed_fragments() {
