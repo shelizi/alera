@@ -13307,6 +13307,29 @@ impl Render for Workbench {
                                     .text_color(rgb(MUTED))
                                     .child(git_summary),
                             )
+                            // Keep the large Git Graph entry near the Source Control header.
+                            // The footer History action sits below a potentially long file list.
+                            .child(
+                                div()
+                                    .id("git-open-large-graph")
+                                    .h(px(36.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .child(icon(UiIcon::Graph, 16.0, TEXT))
+                                    .child(div().flex_1().min_w_0().text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child(tr(self.settings_menu_locale, "Open Git Graph")))
+                                    .child(icon(UiIcon::Open, 14.0, MUTED))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_center_git_graph(cx);
+                                    })),
+                            )
                             // Classic puts the commit form before history and file groups.
                             // Keep the main action labelled, not an icon-only mystery button.
                             .child(
@@ -13963,7 +13986,7 @@ impl Render for Workbench {
                                     .hover(|style| style.bg(rgb(ACTIVE)))
                                     .child(icon(if self.git_sidebar_patch_expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
                                     .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(tr(self.settings_menu_locale, "Patch Preview")))
+                                        .child(tr(self.settings_menu_locale, "Git Diff Preview")))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.git_sidebar_patch_expanded = !this.git_sidebar_patch_expanded;
                                         cx.notify();
@@ -13976,7 +13999,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .gap_2()
                                     .child(div().text_xs().text_color(rgb(MUTED))
-                                        .child(tr(self.settings_menu_locale, "Patch preview · read-only")))
+                                        .child(tr(self.settings_menu_locale, "Git diff preview · read-only")))
                                     .child(if git_diff_expand_available {
                                         div()
                                             .id("git-diff-expand")

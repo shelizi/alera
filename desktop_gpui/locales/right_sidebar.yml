@@ -16,11 +16,16 @@ _version: 2
   zh-TW: "Git 歷史紀錄"
   zh-CN: "Git 历史记录"
   ja: "Git 履歴"
-"Patch Preview":
-  en: "Patch Preview"
-  zh-TW: "差異預覽"
-  zh-CN: "差异预览"
-  ja: "差分プレビュー"
+"Open Git Graph":
+  en: "Open Git Graph"
+  zh-TW: "開啟 Git Graph（中央大圖）"
+  zh-CN: "打开 Git Graph（中央大图）"
+  ja: "Git Graph を中央に大きく表示"
+"Git Diff Preview":
+  en: "Git Diff Preview"
+  zh-TW: "Git 差異預覽"
+  zh-CN: "Git 差异预览"
+  ja: "Git 差分プレビュー"
 "Branch & remote actions":
   en: "Branch & remote actions"
   zh-TW: "分支與遠端操作"
@@ -36,11 +41,11 @@ _version: 2
   zh-TW: "沒有符合的檔案"
   zh-CN: "没有匹配的文件"
   ja: "一致するファイルがありません"
-"Patch preview · read-only":
-  en: "Patch preview · read-only"
-  zh-TW: "差異預覽 · 唯讀"
-  zh-CN: "差异预览 · 只读"
-  ja: "差分プレビュー · 読み取り専用"
+"Git diff preview · read-only":
+  en: "Git diff preview · read-only"
+  zh-TW: "Git 檔案差異／摘要 · 唯讀"
+  zh-CN: "Git 文件差异／摘要 · 只读"
+  ja: "Git 差分／概要 · 読み取り専用"
 "Open with Default Application":
   en: "Open with Default Application"
   zh-TW: "使用系統預設程式開啟"

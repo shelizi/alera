@@ -578,11 +578,12 @@ mod tests {
             "Source Control",
             "Commit",
             "Git History",
-            "Patch Preview",
+            "Open Git Graph",
+            "Git Diff Preview",
             "Branch & remote actions",
             "No changes",
             "No matching files",
-            "Patch preview · read-only",
+            "Git diff preview · read-only",
         ] {
             assert_eq!(tr(UiLocale::English, source), source);
             for locale in [
