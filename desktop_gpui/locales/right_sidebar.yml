@@ -21,6 +21,46 @@ _version: 2
   zh-TW: "開啟 Git Graph（中央大圖）"
   zh-CN: "打开 Git Graph（中央大图）"
   ja: "Git Graph を中央に大きく表示"
+"Display options":
+  en: "Display options"
+  zh-TW: "顯示選項"
+  zh-CN: "显示选项"
+  ja: "表示オプション"
+"Show flat file list":
+  en: "Show flat file list"
+  zh-TW: "顯示平面檔案清單"
+  zh-CN: "显示平面文件列表"
+  ja: "フラットなファイル一覧を表示"
+"Show folder tree":
+  en: "Show folder tree"
+  zh-TW: "顯示資料夾樹狀清單"
+  zh-CN: "显示文件夹树状列表"
+  ja: "フォルダーツリーを表示"
+"Show changes without grouping":
+  en: "Show changes without grouping"
+  zh-TW: "不分組顯示所有變更"
+  zh-CN: "不分组显示所有更改"
+  ja: "変更をグループ化せずに表示"
+"Group changes by status":
+  en: "Group changes by status"
+  zh-TW: "依暫存狀態分組"
+  zh-CN: "按暂存状态分组"
+  ja: "ステージ状態でグループ化"
+"Expand all change groups":
+  en: "Expand all change groups"
+  zh-TW: "展開所有變更群組"
+  zh-CN: "展开所有更改分组"
+  ja: "すべての変更グループを展開"
+"Collapse all change groups":
+  en: "Collapse all change groups"
+  zh-TW: "收合所有變更群組"
+  zh-CN: "折叠所有更改分组"
+  ja: "すべての変更グループを折りたたむ"
+"Refresh Git status":
+  en: "Refresh Git status"
+  zh-TW: "重新整理 Git 狀態"
+  zh-CN: "刷新 Git 状态"
+  ja: "Git 状態を更新"
 "Git Diff Preview":
   en: "Git Diff Preview"
   zh-TW: "Git 差異預覽"

@@ -2172,6 +2172,19 @@ impl Workbench {
         cx.notify();
     }
 
+    fn git_sidebar_all_groups_collapsed(&self) -> bool {
+        let all = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.visible_rows(""))
+            .unwrap_or_default();
+        let sections = section_keys(self.git_sidebar_options.grouping, &all);
+        !sections.is_empty()
+            && sections
+                .iter()
+                .all(|key| self.git_sidebar_options.collapsed_sections.contains(key))
+    }
+
     fn toggle_git_sidebar_collapse_all(&mut self, cx: &mut Context<Self>) {
         let all = self
             .git_snapshot
@@ -13280,19 +13293,53 @@ impl Render for Workbench {
                                             .flex()
                                             .items_center()
                                             .gap_1()
-                                            .child(icon_button("git-sidebar-flat-tree",
-                                                if git_tree_mode { UiIcon::File } else { UiIcon::Folder },
-                                                if git_tree_mode { "Show flat Git changes list" } else { "Show Git changes tree" },
-                                                git_tree_mode)
-                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_view(cx))))
-                                            .child(icon_button("git-sidebar-group-toggle", UiIcon::Graph,
-                                                if git_group_by_area { "Show all Git changes together" } else { "Group Git changes by stage" },
-                                                git_group_by_area)
-                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_group(cx))))
-                                            .child(icon_button("git-sidebar-collapse-all", UiIcon::CollapseAll,
-                                                "Collapse or expand all Git change groups", false)
-                                                .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_collapse_all(cx))))
-                                            .child(icon_button("git-refresh", UiIcon::GitRefresh, "Refresh Git status", false)
+                                            // The Classic toolbar exposes the same view options,
+                                            // but four icon-only controls obscure their meaning in a
+                                            // narrow sidebar. Keep refresh visible and group the
+                                            // presentation-only controls into a labeled menu.
+                                            .child({
+                                                let owner = cx.entity().downgrade();
+                                                let locale = self.settings_menu_locale;
+                                                let tree_mode = git_tree_mode;
+                                                let grouped = git_group_by_area;
+                                                let all_collapsed = self.git_sidebar_all_groups_collapsed();
+                                                Button::new("git-sidebar-display-options")
+                                                    .label(tr(locale, "Display options"))
+                                                    .ghost()
+                                                    .dropdown_menu(move |menu, _, _| {
+                                                        let tree_owner = owner.clone();
+                                                        let group_owner = owner.clone();
+                                                        let collapse_owner = owner.clone();
+                                                        menu
+                                                            .item(PopupMenuItem::new(tr(locale, if tree_mode {
+                                                                "Show flat file list"
+                                                            } else {
+                                                                "Show folder tree"
+                                                            }))
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = tree_owner.update(cx, |view, cx| view.toggle_git_sidebar_view(cx));
+                                                                }))
+                                                            .item(PopupMenuItem::new(tr(locale, if grouped {
+                                                                "Show changes without grouping"
+                                                            } else {
+                                                                "Group changes by status"
+                                                            }))
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = group_owner.update(cx, |view, cx| view.toggle_git_sidebar_group(cx));
+                                                                }))
+                                                            .separator()
+                                                            .item(PopupMenuItem::new(tr(locale, if all_collapsed {
+                                                                "Expand all change groups"
+                                                            } else {
+                                                                "Collapse all change groups"
+                                                            }))
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = collapse_owner.update(cx, |view, cx| view.toggle_git_sidebar_collapse_all(cx));
+                                                                }))
+                                                    })
+                                            })
+                                            .child(icon_button("git-refresh", UiIcon::GitRefresh,
+                                                tr(self.settings_menu_locale, "Refresh Git status"), false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
                                                     if this.git_history_open { this.refresh_git_history(cx); }
