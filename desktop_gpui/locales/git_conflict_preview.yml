@@ -65,3 +65,33 @@ _version: 2
   zh-TW: "點選衝突檔，在中央開啟共同基底／目前／傳入三方唯讀比較。"
   zh-CN: "点击冲突文件，在中央打开共同基底／当前／传入三方只读比较。"
   ja: "競合ファイルを選ぶと、中央に Base／Ours／Theirs の読み取り専用比較を表示します。"
+"Conflict differences":
+  en: "Conflict differences"
+  zh-TW: "衝突差異"
+  zh-CN: "冲突差异"
+  ja: "競合差分"
+"Previous difference":
+  en: "Previous difference"
+  zh-TW: "上一個差異"
+  zh-CN: "上一个差异"
+  ja: "前の差分"
+"Next difference":
+  en: "Next difference"
+  zh-TW: "下一個差異"
+  zh-CN: "下一个差异"
+  ja: "次の差分"
+"Base version":
+  en: "Base"
+  zh-TW: "共同基底"
+  zh-CN: "共同基底"
+  ja: "共通基底"
+"Ours version":
+  en: "Ours"
+  zh-TW: "目前版本"
+  zh-CN: "当前版本"
+  ja: "現在の版"
+"Theirs version":
+  en: "Theirs"
+  zh-TW: "傳入版本"
+  zh-CN: "传入版本"
+  ja: "取り込み側"

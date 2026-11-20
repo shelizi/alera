@@ -157,6 +157,12 @@ mod tests {
                 "Git index stages 1/2/3 · read-only snapshot · no resolving or staging",
                 "Simulated merge index · read-only snapshot · no file or index changes",
                 "Click a conflict file to open full three-way Base / Ours / Theirs read-only preview.",
+                "Conflict differences",
+                "Previous difference",
+                "Next difference",
+                "Base version",
+                "Ours version",
+                "Theirs version",
             ] {
                 let value = tr(locale, source);
                 assert!(!value.is_empty(), "Missing {}: {}", locale.tag(), source);

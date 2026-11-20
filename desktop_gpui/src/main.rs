@@ -15124,7 +15124,7 @@ impl Render for Workbench {
                                             })
                             .child(
                                 if show_center_git_conflict {
-                                    self.render_center_git_conflict(cx)
+                                    self.render_center_git_conflict(window, cx)
                                 } else if graph_in_primary {
                                     self.render_center_git_graph(window, cx)
                                 } else if let Some(instance) = compare_in_primary {
