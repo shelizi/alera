@@ -147,6 +147,33 @@ class EditorSessionRegistry extends ChangeNotifier
     return sorted;
   }
 
+  /// Native Cut/move can relocate a saved tab without notifying its editor.
+  /// Block a file or folder if it contains any open editor path.
+  bool hasOpenFilesUnder({
+    required String workspacePath,
+    required Iterable<String> relativePaths,
+  }) {
+    final roots = <String>[
+      for (final relative in relativePaths)
+        p.normalize(
+          p.join(workspacePath, relative.replaceAll('/', p.separator)),
+        ),
+    ];
+    if (roots.isEmpty) return false;
+    for (final document in _documents.values) {
+      final path = document.relativePath;
+      final workspace = document.workspacePath;
+      if (path == null || workspace == null) continue;
+      final openPath = p.normalize(p.join(workspace, path));
+      if (roots.any(
+        (source) => p.equals(source, openPath) || p.isWithin(source, openPath),
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   String? dirtyTextForPath({
     required String workspacePath,
     required String relativePath,

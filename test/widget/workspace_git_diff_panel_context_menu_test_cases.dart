@@ -1,6 +1,39 @@
 part of 'workspace_git_diff_panel_test.dart';
 
 void _registerWorkspaceGitDiffPanelContextMenuTests() {
+  testWidgets(
+    'Git tree folder selects without collapsing and offers file clipboard actions',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/src/dirty.dart',
+              area: .unstaged,
+              status: .modified,
+            ),
+          ],
+        );
+      await _pumpPanel(tester, backend: backend, viewMode: .tree);
+      await tester.pumpAndSettle();
+      expect(find.text('dirty.dart'), findsOneWidget);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      // The folder text selects; only its chevron expands/collapses.
+      expect(find.text('dirty.dart'), findsOneWidget);
+      await tester.tap(find.text('src'), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(find.text('Copy File/Folder'), findsOneWidget);
+      expect(find.text('Cut File/Folder'), findsOneWidget);
+      expect(
+        find.text('Paste into Containing Folder / Selected Folder'),
+        findsOneWidget,
+      );
+      expect(find.text('Copy Relative Path'), findsOneWidget);
+      expect(find.text('Stage'), findsWidgets);
+    },
+  );
+
   testWidgets('tree file context menu opens the file instead of the diff', (
     tester,
   ) async {

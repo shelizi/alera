@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:desktop_drop/desktop_drop.dart';
 
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -28,6 +31,10 @@ import 'package:alera/src/features/settings/application/settings_controller.dart
 import 'package:alera/src/features/workbench/application/workspace_git_commit_compare_cache.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_history_loader.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/windows_file_drag.dart';
+import 'package:alera/src/features/workbench/application/git_source_file_interop.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/application/git_change_selection.dart';
 import 'package:alera/src/features/workbench/application/workspace_submodule_status_provider.dart';
@@ -35,6 +42,7 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
@@ -51,6 +59,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 part 'workspace_git_diff_panel_types.dart';
 part 'workspace_git_diff_panel_groups.dart';
@@ -72,6 +81,7 @@ part 'workspace_git_diff_panel_context_menu.dart';
 part 'workspace_git_diff_panel_inline_actions.dart';
 part 'workspace_git_diff_panel_navigation.dart';
 part 'workspace_git_diff_panel_selection.dart';
+part 'workspace_git_diff_panel_file_interop.dart';
 
 class _GitDiffPanelUiState {
   const _GitDiffPanelUiState({
@@ -120,6 +130,16 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   final Set<String> _collapsedTreeNodes = <String>{};
   final Set<String> _expandedSubmodules = <String>{};
   final GitChangeSelection _changeSelection = GitChangeSelection();
+  final GitSourceFileGuard _gitFileGuard = const GitSourceFileGuard();
+  final WindowsFileDrag _gitNativeDrag = const WindowsFileDrag();
+  final Map<String, GlobalKey> _gitFileDropRowKeys = <String, GlobalKey>{};
+  late final WorkspaceFileService _gitFileService;
+  late final EditorSessionRegistry _gitEditorSessions;
+  _GitSourceClipboard? _gitFileClipboard;
+  bool _gitFileTransferBusy = false;
+  bool _gitExternalImportActive = false;
+  bool _gitNativeDragBusy = false;
+  bool _gitNativeDragHandedOff = false;
   late final AiAssistService _aiAssistService;
   bool _generatingCommitMessage = false;
   bool _historyCollapsed = true;
@@ -162,6 +182,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   void initState() {
     super.initState();
     _aiAssistService = ref.read(aiAssistServiceProvider);
+    _gitFileService = ref.read(workspaceFileServiceProvider);
+    _gitEditorSessions = ref.read(editorSessionRegistryProvider);
     final backend = ref.read(gitBackendProvider);
     _historyLoader = WorkspaceGitHistoryLoader(
       backend: backend,
@@ -201,6 +223,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       _collapsedTreeNodes.clear();
       _expandedSubmodules.clear();
       _changeSelection.clear();
+      _gitFileClipboard = null;
+      _gitFileDropRowKeys.clear();
       _generatingCommitMessage = false;
       _historyCollapsed = true;
       _restorePanelUiState(widget.sourceControlScope.path);
@@ -244,12 +268,44 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
     );
   }
 
-  Widget _focusableChangesList(Widget child) => Focus(
-    focusNode: _changesListFocusNode,
-    child: Listener(
-      behavior: HitTestBehavior.deferToChild,
-      onPointerDown: (_) => _changesListFocusNode.requestFocus(),
-      child: child,
+  Widget _focusableChangesList(Widget child) => CallbackShortcuts(
+    bindings: <ShortcutActivator, VoidCallback>{
+      const SingleActivator(LogicalKeyboardKey.keyC, control: true): () =>
+          unawaited(_gitCopyOrCut(cut: false)),
+      const SingleActivator(LogicalKeyboardKey.keyC, meta: true): () =>
+          unawaited(_gitCopyOrCut(cut: false)),
+      const SingleActivator(LogicalKeyboardKey.keyX, control: true): () =>
+          unawaited(_gitCopyOrCut(cut: true)),
+      const SingleActivator(LogicalKeyboardKey.keyX, meta: true): () =>
+          unawaited(_gitCopyOrCut(cut: true)),
+      const SingleActivator(LogicalKeyboardKey.keyV, control: true): () =>
+          unawaited(_gitPaste()),
+      const SingleActivator(LogicalKeyboardKey.keyV, meta: true): () =>
+          unawaited(_gitPaste()),
+    },
+    child: Focus(
+      focusNode: _changesListFocusNode,
+      child: Listener(
+        behavior: HitTestBehavior.deferToChild,
+        onPointerDown: (_) => _changesListFocusNode.requestFocus(),
+        child: DropTarget(
+          onDragDone: (details) => unawaited(
+            _gitImportExternal(
+              details.files.map((file) => file.path).toList(growable: false),
+              _gitDropDirectoryAt(details.globalPosition),
+            ),
+          ),
+          child: DragTarget<TerminalPathDragPayload>(
+            onAcceptWithDetails: (details) => unawaited(
+              _gitMoveInternalDrag(
+                details.data.paths.toList(),
+                _gitDropDirectoryAt(details.offset),
+              ),
+            ),
+            builder: (context, candidates, rejected) => child,
+          ),
+        ),
+      ),
     ),
   );
 
@@ -405,6 +461,14 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                           collapsedTreeNodes: _collapsedTreeNodes,
                           expandedSubmodules: _expandedSubmodules,
                           selectedChangeIds: _changeSelection.ids,
+                          onSelectDirectory: _selectGitDirectory,
+                          onCopyOrCut: (id, cut) =>
+                              _gitCopyOrCut(clickedId: id, cut: cut),
+                          onPasteInto: (id) => _gitPaste(targetId: id),
+                          onNativeDragStarted: () =>
+                              _gitNativeDragHandedOff = false,
+                          onNativeDragUpdate: _gitMaybeStartNativeDrag,
+                          dropKeyForId: _gitDropRowKey,
                           onSelectEntry: _selectChangeEntry,
                           onToggleSection: _toggleSectionCollapsed,
                           onToggleTreeNode: _toggleTreeNodeCollapsed,

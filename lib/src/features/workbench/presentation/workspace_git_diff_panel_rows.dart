@@ -9,6 +9,9 @@ String _terminalPathForGitEntry(String workspacePath, String relativePath) {
 
 class const _GitPathDragRegion({
   required final String absolutePath,
+  final List<String>? dragAbsolutePaths,
+  final VoidCallback? onNativeDragStarted,
+  final DragUpdateCallback? onNativeDragUpdate,
   required final String label,
   required final bool isDirectory,
   required final Widget child,
@@ -16,7 +19,11 @@ class const _GitPathDragRegion({
   @override
   Widget build(BuildContext context) {
     return TerminalPathDraggable<TerminalPathDragData>(
-      data: TerminalPathDragData(paths: <String>[absolutePath]),
+      data: TerminalPathDragData(
+        paths: dragAbsolutePaths ?? <String>[absolutePath],
+      ),
+      onDragStarted: onNativeDragStarted,
+      onDragUpdate: onNativeDragUpdate,
       feedback: _GitPathDragFeedback(label: label, isDirectory: isDirectory),
       child: child,
     );
@@ -81,6 +88,7 @@ class const _GitDiffBaseRow({
   required final int depth,
   required final Widget child,
   required final VoidCallback onTap,
+  final Key? dropKey,
   final bool selected = false,
   final GestureTapDownCallback? onSecondaryTapDown,
   final GestureLongPressStartCallback? onLongPressStart,
@@ -88,6 +96,7 @@ class const _GitDiffBaseRow({
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
+      key: dropKey,
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         behavior: .translucent,

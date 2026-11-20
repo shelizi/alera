@@ -9,6 +9,14 @@ class const _GitDiffTree({
   required final Set<String> collapsedTreeNodes,
   required final Set<String> expandedSubmodules,
   required final Set<String> selectedChangeIds,
+  required final List<GitSourceFileItem> visibleItems,
+  required final void Function(String id, bool contextMenu) onSelectDirectory,
+  required final Future<void> Function(String id, bool cut) onCopyOrCut,
+  required final Future<void> Function(String id) onPasteInto,
+  required final VoidCallback onNativeDragStarted,
+  required final void Function(String id, DragUpdateDetails details)
+  onNativeDragUpdate,
+  required final GlobalKey Function(String id) dropKeyForId,
   required final List<GitChangeEntry> selectedEntries,
   required final void Function(GitChangeEntry entry, bool contextMenu)
   onSelectEntry,
@@ -121,6 +129,24 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
       return <Widget>[
         _GitDiffFileRow(
           entry: entry,
+          dropKey: widget.dropKeyForId(entry.id),
+          dragAbsolutePaths:
+              gitSourceSelectedPaths(
+                    visible: widget.visibleItems,
+                    selectedIds: widget.selectedChangeIds,
+                    clickedId: entry.id,
+                  )
+                  .map(
+                    (path) =>
+                        _terminalPathForGitEntry(widget.workspacePath, path),
+                  )
+                  .toList(growable: false),
+          onNativeDragStarted: widget.onNativeDragStarted,
+          onNativeDragUpdate: (details) =>
+              widget.onNativeDragUpdate(entry.id, details),
+          onCopyFiles: () => unawaited(widget.onCopyOrCut(entry.id, false)),
+          onCutFiles: () => unawaited(widget.onCopyOrCut(entry.id, true)),
+          onPasteFiles: () => unawaited(widget.onPasteInto(entry.id)),
           filterQuery: widget.filterQuery,
           absolutePath: _terminalPathForGitEntry(
             widget.workspacePath,
@@ -197,9 +223,31 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
       _treeNodeKey(row.path),
     );
     final capabilities = directoryCapabilities[row.path];
+    final directoryId = _treeNodeKey(row.path);
     return <Widget>[
       _GitDiffDirectoryRow(
         row: row,
+        dropKey: widget.dropKeyForId(directoryId),
+        selected: widget.selectedChangeIds.contains(directoryId),
+        onSelect: (contextMenu) =>
+            widget.onSelectDirectory(directoryId, contextMenu),
+        dragAbsolutePaths:
+            gitSourceSelectedPaths(
+                  visible: widget.visibleItems,
+                  selectedIds: widget.selectedChangeIds,
+                  clickedId: directoryId,
+                )
+                .map(
+                  (path) =>
+                      _terminalPathForGitEntry(widget.workspacePath, path),
+                )
+                .toList(growable: false),
+        onNativeDragStarted: widget.onNativeDragStarted,
+        onNativeDragUpdate: (details) =>
+            widget.onNativeDragUpdate(directoryId, details),
+        onCopyFiles: () => unawaited(widget.onCopyOrCut(directoryId, false)),
+        onCutFiles: () => unawaited(widget.onCopyOrCut(directoryId, true)),
+        onPasteFiles: () => unawaited(widget.onPasteInto(directoryId)),
         filterQuery: widget.filterQuery,
         absolutePath: _terminalPathForGitEntry(widget.workspacePath, row.path),
         busy: widget.busy,
@@ -263,6 +311,15 @@ class const _GitDiffDirectoryRow({
   required final GitChangeTreeRow row,
   required final String filterQuery,
   required final String absolutePath,
+  required final GlobalKey dropKey,
+  required final bool selected,
+  required final ValueChanged<bool> onSelect,
+  required final List<String> dragAbsolutePaths,
+  required final VoidCallback onNativeDragStarted,
+  required final DragUpdateCallback onNativeDragUpdate,
+  required final VoidCallback onCopyFiles,
+  required final VoidCallback onCutFiles,
+  required final VoidCallback onPasteFiles,
   required final bool busy,
   required final bool collapsed,
   required final bool canStage,
@@ -279,18 +336,28 @@ class const _GitDiffDirectoryRow({
   @override
   Widget build(BuildContext context) {
     return _GitDiffBaseRow(
+      dropKey: dropKey,
       depth: row.depth,
-      onTap: onTap,
-      onSecondaryTapDown: (details) =>
-          unawaited(_openMenu(context, details.globalPosition)),
-      onLongPressStart: (details) =>
-          unawaited(_openMenu(context, details.globalPosition)),
+      selected: selected,
+      onTap: () => onSelect(false),
+      onSecondaryTapDown: (details) {
+        onSelect(true);
+        unawaited(_openMenu(context, details.globalPosition));
+      },
+      onLongPressStart: (details) {
+        onSelect(true);
+        unawaited(_openMenu(context, details.globalPosition));
+      },
       child: Row(
         children: <Widget>[
-          Icon(
-            collapsed ? AleraIcons.chevronRight : AleraIcons.chevronDown,
-            size: 14,
-            color: AleraTokens.foregroundMuted,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Icon(
+              collapsed ? AleraIcons.chevronRight : AleraIcons.chevronDown,
+              size: 14,
+              color: AleraTokens.foregroundMuted,
+            ),
           ),
           const SizedBox(width: AleraTokens.space2),
           Expanded(
@@ -298,6 +365,9 @@ class const _GitDiffDirectoryRow({
               absolutePath: absolutePath,
               label: row.name,
               isDirectory: true,
+              dragAbsolutePaths: dragAbsolutePaths,
+              onNativeDragStarted: onNativeDragStarted,
+              onNativeDragUpdate: onNativeDragUpdate,
               child: Row(
                 children: <Widget>[
                   AleraFileIcon(
@@ -347,6 +417,11 @@ class const _GitDiffDirectoryRow({
       context,
       position,
       canOpenFile: onOpenFile != null,
+      onCopyFiles: onCopyFiles,
+      onCutFiles: onCutFiles,
+      onPasteFiles: onPasteFiles,
+      onCopyPath: () =>
+          unawaited(Clipboard.setData(ClipboardData(text: row.path))),
       canStage: canStage,
       canUnstage: canUnstage,
       canDiscard: canDiscard,
@@ -372,6 +447,13 @@ class const _GitDiffFileRow({
   required final GitChangeEntry entry,
   required final String filterQuery,
   required final String absolutePath,
+  final GlobalKey? dropKey,
+  final List<String>? dragAbsolutePaths,
+  final VoidCallback? onNativeDragStarted,
+  final DragUpdateCallback? onNativeDragUpdate,
+  final VoidCallback? onCopyFiles,
+  final VoidCallback? onCutFiles,
+  final VoidCallback? onPasteFiles,
   required final int depth,
   required final VoidCallback onTap,
   required final bool busy,
@@ -402,6 +484,7 @@ class const _GitDiffFileRow({
   @override
   Widget build(BuildContext context) {
     return _GitDiffBaseRow(
+      dropKey: dropKey,
       depth: depth,
       selected: selected,
       onTap: () {
@@ -445,6 +528,9 @@ class const _GitDiffFileRow({
               absolutePath: absolutePath,
               label: showRelativePath ? entry.path : entry.path.split('/').last,
               isDirectory: entry.submodule != null,
+              dragAbsolutePaths: dragAbsolutePaths,
+              onNativeDragStarted: onNativeDragStarted,
+              onNativeDragUpdate: onNativeDragUpdate,
               child: Row(
                 children: <Widget>[
                   AleraFileIcon(pathOrName: entry.path, kind: .file, size: 15),
@@ -511,6 +597,11 @@ class const _GitDiffFileRow({
       position,
       canOpenFile:
           onOpenFile != null && entry.status != GitChangeStatus.deleted,
+      onCopyFiles: onCopyFiles,
+      onCutFiles: onCutFiles,
+      onPasteFiles: onPasteFiles,
+      onCopyPath: () =>
+          unawaited(Clipboard.setData(ClipboardData(text: entry.path))),
       canStage: multiSelected ? selectionCanStage : entry.canStageFromParent,
       canUnstage: multiSelected
           ? selectionCanUnstage

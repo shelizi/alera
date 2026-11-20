@@ -1,6 +1,10 @@
 part of 'workspace_git_diff_panel.dart';
 
 enum _GitChangeContextAction {
+  copyFiles,
+  cutFiles,
+  pasteFiles,
+  copyPath,
   openFile,
   openWithDefaultApplication,
   openExternally,
@@ -21,6 +25,10 @@ Future<void> _showGitChangeContextMenu(
   required bool canStage,
   required bool canUnstage,
   required bool canDiscard,
+  VoidCallback? onCopyFiles,
+  VoidCallback? onCutFiles,
+  VoidCallback? onPasteFiles,
+  VoidCallback? onCopyPath,
   int selectionCount = 1,
   required bool busy,
   required VoidCallback? onOpenFile,
@@ -42,6 +50,38 @@ Future<void> _showGitChangeContextMenu(
     context: context,
     position: .fromLTRB(position.dx, position.dy, position.dx, position.dy),
     items: <PopupMenuEntry<_GitChangeContextAction>>[
+      if (onCopyFiles != null)
+        AleraDropdownEntry<_GitChangeContextAction>(
+          value: .copyFiles,
+          label: selectionCount > 1
+              ? 'Copy Selected Files/Folders'
+              : 'Copy File/Folder',
+          leading: const Icon(Icons.copy, size: 16),
+          enabled: !busy,
+        ),
+      if (onCutFiles != null)
+        AleraDropdownEntry<_GitChangeContextAction>(
+          value: .cutFiles,
+          label: selectionCount > 1
+              ? 'Cut Selected Files/Folders'
+              : 'Cut File/Folder',
+          leading: const Icon(Icons.content_cut, size: 16),
+          enabled: !busy,
+        ),
+      if (onPasteFiles != null)
+        AleraDropdownEntry<_GitChangeContextAction>(
+          value: .pasteFiles,
+          label: 'Paste into Containing Folder / Selected Folder',
+          leading: const Icon(Icons.content_paste, size: 16),
+          enabled: !busy,
+        ),
+      if (onCopyPath != null)
+        const AleraDropdownEntry<_GitChangeContextAction>(
+          value: .copyPath,
+          label: 'Copy Relative Path',
+          leading: Icon(Icons.link, size: 16),
+        ),
+      const PopupMenuDivider(height: AleraTokens.space8),
       if (canOpenFile)
         const AleraDropdownEntry<_GitChangeContextAction>(
           value: .openFile,
@@ -128,6 +168,14 @@ Future<void> _showGitChangeContextMenu(
     return;
   }
   switch (selected) {
+    case _GitChangeContextAction.copyFiles:
+      onCopyFiles?.call();
+    case _GitChangeContextAction.cutFiles:
+      onCutFiles?.call();
+    case _GitChangeContextAction.pasteFiles:
+      onPasteFiles?.call();
+    case _GitChangeContextAction.copyPath:
+      onCopyPath?.call();
     case _GitChangeContextAction.openFile:
       onOpenFile?.call();
     case _GitChangeContextAction.openWithDefaultApplication:

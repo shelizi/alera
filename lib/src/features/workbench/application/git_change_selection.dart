@@ -7,6 +7,7 @@ final class GitChangeSelection {
   String? _anchor;
 
   Set<String> get ids => Set<String>.unmodifiable(_ids);
+  String? get anchor => _anchor;
   bool get isEmpty => _ids.isEmpty;
   bool contains(String id) => _ids.contains(id);
 
