@@ -1,6 +1,6 @@
 {
     "schemaVersion":  1,
-    "sourceSha":  "3a2a7d54409c2b2c4569946cf92b975e54f2c79d",
+    "sourceSha":  "b6642edebebb7d58202ea38aab9ec46a5d8f37f0",
     "channel":  "stable",
     "desktop":  {
                     "shouldRelease":  true,
