@@ -790,6 +790,20 @@ mod tests {
         }
         assert_eq!(unique.len(), PROVIDERS.len());
         assert_eq!(snapshots.len(), 13);
+        let claude_default = snapshots
+            .iter()
+            .find(|s| s.provider == "claude" && s.account_id == "default")
+            .unwrap();
+        let default_extra = claude_default.claude_extra_usage_progress().unwrap();
+        assert!((default_extra.used_fraction as f64 - 0.0566).abs() < 0.00001);
+        assert_eq!(default_extra.remaining_text(), "US$47.17");
+        let claude_work = snapshots
+            .iter()
+            .find(|s| s.provider == "claude" && s.account_id == "work")
+            .unwrap();
+        let work_extra = claude_work.claude_extra_usage_progress().unwrap();
+        assert!((work_extra.used_fraction as f64 - 0.95).abs() < 0.00001);
+        assert_eq!(work_extra.remaining_text(), "US$2.50");
         let agy = snapshots.iter().find(|s| s.provider == "agy").unwrap();
         assert_eq!(agy.readings().len(), 5);
         assert_eq!(agy.readings()[0].label, "G·5H");

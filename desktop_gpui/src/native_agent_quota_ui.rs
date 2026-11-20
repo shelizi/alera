@@ -421,6 +421,13 @@ fn claude_extra_usage_progress_element(
         .mt_1()
         .child(
             div()
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT))
+                .child("Extra Usage"),
+        )
+        .child(
+            div()
                 .flex()
                 .items_center()
                 .justify_between()
