@@ -889,6 +889,11 @@ struct Workbench {
     git_file_diff_paging: Option<GitFileDiffPaging>,
     git_file_compare_ticket: u64,
     git_file_compare_result: Option<(u64, Result<alera_gpui_desktop::git_file_revision_compare::GitFileRevisionComparison, String>)>,
+    git_file_compare_split: bool,
+    git_file_compare_rows: Arc<Vec<alera_gpui_desktop::git_file_split_diff::GitSplitDiffRow>>,
+    git_file_compare_additions: usize,
+    git_file_compare_deletions: usize,
+    git_file_compare_clipped: bool,
     /// A temporary, read-only center projection; never owns or replaces an
     /// Editor buffer, mixed tab or Host Terminal session.
     center_git_diff_source: Option<native_action_dialog_ui::GitDialogFileSource>,
@@ -17145,6 +17150,11 @@ fn main() {
                             git_file_diff_paging: None,
                             git_file_compare_ticket: 0,
                             git_file_compare_result: None,
+                            git_file_compare_split: true,
+                            git_file_compare_rows: Arc::new(Vec::new()),
+                            git_file_compare_additions: 0,
+                            git_file_compare_deletions: 0,
+                            git_file_compare_clipped: false,
                             center_git_diff_source: None,
                             center_git_diff_scroll: UniformListScrollHandle::new(),
                             center_git_diff_hunk: None,

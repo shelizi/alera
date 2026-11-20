@@ -25,6 +25,7 @@ pub mod git_branch_compare;
 pub mod git_external_open;
 pub mod git_file_interop;
 pub mod git_file_revision_compare;
+pub mod git_file_split_diff;
 pub mod git_graph_layout;
 pub mod git_graph_render;
 pub mod git_graph_search;
