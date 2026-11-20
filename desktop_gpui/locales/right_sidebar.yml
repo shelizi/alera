@@ -66,6 +66,56 @@ _version: 2
   zh-TW: "Git 差異預覽"
   zh-CN: "Git 差异预览"
   ja: "Git 差分プレビュー"
+"More commit options":
+  en: "More commit options"
+  zh-TW: "更多提交選項"
+  zh-CN: "更多提交选项"
+  ja: "その他のコミット操作"
+"Draft message from staged files (offline)":
+  en: "Draft message from staged files (offline)"
+  zh-TW: "依已暫存檔案產生提交訊息（離線）"
+  zh-CN: "根据已暂存文件生成提交信息（离线）"
+  ja: "ステージ済みファイルからコミット文を作成（オフライン）"
+"Discard pending draft":
+  en: "Discard pending draft"
+  zh-TW: "取消待處理草稿"
+  zh-CN: "取消待处理草稿"
+  ja: "保留中の下書きを破棄"
+"Prepare amend (review and confirm)":
+  en: "Prepare amend (review and confirm)"
+  zh-TW: "準備修訂上一筆提交（預覽並確認）"
+  zh-CN: "准备修订上一次提交（预览并确认）"
+  ja: "直前のコミット修正を準備（確認が必要）"
+"Confirm amend of last commit":
+  en: "Confirm amend of last commit"
+  zh-TW: "確認修訂上一筆提交"
+  zh-CN: "确认修订上一次提交"
+  ja: "直前のコミット修正を確定"
+"Checking amend preview…":
+  en: "Checking amend preview…"
+  zh-TW: "正在檢查提交修訂預覽…"
+  zh-CN: "正在检查提交修订预览…"
+  ja: "コミット修正のプレビューを確認中…"
+"View merge conflicts (read-only)":
+  en: "View merge conflicts (read-only)"
+  zh-TW: "檢視合併衝突（唯讀）"
+  zh-CN: "查看合并冲突（只读）"
+  ja: "マージ競合を表示（読み取り専用）"
+"Advanced Git actions":
+  en: "Advanced Git actions"
+  zh-TW: "更多 Git 操作"
+  zh-CN: "更多 Git 操作"
+  ja: "その他の Git 操作"
+"Commits":
+  en: "Commits"
+  zh-TW: "提交紀錄"
+  zh-CN: "提交记录"
+  ja: "コミット履歴"
+"Refresh commits":
+  en: "Refresh commits"
+  zh-TW: "重新整理提交紀錄"
+  zh-CN: "刷新提交记录"
+  ja: "コミット履歴を更新"
 "Branch & remote actions":
   en: "Branch & remote actions"
   zh-TW: "分支與遠端操作"

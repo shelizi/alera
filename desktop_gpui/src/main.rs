@@ -11934,6 +11934,19 @@ impl Render for Workbench {
             .as_ref()
             .map(|snapshot| snapshot.visible_rows(""))
             .unwrap_or_default();
+        // Classic shows a separate conflict action above the commit form.
+        // This only opens a read-only three-way index preview, never resolves.
+        let git_current_index_conflict = git_all_changes
+            .iter()
+            .find(|row| row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Conflicts)
+            .map(|row| {
+                (
+                    row.relative.clone(),
+                    git_all_changes.iter().filter(|candidate| {
+                        candidate.area == alera_gpui_desktop::git_inspect::GitChangeArea::Conflicts
+                    }).count(),
+                )
+            });
         let mut git_sidebar_options = self.git_sidebar_options.clone();
         git_sidebar_options.filter = git_filter;
         let git_sidebar_layout = layout_git_sidebar(&git_all_changes, &git_sidebar_options);
@@ -13271,8 +13284,18 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .overflow_y_scroll()
+                                    .overflow_hidden()
                                     .when(self.right_sidebar_view != RightSidebarView::Git, |v| v.hidden())
+                                    // Classic keeps its Commits strip visible at the bottom;
+                                    // only the file/commit-control body scrolls.
+                                    .child(
+                                        div()
+                                            .id("git-classic-scroll-body")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                                            .overflow_y_scroll()
                             .child(
                                 div()
                                     .flex()
@@ -13346,14 +13369,6 @@ impl Render for Workbench {
                                                 }))),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child(git_summary),
-                            )
                             // Keep the large Git Graph entry near the Source Control header.
                             // The footer History action sits below a potentially long file list.
                             .child(
@@ -13377,6 +13392,28 @@ impl Render for Workbench {
                                         this.open_center_git_graph(cx);
                                     })),
                             )
+                            .when_some(git_current_index_conflict, |panel, (relative, count)| {
+                                panel.child(
+                                    div()
+                                        .id("git-current-merge-conflicts")
+                                        .h(px(36.0))
+                                        .px_2()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .cursor_pointer()
+                                        .bg(rgb(ELEVATED))
+                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                        .child(icon(UiIcon::GitMerge, 15.0, TEXT))
+                                        .child(div().min_w_0().flex_1().text_sm().child(format!(
+                                            "{} ({count})",
+                                            tr(self.settings_menu_locale, "View merge conflicts (read-only)")
+                                        )))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.open_index_git_conflict(relative.clone(), cx);
+                                        }))
+                                )
+                            })
                             // Classic puts the commit form before history and file groups.
                             // Keep the main action labelled, not an icon-only mystery button.
                             .child(
@@ -13398,25 +13435,50 @@ impl Render for Workbench {
                                                 let message = this.git_commit_input.read(cx).query().trim().to_owned();
                                                 this.run_git_action(GitUiAction::Commit(message), cx);
                                             }))))
-                                        .child(icon_button(
-                                            "git-commit-offline-draft",
-                                            if git_commit_draft_loading { UiIcon::Close } else { UiIcon::Edit },
-                                            if git_commit_draft_loading {
-                                                "Discard pending local commit draft"
-                                            } else {
-                                                "Draft commit message from staged file names (offline, not AI)"
-                                            },
-                                            git_commit_draft_loading,
-                                        ).on_click(cx.listener(|this, _, _, cx| {
-                                            this.prepare_offline_commit_draft(cx);
-                                        })))
-                                        .child(icon_button("git-amend-confirm",
-                                            if git_amend_ready { UiIcon::Check } else { UiIcon::Edit },
-                                            if git_amend_loading { "Calculating amend preview…" } else if git_amend_ready { "Confirm replacing last local commit" } else { "Prepare Amend: preview current HEAD/index; confirm twice" },
-                                            git_amend_ready)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.prepare_or_confirm_git_amend(cx);
-                                            }))))
+                                        // Classic keeps Commit as the only main action.
+                                        // Preserve draft and amend safely behind a labeled menu.
+                                        .child({
+                                            let owner = cx.entity().downgrade();
+                                            let locale = self.settings_menu_locale;
+                                            Button::new("git-commit-options")
+                                                .icon(IconName::Ellipsis)
+                                                .ghost()
+                                                .tooltip(tr(locale, "More commit options"))
+                                                .dropdown_menu(move |menu, _, _| {
+                                                    let draft_owner = owner.clone();
+                                                    let amend_owner = owner.clone();
+                                                    menu
+                                                        .item(PopupMenuItem::new(tr(locale, if git_commit_draft_loading {
+                                                            "Discard pending draft"
+                                                        } else {
+                                                            "Draft message from staged files (offline)"
+                                                        })).on_click(move |_, _, cx| {
+                                                            let _ = draft_owner.update(cx, |view, cx| {
+                                                                view.prepare_offline_commit_draft(cx);
+                                                            });
+                                                        }))
+                                                        .item(PopupMenuItem::new(tr(locale, if git_amend_loading {
+                                                            "Checking amend preview…"
+                                                        } else if git_amend_ready {
+                                                            "Confirm amend of last commit"
+                                                        } else {
+                                                            "Prepare amend (review and confirm)"
+                                                        })).on_click(move |_, _, cx| {
+                                                            let _ = amend_owner.update(cx, |view, cx| {
+                                                                view.prepare_or_confirm_git_amend(cx);
+                                                            });
+                                                        }))
+                                                })
+                                        }))
+                            )
+                            // Match Classic: repository status follows the primary commit action.
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(git_summary),
                             )
                             .when(git_ai_generate_loading, |panel| panel.child(
                                 div().text_xs().text_color(rgb(MUTED))
@@ -13477,7 +13539,7 @@ impl Render for Workbench {
                                     .text_xs()
                                     .text_color(rgb(TEXT))
                                     .child(icon(if self.git_advanced_actions_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
-                                    .child(tr(self.settings_menu_locale, "Branch & remote actions"))
+                                    .child(tr(self.settings_menu_locale, "Advanced Git actions"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.git_advanced_actions_open = !this.git_advanced_actions_open;
                                         cx.notify();
@@ -13722,10 +13784,10 @@ impl Render for Workbench {
                             } else {
                                 div().h(px(0.0)).into_any_element()
                             })
-                            .child(div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
+                            .when(git_action_busy || !git_action_status.is_empty(), |panel| panel.child(
+                                div().text_xs().text_color(rgb(MUTED))
+                                    .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status })
+                            ))
                             .child(div().px_2().py_1().text_xs().text_color(rgb(MUTED))
                                 .child(format!("{git_sidebar_matches} / {git_sidebar_total} changes")))
                             .child(git_filter_input)
@@ -14145,6 +14207,7 @@ impl Render for Workbench {
                                     .text_color(rgb(MUTED))
                                     .child(git_diff),
                             ))
+                                    )
                             // Classic docks Git History after the changed-file list.
                             .child(
                                 div()
@@ -14161,13 +14224,19 @@ impl Render for Workbench {
                                     .hover(|style| style.bg(rgb(ACTIVE)))
                                     .child(icon(if git_graph_open { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
                                     .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(tr(self.settings_menu_locale, "Git History")))
+                                        .child(tr(self.settings_menu_locale, "Commits")))
                                     .child(div().flex_1())
                                     .child(icon_button("git-graph-expand-center", UiIcon::Open,
                                         "Open persistent Git History tab in workbench", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             cx.stop_propagation();
                                             this.open_center_git_graph(cx);
+                                        })))
+                                    .child(icon_button("git-history-refresh", UiIcon::Refresh,
+                                        tr(self.settings_menu_locale, "Refresh commits"), false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.refresh_git_history(cx);
                                         })))
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_git_history(cx))),
                             )
@@ -14176,7 +14245,7 @@ impl Render for Workbench {
                                     .id("git-graph-panel")
                                     .flex()
                                     .flex_col()
-                                    .max_h(px(460.0))
+                                    .max_h(px(330.0))
                                     .overflow_y_scroll()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
