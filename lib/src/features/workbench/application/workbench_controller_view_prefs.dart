@@ -70,18 +70,18 @@ mixin _WorkbenchControllerViewPrefs
     required List<String> visibleOrder,
   }) {
     final prefs = state.viewPrefs;
+    // Dragging must not implicitly change the user's automatic sort mode.
+    if (prefs.projectSort != WorkbenchSortBy.manual) return;
     final next = moveSidebarOrderId(
       savedOrder: prefs.projectOrder,
       visibleOrder: visibleOrder,
       knownIds: state.projects.map((project) => project.id),
       sourceId: sourceId,
       targetId: targetId,
-      isManual: prefs.projectSort == WorkbenchSortBy.manual,
+      isManual: true,
     );
     if (next == null) return;
-    _updateViewPrefs(
-      prefs.copyWith(projectSort: WorkbenchSortBy.manual, projectOrder: next),
-    );
+    _updateViewPrefs(prefs.copyWith(projectOrder: next));
   }
 
   void moveWorkspaceInSidebar({
@@ -90,6 +90,7 @@ mixin _WorkbenchControllerViewPrefs
     required List<String> visibleOrder,
   }) {
     final prefs = state.viewPrefs;
+    if (prefs.workspaceSort != WorkbenchSortBy.manual) return;
     final next = moveSidebarOrderId(
       savedOrder: prefs.workspaceOrder,
       visibleOrder: visibleOrder,
@@ -99,15 +100,10 @@ mixin _WorkbenchControllerViewPrefs
       ],
       sourceId: sourceId,
       targetId: targetId,
-      isManual: prefs.workspaceSort == WorkbenchSortBy.manual,
+      isManual: true,
     );
     if (next == null) return;
-    _updateViewPrefs(
-      prefs.copyWith(
-        workspaceSort: WorkbenchSortBy.manual,
-        workspaceOrder: next,
-      ),
-    );
+    _updateViewPrefs(prefs.copyWith(workspaceOrder: next));
   }
 
   void setWorkspaceKindFilter(WorkspaceKindFilter filter) {

@@ -488,5 +488,70 @@ void _registerAleraShellSidebarStateTests() {
     },
   );
 
+  for (final mode
+      in <
+        ({
+          WorkbenchSortBy projects,
+          WorkbenchSortBy worktrees,
+          bool projectGrip,
+          bool workspaceGrip,
+        })
+      >[
+        (
+          projects: WorkbenchSortBy.name,
+          worktrees: WorkbenchSortBy.recent,
+          projectGrip: false,
+          workspaceGrip: false,
+        ),
+        (
+          projects: WorkbenchSortBy.manual,
+          worktrees: WorkbenchSortBy.recent,
+          projectGrip: true,
+          workspaceGrip: false,
+        ),
+        (
+          projects: WorkbenchSortBy.activity,
+          worktrees: WorkbenchSortBy.manual,
+          projectGrip: false,
+          workspaceGrip: true,
+        ),
+        (
+          projects: WorkbenchSortBy.manual,
+          worktrees: WorkbenchSortBy.manual,
+          projectGrip: true,
+          workspaceGrip: true,
+        ),
+      ]) {
+    testWidgets('sidebar reorder grips follow independent sort modes: '
+        '${mode.projects.name}/${mode.worktrees.name}', (tester) async {
+      final seeded = _linkedWorkbenchState();
+      await _pumpShell(
+        tester,
+        state: seeded.copyWith(
+          viewPrefs: seeded.viewPrefs.copyWith(
+            projectSort: mode.projects,
+            workspaceSort: mode.worktrees,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Finder gripFor(String kind) => find.byWidgetPredicate((widget) {
+        final key = widget.key;
+        return widget is LongPressDraggable &&
+            key is ValueKey<String> &&
+            key.value.startsWith('sidebar-reorder-handle:') &&
+            key.value.contains('_SidebarOrderKind.$kind:');
+      });
+      expect(
+        gripFor('project'),
+        mode.projectGrip ? findsWidgets : findsNothing,
+      );
+      expect(
+        gripFor('workspace'),
+        mode.workspaceGrip ? findsWidgets : findsNothing,
+      );
+    });
+  }
+
   _registerAleraShellSidebarFeedbackTests();
 }

@@ -70,6 +70,16 @@ pub struct SidebarOrderPrefs {
 }
 
 impl SidebarOrderPrefs {
+    /// Show the Project grip only when Project sort is explicitly Manual.
+    pub fn project_is_manual(&self) -> bool {
+        self.project_sort == "manual"
+    }
+
+    /// Show the Worktree grip only when Worktree sort is explicitly Manual.
+    pub fn workspace_is_manual(&self) -> bool {
+        self.workspace_sort == "manual"
+    }
+
     pub fn from_json(value: &Value) -> io::Result<Self> {
         if value["kind"] != "sidebarOrder" {
             return Err(io::Error::new(
@@ -243,6 +253,26 @@ mod tests {
             groups.into_iter().map(|g| g.label).collect::<Vec<_>>(),
             vec!["B", "A", "unknown"]
         );
+    }
+
+    #[test]
+    fn reordering_grips_require_matching_manual_sort_independently() {
+        let mut prefs = SidebarOrderPrefs::default();
+        assert!(!prefs.project_is_manual());
+        assert!(!prefs.workspace_is_manual());
+
+        prefs.project_sort = "manual".into();
+        assert!(prefs.project_is_manual());
+        assert!(!prefs.workspace_is_manual());
+
+        prefs.project_sort = "activity".into();
+        prefs.workspace_sort = "manual".into();
+        assert!(!prefs.project_is_manual());
+        assert!(prefs.workspace_is_manual());
+
+        prefs.project_sort = "manual".into();
+        assert!(prefs.project_is_manual());
+        assert!(prefs.workspace_is_manual());
     }
 
     #[test]

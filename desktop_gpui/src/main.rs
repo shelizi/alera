@@ -16451,7 +16451,9 @@ impl Render for Workbench {
                                                 let project_drag_gate = sidebar_reorder_hold.clone();
                                                 let project_hint = sidebar_reorder_hint.clone();
                                                 let project_preview_hint = sidebar_reorder_hint.clone();
-                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active;
+                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active
+                                                    && sidebar_order_prefs.as_ref()
+                                                        .is_some_and(|prefs| prefs.project_is_manual());
                                                 let show_all_worktrees = project_title_matches_search(
                                                     &group, runtime_catalog.as_ref(), &sidebar_search_query,
                                                 );
@@ -16595,7 +16597,9 @@ impl Render for Workbench {
                                                         let workspace_drag_gate = sidebar_reorder_hold.clone();
                                                         let workspace_hint = sidebar_reorder_hint.clone();
                                                         let workspace_preview_hint = sidebar_reorder_hint.clone();
-                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active;
+                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active
+                                                            && sidebar_order_prefs.as_ref()
+                                                                .is_some_and(|prefs| prefs.workspace_is_manual());
                                                         div()
                                                             .id(("project-tree-worktree-container", index * 128 + child_index))
                                                             .flex().flex_col()

@@ -64,17 +64,18 @@ pub async fn run(
                 ),
                 _ => return print_error("Sidebar reorder kind must be project or workspace"),
             };
+            if !manual {
+                return print_error("Switch this sidebar section to Manual sort before reordering");
+            }
             let Some(next) = move_ids(order, &visible, source_id, target_id, manual) else {
                 return print_error("Sidebar drag has no valid distinct source/target");
             };
             match kind.as_str() {
                 "project" => {
                     prefs.project_order = next;
-                    prefs.project_sort = SharedWorkbenchSortBy::Manual;
                 }
                 "workspace" => {
                     prefs.workspace_order = next;
-                    prefs.workspace_sort = SharedWorkbenchSortBy::Manual;
                 }
                 _ => unreachable!(),
             }
@@ -136,7 +137,7 @@ fn move_ids(
     target: &str,
     manual: bool,
 ) -> Option<Vec<String>> {
-    if source == target {
+    if !manual || source == target {
         return None;
     }
     let mut result = Vec::new();
@@ -148,13 +149,8 @@ fn move_ids(
             }
         }
     };
-    if manual {
-        append(saved);
-    }
+    append(saved);
     append(visible);
-    if !manual {
-        append(saved);
-    }
     let from = result.iter().position(|id| id == source)?;
     let to = result.iter().position(|id| id == target)?;
     result.remove(from);
@@ -186,10 +182,7 @@ mod tests {
             move_ids(&saved, &visible, "c", "a", true).unwrap(),
             ["c", "a", "hidden", "b"]
         );
-        assert_eq!(
-            move_ids(&[], &visible, "a", "c", false).unwrap(),
-            ["b", "c", "a"]
-        );
+        assert_eq!(move_ids(&[], &visible, "a", "c", false), None,);
     }
 
     #[test]
