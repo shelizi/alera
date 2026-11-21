@@ -199,6 +199,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::ControlAgentVerified(_)
             | TerminalAction::HistorySearch(_)
             | TerminalAction::HistoryResume(_)
+            | TerminalAction::HistoryLocate(_)
             | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
@@ -508,6 +509,39 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             }), 42_000).await {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Exact Agent history Resume Tab");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryLocate(args) => {
+            let valid = matches!(args.provider.as_str(), "codex" | "claude")
+                && [
+                    args.account_id.as_str(),
+                    args.project_id.as_str(),
+                    args.workspace_id.as_str(),
+                ]
+                .iter()
+                .all(|value| {
+                    !value.is_empty()
+                        && value.len() <= 256
+                        && !value.chars().any(char::is_control)
+                })
+                && uuid::Uuid::parse_str(&args.session_id)
+                    .is_ok_and(|uuid| uuid.to_string() == args.session_id);
+            if !valid {
+                eprintln!("History lookup requires a canonical provider-native UUID and registered source identity");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value_with_deadline("agentHistory.locateExact", &json!({
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "providerSessionId": args.session_id,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Existing historical Agent Tab");
                     0
                 }
                 Err(error) => print_error(error),

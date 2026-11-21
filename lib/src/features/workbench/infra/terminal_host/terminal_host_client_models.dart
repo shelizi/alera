@@ -124,6 +124,16 @@ abstract interface class TerminalHostAgentHistoryClient {
 
   Future<void> clearAgentHistorySearchCache();
 
+  /// Read-only, local-only lookup of an existing saved exact native Session
+  /// Tab. Never starts a Host or creates a new Agent/terminal.
+  Future<Map<String, Object?>> locateExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+  });
+
   Future<Map<String, Object?>> resumeExactAgentHistory({
     required String provider,
     required String accountId,

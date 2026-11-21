@@ -298,6 +298,81 @@ impl Workbench {
 }
 
 impl Workbench {
+    /// Deliberately locate an existing Host-pinned Tab without creating a
+    /// terminal or trusting stale UI/session inventory after app restart.
+    fn locate_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.global_agent_history_busy || !self.global_agent_history_consent {
+            return;
+        }
+        let Some(hit) = self.global_agent_history_results.get(index).cloned() else {
+            return;
+        };
+        if hit.account.is_empty() {
+            self.global_agent_history_status =
+                "Cannot locate a Tab without the original registered account".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_history_status = "Alera CLI unavailable; no Host started".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_history_busy = true;
+        self.global_agent_history_resume_armed = None;
+        self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
+        let ticket = self.global_agent_history_request;
+        self.global_agent_history_status =
+            "Locating an existing verified Tab; no Agent will start…".into();
+        cx.notify();
+        let expected_workspace = hit.workspace.clone();
+        cx.spawn(async move |view, cx| {
+            let reply = cx
+                .background_spawn(async move {
+                    bridge.locate_exact_agent_history(
+                        &hit.provider,
+                        &hit.account,
+                        &hit.project,
+                        &hit.workspace,
+                        &hit.native_id,
+                    )
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_history_request != ticket {
+                    return;
+                }
+                view.global_agent_history_busy = false;
+                view.global_agent_history_status = match reply {
+                    Ok(result) if result.get("noAgentStarted").and_then(serde_json::Value::as_bool) == Some(true) =>
+                    {
+                        match (
+                            result.get("found").and_then(serde_json::Value::as_bool),
+                            result.get("tabId").and_then(serde_json::Value::as_str),
+                            result.get("workspaceId").and_then(serde_json::Value::as_str),
+                        ) {
+                            (Some(true), Some(tab_id), Some(workspace))
+                                if !tab_id.is_empty() && workspace == expected_workspace =>
+                            {
+                                format!("Existing Tab {tab_id} found in Worktree {workspace}; open it from its saved Tabs. No new Agent started")
+                            }
+                            (Some(false), None, None) =>
+                                "No verified existing Tab. Use confirmed Resume only if you intend to create one".into(),
+                            _ => "Host lookup identity inconsistent; no action taken".into(),
+                        }
+                    }
+                    _ => "Existing Tab lookup unavailable or source changed; no Agent started".into(),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn resume_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.global_agent_history_busy || !self.global_agent_history_consent {
             return;
@@ -1080,6 +1155,17 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                     }),
             );
         if !hit.account.is_empty() {
+            card = card.child(
+                div()
+                    .id(("global-history-locate-existing", index))
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
+                    .child("Find existing verified Tab (read only)")
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.locate_global_agent_history(index, cx);
+                    })),
+            );
             let identity = history_resume_identity(hit, &profile);
             let armed =
                 view.global_agent_history_resume_armed.as_deref() == Some(identity.as_str());

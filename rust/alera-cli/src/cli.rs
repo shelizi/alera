@@ -173,6 +173,9 @@ pub enum TerminalAction {
     /// Explicit, local-only exact native UUID resume into a new Host Agent Tab.
     #[command(name = "history-resume")]
     HistoryResume(TerminalHistoryResumeArgs),
+    /// Read-only lookup of an already resumed native Session Tab; no PTY.
+    #[command(name = "history-locate")]
+    HistoryLocate(TerminalHistoryLocateArgs),
     /// Clear only the local Agent search cache, never native transcripts.
     #[command(name = "history-clear")]
     HistoryClear,
@@ -300,6 +303,20 @@ pub struct TerminalHistoryResumeArgs {
     pub confirm_account: bool,
     #[arg(long = "confirm-resume", default_value_t = false)]
     pub confirm_resume: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistoryLocateArgs {
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long = "account-id")]
+    pub account_id: String,
+    #[arg(long = "project-id")]
+    pub project_id: String,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "session-id")]
+    pub session_id: String,
 }
 
 #[derive(Debug, Args)]

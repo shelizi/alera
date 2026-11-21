@@ -139,6 +139,70 @@ class _GlobalAgentHistoryPanelState
     }
   }
 
+  /// A deliberate read-only Host lookup, useful after the UI was restarted
+  /// and its in-memory mutation UUID is no longer available.
+  Future<void> _locateExisting(Map<String, Object?> hit) async {
+    if (_busy || !_consented) return;
+    final source = hit['session'];
+    if (source is! Map) return;
+    String field(String key) => source[key]?.toString() ?? '';
+    final provider = field('provider');
+    final account = field('providerAccountId');
+    final project = field('projectId');
+    final workspace = field('workspaceId');
+    final nativeId = field('providerSessionId');
+    final host = ref.read(terminalHostClientProvider);
+    if (host is! TerminalHostAgentHistoryClient ||
+        account.isEmpty ||
+        !['claude', 'codex'].contains(provider)) {
+      setState(
+        () => _feedback = 'Verified source account or Host lookup unavailable.',
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _armedResumeKey = null;
+      _feedback = 'Looking for an existing verified Tab; no Agent will start…';
+    });
+    try {
+      final reply = await (host as TerminalHostAgentHistoryClient)
+          .locateExactAgentHistory(
+            provider: provider,
+            accountId: account,
+            projectId: project,
+            workspaceId: workspace,
+            providerSessionId: nativeId,
+          );
+      if (!mounted) return;
+      if (reply['noAgentStarted'] != true) {
+        throw const FormatException('Unverified Host lookup response');
+      }
+      final tabId = reply['tabId']?.toString();
+      final matchedWorkspace = reply['workspaceId']?.toString();
+      setState(() {
+        _feedback =
+            reply['found'] == true &&
+                tabId != null &&
+                tabId.isNotEmpty &&
+                matchedWorkspace == workspace
+            ? 'Existing Tab $tabId found in Worktree $workspace. '
+                  'Open it from your Workspace Tabs; no new Agent was started.'
+            : reply['found'] == false
+            ? 'No verified existing Tab found. You can explicitly Resume '
+                  'after confirming the source account.'
+            : 'Host lookup returned an unexpected identity; no action taken.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _feedback = 'Cannot confirm an existing Tab on this Host. No Agent was started.',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _resumeExact(Map<String, Object?> hit) async {
     if (_busy || !_consented) return;
     final source = hit['session'];
@@ -433,16 +497,30 @@ class _GlobalAgentHistoryPanelState
                           if (field('providerAccountId').isNotEmpty)
                             Align(
                               alignment: Alignment.centerRight,
-                              child: TextButton.icon(
-                                onPressed: _busy || !_consented
-                                    ? null
-                                    : () => _resumeExact(hit),
-                                icon: const Icon(Icons.history),
-                                label: Text(
-                                  _armedResumeKey == resumeKey
-                                      ? 'Confirm exact Resume'
-                                      : 'Resume exact Session…',
-                                ),
+                              child: Wrap(
+                                spacing: 8,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: _busy || !_consented
+                                        ? null
+                                        : () => _locateExisting(hit),
+                                    icon: const Icon(
+                                      Icons.find_in_page_outlined,
+                                    ),
+                                    label: const Text('Find existing Tab'),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: _busy || !_consented
+                                        ? null
+                                        : () => _resumeExact(hit),
+                                    icon: const Icon(Icons.history),
+                                    label: Text(
+                                      _armedResumeKey == resumeKey
+                                          ? 'Confirm exact Resume'
+                                          : 'Resume exact Session…',
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                         ],

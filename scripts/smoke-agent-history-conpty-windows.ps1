@@ -277,6 +277,7 @@ function Invoke-VerifiedHistoryRpcFixture {
         throw 'Test Host did not persist isolated provider homes'
     }
 
+    $savedTabs = @()
     foreach ($entry in @(
         @{ provider = 'codex'; home = $codexHome; id = $codexId },
         @{ provider = 'claude'; home = $claudeHome; id = $claudeId }
@@ -310,6 +311,19 @@ function Invoke-VerifiedHistoryRpcFixture {
         }
         Write-Output ("$($entry.provider) Host history search: PASS")
 
+        $locateArguments = @(
+            'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+            'history-locate', '--provider', $entry.provider,
+            '--account-id', $entry.home,
+            '--project-id', $projectId, '--workspace-id', $workspaceId,
+            '--session-id', $entry.id
+        )
+        $before = Invoke-AleraJson -Arguments $locateArguments
+        if ($before.found -ne $false -or $before.noAgentStarted -ne $true) {
+            throw "$($entry.provider) read-only lookup invented a Tab before Resume"
+        }
+        Write-Output ("$($entry.provider) read-only initial lookup empty: PASS")
+
         $mutation = [guid]::NewGuid().ToString('D')
         $resumed = Invoke-AleraJson -Arguments @(
             'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
@@ -333,6 +347,24 @@ function Invoke-VerifiedHistoryRpcFixture {
             }
         }
         Write-Output ("$($entry.provider) verified source -> Profile -> Tab: PASS")
+
+        # A *separate* no-start CLI process and local RPC connection must find
+        # the exact saved Tab without knowing the old mutation UUID. This is
+        # the recovery path after Classic/GPUI restarts with no pending state.
+        $located = Invoke-AleraJson -Arguments $locateArguments
+        if ($located.found -ne $true -or
+            $located.tabId -ne $resumed.tab.id -or
+            $located.workspaceId -ne $workspaceId -or
+            $located.noAgentStarted -ne $true) {
+            throw "$($entry.provider) read-only lookup did not recover original Tab"
+        }
+        Write-Output ("$($entry.provider) fresh-client exact Tab lookup: PASS")
+        $savedTabs += @{
+            provider = $entry.provider
+            home = $entry.home
+            id = $entry.id
+            tabId = $resumed.tab.id
+        }
 
         # Ambiguous ACK retries must return the *same* receipt and never
         # create a second PTY. A new mutation ID for the same UUID must fail.
@@ -369,6 +401,77 @@ function Invoke-VerifiedHistoryRpcFixture {
             throw "$($entry.provider) fresh mutation duplicate owner was not rejected"
         }
         Write-Output ("$($entry.provider) duplicate Resume owner rejected: PASS")
+    }
+    # Stop and restart *only* the unique test Host. The new process has no
+    # knowledge of any prior CLI mutation UUID, yet must locate the saved
+    # same-source Tab after RuntimeStore is reopened from disk.
+    $null = & $CliPath runtime --runtime-dir $runtime --json stop --force 2>&1
+    $stopped = $false
+    for ($attempt = 0; $attempt -lt 50; $attempt++) {
+        try {
+            $state = Invoke-AleraJson -Arguments @(
+                'runtime', '--runtime-dir', $runtime, '--json', 'status'
+            )
+            if ($state.running -eq $false) {
+                $stopped = $true
+                break
+            }
+        } catch {
+            # This unique Host's control file may disappear during shutdown.
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $stopped) {
+        throw 'Isolated Host did not stop for restart lookup'
+    }
+    $script:hostStarted = $false
+    if ($null -ne $script:launcher) {
+        try {
+            $script:launcher.Refresh()
+            if (-not $script:launcher.HasExited) {
+                # Stop only the detached start CLI process this script owns.
+                Stop-Process -Id $script:launcher.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            # It may have exited as soon as the isolated Host shut down.
+        }
+    }
+    $script:launcher = Start-Process -FilePath $CliPath -ArgumentList @(
+        'runtime', '--runtime-dir', ('"' + $runtime + '"'), '--json', 'start'
+    ) -WindowStyle Hidden -PassThru
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 90; $attempt++) {
+        try {
+            $state = Invoke-AleraJson -Arguments @(
+                'runtime', '--runtime-dir', $runtime, '--json', 'status'
+            )
+            if ($state.running -eq $true) {
+                $ready = $true
+                $script:hostStarted = $true
+                break
+            }
+        } catch {
+            # New isolated Host may not yet have published its control file.
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $ready) {
+        throw 'Isolated Host did not return after restart'
+    }
+    foreach ($saved in $savedTabs) {
+        $located = Invoke-AleraJson -Arguments @(
+            'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+            'history-locate', '--provider', $saved.provider,
+            '--account-id', $saved.home,
+            '--project-id', $projectId, '--workspace-id', $workspaceId,
+            '--session-id', $saved.id
+        )
+        if ($located.found -ne $true -or $located.tabId -ne $saved.tabId -or
+            $located.workspaceId -ne $workspaceId -or
+            $located.noAgentStarted -ne $true) {
+            throw "$($saved.provider) Host-restart lookup lost saved exact Tab"
+        }
+        Write-Output ("$($saved.provider) Host-restart read-only Tab lookup: PASS")
     }
     Write-Output 'Native positive restoration: NOT TESTED (synthetic metadata is not a native conversation)'
 }

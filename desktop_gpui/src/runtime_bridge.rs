@@ -505,6 +505,31 @@ impl RuntimeCliBridge {
                             .is_some_and(|v| uuid::Uuid::parse_str(v).is_ok())
                     })
             }
+            (Some("history-locate"), false) => {
+                args.len() == 11
+                    && [
+                        (1, "--provider"),
+                        (3, "--account-id"),
+                        (5, "--project-id"),
+                        (7, "--workspace-id"),
+                        (9, "--session-id"),
+                    ]
+                    .iter()
+                    .all(|(index, flag)| args[*index] == OsString::from(flag))
+                    && args[2]
+                        .to_str()
+                        .is_some_and(|value| matches!(value, "codex" | "claude"))
+                    && [4, 6, 8].iter().all(|index| {
+                        args[*index].to_str().is_some_and(|value| {
+                            !value.is_empty()
+                                && value.len() <= 256
+                                && !value.chars().any(char::is_control)
+                        })
+                    })
+                    && args[10].to_str().is_some_and(|value| {
+                        uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.to_string() == value)
+                    })
+            }
             (Some("history-clear"), false) => args.len() == 1,
             // Workspace listing and terminal creation are Host requests with
             // no stdin payload; both still require --no-start below.
@@ -564,7 +589,10 @@ impl RuntimeCliBridge {
                 .read_to_end(&mut bytes)?;
             Ok(bytes)
         });
-        let deadline = if matches!(verb, Some("history-search" | "history-resume")) {
+        let deadline = if matches!(
+            verb,
+            Some("history-search" | "history-resume" | "history-locate")
+        ) {
             Duration::from_secs(45)
         } else {
             PROBE_TIMEOUT
@@ -2503,6 +2531,52 @@ mod tests {
         );
         args[4] = OsString::from("secondary");
         args[10] = OsString::from("--last");
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!dir.path().join("host.json").exists());
+    }
+
+    #[test]
+    fn history_locate_requires_exact_read_only_source_and_never_starts_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        let native = "550e8400-e29b-41d4-a716-446655440001";
+        let mut args: Vec<OsString> = [
+            "history-locate",
+            "--provider",
+            "codex",
+            "--account-id",
+            "secondary",
+            "--project-id",
+            "project",
+            "--workspace-id",
+            "worktree",
+            "--session-id",
+            native,
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        // An exact lookup may not add a launch flag or arbitrary commands.
+        args.push(OsString::from("--confirm-resume"));
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        args.pop();
+        args[10] = OsString::from("--last");
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        args[10] = OsString::from(native);
+        args[4] = OsString::from("");
         assert_eq!(
             bridge.terminal_json(&args).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied

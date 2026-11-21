@@ -350,6 +350,30 @@ final class SocketTerminalHostClient._(
   }
 
   @override
+  Future<Map<String, Object?>> locateExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+  }) async {
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.locateExact',
+      <String, Object?>{
+        'provider': provider,
+        'accountId': accountId,
+        'projectId': projectId,
+        'workspaceId': workspaceId,
+        'providerSessionId': providerSessionId,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'existing historical Agent Tab lookup');
+  }
+
+  @override
   Future<Map<String, Object?>> resumeExactAgentHistory({
     required String provider,
     required String accountId,

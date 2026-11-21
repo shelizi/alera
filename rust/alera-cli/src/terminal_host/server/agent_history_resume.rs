@@ -82,14 +82,9 @@ fn exact_source<'a>(
 }
 
 impl ExactResumeRequest {
-    fn parse(payload: &Value) -> HostResult<Self> {
-        if payload.get("confirmResume") != Some(&Value::Bool(true))
-            || payload.get("confirmProviderAccount") != Some(&Value::Bool(true))
-        {
-            return Err(HostError::state(
-                "Explicit resume and current CLI account confirmations are required.",
-            ));
-        }
+    /// Read-only lookup needs only the native source; it must not be able to
+    /// select an executable Profile or create a new mutation.
+    fn parse_source(payload: &Value) -> HostResult<Self> {
         let provider = bounded_identifier(payload, "provider", 12)?;
         if !matches!(provider.as_str(), "codex" | "claude") {
             return Err(HostError::format("Unsupported historical resume provider"));
@@ -104,18 +99,31 @@ impl ExactResumeRequest {
                 "Provider-native session UUID is not canonical",
             ));
         }
-        let client_mutation_id = bounded_identifier(payload, "clientMutationId", 128)?;
-        Uuid::parse_str(&client_mutation_id)
-            .map_err(|_| HostError::format("Exact resume requires a fresh mutation UUID"))?;
         Ok(Self {
             provider,
             account,
             project: bounded_identifier(payload, "projectId", 256)?,
             workspace: bounded_identifier(payload, "workspaceId", 256)?,
-            profile: bounded_identifier(payload, "profileId", 256)?,
+            profile: String::new(),
             native_id,
-            client_mutation_id,
+            client_mutation_id: String::new(),
         })
+    }
+
+    fn parse(payload: &Value) -> HostResult<Self> {
+        if payload.get("confirmResume") != Some(&Value::Bool(true))
+            || payload.get("confirmProviderAccount") != Some(&Value::Bool(true))
+        {
+            return Err(HostError::state(
+                "Explicit resume and current CLI account confirmations are required.",
+            ));
+        }
+        let mut source = Self::parse_source(payload)?;
+        source.profile = bounded_identifier(payload, "profileId", 256)?;
+        source.client_mutation_id = bounded_identifier(payload, "clientMutationId", 128)?;
+        Uuid::parse_str(&source.client_mutation_id)
+            .map_err(|_| HostError::format("Exact resume requires a fresh mutation UUID"))?;
+        Ok(source)
     }
 }
 
@@ -286,6 +294,31 @@ fn existing_tab_owns_source(
         || registered_source == Some(requested_source.as_str())
 }
 
+/// Unknown/legacy owners must block duplicate Resume, but are not proof that
+/// the caller may reveal or navigate to that Tab. This read-only lookup
+/// requires the Host-private source-directory fingerprint saved at launch.
+fn tab_is_verified_exact_history_owner(
+    tab: &WorkspaceTabRecord,
+    target: &ExactResumeRequest,
+    verified: &VerifiedHistoryResume,
+) -> bool {
+    if tab.kind != "terminal"
+        || tab.workspace_id != target.workspace
+        || tab.payload["automationOwned"] == true
+        || !provider_resume_id(tab)
+            .is_some_and(|(provider, id)| provider == target.provider && id == target.native_id)
+    {
+        return false;
+    }
+    let origin = &tab.payload[RESUME_ORIGIN_KEY];
+    origin["provider"].as_str() == Some(target.provider.as_str())
+        && origin["accountId"]
+            .as_str()
+            .is_some_and(|account| !account.is_empty() && account.len() <= 256)
+        && origin["sourceDirectoryFingerprint"].as_str()
+            == Some(source_directory_fingerprint(&verified.config_directory).as_str())
+}
+
 /// Checked only AFTER an authenticated matching mutation receipt has had a
 /// chance to replay its original Tab. A fresh mutation still cannot launch a
 /// second CLI owner for the exact native conversation.
@@ -333,6 +366,39 @@ pub(super) async fn ensure_history_session_unowned(
 }
 
 impl ServerActor {
+    /// Read-only recovery after a client restart or a lost Resume ACK. It
+    /// never starts a PTY and never guesses an owner's account from its UUID.
+    pub(super) async fn locate_exact_agent_history(
+        &mut self,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let target = ExactResumeRequest::parse_source(payload)?;
+        let verified = verify_native_source(&self.runtime_store, &target).await?;
+        let tabs = self
+            .runtime_store
+            .list_workspace_tabs(&target.workspace)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        let mut matches = tabs
+            .iter()
+            .filter(|tab| tab_is_verified_exact_history_owner(tab, &target, &verified));
+        let existing = matches.next();
+        if matches.next().is_some() {
+            return Err(HostError::state(
+                "Multiple saved Tabs claim the same native history; refusing to guess.",
+            ));
+        }
+        Ok(match existing {
+            Some(tab) => json!({
+                "found": true,
+                "tabId": tab.id,
+                "workspaceId": tab.workspace_id,
+                "noAgentStarted": true,
+            }),
+            None => json!({"found": false, "noAgentStarted": true}),
+        })
+    }
+
     pub(super) async fn resume_exact_agent_history(
         &mut self,
         client_id: u64,
@@ -702,6 +768,79 @@ mod tests {
     }
 
     #[test]
+    fn locate_existing_tab_requires_host_pinned_source_not_just_native_uuid() {
+        let target = ExactResumeRequest::parse_source(&json!({
+            "provider":"codex",
+            "accountId":"alias-two",
+            "projectId":"project",
+            "workspaceId":"workspace",
+            "providerSessionId":"550e8400-e29b-41d4-a716-446655440001",
+        }))
+        .unwrap();
+        let verified = VerifiedHistoryResume {
+            provider: target.provider.clone(),
+            account_id: target.account.clone(),
+            native_id: target.native_id.clone(),
+            codex_transcript_path: None,
+            config_directory: "C:/same-source".into(),
+        };
+        let now = chrono::Utc::now();
+        let mut tab = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Existing".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"agentType":"codex","spawnOnCreate":true}),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "");
+        let mut state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
+        state.observe("codex", Some(&target.native_id), "", 0);
+        state.write(&mut tab);
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        // A different alias can locate only if it pins the *same* source root.
+        tab.payload[RESUME_ORIGIN_KEY] = json!({
+            "provider":"codex",
+            "accountId":"alias-one",
+            "sourceDirectoryFingerprint":source_directory_fingerprint(&verified.config_directory)
+        });
+        assert!(tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        tab.payload[RESUME_ORIGIN_KEY]["accountId"] = Value::Null;
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        tab.payload[RESUME_ORIGIN_KEY]["accountId"] = json!("alias-one");
+        tab.payload[RESUME_ORIGIN_KEY]["sourceDirectoryFingerprint"] =
+            json!(source_directory_fingerprint("C:/different-account"));
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        tab.payload[RESUME_ORIGIN_KEY]["sourceDirectoryFingerprint"] =
+            json!(source_directory_fingerprint(&verified.config_directory));
+        tab.payload["automationOwned"] = json!(true);
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        tab.payload["automationOwned"] = json!(false);
+        tab.workspace_id = "other-worktree".into();
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+        tab.workspace_id = "workspace".into();
+        let mut state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
+        state.native_id = Some(Uuid::new_v4().to_string());
+        state.write(&mut tab);
+        assert!(!tab_is_verified_exact_history_owner(
+            &tab, &target, &verified
+        ));
+    }
+
+    #[test]
     fn exact_resume_rejects_other_accounts_worktrees_and_native_ids() {
         let root = tempfile::tempdir().unwrap();
         let worktree = tempfile::tempdir().unwrap();
@@ -755,5 +894,9 @@ mod tests {
         let route = request_route_policy("agentHistory.resumeExact");
         assert!(!route.mobile_allowed);
         assert_eq!(route.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        let locate = request_route_policy("agentHistory.locateExact");
+        assert!(!locate.mobile_allowed);
+        assert_eq!(locate.runtime_mutation, RuntimeMutationPolicy::Available);
+        assert!(locate.deferred_read.is_none());
     }
 }

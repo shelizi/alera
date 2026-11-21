@@ -454,6 +454,42 @@ impl RuntimeCliBridge {
         self.terminal_json(&args)
     }
 
+    /// Look up an already saved native Agent Tab after UI restart without
+    /// starting a Host, running a CLI Agent or touching its history files.
+    pub fn locate_exact_agent_history(
+        &self,
+        provider: &str,
+        account_id: &str,
+        project_id: &str,
+        workspace_id: &str,
+        native_id: &str,
+    ) -> io::Result<Value> {
+        if !matches!(provider, "codex" | "claude")
+            || [account_id, project_id, workspace_id].iter().any(|value| {
+                value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+            })
+            || !uuid::Uuid::parse_str(native_id).is_ok_and(|parsed| parsed.to_string() == native_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "History Tab lookup requires a canonical verified source identity",
+            ));
+        }
+        self.terminal_json(&[
+            OsString::from("history-locate"),
+            OsString::from("--provider"),
+            OsString::from(provider),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--project-id"),
+            OsString::from(project_id),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+            OsString::from("--session-id"),
+            OsString::from(native_id),
+        ])
+    }
+
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
         let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)

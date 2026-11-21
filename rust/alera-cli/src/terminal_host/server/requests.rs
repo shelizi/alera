@@ -1180,6 +1180,11 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.resume_exact_agent_history(client_id, payload).await
             }
+            "agentHistory.locateExact" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                self.locate_exact_agent_history(payload).await
+            }
             "aiText.cancel" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;
