@@ -111,6 +111,20 @@ abstract interface class TerminalHostVerifiedAgentLifecycleClient {
   });
 }
 
+/// Optional privacy-gated, local-only Host history search capability.
+/// Older Hosts and fake clients need not implement this port.
+abstract interface class TerminalHostAgentHistoryClient {
+  Future<Map<String, Object?>> searchAgentHistory({
+    required String text,
+    String? projectId,
+    String? workspaceId,
+    String? provider,
+    String? accountId,
+  });
+
+  Future<void> clearAgentHistorySearchCache();
+}
+
 /// Narrow opt-in view identity port for production hosts. Legacy fake and
 /// older clients keep their original TerminalHostClient methods unchanged.
 abstract interface class TerminalHostViewLeaseClient {

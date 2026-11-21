@@ -2,15 +2,15 @@ mod agent_account_environment;
 mod agent_descriptor_export;
 mod agent_history_snapshots;
 mod agent_history_sync;
-mod agent_session_history_scan;
-mod agent_session_history_fts;
-mod agent_session_history_service;
 mod agent_profile_commands;
 mod agent_profile_input;
 mod agent_profile_launch;
 mod agent_prompt_stdin_script;
 mod agent_quota;
 mod agent_quota_commands;
+mod agent_session_history_fts;
+mod agent_session_history_scan;
+mod agent_session_history_service;
 mod agent_status;
 mod agy_ssh_route;
 mod ai_commit_commands;
@@ -197,6 +197,8 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::CreateAgent(_)
             | TerminalAction::Resize(_)
             | TerminalAction::ControlAgentVerified(_)
+            | TerminalAction::HistorySearch(_)
+            | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
     {
@@ -433,6 +435,50 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             })).await {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Agent lifecycle control accepted by Host");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistorySearch(args) => {
+            if !args.stdin || !args.consent {
+                eprintln!("History search requires --stdin and --consent-index-user-text");
+                return USAGE_EXIT_CODE;
+            }
+            // Explicitly bound the pipe before UTF-8 validation; no query
+            // string is passed in argv or echoed to standard error.
+            let mut input = Vec::new();
+            if let Err(error) = std::io::stdin().take(1025).read_to_end(&mut input) {
+                return print_error(error);
+            }
+            let query = match String::from_utf8(input) {
+                Ok(text) if !text.trim().is_empty() && text.chars().count() <= 256
+                    && text.len() <= 1024 && !text.contains('\0') => text,
+                _ => {
+                    eprintln!("Search text must be UTF-8 and at most 256 characters");
+                    return USAGE_EXIT_CODE;
+                }
+            };
+            match client.request_value_with_deadline("agentHistory.search", &json!({
+                "text": query,
+                "consentToIndexUserText": true,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "maxResults": args.max_results,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Historical Agent matches");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryClear => {
+            match client.request_value("agentHistory.clear", &json!({})).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "History search cache cleared");
                     0
                 }
                 Err(error) => print_error(error),

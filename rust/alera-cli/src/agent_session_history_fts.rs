@@ -5,13 +5,13 @@
 use std::path::Path;
 use std::time::Duration;
 
-use alera_core::global_agent_search::AgentSessionSearchRecord;
+use alera_core::global_agent_search::{AgentSessionSearchQuery, AgentSessionSearchRecord};
 use alera_core::runtime::{
     harden_sqlite_files, open_private_runtime_file, prepare_private_runtime_directory,
 };
 use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Row, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 const MAX_BATCH: usize = 256;
 const MAX_RESULTS: usize = 100;
@@ -257,6 +257,78 @@ impl AgentSessionHistoryIndex {
             .collect()
     }
 
+    /// Scope FTS BEFORE applying the global result limit. Without this,
+    /// unrelated account/project hits can crowd out all authorized matches.
+    /// Keys come exclusively from the bounded, currently observed native scan.
+    pub(crate) async fn search_scoped(
+        &self,
+        query: &AgentSessionSearchQuery,
+        observed: &[AgentSessionSearchRecord],
+    ) -> Result<Vec<AgentSessionSearchRecord>> {
+        let Some(fts) = query_terms(&query.text) else {
+            return Ok(Vec::new());
+        };
+        let keys = observed
+            .iter()
+            .filter(|record| {
+                query
+                    .project_id
+                    .as_ref()
+                    .is_none_or(|id| &record.project_id == id)
+                    && query
+                        .workspace_id
+                        .as_ref()
+                        .is_none_or(|id| &record.workspace_id == id)
+                    && query
+                        .provider
+                        .as_ref()
+                        .is_none_or(|id| &record.provider == id)
+                    && query
+                        .provider_account_id
+                        .as_ref()
+                        .is_none_or(|id| record.provider_account_id.as_ref() == Some(id))
+            })
+            .take(MAX_BATCH)
+            .map(|record| {
+                serde_json::to_string(&(
+                    &record.runtime_instance_id,
+                    &record.project_id,
+                    &record.workspace_id,
+                    &record.provider,
+                    &record.provider_account_id,
+                    &record.profile_id,
+                    &record.provider_session_id,
+                ))
+                .map_err(Into::into)
+            })
+            .collect::<Result<Vec<String>>>()?;
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = QueryBuilder::<Sqlite>::new(
+            "SELECT d.record_json FROM history_search_fts
+             JOIN history_search_docs AS d ON history_search_fts.rowid=d.id
+             WHERE history_search_fts MATCH ",
+        );
+        sql.push_bind(fts);
+        sql.push(" AND d.document_key IN (");
+        {
+            let mut values = sql.separated(", ");
+            for key in keys {
+                values.push_bind(key);
+            }
+        }
+        sql.push(") ORDER BY bm25(history_search_fts), d.updated_ms DESC LIMIT ");
+        sql.push_bind(MAX_RESULTS as i64);
+        let rows = sql.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let raw: String = row.try_get("record_json")?;
+                serde_json::from_str(&raw).map_err(Into::into)
+            })
+            .collect()
+    }
+
     /// Explicit privacy switch-off removes indexed previews. Provider logs are
     /// untouched; the caller controls whether and when to reindex.
     pub(crate) async fn clear(&self) -> Result<()> {
@@ -371,6 +443,46 @@ mod tests {
             2,
             "updating one account must not overwrite others"
         );
+    }
+
+    #[tokio::test]
+    async fn scoped_fts_filters_current_account_before_result_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let primary = record(
+            "550e8400-e29b-41d4-a716-446655440001",
+            "Windows Windows Windows troubleshooting",
+            "Windows desktop",
+        );
+        let mut secondary = record(
+            "550e8400-e29b-41d4-a716-446655440002",
+            "Windows IME",
+            "native keyboard",
+        );
+        secondary.provider_account_id = Some("secondary".into());
+        index
+            .upsert_batch(&[primary.clone(), secondary.clone()])
+            .await
+            .unwrap();
+        let query = AgentSessionSearchQuery {
+            text: "Windows".into(),
+            provider_account_id: Some("secondary".into()),
+            max_results: 1,
+            ..Default::default()
+        };
+        let results = index
+            .search_scoped(&query, &[primary.clone(), secondary.clone()])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].provider_account_id.as_deref(), Some("secondary"));
+        // Cached secondary history is never returned after it disappears
+        // from the currently authorized native scan.
+        assert!(index
+            .search_scoped(&query, &[primary])
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 //! Explicit opt-in pipeline: registered Worktree -> bounded provider scan ->
-//! private FTS5 cache -> typed core ranking. This is not a Host route yet;
-//! the UI/RPC layer must authorize the caller and supply only trusted scopes.
+//! private FTS5 cache -> typed core ranking. The Host route authorizes local
+//! callers and provides trusted registered Workspace and account scopes.
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -69,9 +69,9 @@ pub(crate) async fn search_history_on_demand(
         empty.writes.unchanged += write.unchanged;
         empty.writes.trimmed += write.trimmed;
     }
-    let candidates = index
-        .search(&query.text, query.max_results.clamp(1, 100))
-        .await?;
+    // Scope and current-file identity constrain FTS before top-N limiting;
+    // otherwise other accounts can hide relevant rows from a filtered query.
+    let candidates = index.search_scoped(query, &scan.records).await?;
     let observed = scan
         .records
         .iter()

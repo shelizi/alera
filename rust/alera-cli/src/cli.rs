@@ -167,6 +167,12 @@ pub enum TerminalAction {
     /// Local desktop-only lifecycle action on an exact live Agent.
     #[command(name = "control-agent-verified")]
     ControlAgentVerified(TerminalControlAgentArgs),
+    /// Explicit consent-gated, local-only historical Agent search.
+    #[command(name = "history-search")]
+    HistorySearch(TerminalHistorySearchArgs),
+    /// Clear only the local Agent search cache, never native transcripts.
+    #[command(name = "history-clear")]
+    HistoryClear,
     /// Attach an interactive native terminal client to an existing session.
     Attach(TerminalAttachArgs),
 }
@@ -250,6 +256,25 @@ pub struct TerminalControlAgentArgs {
     /// Explicit acknowledgment that termination removes the Host Session.
     #[arg(long, default_value_t = false)]
     pub confirm_terminate: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistorySearchArgs {
+    /// Search query read from stdin, never from a process-visible argument.
+    #[arg(long, default_value_t = false)]
+    pub stdin: bool,
+    #[arg(long = "consent-index-user-text", default_value_t = false)]
+    pub consent: bool,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long = "project-id")]
+    pub project_id: Option<String>,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: Option<String>,
+    #[arg(long = "account-id")]
+    pub account_id: Option<String>,
+    #[arg(long = "max-results", default_value_t = 30)]
+    pub max_results: usize,
 }
 
 #[derive(Debug, Args)]

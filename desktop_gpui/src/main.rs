@@ -1059,6 +1059,16 @@ struct Workbench {
     agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
     global_agent_prompt_input: Entity<QuickOpenInput>,
+    global_agent_history_open: bool,
+    global_agent_history_consent: bool,
+    global_agent_history_input: Entity<QuickOpenInput>,
+    global_agent_history_account_input: Entity<QuickOpenInput>,
+    global_agent_history_workspace_input: Entity<QuickOpenInput>,
+    global_agent_history_provider: Option<String>,
+    global_agent_history_busy: bool,
+    global_agent_history_request: u64,
+    global_agent_history_status: String,
+    global_agent_history_results: Vec<native_global_agents_ui::GlobalHistoryPreview>,
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
     global_agent_submit_busy: bool,
     global_agent_submit_status: String,
@@ -18102,6 +18112,22 @@ fn main() {
                             global_agent_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::profile_command(cx)
                             }),
+                            global_agent_history_open: false,
+                            global_agent_history_consent: false,
+                            global_agent_history_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Find a previous Agent session…", cx)
+                            }),
+                            global_agent_history_account_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Account ID (optional)", cx)
+                            }),
+                            global_agent_history_workspace_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Worktree ID (optional)", cx)
+                            }),
+                            global_agent_history_provider: None,
+                            global_agent_history_busy: false,
+                            global_agent_history_request: 0,
+                            global_agent_history_status: "Native history search is off until you explicitly opt in".into(),
+                            global_agent_history_results: Vec::new(),
                             global_agent_target: None,
                             global_agent_submit_busy: false,
                             global_agent_submit_status: String::new(),

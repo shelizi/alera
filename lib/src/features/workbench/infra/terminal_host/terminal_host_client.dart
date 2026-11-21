@@ -62,6 +62,7 @@ final class SocketTerminalHostClient._(
         TerminalHostViewLeaseClient,
         TerminalHostVerifiedAgentInputClient,
         TerminalHostVerifiedAgentLifecycleClient,
+        TerminalHostAgentHistoryClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -301,6 +302,50 @@ final class SocketTerminalHostClient._(
         'deferredEnter': true,
         'bracketedPaste': true,
       },
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> searchAgentHistory({
+    required String text,
+    String? projectId,
+    String? workspaceId,
+    String? provider,
+    String? accountId,
+  }) async {
+    if (text.trim().isEmpty ||
+        text.runes.length > 256 ||
+        text.contains('\u0000')) {
+      throw ArgumentError('History search requires 1–256 characters.');
+    }
+    // No implicit Host startup; the UI prompts for explicit opt-in before
+    // calling this endpoint. The Host independently validates consent.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.search',
+      <String, Object?>{
+        'text': text,
+        'consentToIndexUserText': true,
+        if (projectId != null) 'projectId': projectId,
+        if (workspaceId != null) 'workspaceId': workspaceId,
+        if (provider != null) 'provider': provider,
+        if (accountId != null) 'accountId': accountId,
+        'maxResults': 30,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'agent history search');
+  }
+
+  @override
+  Future<void> clearAgentHistorySearchCache() async {
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      'agentHistory.clear',
+      const <String, Object?>{},
+      timeout: const Duration(seconds: 20),
     );
   }
 

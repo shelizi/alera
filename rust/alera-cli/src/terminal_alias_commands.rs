@@ -95,6 +95,8 @@ pub async fn run(
         | TerminalAction::Read(_)
         | TerminalAction::Write(_)
         | TerminalAction::ControlAgentVerified(_)
+        | TerminalAction::HistorySearch(_)
+        | TerminalAction::HistoryClear
         | TerminalAction::Attach(_)
         | TerminalAction::Workspaces
         | TerminalAction::Create(_)

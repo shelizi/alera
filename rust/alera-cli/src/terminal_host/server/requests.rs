@@ -193,6 +193,7 @@ impl ServerActor {
             return DeferredReadRequestHandler::new(
                 self.runtime_store.clone(),
                 self.deferred_request_scheduler(),
+                self.runtime_dir.clone(),
             )
             .execute_inline(route, payload)
             .await;

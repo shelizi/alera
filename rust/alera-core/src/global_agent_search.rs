@@ -125,6 +125,8 @@ pub struct AgentSessionSearchQuery {
     pub project_id: Option<String>,
     pub workspace_id: Option<String>,
     pub provider: Option<String>,
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
     pub max_results: usize,
 }
 
@@ -247,6 +249,10 @@ pub fn search_agent_sessions(
                 .provider
                 .as_ref()
                 .is_some_and(|id| id != &record.provider)
+            || query
+                .provider_account_id
+                .as_ref()
+                .is_some_and(|id| record.provider_account_id.as_ref() != Some(id))
         {
             continue;
         }
@@ -409,6 +415,24 @@ mod tests {
         other.provider_account_id = Some("account-secondary".into());
         let hits = search_agent_sessions(vec![sample("claude", false), other], &query("Windows"));
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn provider_account_filter_never_returns_other_accounts() {
+        let mut other = sample("claude", false);
+        other.provider_account_id = Some("account-secondary".into());
+        let hits = search_agent_sessions(
+            vec![sample("claude", false), other],
+            &AgentSessionSearchQuery {
+                provider_account_id: Some("account-secondary".into()),
+                ..query("Windows")
+            },
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].session.provider_account_id.as_deref(),
+            Some("account-secondary")
+        );
     }
 
     #[test]

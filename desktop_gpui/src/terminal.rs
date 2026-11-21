@@ -355,6 +355,56 @@ pub fn read_terminal_verb_bounded(
 }
 
 impl RuntimeCliBridge {
+    /// Read only already-registered Host history. Consent is supplied by the
+    /// Native view on each deliberate click, and transcript text uses stdin.
+    pub fn search_agent_history(
+        &self,
+        text: &str,
+        provider: Option<&str>,
+        account_id: Option<&str>,
+        workspace_id: Option<&str>,
+    ) -> io::Result<Value> {
+        if text.trim().is_empty()
+            || text.chars().count() > 256
+            || text.len() > 1024
+            || text.contains('\0')
+            || provider.is_some_and(|value| !matches!(value, "claude" | "codex"))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid or oversized historical Agent search",
+            ));
+        }
+        let mut args = vec![
+            OsString::from("history-search"),
+            OsString::from("--stdin"),
+            OsString::from("--consent-index-user-text"),
+        ];
+        for (flag, value) in [
+            ("--provider", provider),
+            ("--account-id", account_id),
+            ("--workspace-id", workspace_id),
+        ] {
+            if let Some(value) = value {
+                if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Invalid history scope",
+                    ));
+                }
+                args.push(OsString::from(flag));
+                args.push(OsString::from(value));
+            }
+        }
+        self.terminal_json_with_input(&args, text.as_bytes())
+    }
+
+    /// Provider-native transcripts are never modified by this operation.
+    pub fn clear_agent_history_search_cache(&self) -> io::Result<()> {
+        self.terminal_json(&[OsString::from("history-clear")])?;
+        Ok(())
+    }
+
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
         let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)

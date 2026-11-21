@@ -5,6 +5,209 @@
 //! reuses the existing verified Agent notice / draft-safe workspace switch.
 use super::*;
 
+#[derive(Clone, Debug)]
+pub(super) struct GlobalHistoryPreview {
+    title: String,
+    goal: String,
+    provider: String,
+    account: String,
+    project: String,
+    workspace: String,
+    native_id: String,
+}
+
+fn history_preview_text(value: Option<&serde_json::Value>, cap: usize) -> String {
+    value
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(cap)
+        .collect::<String>()
+}
+
+fn parse_history_previews(
+    value: &serde_json::Value,
+) -> Result<(Vec<GlobalHistoryPreview>, bool), &'static str> {
+    let raw = value
+        .get("hits")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Missing Host history results")?;
+    if raw.len() > 100 {
+        return Err("Host history result budget exceeded");
+    }
+    let mut hits = Vec::with_capacity(raw.len().min(30));
+    for item in raw.iter().take(30) {
+        let session = item
+            .get("session")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("Malformed Host history result")?;
+        let provider = history_preview_text(session.get("provider"), 32);
+        let native_id = history_preview_text(session.get("providerSessionId"), 64);
+        if !matches!(provider.as_str(), "claude" | "codex")
+            || item.get("openAction").and_then(serde_json::Value::as_str) != Some("preview_only")
+            || native_id.is_empty()
+        {
+            return Err("History result did not pass preview-only validation");
+        }
+        hits.push(GlobalHistoryPreview {
+            title: history_preview_text(session.get("title"), 160),
+            goal: history_preview_text(session.get("goal"), 240),
+            provider,
+            account: history_preview_text(session.get("providerAccountId"), 128),
+            project: history_preview_text(session.get("projectId"), 128),
+            workspace: history_preview_text(session.get("workspaceId"), 128),
+            native_id,
+        });
+    }
+    Ok((
+        hits,
+        value
+            .get("scanTruncated")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true),
+    ))
+}
+
+impl Workbench {
+    fn search_global_agent_history(&mut self, cx: &mut Context<Self>) {
+        if self.global_agent_history_busy || !self.global_agent_history_consent {
+            self.global_agent_history_status =
+                "Enable explicit local indexing before searching".into();
+            cx.notify();
+            return;
+        }
+        let input = self.global_agent_history_input.read(cx);
+        if input.composing() {
+            self.global_agent_history_status = "Finish IME composition before searching".into();
+            cx.notify();
+            return;
+        }
+        let text = input.query().trim().to_owned();
+        if text.is_empty() || text.chars().count() > 256 || text.len() > 1024 || text.contains('\0')
+        {
+            self.global_agent_history_status = "Enter 1–256 UTF-8 characters".into();
+            cx.notify();
+            return;
+        }
+        let account = self
+            .global_agent_history_account_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let workspace = self
+            .global_agent_history_workspace_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        if account.len() > 256 || workspace.len() > 256 {
+            self.global_agent_history_status = "Account/Worktree filter too long".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_history_status = "Alera CLI not found; no Host started".into();
+            cx.notify();
+            return;
+        };
+        let provider = self.global_agent_history_provider.clone();
+        self.global_agent_history_busy = true;
+        self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
+        let ticket = self.global_agent_history_request;
+        self.global_agent_history_results.clear();
+        self.global_agent_history_status = "Scanning registered Worktrees; preview only…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let reply = cx
+                .background_spawn(async move {
+                    bridge.search_agent_history(
+                        &text,
+                        provider.as_deref(),
+                        (!account.is_empty()).then_some(account.as_str()),
+                        (!workspace.is_empty()).then_some(workspace.as_str()),
+                    )
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_history_request != ticket {
+                    return;
+                }
+                view.global_agent_history_busy = false;
+                match reply {
+                    Ok(value) => match parse_history_previews(&value) {
+                        Ok((hits, truncated)) => {
+                            view.global_agent_history_status = format!(
+                                "{} preview-only matches{}",
+                                hits.len(),
+                                if truncated {
+                                    " · scan capped, may be incomplete"
+                                } else {
+                                    ""
+                                }
+                            );
+                            view.global_agent_history_results = hits;
+                        }
+                        Err(message) => {
+                            view.global_agent_history_status = message.into();
+                        }
+                    },
+                    Err(_) => {
+                        view.global_agent_history_status =
+                            "Host history search unavailable; no Agent started".into();
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn clear_global_agent_history(&mut self, cx: &mut Context<Self>) {
+        if self.global_agent_history_busy {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_history_status = "Connect an existing Host to clear the cache".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_history_busy = true;
+        self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
+        let ticket = self.global_agent_history_request;
+        self.global_agent_history_status = "Clearing only the private search index…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.clear_agent_history_search_cache() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_history_request != ticket {
+                    return;
+                }
+                view.global_agent_history_busy = false;
+                if result.is_ok() {
+                    view.global_agent_history_results.clear();
+                    view.global_agent_history_consent = false;
+                    view.global_agent_history_status =
+                        "Search cache cleared. Provider transcripts preserved".into();
+                } else {
+                    view.global_agent_history_status =
+                        "Cache removal unconfirmed; inspect Host before retrying".into();
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct GlobalAgentPromptTarget {
     handle: String,
@@ -528,7 +731,148 @@ impl Workbench {
     }
 }
 
+fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
+    let busy = view.global_agent_history_busy;
+    let consented = view.global_agent_history_consent;
+    let provider = view
+        .global_agent_history_provider
+        .as_deref()
+        .unwrap_or("all");
+    let mut list = div()
+        .id("global-agent-history-panel")
+        .h(px(590.0))
+        .flex_shrink_0()
+        .overflow_y_scroll()
+        .px_3()
+        .py_2()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("Historical Agent Sessions · local FTS5"),
+        )
+        .child(
+            div()
+                .id("global-history-return-to-live")
+                .text_xs()
+                .cursor_pointer()
+                .text_color(rgb(TEXT))
+                .child("← Back to live Agent dashboard")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.global_agent_history_open = false;
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("No cloud indexing or automatic Agent resume. Searches match limited native user-message previews."),
+        )
+        .child(view.global_agent_history_input.clone())
+        .child(
+            div()
+                .id("global-history-provider")
+                .text_xs()
+                .cursor_pointer()
+                .child(format!("Provider: {provider} · click to filter"))
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.global_agent_history_provider =
+                        match view.global_agent_history_provider.as_deref() {
+                            None => Some("claude".into()),
+                            Some("claude") => Some("codex".into()),
+                            _ => None,
+                        };
+                    cx.notify();
+                })),
+        )
+        .child(view.global_agent_history_account_input.clone())
+        .child(view.global_agent_history_workspace_input.clone())
+        .child(
+            div()
+                .id("global-history-consent")
+                .text_xs()
+                .cursor_pointer()
+                .text_color(rgb(if consented { TEXT } else { MUTED }))
+                .child(if consented {
+                    "☑ I allow local indexing of limited user-message previews"
+                } else {
+                    "☐ Opt in: index limited user-message previews to a private local SQLite cache (not encrypted)"
+                })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    if view.global_agent_history_busy { return; }
+                    view.global_agent_history_consent = !view.global_agent_history_consent;
+                    if !view.global_agent_history_consent {
+                        view.global_agent_history_results.clear();
+                    }
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .id("global-history-search")
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
+                .child(if busy { "Searching…" } else { "Search prior Sessions (preview only)" })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.search_global_agent_history(cx);
+                })),
+        )
+        .child(
+            div()
+                .id("global-history-clear")
+                .text_xs()
+                .cursor_pointer()
+                .text_color(rgb(MUTED))
+                .child("Clear private search index · keep Claude/Codex transcripts")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.clear_global_agent_history(cx);
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(view.global_agent_history_status.clone()),
+        );
+    for (index, hit) in view.global_agent_history_results.iter().enumerate() {
+        list = list.child(
+            div()
+                .id(("global-history-preview", index))
+                .bg(rgb(ELEVATED))
+                .rounded_md()
+                .px_2()
+                .py_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(hit.title.clone()))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    format!("{} · {} · {}", hit.provider, hit.account, hit.native_id),
+                ))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    format!("Project {} / Worktree {}", hit.project, hit.workspace),
+                ))
+                .child(div().text_xs().child(hit.goal.clone()))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Preview only · Resume requires independent Host/provider identity verification",
+                )),
+        );
+    }
+    list.into_any_element()
+}
+
 pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
+    if view.global_agent_history_open {
+        return history_panel(view, cx);
+    }
     let fresh = !view.terminals.session_list_is_stale();
     let sessions = view
         .terminals
@@ -774,6 +1118,18 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 .text_xs()
                 .text_color(rgb(MUTED))
                 .child("Global Host inventory, all registered workspaces"),
+        )
+        .child(
+            div()
+                .id("global-agent-open-history")
+                .text_xs()
+                .cursor_pointer()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("Search historical Claude / Codex Sessions")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.global_agent_history_open = true;
+                    cx.notify();
+                })),
         )
         .child(
             div()

@@ -30,6 +30,8 @@ pub(super) enum DeferredReadRoute {
     ProjectBranchesList,
     WorkspaceRepositoryWebUrl,
     HostDirectoryList,
+    AgentHistorySearch,
+    AgentHistoryClear,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -297,6 +299,10 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.create"
         | "workspaceTag.remove"
         | "workspaceTag.setForWorkspace" => MOBILE_CONFLICT,
+
+        // Private opt-in transcript metadata is never exposed to remote/mobile.
+        "agentHistory.search" => local_deferred(DeferredReadRoute::AgentHistorySearch),
+        "agentHistory.clear" => local_deferred(DeferredReadRoute::AgentHistoryClear),
 
         "project.register" => {
             mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)
@@ -630,6 +636,13 @@ const fn serialized_mobile(kind: SerializedRuntimeMutation) -> RequestRoutePolic
 const fn mobile_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
     RequestRoutePolicy {
         mobile_allowed: true,
+        deferred_read: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn local_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
         deferred_read: Some(route),
         ..LOCAL
     }

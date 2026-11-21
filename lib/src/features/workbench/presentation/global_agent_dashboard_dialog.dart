@@ -5,6 +5,7 @@ import 'package:alera/src/features/agent_status/application/agent_status_control
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/global_agent_live_projection.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_launch_dialog.dart';
+import 'package:alera/src/features/workbench/presentation/global_agent_history_panel.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
@@ -29,6 +30,7 @@ class const GlobalAgentDashboardDialog({super.key})
 class _GlobalAgentDashboardDialogState
     extends ConsumerState<GlobalAgentDashboardDialog> {
   String _query = '';
+  bool _historyMode = false;
   final TextEditingController _instruction = TextEditingController();
   ({String sessionId, String workspaceId, String tabId})? _target;
   bool _sending = false;
@@ -292,239 +294,269 @@ class _GlobalAgentDashboardDialogState
               ),
               const SizedBox(height: AleraTokens.space8),
               Text(
-                'All registered projects and worktrees. Live Agent status only; '
-                'historical and semantic search will be added separately.',
+                'All registered projects and worktrees. Live Host Agents or '
+                'opt-in local history previews; semantic search is not yet available.',
                 style: muted,
               ),
-              const SizedBox(height: AleraTokens.space16),
-              TextField(
-                autofocus: true,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  labelText: 'Search Live Sessions',
-                  hintText: 'Project, Agent, overall objective or progress',
-                ),
-                onChanged: (value) => setState(() => _query = value),
-              ),
-              const SizedBox(height: AleraTokens.space12),
+              const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(
-                    child: Text(
-                      '${rows.length} of ${all.length} Agent sessions',
-                      style: muted,
-                    ),
+                  TextButton.icon(
+                    onPressed: () => setState(() => _historyMode = false),
+                    icon: const Icon(Icons.smart_toy_outlined),
+                    label: Text(_historyMode ? 'Live Agents' : '● Live Agents'),
                   ),
-                  TextButton(
-                    onPressed: () => setState(() => _showHidden = !_showHidden),
-                    child: Text(
-                      _showHidden
-                          ? 'Show visible only'
-                          : 'Show hidden cards (${_hiddenCards.length})',
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: () => setState(() => _historyMode = true),
+                    icon: const Icon(Icons.history),
+                    label: Text(
+                      _historyMode ? '● History Search' : 'History Search',
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: AleraTokens.space12),
-              if (_target != null) ...[
-                Text(
-                  'Target: ${_target!.workspaceId} / ${_target!.tabId}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: muted,
+              if (_historyMode)
+                const Expanded(child: GlobalAgentHistoryPanel())
+              else ...[
+                const SizedBox(height: AleraTokens.space16),
+                TextField(
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    labelText: 'Search Live Sessions',
+                    hintText: 'Project, Agent, overall objective or progress',
+                  ),
+                  onChanged: (value) => setState(() => _query = value),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: AleraTokens.space12),
                 Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _instruction,
-                        enabled: !_sending,
-                        maxLines: 2,
-                        minLines: 1,
-                        maxLength: 4000,
-                        decoration: const InputDecoration(
-                          hintText: 'Send an instruction to this Agent without opening its Tab',
-                          isDense: true,
-                        ),
+                      child: Text(
+                        '${rows.length} of ${all.length} Agent sessions',
+                        style: muted,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _sending ? null : _submitToAgent,
-                      child: const Text('Send'),
+                    TextButton(
+                      onPressed: () =>
+                          setState(() => _showHidden = !_showHidden),
+                      child: Text(
+                        _showHidden
+                            ? 'Show visible only'
+                            : 'Show hidden cards (${_hiddenCards.length})',
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-              ],
-              if (_sendFeedback != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(_sendFeedback!, style: muted),
-                ),
-              Expanded(
-                child: rows.isEmpty
-                    ? Center(
-                        child: Text(
-                          all.isEmpty
-                              ? 'No verified live Agent sessions in registered workspaces.'
-                              : 'No matching live Agent sessions.',
-                          style: muted,
+                const SizedBox(height: AleraTokens.space12),
+                if (_target != null) ...[
+                  Text(
+                    'Target: ${_target!.workspaceId} / ${_target!.tabId}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: muted,
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _instruction,
+                          enabled: !_sending,
+                          maxLines: 2,
+                          minLines: 1,
+                          maxLength: 4000,
+                          decoration: const InputDecoration(
+                            hintText: 'Send an instruction to this Agent without opening its Tab',
+                            isDense: true,
+                          ),
                         ),
-                      )
-                    : ListView.separated(
-                        itemCount: rows.length,
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(height: AleraTokens.space8),
-                        itemBuilder: (context, index) {
-                          final row = rows[index];
-                          return DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: AleraTokens.surface,
-                              border: Border.all(
-                                color: AleraTokens.borderSubtle,
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: _sending ? null : _submitToAgent,
+                        child: const Text('Send'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (_sendFeedback != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(_sendFeedback!, style: muted),
+                  ),
+                Expanded(
+                  child: rows.isEmpty
+                      ? Center(
+                          child: Text(
+                            all.isEmpty
+                                ? 'No verified live Agent sessions in registered workspaces.'
+                                : 'No matching live Agent sessions.',
+                            style: muted,
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: rows.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: AleraTokens.space8),
+                          itemBuilder: (context, index) {
+                            final row = rows[index];
+                            return DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: AleraTokens.surface,
+                                border: Border.all(
+                                  color: AleraTokens.borderSubtle,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  AleraTokens.radiusMd,
+                                ),
                               ),
-                              borderRadius: BorderRadius.circular(
-                                AleraTokens.radiusMd,
-                              ),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(
-                                AleraTokens.space16,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '${row.project} / ${row.workspace}',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall,
+                              child: Padding(
+                                padding: const EdgeInsets.all(
+                                  AleraTokens.space16,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            '${row.project} / ${row.workspace}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall,
+                                          ),
                                         ),
+                                        Text(
+                                          '${row.status.agentType.key} - '
+                                          '${row.status.state.key}',
+                                          style: muted,
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: AleraTokens.space8),
+                                    Text(
+                                      row.goal.isEmpty
+                                          ? row.tab.title
+                                          : row.goal,
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    if (row.progress.isNotEmpty) ...[
+                                      const SizedBox(
+                                        height: AleraTokens.space4,
                                       ),
                                       Text(
-                                        '${row.status.agentType.key} - '
-                                        '${row.status.state.key}',
+                                        row.progress,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
                                         style: muted,
                                       ),
                                     ],
-                                  ),
-                                  const SizedBox(height: AleraTokens.space8),
-                                  Text(
-                                    row.goal.isEmpty ? row.tab.title : row.goal,
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (row.progress.isNotEmpty) ...[
-                                    const SizedBox(height: AleraTokens.space4),
-                                    Text(
-                                      row.progress,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: muted,
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: () => _toggleHidden(row),
+                                        icon: Icon(
+                                          _hiddenCards.contains(_identity(row))
+                                              ? Icons.visibility
+                                              : Icons.visibility_off,
+                                        ),
+                                        label: Text(
+                                          _hiddenCards.contains(_identity(row))
+                                              ? 'Show card'
+                                              : 'Hide card (Agent keeps running)',
+                                        ),
+                                      ),
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: () => setState(() {
+                                          _target = (
+                                            sessionId:
+                                                row.tab.terminalSessionId,
+                                            workspaceId: row.status.workspaceId,
+                                            tabId: row.tab.id,
+                                          );
+                                          _sendFeedback = null;
+                                        }),
+                                        icon: const Icon(Icons.edit_note),
+                                        label: const Text('Steer'),
+                                      ),
+                                    ),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        TextButton.icon(
+                                          onPressed: _controlling || _sending
+                                              ? null
+                                              : () => _controlAgent(row, false),
+                                          icon: const Icon(
+                                            Icons.pause_circle_outline,
+                                          ),
+                                          label: Text(
+                                            _armedControl ==
+                                                    (
+                                                      sessionId: row
+                                                          .tab
+                                                          .terminalSessionId,
+                                                      workspaceId: row
+                                                          .status
+                                                          .workspaceId,
+                                                      tabId: row.tab.id,
+                                                      terminate: false,
+                                                    )
+                                                ? 'Confirm interrupt'
+                                                : 'Interrupt turn',
+                                          ),
+                                        ),
+                                        TextButton.icon(
+                                          onPressed: _controlling || _sending
+                                              ? null
+                                              : () => _controlAgent(row, true),
+                                          icon: const Icon(
+                                            Icons.stop_circle_outlined,
+                                          ),
+                                          label: Text(
+                                            _armedControl ==
+                                                    (
+                                                      sessionId: row
+                                                          .tab
+                                                          .terminalSessionId,
+                                                      workspaceId: row
+                                                          .status
+                                                          .workspaceId,
+                                                      tabId: row.tab.id,
+                                                      terminate: true,
+                                                    )
+                                                ? 'Confirm terminate'
+                                                : 'Terminate Session',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerRight,
+                                      child: TextButton.icon(
+                                        onPressed: () => _focus(row),
+                                        icon: const Icon(Icons.open_in_new),
+                                        label: const Text('Open Agent'),
+                                      ),
                                     ),
                                   ],
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton.icon(
-                                      onPressed: () => _toggleHidden(row),
-                                      icon: Icon(
-                                        _hiddenCards.contains(_identity(row))
-                                            ? Icons.visibility
-                                            : Icons.visibility_off,
-                                      ),
-                                      label: Text(
-                                        _hiddenCards.contains(_identity(row))
-                                            ? 'Show card'
-                                            : 'Hide card (Agent keeps running)',
-                                      ),
-                                    ),
-                                  ),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton.icon(
-                                      onPressed: () => setState(() {
-                                        _target = (
-                                          sessionId: row.tab.terminalSessionId,
-                                          workspaceId: row.status.workspaceId,
-                                          tabId: row.tab.id,
-                                        );
-                                        _sendFeedback = null;
-                                      }),
-                                      icon: const Icon(Icons.edit_note),
-                                      label: const Text('Steer'),
-                                    ),
-                                  ),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      TextButton.icon(
-                                        onPressed: _controlling || _sending
-                                            ? null
-                                            : () => _controlAgent(row, false),
-                                        icon: const Icon(
-                                          Icons.pause_circle_outline,
-                                        ),
-                                        label: Text(
-                                          _armedControl ==
-                                                  (
-                                                    sessionId: row
-                                                        .tab
-                                                        .terminalSessionId,
-                                                    workspaceId:
-                                                        row.status.workspaceId,
-                                                    tabId: row.tab.id,
-                                                    terminate: false,
-                                                  )
-                                              ? 'Confirm interrupt'
-                                              : 'Interrupt turn',
-                                        ),
-                                      ),
-                                      TextButton.icon(
-                                        onPressed: _controlling || _sending
-                                            ? null
-                                            : () => _controlAgent(row, true),
-                                        icon: const Icon(
-                                          Icons.stop_circle_outlined,
-                                        ),
-                                        label: Text(
-                                          _armedControl ==
-                                                  (
-                                                    sessionId: row
-                                                        .tab
-                                                        .terminalSessionId,
-                                                    workspaceId:
-                                                        row.status.workspaceId,
-                                                    tabId: row.tab.id,
-                                                    terminate: true,
-                                                  )
-                                              ? 'Confirm terminate'
-                                              : 'Terminate Session',
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton.icon(
-                                      onPressed: () => _focus(row),
-                                      icon: const Icon(Icons.open_in_new),
-                                      label: const Text('Open Agent'),
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
-              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
             ],
           ),
         ),

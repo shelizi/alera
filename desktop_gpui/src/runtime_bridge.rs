@@ -454,6 +454,24 @@ impl RuntimeCliBridge {
         let verb = args.first().and_then(|arg| arg.to_str());
         let allowed = match (verb, input.is_some()) {
             (Some("list" | "read"), false) | (Some("write"), true) => true,
+            (Some("history-search"), true) => {
+                args.len() >= 3
+                    && args[1] == OsString::from("--stdin")
+                    && args[2] == OsString::from("--consent-index-user-text")
+                    && (args.len() - 3) % 2 == 0
+                    && args[3..].chunks_exact(2).all(|pair| {
+                        matches!(
+                            pair[0].to_str(),
+                            Some("--provider" | "--account-id" | "--workspace-id")
+                        ) && pair[1].to_str().is_some_and(|value| {
+                            !value.is_empty()
+                                && value.len() <= 256
+                                && !value.chars().any(char::is_control)
+                        })
+                    })
+                    && input.is_some_and(|bytes| !bytes.is_empty() && bytes.len() <= 1024)
+            }
+            (Some("history-clear"), false) => args.len() == 1,
             // Workspace listing and terminal creation are Host requests with
             // no stdin payload; both still require --no-start below.
             (Some("workspaces"), false) => args.len() == 1,
@@ -465,7 +483,7 @@ impl RuntimeCliBridge {
         if !allowed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "GPUI supports fixed terminal list/read/workspaces/create/create-agent/explicit write only",
+                "GPUI permits only bounded allowlisted no-start terminal and history verbs",
             ));
         }
         if !self.runtime_dir.join("host.json").is_file()
@@ -512,7 +530,12 @@ impl RuntimeCliBridge {
                 .read_to_end(&mut bytes)?;
             Ok(bytes)
         });
-        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+        let deadline = if verb == Some("history-search") {
+            Duration::from_secs(45)
+        } else {
+            PROBE_TIMEOUT
+        };
+        let status = match wait_with_timeout(&mut child, deadline) {
             Ok(status) => status,
             Err(error) => {
                 let _ = reader.join();
@@ -759,7 +782,10 @@ impl RuntimeCliBridge {
             || !visible_order.iter().any(|id| id == source_id)
             || !visible_order.iter().any(|id| id == target_id)
         {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid sidebar drag"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid sidebar drag",
+            ));
         }
         let encoded = serde_json::to_string(visible_order)
             .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
@@ -2020,8 +2046,9 @@ fn validate_desktop_settings_cas_readback(
 
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
-        Some("sidebar-order-get" | "sidebar-order-move") =>
-            SidebarOrderPrefs::from_json(response).is_ok(),
+        Some("sidebar-order-get" | "sidebar-order-move") => {
+            SidebarOrderPrefs::from_json(response).is_ok()
+        }
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
         Some("agent-hooks-cas") => parse_versioned_agent_hook_settings(response).is_ok(),
         Some("pin-list") => response.is_array(),
@@ -2337,6 +2364,59 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         }
+    }
+
+    #[test]
+    fn history_bridge_requires_consent_stdin_and_a_fixed_no_start_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        for args in [
+            vec!["history-search"],
+            vec!["history-search", "--stdin"],
+            vec!["history-search", "--stdin", "--provider", "codex"],
+            vec![
+                "history-search",
+                "--stdin",
+                "--consent-index-user-text",
+                "--unknown",
+                "x",
+            ],
+        ] {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            let err = bridge
+                .terminal_json_with_input(&args, b"local query")
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
+        let valid = [
+            OsString::from("history-search"),
+            OsString::from("--stdin"),
+            OsString::from("--consent-index-user-text"),
+            OsString::from("--provider"),
+            OsString::from("claude"),
+        ];
+        assert_eq!(
+            bridge
+                .terminal_json_with_input(&valid, b"IME")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .terminal_json(&[OsString::from("history-clear")])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .terminal_json_with_input(&[OsString::from("history-clear")], b"x")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!dir.path().join("host.json").exists());
     }
 
     #[test]
