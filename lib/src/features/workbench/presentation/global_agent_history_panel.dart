@@ -386,8 +386,10 @@ class _GlobalAgentHistoryPanelState
                               overflow: TextOverflow.ellipsis,
                             ),
                           Text(
-                            'Preview only · matched ${hit['matchField']} · '
-                            'Resume requires separately verified native identity',
+                            field('providerAccountId').isNotEmpty
+                                ? 'Matched ${hit['matchField']} · Select Resume to '
+                                      'verify the source account, UUID, and Worktree'
+                                : 'Preview only · source account unavailable',
                             style: muted,
                           ),
                           if (field('providerAccountId').isNotEmpty)

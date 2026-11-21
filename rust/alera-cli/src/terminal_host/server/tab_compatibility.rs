@@ -137,7 +137,8 @@ mod history_account_tests {
             payload: json!({
                 "agentHistoryResumeOriginV1": {
                     "provider": "codex",
-                    "accountId": "/private/account"
+                    "accountId": "/private/account",
+                    "sourceDirectoryFingerprint": "private-fingerprint"
                 },
                 "agentProfileLaunchV1": {"test":"managed"},
                 "visible": true,
@@ -160,6 +161,10 @@ mod history_account_tests {
         assert_eq!(
             projected.payload["agentHistoryResumeOriginV1"]["provider"],
             "codex"
+        );
+        assert_eq!(
+            projected.payload["agentHistoryResumeOriginV1"]["sourceDirectoryFingerprint"],
+            "private-fingerprint"
         );
         assert_eq!(projected.title, "Renamed");
     }

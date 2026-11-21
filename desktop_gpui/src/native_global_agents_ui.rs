@@ -976,9 +976,16 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 hit.project, hit.workspace
             )))
             .child(div().text_xs().child(hit.goal.clone()))
-            .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Preview only · Resume requires independent Host/provider identity verification",
-            ));
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(if hit.account.is_empty() {
+                        "Preview only · source account unavailable"
+                    } else {
+                        "Exact Resume available · Host verifies source account, UUID and Worktree"
+                    }),
+            );
         if !hit.account.is_empty() {
             let identity = format!(
                 "{}|{}|{}|{}|{}|{}",

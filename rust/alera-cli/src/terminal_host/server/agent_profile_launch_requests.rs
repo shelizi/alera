@@ -487,6 +487,9 @@ fn configure_exact_history_checkpoint(
     tab.payload[super::agent_history_resume::RESUME_ORIGIN_KEY] = json!({
         "provider": history.provider,
         "accountId": history.account_id,
+        "sourceDirectoryFingerprint": super::agent_history_resume::source_directory_fingerprint(
+            &history.config_directory,
+        ),
     });
     // Future prompt-path changes must not inject a new task into an existing
     // provider conversation or silently reinterpret Resume as a fresh chat.
@@ -576,6 +579,11 @@ mod tests {
         assert_eq!(
             tab.payload[super::super::agent_history_resume::RESUME_ORIGIN_KEY]["accountId"],
             "other"
+        );
+        assert_eq!(
+            tab.payload[super::super::agent_history_resume::RESUME_ORIGIN_KEY]
+                ["sourceDirectoryFingerprint"],
+            super::super::agent_history_resume::source_directory_fingerprint("provider-config-dir")
         );
         assert_eq!(
             super::super::terminal_startup_commands::provider_resume_id(&tab),

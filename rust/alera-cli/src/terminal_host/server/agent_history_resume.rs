@@ -5,13 +5,15 @@
 //! No arbitrary transcript path, shell command or provider argv is accepted.
 use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::terminal_startup_commands::provider_resume_id;
 use super::ServerActor;
 use crate::agent_history_sync::search_roots;
 use crate::agent_session_history_scan::{
-    discover_history, HistoryScanPolicy, HistoryScanReport, HistorySourceProof,
+    discover_exact_native_history, HistoryScanPolicy, HistoryScanReport, HistorySourceProof,
     RegisteredHistoryWorkspace,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -27,6 +29,18 @@ pub(super) struct VerifiedHistoryResume {
 }
 
 pub(super) const RESUME_ORIGIN_KEY: &str = "agentHistoryResumeOriginV1";
+
+/// A source account label is not a unique identity: two labels may point to
+/// one native provider config directory. Keep the canonical directory itself
+/// Host-private and persist only its stable comparison fingerprint.
+pub(super) fn source_directory_fingerprint(canonical_dir: &str) -> String {
+    let identity = if cfg!(windows) {
+        canonical_dir.to_lowercase()
+    } else {
+        canonical_dir.to_owned()
+    };
+    hex::encode(Sha256::digest(identity.as_bytes()))
+}
 
 fn bounded_identifier(payload: &Value, key: &str, max: usize) -> HostResult<String> {
     match payload.get(key).and_then(Value::as_str) {
@@ -152,14 +166,16 @@ async fn verify_native_source(
         workspace_id: workspace.id,
         path: workspace.path.into(),
     }];
+    let exact_native_id = target.native_id.clone();
     let scan = tokio::task::spawn_blocking(move || {
-        discover_history(
+        discover_exact_native_history(
             &roots,
             &known,
             HistoryScanPolicy {
                 index_user_text: false,
                 max_files: 256,
             },
+            &exact_native_id,
         )
     })
     .await
@@ -217,12 +233,57 @@ pub(super) async fn verified_history_launch_environment(
         client_mutation_id: String::new(),
     };
     let proof = verify_native_source(store, &target).await?;
+    if let Some(pinned) = origin.get("sourceDirectoryFingerprint") {
+        let fingerprint = bounded_identifier(origin, "sourceDirectoryFingerprint", 64)?;
+        if !pinned.is_string()
+            || fingerprint != source_directory_fingerprint(&proof.config_directory)
+        {
+            return Err(HostError::state(
+                "Historical source account now resolves to a different provider directory. No Agent was started.",
+            ));
+        }
+    }
     let variable = match proof.provider.as_str() {
         "codex" => "ALERA_ACCOUNT_CODEX_HOME",
         "claude" => "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR",
         _ => return Err(HostError::state("Unsupported history provider environment")),
     };
     Ok(Some((variable, proof.config_directory)))
+}
+
+fn existing_tab_owns_source(
+    tab: &WorkspaceTabRecord,
+    target: &ExactResumeRequest,
+    verified: &VerifiedHistoryResume,
+    registered_fingerprints: &HashMap<(String, String), String>,
+) -> bool {
+    if !provider_resume_id(tab)
+        .is_some_and(|(provider, native)| provider == target.provider && native == target.native_id)
+    {
+        return false;
+    }
+    let origin = &tab.payload[RESUME_ORIGIN_KEY];
+    let Some(account) = origin.get("accountId").and_then(Value::as_str) else {
+        // Old tabs have no authoritative account identity. Do not risk two
+        // owner processes for what might be the very same transcript.
+        return true;
+    };
+    if account == target.account {
+        return true;
+    }
+    let pinned_source = origin
+        .get("sourceDirectoryFingerprint")
+        .and_then(Value::as_str);
+    let registered_source = registered_fingerprints
+        .get(&(target.provider.clone(), account.to_owned()))
+        .map(String::as_str);
+    let requested_source = source_directory_fingerprint(&verified.config_directory);
+    // A moved alias may now point to the requested directory even if its
+    // historical checkpoint was pinned elsewhere. Compare both identities.
+    // Unknown paths are not evidence of independent accounts.
+    (pinned_source.is_none() && registered_source.is_none())
+        || pinned_source == Some(requested_source.as_str())
+        || registered_source == Some(requested_source.as_str())
 }
 
 impl ServerActor {
@@ -234,6 +295,22 @@ impl ServerActor {
         // Route policy already rejects mobile and unauthenticated callers.
         let target = ExactResumeRequest::parse(payload)?;
         let verified = verify_native_source(&self.runtime_store, &target).await?;
+        let settings = self
+            .runtime_store
+            .agent_quota_settings()
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        let registered_fingerprints: HashMap<(String, String), String> = search_roots(&settings)
+            .await
+            .into_iter()
+            .filter_map(|root| {
+                let directory = root.path.parent()?.canonicalize().ok()?;
+                Some((
+                    (root.provider.to_owned(), root.account_id),
+                    source_directory_fingerprint(&directory.to_string_lossy()),
+                ))
+            })
+            .collect();
         // Prefer an existing Alera-owned tab over spawning a second CLI that
         // edits/locks the same native provider session concurrently. This
         // includes stopped tabs that Alera already knows how to restore.
@@ -244,16 +321,7 @@ impl ServerActor {
             .map_err(|err| HostError::state(err.to_string()))?
             .into_iter()
             .any(|tab| {
-                let known_account = tab.payload[RESUME_ORIGIN_KEY]["accountId"].as_str();
-                provider_resume_id(&tab).is_some_and(|(provider, native)| {
-                    provider == target.provider
-                        && native == target.native_id
-                        // Distinct configured homes may contain independent
-                        // copies of the same UUID. Block duplicates only
-                        // inside the same source account. For older tabs
-                        // without origin, conservatively treat as occupied.
-                        && known_account.is_none_or(|account| account == target.account)
-                })
+                existing_tab_owns_source(&tab, &target, &verified, &registered_fingerprints)
             });
         if existing {
             return Err(HostError::state(
@@ -278,6 +346,7 @@ impl ServerActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_session_history_scan::discover_history;
     use alera_core::runtime::{
         Project, ProjectKind, RuntimeAgentQuotaSettings, RuntimeClaudeQuotaProfile,
         RuntimeCodexQuotaProfile, Workspace, WorkspaceKind, WorkspaceStatus, WorkspaceTabRecord,
@@ -420,13 +489,26 @@ mod tests {
         let mut title_state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
         title_state.observe("codex", Some(native), "", 0);
         title_state.write(&mut tab);
-        tab.payload[RESUME_ORIGIN_KEY] = json!({"provider":"codex","accountId":account_id});
+        tab.payload[RESUME_ORIGIN_KEY] = json!({
+            "provider":"codex",
+            "accountId":account_id,
+            "sourceDirectoryFingerprint":source_directory_fingerprint(&proof.config_directory),
+        });
         let env = verified_history_launch_environment(&store, &tab)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(env.0, "ALERA_ACCOUNT_CODEX_HOME");
         assert_eq!(env.1, proof.config_directory);
+        // Changing an account registration cannot silently repoint an
+        // existing resumed Tab to another provider session directory.
+        tab.payload[RESUME_ORIGIN_KEY]["sourceDirectoryFingerprint"] =
+            json!(source_directory_fingerprint("another-config-dir"));
+        assert!(verified_history_launch_environment(&store, &tab)
+            .await
+            .is_err());
+        tab.payload[RESUME_ORIGIN_KEY]["sourceDirectoryFingerprint"] =
+            json!(source_directory_fingerprint(&proof.config_directory));
         std::fs::remove_file(file).unwrap();
         assert!(verified_history_launch_environment(&store, &tab)
             .await
@@ -479,7 +561,11 @@ mod tests {
             super::super::agent_title_state::AgentTitleState::read(&claude_tab).unwrap();
         title.observe("claude", Some(claude_native), "", 0);
         title.write(&mut claude_tab);
-        claude_tab.payload[RESUME_ORIGIN_KEY] = json!({"provider":"claude","accountId":claude_id});
+        claude_tab.payload[RESUME_ORIGIN_KEY] = json!({
+            "provider":"claude",
+            "accountId":claude_id,
+            "sourceDirectoryFingerprint":source_directory_fingerprint(&claude_proof.config_directory),
+        });
         let env = verified_history_launch_environment(&store, &claude_tab)
             .await
             .unwrap()
@@ -501,6 +587,105 @@ mod tests {
         .await
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn equivalent_account_aliases_cannot_duplicate_the_same_native_session() {
+        let now = chrono::Utc::now();
+        let native = "550e8400-e29b-41d4-a716-446655440001";
+        let mut tab = WorkspaceTabRecord {
+            id: "existing".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Prior".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"agentType":"codex","spawnOnCreate":true}),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "");
+        let mut state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
+        state.observe("codex", Some(native), "", 0);
+        state.write(&mut tab);
+        let mut request = ExactResumeRequest::parse(&valid_payload()).unwrap();
+        request.account = "alias-two".into();
+        let verified = VerifiedHistoryResume {
+            provider: "codex".into(),
+            account_id: request.account.clone(),
+            native_id: native.into(),
+            codex_transcript_path: None,
+            config_directory: "C:/account-home".into(),
+        };
+        let matching = source_directory_fingerprint(&verified.config_directory);
+        let other = source_directory_fingerprint("C:/another-home");
+        let mut configured = HashMap::new();
+        tab.payload[RESUME_ORIGIN_KEY] = json!({
+            "provider":"codex",
+            "accountId":"alias-one",
+            "sourceDirectoryFingerprint":matching,
+        });
+        assert!(existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        tab.payload[RESUME_ORIGIN_KEY]["sourceDirectoryFingerprint"] = json!(other);
+        assert!(!existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        configured.insert(("codex".into(), "alias-one".into()), matching.clone());
+        assert!(existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        tab.payload[RESUME_ORIGIN_KEY]
+            .as_object_mut()
+            .unwrap()
+            .remove("sourceDirectoryFingerprint");
+        assert!(existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        configured.insert(("codex".into(), "alias-one".into()), other);
+        assert!(!existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        configured.clear();
+        assert!(existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        tab.payload
+            .as_object_mut()
+            .unwrap()
+            .remove(RESUME_ORIGIN_KEY);
+        assert!(existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
+        let mut state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
+        state.native_id = Some("550e8400-e29b-41d4-a716-446655440004".into());
+        state.write(&mut tab);
+        assert!(!existing_tab_owns_source(
+            &tab,
+            &request,
+            &verified,
+            &configured
+        ));
     }
 
     #[test]

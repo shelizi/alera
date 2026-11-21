@@ -106,6 +106,33 @@ pub(crate) fn discover_history(
     workspaces: &[RegisteredHistoryWorkspace],
     policy: HistoryScanPolicy,
 ) -> HistoryScanReport {
+    discover_history_with_exact_id(roots, workspaces, policy, None)
+}
+
+/// Exact UUID verification cannot depend on the first-N preview scan cap.
+/// Filter by the native provider filename before opening file content, then
+/// enforce the same canonical source, CWD and Worktree proof checks.
+pub(crate) fn discover_exact_native_history(
+    roots: &[ProviderHistoryRoot],
+    workspaces: &[RegisteredHistoryWorkspace],
+    policy: HistoryScanPolicy,
+    native_session_id: &str,
+) -> HistoryScanReport {
+    if Uuid::parse_str(native_session_id)
+        .ok()
+        .is_none_or(|parsed| parsed.to_string() != native_session_id)
+    {
+        return HistoryScanReport::default();
+    }
+    discover_history_with_exact_id(roots, workspaces, policy, Some(native_session_id))
+}
+
+fn discover_history_with_exact_id(
+    roots: &[ProviderHistoryRoot],
+    workspaces: &[RegisteredHistoryWorkspace],
+    policy: HistoryScanPolicy,
+    exact_id: Option<&str>,
+) -> HistoryScanReport {
     let mut report = HistoryScanReport::default();
     let cap = policy.max_files.min(MAX_FILES);
     if cap == 0 {
@@ -178,6 +205,11 @@ pub(crate) fn discover_history(
                 if !meta.is_file() || !is_provider_filename(root.provider, &path) {
                     continue;
                 }
+                if exact_id
+                    .is_some_and(|native| !filename_matches_native_id(root.provider, &path, native))
+                {
+                    continue;
+                }
                 if report.visited_files >= cap {
                     report.truncated = true;
                     return report;
@@ -195,7 +227,10 @@ pub(crate) fn discover_history(
                     continue;
                 }
                 report.visited_files += 1;
-                if meta.len() > MAX_FILE_BYTES {
+                // General indexing skips huge transcripts. Exact UUID
+                // verification remains bounded by MAX_READ_BYTES/MAX_LINES
+                // and may safely inspect the beginning of a large session.
+                if skip_oversized_file(meta.len(), exact_id) {
                     report.skipped_files += 1;
                     continue;
                 }
@@ -257,6 +292,22 @@ pub(crate) fn discover_history(
         }
     }
     report
+}
+
+fn filename_matches_native_id(provider: &str, path: &Path, native_id: &str) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    match provider {
+        "codex" => name.starts_with("rollout-") && name.ends_with(&format!("-{native_id}.jsonl")),
+        "claude" => name == format!("{native_id}.jsonl"),
+        _ => false,
+    }
+}
+
+fn skip_oversized_file(file_len: u64, exact_id: Option<&str>) -> bool {
+    // The reader itself always enforces MAX_READ_BYTES and MAX_LINES.
+    file_len > MAX_FILE_BYTES && exact_id.is_none()
 }
 
 fn is_provider_filename(provider: &str, path: &Path) -> bool {
@@ -512,6 +563,123 @@ mod tests {
             matches.records[0].open_action(),
             SessionOpenAction::PreviewOnly
         );
+    }
+
+    #[test]
+    fn exact_uuid_verification_finds_old_codex_and_claude_files_beyond_preview_cap() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let codex_dir = home.path().join("codex/sessions/2026/11/21");
+        let claude_dir = home.path().join("claude/projects/project-slug");
+        fs::create_dir_all(&codex_dir).unwrap();
+        fs::create_dir_all(&claude_dir).unwrap();
+        let codex_id = "550e8400-e29b-41d4-a716-446655440000";
+        let codex_file = codex_dir.join(format!("rollout-2020-01-01T00-00-00-{codex_id}.jsonl"));
+        fs::write(
+            &codex_file,
+            format!(
+                "{}\n",
+                json!({
+                    "type":"session_meta","payload":{"id":codex_id,"cwd":work.path()}
+                })
+            ),
+        )
+        .unwrap();
+        for index in 1..7 {
+            let id = format!("550e8400-e29b-41d4-a716-446655440{index:03}");
+            let file = codex_dir.join(format!("rollout-2026-11-21T10-{index:02}-00-{id}.jsonl"));
+            fs::write(
+                &file,
+                format!(
+                    "{}\n",
+                    json!({
+                        "type":"session_meta","payload":{"id":id,"cwd":work.path()}
+                    })
+                ),
+            )
+            .unwrap();
+        }
+        let roots = [root("codex", &home.path().join("codex/sessions"))];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: false,
+            max_files: 2,
+        };
+        let general = discover_history(&roots, &known, policy);
+        assert!(general.truncated);
+        assert!(!general
+            .source_proofs
+            .iter()
+            .any(|proof| proof.native_session_id == codex_id));
+        let exact = discover_exact_native_history(&roots, &known, policy, codex_id);
+        assert_eq!(exact.visited_files, 1);
+        assert_eq!(exact.source_proofs.len(), 1);
+        assert_eq!(exact.source_proofs[0].native_session_id, codex_id);
+        assert!(exact.records[0].goal.is_empty());
+
+        let claude_id = "00000000-0000-0000-0000-000000000001";
+        let claude_file = claude_dir.join(format!("{claude_id}.jsonl"));
+        let claude_line = |id: &str| {
+            json!({
+                "type":"user","sessionId":id,"cwd":work.path(),
+                "message":{"role":"user","content":"Test older conversation"}
+            })
+        };
+        fs::write(&claude_file, format!("{}\n", claude_line(claude_id))).unwrap();
+        for index in 2..7 {
+            let id = format!("10000000-0000-0000-0000-{index:012}");
+            fs::write(
+                claude_dir.join(format!("{id}.jsonl")),
+                format!("{}\n", claude_line(&id)),
+            )
+            .unwrap();
+        }
+        let claude_roots = [root("claude", &home.path().join("claude/projects"))];
+        let general = discover_history(&claude_roots, &known, policy);
+        assert!(!general
+            .source_proofs
+            .iter()
+            .any(|proof| proof.native_session_id == claude_id));
+        let exact = discover_exact_native_history(&claude_roots, &known, policy, claude_id);
+        assert_eq!(exact.visited_files, 1);
+        assert_eq!(exact.source_proofs[0].native_session_id, claude_id);
+
+        // Filename alone never becomes source authority.
+        fs::write(
+            &codex_file,
+            format!(
+                "{}\n",
+                json!({
+                    "type":"session_meta","payload":{
+                        "id":"550e8400-e29b-41d4-a716-446655440999","cwd":work.path()
+                    }
+                })
+            ),
+        )
+        .unwrap();
+        assert!(
+            discover_exact_native_history(&roots, &known, policy, codex_id)
+                .source_proofs
+                .is_empty()
+        );
+        fs::write(
+            &claude_file,
+            format!("{}\n", claude_line("00000000-0000-0000-0000-000000000999")),
+        )
+        .unwrap();
+        assert!(
+            discover_exact_native_history(&claude_roots, &known, policy, claude_id)
+                .source_proofs
+                .is_empty()
+        );
+        assert!(
+            discover_exact_native_history(&roots, &known, policy, "--last")
+                .source_proofs
+                .is_empty()
+        );
+        assert!(skip_oversized_file(MAX_FILE_BYTES + 1, None));
+        assert!(!skip_oversized_file(MAX_FILE_BYTES + 1, Some(codex_id)));
+        assert!(!skip_oversized_file(MAX_FILE_BYTES + 1, Some(claude_id)));
     }
 
     #[test]
