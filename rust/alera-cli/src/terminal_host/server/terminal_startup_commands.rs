@@ -33,6 +33,27 @@ pub(super) fn provider_resume_id(tab: &WorkspaceTabRecord) -> Option<(&str, Stri
     Some((agent, id.to_string()))
 }
 
+/// A Codex Hook's exact rollout file must still contain the saved native
+/// session ID before we relaunch a restored tab. If that local record was
+/// removed, fail closed and keep the tab instead of starting a fresh chat.
+/// Legacy checkpoints created before transcript proofs remain supported.
+pub(super) fn validate_codex_resume_checkpoint(tab: &WorkspaceTabRecord) -> HostResult<()> {
+    let Some(("codex", id)) = provider_resume_id(tab) else {
+        return Ok(());
+    };
+    let Some(transcript_path) =
+        AgentTitleState::read(tab).and_then(|state| state.codex_transcript_path)
+    else {
+        return Ok(());
+    };
+    if !super::codex_resume_identity::verified_transcript(&id, &transcript_path, None) {
+        return Err(HostError::state(
+            "Codex saved session transcript is missing or no longer matches its native ID. Keeping the Agent tab; automatic resume is blocked.",
+        ));
+    }
+    Ok(())
+}
+
 /// Only append a resume command to the known provider executable, not to
 /// custom profile wrappers whose argument grammar is unknown.
 pub(super) fn configure_provider_resume(

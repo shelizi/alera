@@ -90,6 +90,7 @@ mod client_dispose;
 mod codex_app_server;
 mod codex_app_server_session_state;
 mod codex_dictation;
+mod codex_resume_identity;
 mod codex_server_startup;
 mod configuration_requests;
 mod configuration_transfers;

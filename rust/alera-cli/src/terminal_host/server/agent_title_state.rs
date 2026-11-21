@@ -12,6 +12,8 @@ pub(super) struct AgentTitleState {
     pub conversation_id: String,
     pub agent: Option<String>,
     pub native_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_transcript_path: Option<String>,
     pub retired: Vec<String>,
     #[serde(default)]
     pub retired_prompts: BTreeMap<String, String>,
@@ -28,6 +30,7 @@ impl AgentTitleState {
             conversation_id: Uuid::new_v4().to_string(),
             agent: None,
             native_id: None,
+            codex_transcript_path: None,
             retired: Vec::new(),
             retired_prompts: BTreeMap::new(),
             initial_prompt: String::new(),

@@ -13,6 +13,7 @@ use super::ServerActor;
 struct TitleActivity {
     work_started: bool,
     session_started: bool,
+    codex_transcript_path: Option<String>,
 }
 
 pub(super) fn conversation_id(payload: &Value) -> Option<&str> {
@@ -32,6 +33,23 @@ pub(super) fn conversation_id(payload: &Value) -> Option<&str> {
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
     })
+}
+
+/// Codex's resumable identity comes only from its native session_id plus the
+/// exact transcript_path metadata. Other UUID fields can identify turns or
+/// child conversations and must never become an automatic resume target.
+fn verified_codex_event(
+    event: &AgentHookEvent,
+) -> Option<super::codex_resume_identity::VerifiedCodexSession<'_>> {
+    if event.agent_type != "codex"
+        || !matches!(
+            event.event_name.as_deref(),
+            Some("SessionStart" | "UserPromptSubmit" | "Stop" | "SessionEnd")
+        )
+    {
+        return None;
+    }
+    super::codex_resume_identity::from_hook(&event.payload)
 }
 
 impl ServerActor {
@@ -84,6 +102,20 @@ impl ServerActor {
             self.close_agent_title_conversation(event).await;
             return;
         }
+        let codex_identity = verified_codex_event(event);
+        // An unverified native ID must not overwrite an existing checkpoint.
+        // The generic conversation_id / thread_id aliases are not Codex IDs.
+        if event.agent_type == "codex"
+            && event.payload.get("session_id").is_some()
+            && codex_identity.is_none()
+        {
+            return;
+        }
+        let native_id = if event.agent_type == "codex" {
+            codex_identity.as_ref().map(|identity| identity.id)
+        } else {
+            conversation_id(&event.payload)
+        };
         // Do not inherit an activity prompt from a previous turn or conversation.
         let prompt = normalized
             .as_ref()
@@ -97,11 +129,13 @@ impl ServerActor {
         self.observe_agent_title_event(
             &event.tab_id,
             &event.agent_type,
-            conversation_id(&event.payload),
+            native_id,
             prompt,
             TitleActivity {
                 work_started: work_started || !prompt.is_empty(),
                 session_started,
+                codex_transcript_path: codex_identity
+                    .map(|identity| identity.transcript_path.to_owned()),
             },
         )
         .await;
@@ -150,6 +184,22 @@ impl ServerActor {
             .map(|s| s.output_stream_range().1)
             .unwrap_or(0);
         let mut state = AgentTitleState::read(&tab).unwrap_or_else(|| AgentTitleState::new(false));
+        if agent == "codex" && activity.codex_transcript_path.is_some() {
+            if let (Some(existing), Some(incoming)) = (state.native_id.as_deref(), native_id) {
+                // Only a verified SessionStart (or a closed session) can
+                // switch an active tab to a different Codex conversation.
+                // Late/child UserPromptSubmit events must not retire it.
+                if existing != incoming && !activity.session_started && !state.closed {
+                    return;
+                }
+                if existing == incoming
+                    && state.codex_transcript_path.is_some()
+                    && state.codex_transcript_path != activity.codex_transcript_path
+                {
+                    return;
+                }
+            }
+        }
         let previous = state.clone();
         let previous_id = state.conversation_id.clone();
         if activity.session_started {
@@ -157,6 +207,11 @@ impl ServerActor {
         }
         if !state.observe(agent, native_id, prompt, cursor) {
             return;
+        }
+        if agent == "codex" && state.native_id.as_deref() == native_id {
+            if let Some(path) = activity.codex_transcript_path {
+                state.codex_transcript_path = Some(path);
+            }
         }
         if previous_id != state.conversation_id {
             self.cancel_agent_title_job(tab_id);
@@ -195,6 +250,15 @@ impl ServerActor {
         let Some(mut state) = AgentTitleState::read(&tab) else {
             return;
         };
+        let codex_identity = verified_codex_event(event);
+        let native_id = if event.agent_type == "codex" {
+            codex_identity.as_ref().map(|identity| identity.id)
+        } else {
+            conversation_id(&event.payload)
+        };
+        if event.agent_type == "codex" && native_id.is_none() {
+            return;
+        }
         // SessionEnd can be the first successful Hook. Only its authenticated
         // tab identity and native provider UUID may authorize a checkpoint.
         if !state.closed
@@ -207,15 +271,16 @@ impl ServerActor {
                 .as_deref()
                 .is_none_or(|agent| agent == event.agent_type)
         {
-            if let Some(id) =
-                conversation_id(&event.payload).filter(|id| uuid::Uuid::parse_str(id).is_ok())
-            {
+            if let Some(id) = native_id.filter(|id| uuid::Uuid::parse_str(id).is_ok()) {
                 state.observe(&event.agent_type, Some(id), "", 0);
+                if let Some(identity) = codex_identity.as_ref() {
+                    state.codex_transcript_path = Some(identity.transcript_path.to_owned());
+                }
             }
         }
         if state.closed
             || state.agent.as_deref() != Some(event.agent_type.as_str())
-            || matches!((state.native_id.as_deref(), conversation_id(&event.payload)), (Some(current), Some(incoming)) if current != incoming)
+            || matches!((state.native_id.as_deref(), native_id), (Some(current), Some(incoming)) if current != incoming)
         {
             return;
         }

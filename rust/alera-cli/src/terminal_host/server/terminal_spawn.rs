@@ -26,7 +26,7 @@ use super::terminal_startup_commands::{
     delivers_initial_prompt_once, initial_command, initial_delivery_mechanism as mechanism,
     initial_managed_agent_launch, initial_prompt, pending_agent_type, provider_resume_id,
     resume_bare_agent_command, seed_claude_native_session, tab_agent_type, terminal_session_id,
-    user_agent_recovery_allowed,
+    user_agent_recovery_allowed, validate_codex_resume_checkpoint,
 };
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
@@ -277,6 +277,9 @@ impl ServerActor {
                 "Transferred Terminal has no original live PTY. Automatic spawn-on-create recovery is disabled.",
             ));
         }
+        // Refuse a saved Codex UUID that no longer points to the exact
+        // verified native rollout. Reconciliation preserves the original tab.
+        validate_codex_resume_checkpoint(tab)?;
         let rearmed = self.rearm_terminal_after_ready_prompt(tab).await?;
         let tab = rearmed.as_ref().unwrap_or(tab);
         let workspace = TerminalSpawnPersistence::new(&self.runtime_store)

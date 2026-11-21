@@ -21,6 +21,21 @@ fn tab() -> WorkspaceTabRecord {
     }
 }
 
+fn codex_rollout_fixture(dir: &std::path::Path, session_id: &str) -> String {
+    let sessions = dir.join("sessions/2026/11/21");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let path = sessions.join(format!("rollout-2026-11-21T10-00-00-{session_id}.jsonl"));
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({"type": "session_meta", "payload": {"id": session_id, "session_id": session_id}})
+        ),
+    )
+    .unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
 #[tokio::test]
 async fn agent_title_settings_query_can_be_tested_without_server_actor() {
     let dir = tempfile::tempdir().unwrap();
@@ -515,13 +530,18 @@ async fn final_provider_hook_recovers_native_id_without_session_start() {
             .unwrap();
 
         let id = "550e8400-e29b-41d4-a716-446655440077";
+        let payload = if agent == "codex" {
+            json!({"session_id": id, "transcript_path": codex_rollout_fixture(dir.path(), id)})
+        } else {
+            json!({"session_id": id})
+        };
         let last = crate::agent_status::AgentHookEvent {
             terminal_session_id: "session".into(),
             workspace_id: "workspace".into(),
             tab_id: "tab".into(),
             agent_type: agent.into(),
             event_name: Some("SessionEnd".into()),
-            payload: json!({"session_id": id}),
+            payload,
         };
         actor.observe_hook_title(&last).await;
         let saved = actor
@@ -581,7 +601,10 @@ async fn disabled_presence_notifications_do_not_suppress_native_session_checkpoi
             tab_id: "tab-session".into(),
             agent_type: "codex".into(),
             event_name: Some("SessionStart".into()),
-            payload: json!({"thread_id":id}),
+            payload: json!({
+                "session_id": id,
+                "transcript_path": codex_rollout_fixture(dir.path(), id)
+            }),
         })
         .await;
     let saved = actor
@@ -594,4 +617,161 @@ async fn disabled_presence_notifications_do_not_suppress_native_session_checkpoi
         super::terminal_startup_commands::provider_resume_id(&saved),
         Some(("codex", id.to_owned()))
     );
+}
+
+#[tokio::test]
+async fn codex_session_start_uses_verified_rollout_id_not_conflicting_conversation_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let mut record = tab();
+    record.payload["agentType"] = json!("codex");
+    initialize(&mut record, "");
+    actor
+        .runtime_store
+        .upsert_workspace_tab(record)
+        .await
+        .unwrap();
+
+    let native_id = "550e8400-e29b-41d4-a716-446655440100";
+    let wrong_id = "550e8400-e29b-41d4-a716-446655440200";
+    let transcript_path = codex_rollout_fixture(dir.path(), native_id);
+    let event = crate::agent_status::AgentHookEvent {
+        terminal_session_id: "session".into(),
+        workspace_id: "workspace".into(),
+        tab_id: "tab".into(),
+        agent_type: "codex".into(),
+        event_name: Some("SessionStart".into()),
+        payload: json!({
+            "session_id": native_id,
+            "transcript_path": transcript_path,
+            "conversation_id": wrong_id,
+            "thread_id": wrong_id,
+            "turn_id": wrong_id,
+        }),
+    };
+    actor.observe_hook_title(&event).await;
+    let current = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        super::terminal_startup_commands::provider_resume_id(&current),
+        Some(("codex", native_id.to_owned()))
+    );
+    let state = AgentTitleState::read(&current).unwrap();
+    assert_eq!(
+        state.codex_transcript_path.as_deref(),
+        Some(transcript_path.as_str())
+    );
+    assert!(super::terminal_startup_commands::validate_codex_resume_checkpoint(&current).is_ok());
+
+    let mut mismatched = event.clone();
+    mismatched.payload["session_id"] = json!(wrong_id);
+    actor.observe_hook_title(&mismatched).await;
+    let after_mismatch = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after_mismatch.payload[PRIVATE_KEY],
+        current.payload[PRIVATE_KEY]
+    );
+
+    // An unrelated verified prompt (e.g. child Codex with inherited tab env)
+    // cannot replace the running parent's session without SessionStart.
+    let mut late_child = event.clone();
+    late_child.event_name = Some("UserPromptSubmit".into());
+    late_child.payload["session_id"] = json!(wrong_id);
+    late_child.payload["transcript_path"] = json!(codex_rollout_fixture(dir.path(), wrong_id));
+    late_child.payload["prompt"] = json!("Unrelated work");
+    actor.observe_hook_title(&late_child).await;
+    let after_late = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after_late.payload[PRIVATE_KEY],
+        current.payload[PRIVATE_KEY]
+    );
+
+    let mut bad_end = late_child.clone();
+    bad_end.event_name = Some("SessionEnd".into());
+    actor.observe_hook_title(&bad_end).await;
+    let after_end = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_end.payload[PRIVATE_KEY], current.payload[PRIVATE_KEY]);
+
+    let mut valid_end = event.clone();
+    valid_end.event_name = Some("SessionEnd".into());
+    actor.observe_hook_title(&valid_end).await;
+    let closed = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(AgentTitleState::read(&closed).unwrap().closed);
+    assert!(super::terminal_startup_commands::validate_codex_resume_checkpoint(&closed).is_ok());
+
+    // The transcript must still exist when Host restarts; leave the tab
+    // stored and refuse auto-spawn if the exact file was removed.
+    std::fs::remove_file(&transcript_path).unwrap();
+    assert!(super::terminal_startup_commands::validate_codex_resume_checkpoint(&closed).is_err());
+    assert_eq!(
+        super::terminal_startup_commands::provider_resume_id(&closed)
+            .unwrap()
+            .1,
+        native_id
+    );
+}
+
+#[tokio::test]
+async fn codex_legacy_unverified_hook_does_not_capture_turn_or_thread_uuid() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+    let mut record = tab();
+    record.payload["agentType"] = json!("codex");
+    initialize(&mut record, "");
+    actor
+        .runtime_store
+        .upsert_workspace_tab(record)
+        .await
+        .unwrap();
+    let wrong_id = "550e8400-e29b-41d4-a716-446655440300";
+    let event = crate::agent_status::AgentHookEvent {
+        terminal_session_id: "session".into(),
+        workspace_id: "workspace".into(),
+        tab_id: "tab".into(),
+        agent_type: "codex".into(),
+        event_name: Some("SessionStart".into()),
+        payload: json!({"thread_id": wrong_id, "conversation_id": wrong_id}),
+    };
+    actor.observe_hook_title(&event).await;
+    let saved = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(super::terminal_startup_commands::provider_resume_id(&saved).is_none());
+    let mut unverified = event;
+    unverified.payload["session_id"] = json!(wrong_id);
+    actor.observe_hook_title(&unverified).await;
+    let saved = actor
+        .runtime_store
+        .find_workspace_tab("tab")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(super::terminal_startup_commands::provider_resume_id(&saved).is_none());
 }
