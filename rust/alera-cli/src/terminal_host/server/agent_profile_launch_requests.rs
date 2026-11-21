@@ -123,8 +123,8 @@ impl ServerActor {
             if let Some(history) = verified_history.as_ref() {
                 digest = hex::encode(Sha256::digest(
                     format!(
-                        "{digest}\0exact_history:{}:{}",
-                        history.provider, history.native_id
+                        "{digest}\0exact_history:{}:{}:{}",
+                        history.provider, history.account_id, history.native_id
                     )
                     .as_bytes(),
                 ));
@@ -473,7 +473,9 @@ fn configure_exact_history_checkpoint(
     if !matches!(history.provider.as_str(), "claude" | "codex")
         || uuid::Uuid::parse_str(&history.native_id).is_err()
     {
-        return Err(HostError::state("Exact historical resume identity is invalid"));
+        return Err(HostError::state(
+            "Exact historical resume identity is invalid",
+        ));
     }
     state.agent = Some(history.provider.clone());
     state.native_id = Some(history.native_id.clone());
@@ -482,6 +484,10 @@ fn configure_exact_history_checkpoint(
     state.attempted = true;
     state.closed = false;
     state.initial_prompt.clear();
+    tab.payload[super::agent_history_resume::RESUME_ORIGIN_KEY] = json!({
+        "provider": history.provider,
+        "accountId": history.account_id,
+    });
     // Future prompt-path changes must not inject a new task into an existing
     // provider conversation or silently reinterpret Resume as a fresh chat.
     tab.payload["initialPrompt"] = Value::Null;
@@ -552,8 +558,10 @@ mod tests {
             &mut tab,
             &VerifiedHistoryResume {
                 provider: "codex".into(),
+                account_id: "other".into(),
                 native_id: native.into(),
                 codex_transcript_path: Some("verified/native/transcript.jsonl".into()),
+                config_directory: "provider-config-dir".into(),
             },
         )
         .unwrap();
@@ -565,6 +573,10 @@ mod tests {
         assert!(state.initial_prompt.is_empty());
         assert!(tab.payload["initialPrompt"].is_null());
         assert!(tab.payload["pendingAgentPrompt"].is_null());
+        assert_eq!(
+            tab.payload[super::super::agent_history_resume::RESUME_ORIGIN_KEY]["accountId"],
+            "other"
+        );
         assert_eq!(
             super::super::terminal_startup_commands::provider_resume_id(&tab),
             Some(("codex", native.to_owned()))

@@ -485,12 +485,14 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             if !args.confirm_account
                 || !args.confirm_resume
                 || !matches!(args.provider.as_str(), "codex" | "claude")
-                || args.account_id != "default"
+                || args.account_id.is_empty()
+                || args.account_id.len() > 256
+                || args.account_id.chars().any(char::is_control)
                 || ids.iter().any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
                 || uuid::Uuid::parse_str(&args.session_id).is_err()
                 || uuid::Uuid::parse_str(&args.client_mutation_id).is_err()
             {
-                eprintln!("Exact resume requires canonical native/session mutation UUIDs, an official default account and explicit confirmations.");
+                eprintln!("Exact resume requires canonical native/session mutation UUIDs, a configured provider account and explicit confirmations.");
                 return USAGE_EXIT_CODE;
             }
             match client.request_value_with_deadline("agentHistory.resumeExact", &json!({

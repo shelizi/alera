@@ -146,11 +146,10 @@ class _GlobalAgentHistoryPanelState
     final workspace = field('workspaceId');
     final nativeId = field('providerSessionId');
     final profile = _resumeProfile.text.trim();
-    if (account != 'default' || !['claude', 'codex'].contains(provider)) {
+    if (account.isEmpty || !['claude', 'codex'].contains(provider)) {
       setState(
         () => _feedback =
-            'Other accounts remain preview-only until their CLI account '
-            'environment can be verified.',
+            'Exact Resume requires a known Claude/Codex source account.',
       );
       return;
     }
@@ -166,9 +165,10 @@ class _GlobalAgentHistoryPanelState
       setState(() {
         _armedResumeKey = identity;
         _feedback =
-            'Confirm the signed-in $provider CLI uses the default '
-            'account. Press Confirm exact Resume on the SAME result to create '
-            'one Agent Tab without replaying a previous prompt.';
+            'Alera will select the configured $provider account "$account" '
+            'and verify this Session again. Confirm exact Resume on the SAME '
+            'result to create a Tab. No old prompt is replayed; the provider '
+            'may reject an incompatible login.';
       });
       return;
     }
@@ -283,8 +283,8 @@ class _GlobalAgentHistoryPanelState
           decoration: const InputDecoration(
             labelText: 'Official Claude/Codex Profile ID (exact Resume)',
             helperText:
-                'Profile from Settings · default account only · '
-                'the Host will reject custom wrappers and mismatched sources.',
+                'Host uses the source account directory automatically. '
+                'Only official CLI Profiles, no custom wrappers.',
           ),
           onChanged: (_) => setState(() => _armedResumeKey = null),
         ),
@@ -306,7 +306,8 @@ class _GlobalAgentHistoryPanelState
           ),
           subtitle: const Text(
             'Explicit opt-in per view. Stored in a private local '
-            'SQLite cache (not encrypted). No cloud upload or automatic resume.',
+            'SQLite cache (not encrypted). Manual Resume selects the '
+            'verified source account. No cloud index upload.',
           ),
         ),
         Row(
@@ -389,7 +390,7 @@ class _GlobalAgentHistoryPanelState
                             'Resume requires separately verified native identity',
                             style: muted,
                           ),
-                          if (field('providerAccountId') == 'default')
+                          if (field('providerAccountId').isNotEmpty)
                             Align(
                               alignment: Alignment.centerRight,
                               child: TextButton.icon(

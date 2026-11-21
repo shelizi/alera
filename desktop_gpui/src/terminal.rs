@@ -418,7 +418,9 @@ impl RuntimeCliBridge {
         mutation_id: &str,
     ) -> io::Result<Value> {
         if !matches!(provider, "claude" | "codex")
-            || account_id != "default"
+            || account_id.is_empty()
+            || account_id.len() > 256
+            || account_id.chars().any(char::is_control)
             || uuid::Uuid::parse_str(native_id).is_err()
             || uuid::Uuid::parse_str(mutation_id).is_err()
             || [project_id, workspace_id, profile_id]

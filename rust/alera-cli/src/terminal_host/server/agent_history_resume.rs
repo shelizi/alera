@@ -1,12 +1,13 @@
 //! Explicit, local-only exact history resume. A JSONL file proves its own
 //! provider UUID and registered CWD but never proves the active CLI login.
-//! Until account-selection launches can be verified, only the configured
-//! *default* provider root may be resumed after a separate user confirmation.
+//! The Host selects the configured source account's native config directory
+//! for every launch (including after restart); no credentials are mirrored.
 //! No arbitrary transcript path, shell command or provider argv is accepted.
-use alera_core::runtime::{RuntimeStore, WorkspaceStatus};
+use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::terminal_startup_commands::provider_resume_id;
 use super::ServerActor;
 use crate::agent_history_sync::search_roots;
 use crate::agent_session_history_scan::{
@@ -14,14 +15,18 @@ use crate::agent_session_history_scan::{
     RegisteredHistoryWorkspace,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
-use super::terminal_startup_commands::provider_resume_id;
 
 #[derive(Clone, Debug)]
 pub(super) struct VerifiedHistoryResume {
     pub provider: String,
+    pub account_id: String,
     pub native_id: String,
     pub codex_transcript_path: Option<String>,
+    /// Derived from a configured, canonical provider root; never caller input.
+    pub config_directory: String,
 }
+
+pub(super) const RESUME_ORIGIN_KEY: &str = "agentHistoryResumeOriginV1";
 
 fn bounded_identifier(payload: &Value, key: &str, max: usize) -> HostResult<String> {
     match payload.get(key).and_then(Value::as_str) {
@@ -75,12 +80,7 @@ impl ExactResumeRequest {
         if !matches!(provider.as_str(), "codex" | "claude") {
             return Err(HostError::format("Unsupported historical resume provider"));
         }
-        let account = bounded_identifier(payload, "accountId", 128)?;
-        if account != "default" {
-            return Err(HostError::state(
-                "Non-default provider accounts remain preview-only until their launch environment can be verified.",
-            ));
-        }
+        let account = bounded_identifier(payload, "accountId", 256)?;
         let native = bounded_identifier(payload, "providerSessionId", 64)?;
         let native_id = Uuid::parse_str(&native)
             .map_err(|_| HostError::format("Invalid provider-native session UUID"))?
@@ -131,6 +131,21 @@ async fn verify_native_source(
         .into_iter()
         .filter(|root| root.provider == target.provider && root.account_id == target.account)
         .collect::<Vec<_>>();
+    // An account alias may be configured more than once. Do not guess which
+    // auth store should own this resume.
+    if roots.len() != 1 {
+        return Err(HostError::state(
+            "History account must resolve to exactly one configured provider directory.",
+        ));
+    }
+    let config_directory = roots[0]
+        .path
+        .parent()
+        .and_then(|directory| std::fs::canonicalize(directory).ok())
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| HostError::state("Provider account config directory is missing"))?
+        .to_string_lossy()
+        .into_owned();
     let known = vec![RegisteredHistoryWorkspace {
         runtime_instance_id: workspace.instance_id,
         project_id: workspace.project_id,
@@ -157,10 +172,57 @@ async fn verify_native_source(
     };
     Ok(VerifiedHistoryResume {
         provider: target.provider.clone(),
+        account_id: target.account.clone(),
         native_id: target.native_id.clone(),
         codex_transcript_path: (target.provider == "codex")
             .then(|| proof.canonical_file.to_string_lossy().into_owned()),
+        config_directory,
     })
+}
+
+/// Called for every fresh PTY, including application restart. Never trust a
+/// cached account path or a stale tab title: rebuild the native source proof
+/// from current Host configuration and the authoritative tab UUID.
+pub(super) async fn verified_history_launch_environment(
+    store: &RuntimeStore,
+    tab: &WorkspaceTabRecord,
+) -> HostResult<Option<(&'static str, String)>> {
+    let Some(origin) = tab.payload.get(RESUME_ORIGIN_KEY) else {
+        return Ok(None);
+    };
+    let provider = bounded_identifier(origin, "provider", 12)?;
+    let account = bounded_identifier(origin, "accountId", 256)?;
+    let Some((saved_provider, native_id)) = provider_resume_id(tab) else {
+        return Err(HostError::state(
+            "Saved historical Agent tab has no exact native session identity",
+        ));
+    };
+    if saved_provider != provider || tab.payload["automationOwned"] == true {
+        return Err(HostError::state(
+            "Historical Agent provider identity no longer matches its tab",
+        ));
+    }
+    let workspace = store
+        .find_workspace(&tab.workspace_id)
+        .await
+        .map_err(|error| HostError::state(error.to_string()))?
+        .ok_or_else(|| HostError::state("Saved historical Agent Worktree no longer exists"))?;
+    let target = ExactResumeRequest {
+        provider: provider.clone(),
+        account,
+        project: workspace.project_id,
+        workspace: tab.workspace_id.clone(),
+        profile: String::new(),
+        native_id,
+        client_mutation_id: String::new(),
+    };
+    let proof = verify_native_source(store, &target).await?;
+    let variable = match proof.provider.as_str() {
+        "codex" => "ALERA_ACCOUNT_CODEX_HOME",
+        "claude" => "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR",
+        _ => return Err(HostError::state("Unsupported history provider environment")),
+    };
+    Ok(Some((variable, proof.config_directory)))
 }
 
 impl ServerActor {
@@ -182,8 +244,15 @@ impl ServerActor {
             .map_err(|err| HostError::state(err.to_string()))?
             .into_iter()
             .any(|tab| {
+                let known_account = tab.payload[RESUME_ORIGIN_KEY]["accountId"].as_str();
                 provider_resume_id(&tab).is_some_and(|(provider, native)| {
-                    provider == target.provider && native == target.native_id
+                    provider == target.provider
+                        && native == target.native_id
+                        // Distinct configured homes may contain independent
+                        // copies of the same UUID. Block duplicates only
+                        // inside the same source account. For older tabs
+                        // without origin, conservatively treat as occupied.
+                        && known_account.is_none_or(|account| account == target.account)
                 })
             });
         if existing {
@@ -209,6 +278,10 @@ impl ServerActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alera_core::runtime::{
+        Project, ProjectKind, RuntimeAgentQuotaSettings, RuntimeClaudeQuotaProfile,
+        RuntimeCodexQuotaProfile, Workspace, WorkspaceKind, WorkspaceStatus, WorkspaceTabRecord,
+    };
 
     fn valid_payload() -> Value {
         json!({
@@ -232,6 +305,11 @@ mod tests {
         assert!(ExactResumeRequest::parse(&request).is_err());
         request["confirmProviderAccount"] = json!(true);
         request["accountId"] = json!("secondary");
+        assert_eq!(
+            ExactResumeRequest::parse(&request).unwrap().account,
+            "secondary"
+        );
+        request["accountId"] = json!("");
         assert!(ExactResumeRequest::parse(&request).is_err());
         request["accountId"] = json!("default");
         request["providerSessionId"] = json!("--last");
@@ -249,6 +327,180 @@ mod tests {
         assert!(verify_native_source(&store, &request).await.is_err());
         assert!(!dir.path().join("agent-session-search").exists());
         assert!(store.list_all_workspaces().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn registered_secondary_codex_home_is_used_for_resume_and_revalidated_after_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        let account = temp.path().join("secondary-codex");
+        let session_dir = account.join("sessions/2026/11/21");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let native = "550e8400-e29b-41d4-a716-446655440001";
+        let file = session_dir.join(format!("rollout-2026-11-21T10-00-00-{native}.jsonl"));
+        std::fs::write(
+            &file,
+            format!(
+                "{}\n",
+                json!({
+                    "type":"session_meta",
+                    "payload":{"id":native,"cwd":repo}
+                })
+            ),
+        )
+        .unwrap();
+        let store = RuntimeStore::open(temp.path()).await.unwrap();
+        let now = chrono::Utc::now();
+        store
+            .upsert_project(Project {
+                id: "project".into(),
+                name: "Project".into(),
+                repo_path: repo.to_string_lossy().into_owned(),
+                created_at: now,
+                updated_at: now,
+                kind: ProjectKind::GitRepository,
+            })
+            .await
+            .unwrap();
+        store
+            .upsert_workspace(Workspace {
+                id: "workspace".into(),
+                instance_id: "instance".into(),
+                host_id: "local".into(),
+                project_id: "project".into(),
+                name: "Main".into(),
+                branch: None,
+                path: repo.to_string_lossy().into_owned(),
+                created_at: now,
+                updated_at: now,
+                kind: WorkspaceKind::Main,
+                status: WorkspaceStatus::Active,
+                source_branch: None,
+                reuses_existing_branch: false,
+                is_pinned: false,
+                tag_ids: vec![],
+                tag_names: vec![],
+                section_id: None,
+                parent_workspace_id: None,
+                child_count: 0,
+                archived_at: None,
+            })
+            .await
+            .unwrap();
+        let account_id = account.to_string_lossy().into_owned();
+        store
+            .set_agent_quota_settings(RuntimeAgentQuotaSettings {
+                codex_profiles: vec![RuntimeCodexQuotaProfile {
+                    alias: "Secondary".into(),
+                    profile: account_id.clone(),
+                }],
+                ..RuntimeAgentQuotaSettings::default()
+            })
+            .await
+            .unwrap();
+        let mut request = ExactResumeRequest::parse(&valid_payload()).unwrap();
+        request.account = account_id.clone();
+        let proof = verify_native_source(&store, &request).await.unwrap();
+        assert_eq!(proof.account_id, account_id);
+        assert_eq!(
+            proof.config_directory,
+            account.canonicalize().unwrap().to_string_lossy()
+        );
+        let mut tab = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Resumed".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"agentType":"codex", "spawnOnCreate":true}),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "");
+        let mut title_state = super::super::agent_title_state::AgentTitleState::read(&tab).unwrap();
+        title_state.observe("codex", Some(native), "", 0);
+        title_state.write(&mut tab);
+        tab.payload[RESUME_ORIGIN_KEY] = json!({"provider":"codex","accountId":account_id});
+        let env = verified_history_launch_environment(&store, &tab)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.0, "ALERA_ACCOUNT_CODEX_HOME");
+        assert_eq!(env.1, proof.config_directory);
+        std::fs::remove_file(file).unwrap();
+        assert!(verified_history_launch_environment(&store, &tab)
+            .await
+            .is_err());
+
+        // Claude uses a different native history layout and config variable,
+        // but must bind to the same verified registered Worktree.
+        let claude_account = temp.path().join("secondary-claude");
+        let claude_projects = claude_account.join("projects/-repo");
+        std::fs::create_dir_all(&claude_projects).unwrap();
+        let claude_native = "550e8400-e29b-41d4-a716-446655440003";
+        let claude_file = claude_projects.join(format!("{claude_native}.jsonl"));
+        std::fs::write(
+            &claude_file,
+            format!(
+                "{}\n",
+                json!({
+                    "type":"user",
+                    "sessionId":claude_native,
+                    "cwd":repo,
+                    "message":{"role":"user","content":"Restore source session"}
+                })
+            ),
+        )
+        .unwrap();
+        let claude_id = claude_account.to_string_lossy().into_owned();
+        store
+            .set_agent_quota_settings(RuntimeAgentQuotaSettings {
+                claude_profiles: vec![RuntimeClaudeQuotaProfile {
+                    alias: "Secondary Claude".into(),
+                    profile: claude_id.clone(),
+                    show_in_usage: true,
+                    usage_display_name: None,
+                }],
+                ..RuntimeAgentQuotaSettings::default()
+            })
+            .await
+            .unwrap();
+        request.provider = "claude".into();
+        request.account = claude_id.clone();
+        request.native_id = claude_native.into();
+        let claude_proof = verify_native_source(&store, &request).await.unwrap();
+        assert_eq!(
+            claude_proof.config_directory,
+            claude_account.canonicalize().unwrap().to_string_lossy()
+        );
+        let mut claude_tab = tab.clone();
+        claude_tab.payload["agentType"] = json!("claude");
+        let mut title =
+            super::super::agent_title_state::AgentTitleState::read(&claude_tab).unwrap();
+        title.observe("claude", Some(claude_native), "", 0);
+        title.write(&mut claude_tab);
+        claude_tab.payload[RESUME_ORIGIN_KEY] = json!({"provider":"claude","accountId":claude_id});
+        let env = verified_history_launch_environment(&store, &claude_tab)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.0, "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR");
+        assert_eq!(env.1, claude_proof.config_directory);
+        std::fs::remove_file(claude_file).unwrap();
+        assert!(verified_history_launch_environment(&store, &claude_tab)
+            .await
+            .is_err());
+
+        assert!(verified_history_launch_environment(
+            &store,
+            &WorkspaceTabRecord {
+                payload: json!({"agentType":"codex"}),
+                ..tab
+            }
+        )
+        .await
+        .unwrap()
+        .is_none());
     }
 
     #[test]

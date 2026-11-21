@@ -556,9 +556,22 @@ impl ServerActor {
         }
         let tab_for_launch = WorkspaceTabStoreHandler::new(&self.runtime_store)
             .find(&tab_id)
-            .await
-            .ok()
-            .flatten();
+            .await?;
+        if let Some(tab) = tab_for_launch.as_ref() {
+            if let Some((key, directory)) =
+                super::agent_history_resume::verified_history_launch_environment(
+                    &self.runtime_store,
+                    tab,
+                )
+                .await?
+            {
+                // Bind the shell to the scanned provider account before the
+                // hook overlay and login-shell environment are prepared.
+                // Overrides any stale globally selected account and remains
+                // reproducible when Alera reopens this Tab after a restart.
+                launch.environment.insert(key.to_owned(), directory);
+            }
+        }
         let selected_agent = tab_for_launch
             .as_ref()
             .and_then(tab_agent_type)

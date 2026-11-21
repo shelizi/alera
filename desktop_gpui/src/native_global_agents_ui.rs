@@ -54,9 +54,11 @@ fn parse_history_previews(
             title: history_preview_text(session.get("title"), 160),
             goal: history_preview_text(session.get("goal"), 240),
             provider,
-            account: history_preview_text(session.get("providerAccountId"), 128),
-            project: history_preview_text(session.get("projectId"), 128),
-            workspace: history_preview_text(session.get("workspaceId"), 128),
+            // Codex account IDs can be absolute CODEX_HOME paths. Do not
+            // truncate Host identity fields before sending exact Resume.
+            account: history_preview_text(session.get("providerAccountId"), 256),
+            project: history_preview_text(session.get("projectId"), 256),
+            workspace: history_preview_text(session.get("workspaceId"), 256),
             native_id,
         });
     }
@@ -218,9 +220,9 @@ impl Workbench {
         let Some(hit) = self.global_agent_history_results.get(index).cloned() else {
             return;
         };
-        if hit.account != "default" {
+        if hit.account.is_empty() {
             self.global_agent_history_status =
-                "Non-default account history remains preview-only until its CLI login can be verified".into();
+                "Exact Resume requires a registered Claude/Codex source account".into();
             cx.notify();
             return;
         }
@@ -245,7 +247,7 @@ impl Workbench {
         if self.global_agent_history_resume_armed.as_deref() != Some(identity.as_str()) {
             self.global_agent_history_resume_armed = Some(identity);
             self.global_agent_history_status =
-                "Confirm your current CLI uses the default provider account. Click Confirm exact Resume on the SAME result to create one Tab without replaying the old prompt".into();
+                format!("Alera will select the configured {} account '{}', and revalidate its native history. Confirm exact Resume on the SAME result; the provider may reject incompatible credentials", hit.provider, hit.account);
             cx.notify();
             return;
         }
@@ -891,7 +893,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
             div()
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child("Exact Resume is limited to the default CLI account and a matching official Profile ID. Clicking one result twice confirms the current login. Other accounts remain preview-only."),
+                .child("Exact Resume uses the verified source account's CLI config directory, including non-default accounts. Use an official CLI Profile ID; confirm the same result twice. No credentials are copied."),
         )
         .child(
             div()
@@ -977,7 +979,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
             .child(div().text_xs().text_color(rgb(MUTED)).child(
                 "Preview only · Resume requires independent Host/provider identity verification",
             ));
-        if hit.account == "default" {
+        if !hit.account.is_empty() {
             let identity = format!(
                 "{}|{}|{}|{}|{}|{}",
                 hit.provider, hit.account, hit.project, hit.workspace, hit.native_id, profile

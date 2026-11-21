@@ -489,7 +489,11 @@ impl RuntimeCliBridge {
                     && args[2]
                         .to_str()
                         .is_some_and(|p| matches!(p, "claude" | "codex"))
-                    && args[4] == OsString::from("default")
+                    && args[4].to_str().is_some_and(|account| {
+                        !account.is_empty()
+                            && account.len() <= 256
+                            && !account.chars().any(char::is_control)
+                    })
                     && [6, 8, 12].iter().all(|index| {
                         args[*index].to_str().is_some_and(|v| {
                             !v.is_empty() && v.len() <= 256 && !v.chars().any(char::is_control)
@@ -2457,14 +2461,22 @@ mod tests {
         let mutation = "550e8400-e29b-41d4-a716-446655440002";
         let mut args: Vec<OsString> = [
             "history-resume",
-            "--provider", "codex",
-            "--account-id", "default",
-            "--project-id", "project",
-            "--workspace-id", "worktree",
-            "--session-id", native,
-            "--profile-id", "profile",
-            "--client-mutation-id", mutation,
-            "--confirm-account", "--confirm-resume",
+            "--provider",
+            "codex",
+            "--account-id",
+            "default",
+            "--project-id",
+            "project",
+            "--workspace-id",
+            "worktree",
+            "--session-id",
+            native,
+            "--profile-id",
+            "profile",
+            "--client-mutation-id",
+            mutation,
+            "--confirm-account",
+            "--confirm-resume",
         ]
         .iter()
         .map(OsString::from)
@@ -2482,9 +2494,14 @@ mod tests {
         args[4] = OsString::from("secondary");
         assert_eq!(
             bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        args[4] = OsString::from("");
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
-        args[4] = OsString::from("default");
+        args[4] = OsString::from("secondary");
         args[10] = OsString::from("--last");
         assert_eq!(
             bridge.terminal_json(&args).unwrap_err().kind(),
