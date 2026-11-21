@@ -2,6 +2,85 @@ part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerViewPrefsTests() {
   test(
+    'project reordering is ignored until Manual is explicitly selected',
+    () async {
+      await _harness.addProject('project-2', 'Other Project');
+      await _controller.bootstrap();
+      await _flushUntil(() => _controller.state.projects.length == 2);
+      final order = _controller.state.projects
+          .map((project) => project.id)
+          .toList();
+
+      _controller.moveProjectInSidebar(
+        sourceId: order[0],
+        targetId: order[1],
+        visibleOrder: order,
+      );
+      expect(_controller.state.viewPrefs.projectSort, WorkbenchSortBy.name);
+      expect(_controller.state.viewPrefs.projectOrder, isEmpty);
+
+      _controller.setProjectSort(WorkbenchSortBy.manual);
+      _controller.moveProjectInSidebar(
+        sourceId: order[0],
+        targetId: order[1],
+        visibleOrder: order,
+      );
+      expect(_controller.state.viewPrefs.projectSort, WorkbenchSortBy.manual);
+      expect(_controller.state.viewPrefs.projectOrder, <String>[
+        order[1],
+        order[0],
+      ]);
+
+      // The Worktree sort is an independent setting.
+      expect(_controller.state.viewPrefs.workspaceSort, WorkbenchSortBy.name);
+    },
+  );
+
+  test(
+    'worktree reordering never switches an automatic mode to Manual',
+    () async {
+      await _controller.bootstrap();
+      final main = await _selectMainWorkspace(_controller, _harness);
+      final linked = await _harness.workbenchRepository.upsertWorkspace(
+        main.copyWith(
+          id: 'linked-for-reorder',
+          name: 'Linked',
+          branch: 'feature/reorder',
+          path: p.join(_harness.project.repoPath, 'linked-for-reorder'),
+          kind: .linked,
+        ),
+      );
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(main.projectId)
+            .any((workspace) => workspace.id == linked.id),
+      );
+      final order = <String>[main.id, linked.id];
+
+      _controller.moveWorkspaceInSidebar(
+        sourceId: order[0],
+        targetId: order[1],
+        visibleOrder: order,
+      );
+      expect(_controller.state.viewPrefs.workspaceSort, WorkbenchSortBy.name);
+      expect(_controller.state.viewPrefs.workspaceOrder, isEmpty);
+
+      _controller.setWorkspaceSort(WorkbenchSortBy.manual);
+      _controller.moveWorkspaceInSidebar(
+        sourceId: order[0],
+        targetId: order[1],
+        visibleOrder: order,
+      );
+      expect(_controller.state.viewPrefs.workspaceSort, WorkbenchSortBy.manual);
+      expect(_controller.state.viewPrefs.workspaceOrder, <String>[
+        order[1],
+        order[0],
+      ]);
+      expect(_controller.state.viewPrefs.projectSort, WorkbenchSortBy.name);
+    },
+  );
+
+  test(
     'right sidebar width limit is independent of the project sidebar',
     () async {
       await _controller.bootstrap();

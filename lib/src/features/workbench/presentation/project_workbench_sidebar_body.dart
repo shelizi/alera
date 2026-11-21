@@ -408,8 +408,16 @@ class const _SidebarBody({
   }) {
     // No cross-project or cross-section moves: drag changes order only, never
     // Workspace parentage, pin/archive state, checkout paths or live PTYs.
-    if (state.viewPrefs.groupBy != WorkbenchGroupBy.project ||
-        state.searchQuery.trim().isNotEmpty) {
+    final prefs = state.viewPrefs;
+    // A Project grip depends only on Project manual sort, and a Worktree
+    // grip depends only on Worktree manual sort. Automatic modes offer no
+    // drag target or handle and must never become Manual from a drop.
+    final manuallySorted = target.kind == _SidebarOrderKind.project
+        ? prefs.projectSort == WorkbenchSortBy.manual
+        : prefs.workspaceSort == WorkbenchSortBy.manual;
+    if (prefs.groupBy != WorkbenchGroupBy.project ||
+        state.searchQuery.trim().isNotEmpty ||
+        !manuallySorted) {
       return child;
     }
     bool accepts(_SidebarOrderDrag source) {

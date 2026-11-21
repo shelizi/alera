@@ -10,7 +10,8 @@ List<String>? moveSidebarOrderId({
   required String targetId,
   required bool isManual,
 }) {
-  if (sourceId == targetId) return null;
+  // A drag can change order only after the user explicitly selects Manual.
+  if (!isManual || sourceId == targetId) return null;
   final known = knownIds.toSet();
   if (!known.contains(sourceId) || !known.contains(targetId)) return null;
   final result = <String>[];
@@ -21,9 +22,8 @@ List<String>? moveSidebarOrderId({
     }
   }
 
-  if (isManual) append(savedOrder);
+  append(savedOrder);
   append(visibleOrder);
-  if (!isManual) append(savedOrder);
   append(knownIds);
   final from = result.indexOf(sourceId);
   final to = result.indexOf(targetId);
