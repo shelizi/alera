@@ -110,6 +110,8 @@ fn prepare_claude(
 }
 
 pub(super) const CLAUDE_HOOK_EVENTS: &[(&str, Option<&str>)] = &[
+    ("SessionStart", None),
+    ("SessionEnd", None),
     ("UserPromptSubmit", None),
     ("Stop", None),
     ("StopFailure", None),

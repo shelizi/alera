@@ -11,9 +11,15 @@ use crate::terminal_host::orchestration::managed_agent_launch::ManagedAgentLaunc
 
 use super::agent_title_state::AgentTitleState;
 
+/// Only user-owned, long-lived Agent tabs participate in persistent resume.
+/// A one-shot automation or setup command must retain its exit/cleanup policy.
+pub(super) fn user_agent_recovery_allowed(tab: &WorkspaceTabRecord) -> bool {
+    tab.payload["automationOwned"] != true && !auto_closes_on_success(tab)
+}
+
 /// A Host terminal handle is not a provider conversation. Only a provider
-/// UUID observed in a tab-scoped Hook can authorize resume. Never use --last:
-/// two Agent tabs in the same workspace can have different conversations.
+/// UUID bound to a tab (via a Hook or a caller-selected Claude UUID) may
+/// authorize resume. Never use --last across multiple Agent tabs.
 pub(super) fn provider_resume_id(tab: &WorkspaceTabRecord) -> Option<(&str, String)> {
     let agent = tab_agent_type(tab)?;
     if !matches!(agent, "codex" | "claude") {
@@ -117,6 +123,43 @@ pub(super) fn resume_bare_agent_command(
             &launch, shell,
         )
     })
+}
+
+/// Claude Code supports choosing a new native UUID before its first prompt.
+/// Persisting this UUID per Tab removes the first-Hook timing race. Only the
+/// genuine Claude CLI may receive this flag; custom wrappers stay untouched.
+pub(super) fn configure_claude_new_session(
+    launch: &mut ManagedAgentLaunch,
+    native_id: &str,
+) -> bool {
+    let mut resume_probe = launch.clone();
+    if !configure_provider_resume(&mut resume_probe, "claude", native_id) {
+        return false;
+    }
+    launch.arguments.push("--session-id".to_owned());
+    launch.arguments.push(native_id.to_owned());
+    true
+}
+
+pub(super) fn seed_claude_native_session(
+    tab: &mut WorkspaceTabRecord,
+    launch: &ManagedAgentLaunch,
+) -> Option<String> {
+    if tab_agent_type(tab) != Some("claude") {
+        return None;
+    }
+    let mut state = AgentTitleState::read(tab).unwrap_or_else(|| AgentTitleState::new(false));
+    if state.native_id.is_some() || state.closed {
+        return None;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut probe = launch.clone();
+    if !configure_claude_new_session(&mut probe, &id) {
+        return None;
+    }
+    state.observe("claude", Some(&id), "", 0);
+    state.write(tab);
+    Some(id)
 }
 
 pub(super) fn terminal_session_id(tab: &WorkspaceTabRecord) -> String {
@@ -373,6 +416,78 @@ mod tests {
             launch.arguments,
             vec!["--model", "sonnet", "--resume", second]
         );
+    }
+
+    #[test]
+    fn fresh_claude_tabs_preassign_distinct_native_session_ids_before_first_hook() {
+        let mut first = tab(json!({"agentType": "claude"}));
+        let mut second = tab(json!({"agentType": "claude"}));
+        second.id = "tab-2".to_owned();
+        let launch = ManagedAgentLaunch {
+            executable: "claude.cmd".to_owned(),
+            arguments: vec!["--model".into(), "sonnet".into()],
+        };
+
+        let first_id = seed_claude_native_session(&mut first, &launch).unwrap();
+        let second_id = seed_claude_native_session(&mut second, &launch).unwrap();
+        assert_ne!(first_id, second_id);
+        assert!(uuid::Uuid::parse_str(&first_id).is_ok());
+        assert_eq!(
+            provider_resume_id(&first),
+            Some(("claude", first_id.clone()))
+        );
+        assert_eq!(provider_resume_id(&second), Some(("claude", second_id)));
+        assert_eq!(seed_claude_native_session(&mut first, &launch), None);
+
+        let mut new_launch = launch.clone();
+        assert!(configure_claude_new_session(&mut new_launch, &first_id));
+        assert_eq!(
+            new_launch.arguments,
+            vec!["--model", "sonnet", "--session-id", first_id.as_str()]
+        );
+
+        let restored: WorkspaceTabRecord =
+            serde_json::from_value(serde_json::to_value(first).unwrap()).unwrap();
+        let (_, saved_id) = provider_resume_id(&restored).unwrap();
+        let mut resumed = launch;
+        assert!(configure_provider_resume(&mut resumed, "claude", &saved_id));
+        assert_eq!(
+            resumed.arguments,
+            vec!["--model", "sonnet", "--resume", saved_id.as_str()]
+        );
+    }
+
+    #[test]
+    fn claude_seeding_does_not_override_custom_commands_or_explicit_sessions() {
+        for (exe, args) in [
+            ("claude-wrapper", vec![]),
+            ("claude", vec!["--session-id".into(), "custom".into()]),
+            ("claude", vec!["--resume".into(), "existing".into()]),
+            ("codex", vec![]),
+        ] {
+            let mut tab = tab(json!({"agentType":"claude"}));
+            let launch = ManagedAgentLaunch {
+                executable: exe.into(),
+                arguments: args,
+            };
+            assert_eq!(seed_claude_native_session(&mut tab, &launch), None);
+            assert!(provider_resume_id(&tab).is_none());
+        }
+    }
+
+    #[test]
+    fn agent_resume_retains_user_tabs_but_not_automation_or_setup_tabs() {
+        let id = "550e8400-e29b-41d4-a716-446655440079";
+        let ordinary = tab_with_native_session("claude", id);
+        assert!(user_agent_recovery_allowed(&ordinary));
+
+        let mut automation = ordinary.clone();
+        automation.payload["automationOwned"] = json!(true);
+        assert!(!user_agent_recovery_allowed(&automation));
+
+        let mut setup = ordinary;
+        setup.payload["autoCloseOnSuccess"] = json!(true);
+        assert!(!user_agent_recovery_allowed(&setup));
     }
 
     #[test]

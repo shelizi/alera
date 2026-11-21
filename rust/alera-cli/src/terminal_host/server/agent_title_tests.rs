@@ -499,3 +499,99 @@ async fn unauthenticated_clients_cannot_start_title_generation() {
         .is_err());
     assert!(actor.agent_title_jobs.is_empty());
 }
+
+#[tokio::test]
+async fn final_provider_hook_recovers_native_id_without_session_start() {
+    for agent in ["codex", "claude"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        let mut saved_tab = tab();
+        saved_tab.payload["agentType"] = json!(agent);
+        initialize(&mut saved_tab, "");
+        actor
+            .runtime_store
+            .upsert_workspace_tab(saved_tab)
+            .await
+            .unwrap();
+
+        let id = "550e8400-e29b-41d4-a716-446655440077";
+        let last = crate::agent_status::AgentHookEvent {
+            terminal_session_id: "session".into(),
+            workspace_id: "workspace".into(),
+            tab_id: "tab".into(),
+            agent_type: agent.into(),
+            event_name: Some("SessionEnd".into()),
+            payload: json!({"session_id": id}),
+        };
+        actor.observe_hook_title(&last).await;
+        let saved = actor
+            .runtime_store
+            .find_workspace_tab("tab")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            super::terminal_startup_commands::provider_resume_id(&saved),
+            Some((agent, id.to_owned()))
+        );
+        assert!(AgentTitleState::read(&saved).unwrap().closed);
+        actor.observe_hook_title(&last).await;
+        let duplicate = actor
+            .runtime_store
+            .find_workspace_tab("tab")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.payload[PRIVATE_KEY], duplicate.payload[PRIVATE_KEY]);
+    }
+}
+
+#[tokio::test]
+async fn disabled_presence_notifications_do_not_suppress_native_session_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = crate::terminal_host::session::Session::driver_test_stub("session", 80, 24);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::new(),
+        HashMap::from([("session".to_string(), session)]),
+    )
+    .await;
+    let mut saved_tab = tab();
+    saved_tab.id = "tab-session".into();
+    saved_tab.payload["agentType"] = json!("codex");
+    initialize(&mut saved_tab, "");
+    actor
+        .runtime_store
+        .upsert_workspace_tab(saved_tab)
+        .await
+        .unwrap();
+
+    // Runtime settings default to presence notifications off.
+    assert!(!actor
+        .runtime_store
+        .agent_status_hook_settings()
+        .await
+        .unwrap()
+        .is_enabled("codex"));
+    let id = "550e8400-e29b-41d4-a716-446655440082";
+    actor
+        .handle_agent_hook_event(crate::agent_status::AgentHookEvent {
+            terminal_session_id: "session".into(),
+            workspace_id: "workspace".into(),
+            tab_id: "tab-session".into(),
+            agent_type: "codex".into(),
+            event_name: Some("SessionStart".into()),
+            payload: json!({"thread_id":id}),
+        })
+        .await;
+    let saved = actor
+        .runtime_store
+        .find_workspace_tab("tab-session")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        super::terminal_startup_commands::provider_resume_id(&saved),
+        Some(("codex", id.to_owned()))
+    );
+}

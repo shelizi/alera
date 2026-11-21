@@ -195,6 +195,24 @@ impl ServerActor {
         let Some(mut state) = AgentTitleState::read(&tab) else {
             return;
         };
+        // SessionEnd can be the first successful Hook. Only its authenticated
+        // tab identity and native provider UUID may authorize a checkpoint.
+        if !state.closed
+            && state.native_id.is_none()
+            && matches!(event.agent_type.as_str(), "codex" | "claude")
+            && super::terminal_startup_commands::tab_agent_type(&tab)
+                == Some(event.agent_type.as_str())
+            && state
+                .agent
+                .as_deref()
+                .is_none_or(|agent| agent == event.agent_type)
+        {
+            if let Some(id) =
+                conversation_id(&event.payload).filter(|id| uuid::Uuid::parse_str(id).is_ok())
+            {
+                state.observe(&event.agent_type, Some(id), "", 0);
+            }
+        }
         if state.closed
             || state.agent.as_deref() != Some(event.agent_type.as_str())
             || matches!((state.native_id.as_deref(), conversation_id(&event.payload)), (Some(current), Some(incoming)) if current != incoming)
