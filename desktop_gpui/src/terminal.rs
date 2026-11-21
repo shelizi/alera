@@ -405,6 +405,53 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
+    /// Native exact history resume is a user-confirmed Host mutation. No
+    /// caller-supplied paths, shell snippets, prompts, or ambient Host startup.
+    pub fn resume_exact_agent_history(
+        &self,
+        provider: &str,
+        account_id: &str,
+        project_id: &str,
+        workspace_id: &str,
+        native_id: &str,
+        profile_id: &str,
+        mutation_id: &str,
+    ) -> io::Result<Value> {
+        if !matches!(provider, "claude" | "codex")
+            || account_id != "default"
+            || uuid::Uuid::parse_str(native_id).is_err()
+            || uuid::Uuid::parse_str(mutation_id).is_err()
+            || [project_id, workspace_id, profile_id]
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Exact Resume requires a verified default account and canonical identity",
+            ));
+        }
+        let args = vec![
+            OsString::from("history-resume"),
+            OsString::from("--provider"),
+            OsString::from(provider),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--project-id"),
+            OsString::from(project_id),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+            OsString::from("--session-id"),
+            OsString::from(native_id),
+            OsString::from("--profile-id"),
+            OsString::from(profile_id),
+            OsString::from("--client-mutation-id"),
+            OsString::from(mutation_id),
+            OsString::from("--confirm-account"),
+            OsString::from("--confirm-resume"),
+        ];
+        self.terminal_json(&args)
+    }
+
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
         let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)

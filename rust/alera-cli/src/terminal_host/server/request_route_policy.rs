@@ -303,6 +303,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         // Private opt-in transcript metadata is never exposed to remote/mobile.
         "agentHistory.search" => local_deferred(DeferredReadRoute::AgentHistorySearch),
         "agentHistory.clear" => local_deferred(DeferredReadRoute::AgentHistoryClear),
+        "agentHistory.resumeExact" => LOCAL_CONFLICT,
 
         "project.register" => {
             mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)

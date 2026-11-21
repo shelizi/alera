@@ -1175,6 +1175,11 @@ impl ServerActor {
                 required_non_blank(payload, "clientMutationId")?;
                 self.launch_agent_profile(Some(client_id), payload).await
             }
+            "agentHistory.resumeExact" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                self.resume_exact_agent_history(client_id, payload).await
+            }
             "aiText.cancel" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;

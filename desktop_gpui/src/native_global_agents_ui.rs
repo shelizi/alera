@@ -117,6 +117,7 @@ impl Workbench {
         };
         let provider = self.global_agent_history_provider.clone();
         self.global_agent_history_busy = true;
+        self.global_agent_history_resume_armed = None;
         self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
         let ticket = self.global_agent_history_request;
         self.global_agent_history_results.clear();
@@ -194,6 +195,7 @@ impl Workbench {
                 if result.is_ok() {
                     view.global_agent_history_results.clear();
                     view.global_agent_history_consent = false;
+                    view.global_agent_history_resume_armed = None;
                     view.global_agent_history_status =
                         "Search cache cleared. Provider transcripts preserved".into();
                 } else {
@@ -205,6 +207,97 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+}
+
+impl Workbench {
+    fn resume_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.global_agent_history_busy || !self.global_agent_history_consent {
+            return;
+        }
+        let Some(hit) = self.global_agent_history_results.get(index).cloned() else {
+            return;
+        };
+        if hit.account != "default" {
+            self.global_agent_history_status =
+                "Non-default account history remains preview-only until its CLI login can be verified".into();
+            cx.notify();
+            return;
+        }
+        let input = self.global_agent_history_resume_profile_input.read(cx);
+        if input.composing() {
+            self.global_agent_history_status =
+                "Finish IME composition before selecting a Profile".into();
+            cx.notify();
+            return;
+        }
+        let profile = input.query().trim().to_owned();
+        if profile.is_empty() || profile.len() > 256 || profile.chars().any(char::is_control) {
+            self.global_agent_history_status =
+                "Enter the matching official CLI Profile ID from Settings".into();
+            cx.notify();
+            return;
+        }
+        let identity = format!(
+            "{}|{}|{}|{}|{}|{}",
+            hit.provider, hit.account, hit.project, hit.workspace, hit.native_id, profile
+        );
+        if self.global_agent_history_resume_armed.as_deref() != Some(identity.as_str()) {
+            self.global_agent_history_resume_armed = Some(identity);
+            self.global_agent_history_status =
+                "Confirm your current CLI uses the default provider account. Click Confirm exact Resume on the SAME result to create one Tab without replaying the old prompt".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_history_status = "Alera CLI unavailable; no Host started".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_history_resume_armed = None;
+        self.global_agent_history_busy = true;
+        self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
+        let ticket = self.global_agent_history_request;
+        self.global_agent_history_status =
+            "Host revalidating native UUID and original registered Worktree…".into();
+        cx.notify();
+        let mutation_id = uuid::Uuid::new_v4().to_string();
+        cx.spawn(async move |view, cx| {
+            let reply = cx.background_spawn(async move {
+                bridge.resume_exact_agent_history(
+                    &hit.provider,
+                    &hit.account,
+                    &hit.project,
+                    &hit.workspace,
+                    &hit.native_id,
+                    &profile,
+                    &mutation_id,
+                )
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_history_request != ticket {
+                    return;
+                }
+                view.global_agent_history_busy = false;
+                view.global_agent_history_status = match reply {
+                    Ok(value)
+                        if value.get("tab")
+                            .and_then(|tab| tab.get("id"))
+                            .and_then(serde_json::Value::as_str)
+                            .is_some() =>
+                    {
+                        "Exact Resume Tab created by Host. Open it from Live Agents; do not retry while startup is pending".into()
+                    }
+                    _ => {
+                        "Exact Resume rejected or acknowledgement ambiguous. Inspect Live Agents before retrying".into()
+                    }
+                };
+                cx.notify();
+            }).ok();
+        }).detach();
     }
 }
 
@@ -793,6 +886,13 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
         )
         .child(view.global_agent_history_account_input.clone())
         .child(view.global_agent_history_workspace_input.clone())
+        .child(view.global_agent_history_resume_profile_input.clone())
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child("Exact Resume is limited to the default CLI account and a matching official Profile ID. Clicking one result twice confirms the current login. Other accounts remain preview-only."),
+        )
         .child(
             div()
                 .id("global-history-consent")
@@ -809,6 +909,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                     view.global_agent_history_consent = !view.global_agent_history_consent;
                     if !view.global_agent_history_consent {
                         view.global_agent_history_results.clear();
+                        view.global_agent_history_resume_armed = None;
                     }
                     cx.notify();
                 })),
@@ -842,29 +943,64 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 .text_color(rgb(MUTED))
                 .child(view.global_agent_history_status.clone()),
         );
+    let profile = view
+        .global_agent_history_resume_profile_input
+        .read(cx)
+        .query()
+        .trim()
+        .to_owned();
     for (index, hit) in view.global_agent_history_results.iter().enumerate() {
-        list = list.child(
-            div()
-                .id(("global-history-preview", index))
-                .bg(rgb(ELEVATED))
-                .rounded_md()
-                .px_2()
-                .py_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(hit.title.clone()))
-                .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    format!("{} · {} · {}", hit.provider, hit.account, hit.native_id),
-                ))
-                .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    format!("Project {} / Worktree {}", hit.project, hit.workspace),
-                ))
-                .child(div().text_xs().child(hit.goal.clone()))
-                .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    "Preview only · Resume requires independent Host/provider identity verification",
-                )),
-        );
+        let mut card = div()
+            .id(("global-history-preview", index))
+            .bg(rgb(ELEVATED))
+            .rounded_md()
+            .px_2()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(hit.title.clone()),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{} · {} · {}",
+                hit.provider, hit.account, hit.native_id
+            )))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "Project {} / Worktree {}",
+                hit.project, hit.workspace
+            )))
+            .child(div().text_xs().child(hit.goal.clone()))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                "Preview only · Resume requires independent Host/provider identity verification",
+            ));
+        if hit.account == "default" {
+            let identity = format!(
+                "{}|{}|{}|{}|{}|{}",
+                hit.provider, hit.account, hit.project, hit.workspace, hit.native_id, profile
+            );
+            let armed =
+                view.global_agent_history_resume_armed.as_deref() == Some(identity.as_str());
+            card = card.child(
+                div()
+                    .id(("global-history-exact-resume", index))
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
+                    .child(if armed {
+                        "Confirm exact Resume of this Session"
+                    } else {
+                        "Resume exact Session…"
+                    })
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.resume_global_agent_history(index, cx);
+                    })),
+            );
+        }
+        list = list.child(card);
     }
     list.into_any_element()
 }

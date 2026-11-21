@@ -1064,6 +1064,8 @@ struct Workbench {
     global_agent_history_input: Entity<QuickOpenInput>,
     global_agent_history_account_input: Entity<QuickOpenInput>,
     global_agent_history_workspace_input: Entity<QuickOpenInput>,
+    global_agent_history_resume_profile_input: Entity<QuickOpenInput>,
+    global_agent_history_resume_armed: Option<String>,
     global_agent_history_provider: Option<String>,
     global_agent_history_busy: bool,
     global_agent_history_request: u64,
@@ -18123,6 +18125,10 @@ fn main() {
                             global_agent_history_workspace_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Worktree ID (optional)", cx)
                             }),
+                            global_agent_history_resume_profile_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Official Claude/Codex Profile ID to resume…", cx)
+                            }),
+                            global_agent_history_resume_armed: None,
                             global_agent_history_provider: None,
                             global_agent_history_busy: false,
                             global_agent_history_request: 0,

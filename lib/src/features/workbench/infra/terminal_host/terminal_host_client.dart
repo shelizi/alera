@@ -350,6 +350,37 @@ final class SocketTerminalHostClient._(
   }
 
   @override
+  Future<Map<String, Object?>> resumeExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+    required String profileId,
+    required String clientMutationId,
+  }) async {
+    // Never start an old/missing Host or downgrade exact resume to a new Tab.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.resumeExact',
+      <String, Object?>{
+        'provider': provider,
+        'accountId': accountId,
+        'projectId': projectId,
+        'workspaceId': workspaceId,
+        'providerSessionId': providerSessionId,
+        'profileId': profileId,
+        'clientMutationId': clientMutationId,
+        'confirmResume': true,
+        'confirmProviderAccount': true,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'exact historical Agent resume');
+  }
+
+  @override
   Future<void> controlVerifiedAgent({
     required String sessionId,
     required String workspaceId,

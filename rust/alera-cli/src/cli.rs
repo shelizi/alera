@@ -170,6 +170,9 @@ pub enum TerminalAction {
     /// Explicit consent-gated, local-only historical Agent search.
     #[command(name = "history-search")]
     HistorySearch(TerminalHistorySearchArgs),
+    /// Explicit, local-only exact native UUID resume into a new Host Agent Tab.
+    #[command(name = "history-resume")]
+    HistoryResume(TerminalHistoryResumeArgs),
     /// Clear only the local Agent search cache, never native transcripts.
     #[command(name = "history-clear")]
     HistoryClear,
@@ -275,6 +278,28 @@ pub struct TerminalHistorySearchArgs {
     pub account_id: Option<String>,
     #[arg(long = "max-results", default_value_t = 30)]
     pub max_results: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistoryResumeArgs {
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long = "account-id")]
+    pub account_id: String,
+    #[arg(long = "project-id")]
+    pub project_id: String,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "session-id")]
+    pub session_id: String,
+    #[arg(long = "profile-id")]
+    pub profile_id: String,
+    #[arg(long = "client-mutation-id")]
+    pub client_mutation_id: String,
+    #[arg(long = "confirm-account", default_value_t = false)]
+    pub confirm_account: bool,
+    #[arg(long = "confirm-resume", default_value_t = false)]
+    pub confirm_resume: bool,
 }
 
 #[derive(Debug, Args)]

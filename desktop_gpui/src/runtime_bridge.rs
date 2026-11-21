@@ -471,6 +471,36 @@ impl RuntimeCliBridge {
                     })
                     && input.is_some_and(|bytes| !bytes.is_empty() && bytes.len() <= 1024)
             }
+            (Some("history-resume"), false) => {
+                args.len() == 17
+                    && [
+                        (1, "--provider"),
+                        (3, "--account-id"),
+                        (5, "--project-id"),
+                        (7, "--workspace-id"),
+                        (9, "--session-id"),
+                        (11, "--profile-id"),
+                        (13, "--client-mutation-id"),
+                        (15, "--confirm-account"),
+                        (16, "--confirm-resume"),
+                    ]
+                    .iter()
+                    .all(|(index, name)| args[*index] == OsString::from(name))
+                    && args[2]
+                        .to_str()
+                        .is_some_and(|p| matches!(p, "claude" | "codex"))
+                    && args[4] == OsString::from("default")
+                    && [6, 8, 12].iter().all(|index| {
+                        args[*index].to_str().is_some_and(|v| {
+                            !v.is_empty() && v.len() <= 256 && !v.chars().any(char::is_control)
+                        })
+                    })
+                    && [10, 14].iter().all(|index| {
+                        args[*index]
+                            .to_str()
+                            .is_some_and(|v| uuid::Uuid::parse_str(v).is_ok())
+                    })
+            }
             (Some("history-clear"), false) => args.len() == 1,
             // Workspace listing and terminal creation are Host requests with
             // no stdin payload; both still require --no-start below.
@@ -530,7 +560,7 @@ impl RuntimeCliBridge {
                 .read_to_end(&mut bytes)?;
             Ok(bytes)
         });
-        let deadline = if verb == Some("history-search") {
+        let deadline = if matches!(verb, Some("history-search" | "history-resume")) {
             Duration::from_secs(45)
         } else {
             PROBE_TIMEOUT
@@ -2414,6 +2444,50 @@ mod tests {
                 .terminal_json_with_input(&[OsString::from("history-clear")], b"x")
                 .unwrap_err()
                 .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(!dir.path().join("host.json").exists());
+    }
+
+    #[test]
+    fn history_exact_resume_requires_full_confirmed_identity_and_never_starts_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        let native = "550e8400-e29b-41d4-a716-446655440001";
+        let mutation = "550e8400-e29b-41d4-a716-446655440002";
+        let mut args: Vec<OsString> = [
+            "history-resume",
+            "--provider", "codex",
+            "--account-id", "default",
+            "--project-id", "project",
+            "--workspace-id", "worktree",
+            "--session-id", native,
+            "--profile-id", "profile",
+            "--client-mutation-id", mutation,
+            "--confirm-account", "--confirm-resume",
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        args.pop();
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        args.push(OsString::from("--confirm-resume"));
+        args[4] = OsString::from("secondary");
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        args[4] = OsString::from("default");
+        args[10] = OsString::from("--last");
+        assert_eq!(
+            bridge.terminal_json(&args).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied
         );
         assert!(!dir.path().join("host.json").exists());

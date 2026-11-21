@@ -56,9 +56,39 @@ impl Default for HistoryScanPolicy {
 #[derive(Default, Debug)]
 pub(crate) struct HistoryScanReport {
     pub records: Vec<AgentSessionSearchRecord>,
+    /// Canonical source evidence stays Host-private; never enters search JSON.
+    pub source_proofs: Vec<HistorySourceProof>,
     pub visited_files: usize,
     pub skipped_files: usize,
     pub truncated: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HistorySourceProof {
+    pub provider: String,
+    pub account_id: String,
+    pub project_id: String,
+    pub workspace_id: String,
+    pub runtime_instance_id: String,
+    pub native_session_id: String,
+    pub canonical_file: PathBuf,
+}
+
+impl HistorySourceProof {
+    pub(crate) fn matches(
+        &self,
+        provider: &str,
+        account_id: &str,
+        project_id: &str,
+        workspace_id: &str,
+        native_session_id: &str,
+    ) -> bool {
+        self.provider == provider
+            && self.account_id == account_id
+            && self.project_id == project_id
+            && self.workspace_id == workspace_id
+            && self.native_session_id == native_session_id
+    }
 }
 
 #[derive(Clone)]
@@ -193,6 +223,15 @@ pub(crate) fn discover_history(
                     .as_deref()
                     .map(|p| p.chars().take(96).collect())
                     .unwrap_or(display);
+                report.source_proofs.push(HistorySourceProof {
+                    provider: root.provider.to_owned(),
+                    account_id: root.account_id.clone(),
+                    project_id: workspace.project.clone(),
+                    workspace_id: workspace.workspace.clone(),
+                    runtime_instance_id: workspace.runtime.clone(),
+                    native_session_id: native_id.clone(),
+                    canonical_file,
+                });
                 report.records.push(AgentSessionSearchRecord {
                     runtime_instance_id: workspace.runtime.clone(),
                     project_id: workspace.project.clone(),

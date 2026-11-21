@@ -123,6 +123,16 @@ abstract interface class TerminalHostAgentHistoryClient {
   });
 
   Future<void> clearAgentHistorySearchCache();
+
+  Future<Map<String, Object?>> resumeExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+    required String profileId,
+    required String clientMutationId,
+  });
 }
 
 /// Narrow opt-in view identity port for production hosts. Legacy fake and

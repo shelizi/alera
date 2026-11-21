@@ -198,6 +198,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::Resize(_)
             | TerminalAction::ControlAgentVerified(_)
             | TerminalAction::HistorySearch(_)
+            | TerminalAction::HistoryResume(_)
             | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
@@ -470,6 +471,41 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             }), 42_000).await {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Historical Agent matches");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryResume(args) => {
+            let ids = [
+                args.project_id.as_str(),
+                args.workspace_id.as_str(),
+                args.profile_id.as_str(),
+            ];
+            if !args.confirm_account
+                || !args.confirm_resume
+                || !matches!(args.provider.as_str(), "codex" | "claude")
+                || args.account_id != "default"
+                || ids.iter().any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+                || uuid::Uuid::parse_str(&args.session_id).is_err()
+                || uuid::Uuid::parse_str(&args.client_mutation_id).is_err()
+            {
+                eprintln!("Exact resume requires canonical native/session mutation UUIDs, an official default account and explicit confirmations.");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value_with_deadline("agentHistory.resumeExact", &json!({
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "providerSessionId": args.session_id,
+                "profileId": args.profile_id,
+                "clientMutationId": args.client_mutation_id,
+                "confirmProviderAccount": true,
+                "confirmResume": true,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Exact Agent history Resume Tab");
                     0
                 }
                 Err(error) => print_error(error),

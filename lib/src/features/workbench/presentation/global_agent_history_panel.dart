@@ -3,6 +3,7 @@ import 'package:alera/src/features/workbench/application/workbench_providers.dar
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 /// A deliberate, local-only historical search surface. Never index while
 /// typing or automatically opt users into storing transcript text.
@@ -20,9 +21,11 @@ class _GlobalAgentHistoryPanelState
   final _project = TextEditingController();
   final _workspace = TextEditingController();
   final _account = TextEditingController();
+  final _resumeProfile = TextEditingController();
   bool _consented = false;
   bool _busy = false;
   String? _provider;
+  String? _armedResumeKey;
   String _feedback =
       'Search is off until you explicitly enable local indexing.';
   List<Map<String, Object?>> _hits = const [];
@@ -33,6 +36,7 @@ class _GlobalAgentHistoryPanelState
     _project.dispose();
     _workspace.dispose();
     _account.dispose();
+    _resumeProfile.dispose();
     super.dispose();
   }
 
@@ -58,6 +62,7 @@ class _GlobalAgentHistoryPanelState
     }
     setState(() {
       _busy = true;
+      _armedResumeKey = null;
       _feedback = 'Searching verified workspaces; no Agent will be started…';
     });
     try {
@@ -116,6 +121,7 @@ class _GlobalAgentHistoryPanelState
       setState(() {
         _hits = const [];
         _consented = false;
+        _armedResumeKey = null;
         _feedback = 'Local search index cleared. Native Claude/Codex files were not changed.';
       });
     } catch (_) {
@@ -123,6 +129,82 @@ class _GlobalAgentHistoryPanelState
       setState(
         () =>
             _feedback = 'Could not confirm cache deletion. Check Host status.',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resumeExact(Map<String, Object?> hit) async {
+    if (_busy || !_consented) return;
+    final source = hit['session'];
+    if (source is! Map) return;
+    String field(String key) => source[key]?.toString() ?? '';
+    final provider = field('provider');
+    final account = field('providerAccountId');
+    final project = field('projectId');
+    final workspace = field('workspaceId');
+    final nativeId = field('providerSessionId');
+    final profile = _resumeProfile.text.trim();
+    if (account != 'default' || !['claude', 'codex'].contains(provider)) {
+      setState(
+        () => _feedback =
+            'Other accounts remain preview-only until their CLI account '
+            'environment can be verified.',
+      );
+      return;
+    }
+    if (profile.isEmpty) {
+      setState(
+        () => _feedback = 'Enter the matching official Claude/Codex Profile ID from Settings.',
+      );
+      return;
+    }
+    final identity =
+        '$provider|$account|$project|$workspace|$nativeId|$profile';
+    if (_armedResumeKey != identity) {
+      setState(() {
+        _armedResumeKey = identity;
+        _feedback =
+            'Confirm the signed-in $provider CLI uses the default '
+            'account. Press Confirm exact Resume on the SAME result to create '
+            'one Agent Tab without replaying a previous prompt.';
+      });
+      return;
+    }
+    final host = ref.read(terminalHostClientProvider);
+    if (host is! TerminalHostAgentHistoryClient) return;
+    setState(() {
+      _armedResumeKey = null;
+      _busy = true;
+      _feedback = 'Rechecking the native source before exact Resume…';
+    });
+    try {
+      final reply = await (host as TerminalHostAgentHistoryClient)
+          .resumeExactAgentHistory(
+            provider: provider,
+            accountId: account,
+            projectId: project,
+            workspaceId: workspace,
+            providerSessionId: nativeId,
+            profileId: profile,
+            clientMutationId: const Uuid().v4(),
+          );
+      if (!mounted) return;
+      final tab = reply['tab'];
+      final tabId = tab is Map ? tab['id']?.toString() : null;
+      setState(
+        () => _feedback = tabId == null
+            ? 'Host reply did not confirm a Tab. Inspect Live Agents.'
+            : 'Exact Resume Tab $tabId created. Open it from Live Agents. '
+                  'Do not retry while the CLI login or PTY is connecting.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _feedback =
+            'Exact Resume failed or its acknowledgement was ambiguous. '
+            'Inspect Live Agents before retrying.',
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -196,6 +278,16 @@ class _GlobalAgentHistoryPanelState
             ),
           ],
         ),
+        TextField(
+          controller: _resumeProfile,
+          decoration: const InputDecoration(
+            labelText: 'Official Claude/Codex Profile ID (exact Resume)',
+            helperText:
+                'Profile from Settings · default account only · '
+                'the Host will reject custom wrappers and mismatched sources.',
+          ),
+          onChanged: (_) => setState(() => _armedResumeKey = null),
+        ),
         CheckboxListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
@@ -204,7 +296,10 @@ class _GlobalAgentHistoryPanelState
               ? null
               : (value) => setState(() {
                   _consented = value == true;
-                  if (!_consented) _hits = const [];
+                  if (!_consented) {
+                    _hits = const [];
+                    _armedResumeKey = null;
+                  }
                 }),
           title: const Text(
             'Allow local indexing of limited user-message previews',
@@ -253,6 +348,10 @@ class _GlobalAgentHistoryPanelState
                         : const <String, Object?>{};
                     String field(String key) => data[key]?.toString() ?? '';
                     final goal = field('goal');
+                    final resumeKey =
+                        "${field('provider')}|${field('providerAccountId')}|"
+                        "${field('projectId')}|${field('workspaceId')}|"
+                        "${field('providerSessionId')}|${_resumeProfile.text.trim()}";
                     return Container(
                       decoration: BoxDecoration(
                         color: AleraTokens.surface,
@@ -290,6 +389,21 @@ class _GlobalAgentHistoryPanelState
                             'Resume requires separately verified native identity',
                             style: muted,
                           ),
+                          if (field('providerAccountId') == 'default')
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                onPressed: _busy || !_consented
+                                    ? null
+                                    : () => _resumeExact(hit),
+                                icon: const Icon(Icons.history),
+                                label: Text(
+                                  _armedResumeKey == resumeKey
+                                      ? 'Confirm exact Resume'
+                                      : 'Resume exact Session…',
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     );
