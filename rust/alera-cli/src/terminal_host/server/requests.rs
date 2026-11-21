@@ -396,7 +396,7 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.recover_existing_worker(client_id, payload).await
             }
-            "write" => {
+            "write" | "agent.writeVerified" => {
                 self.require_auth(client_id)?;
                 Ok(json!({}))
             }

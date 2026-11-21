@@ -59,6 +59,30 @@ impl ServerActor {
         self.retry_backpressured_delivery_if_idle(session_id).await;
     }
 
+    /// Dedicated, fail-closed cross-workspace Agent RPC. Old Hosts reject this
+    /// request type instead of downgrading to an unsafe handle-only write.
+    pub(super) fn queue_verified_agent_input(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<bool> {
+        let valid_owner = ["expectedWorkspaceId", "expectedTabId"]
+            .into_iter()
+            .all(|field| {
+                payload
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+            });
+        if !valid_owner {
+            return Err(HostError::state(
+                "Guarded terminal write requires workspace and tab.",
+            ));
+        }
+        self.queue_terminal_input(client_id, request_id, payload)
+    }
+
     pub(super) fn queue_terminal_input(
         &mut self,
         client_id: u64,
@@ -66,6 +90,34 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<bool> {
         let session_id = self.require_session(payload)?;
+        // Global Agent control has no foreground terminal lease. Require the
+        // complete owner identity at the Host write boundary, not just a UI
+        // preflight: a moved tab/reused handle must never receive the prompt.
+        // Legacy terminal clients remain unchanged when neither field exists.
+        let expected_workspace = payload.get("expectedWorkspaceId").filter(|v| !v.is_null());
+        let expected_tab = payload.get("expectedTabId").filter(|v| !v.is_null());
+        if expected_workspace.is_some() || expected_tab.is_some() {
+            let workspace = expected_workspace
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    HostError::state("Guarded terminal write requires workspace and tab.")
+                })?;
+            let tab = expected_tab
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .ok_or_else(|| {
+                    HostError::state("Guarded terminal write requires workspace and tab.")
+                })?;
+            let identity_matches = self.sessions.get(&session_id).is_some_and(|session| {
+                session.running() && session.workspace_id == workspace && session.tab_id == tab
+            });
+            if !identity_matches {
+                return Err(HostError::state(
+                    "Guarded terminal write rejected: Session, Workspace or Tab changed.",
+                ));
+            }
+        }
         let mut bytes = decode_bytes(payload.get("dataBase64"))?;
         let deferred_enter = payload
             .get("deferredEnter")

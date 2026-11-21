@@ -60,6 +60,7 @@ final class SocketTerminalHostClient._(
     implements
         TerminalHostClient,
         TerminalHostViewLeaseClient,
+        TerminalHostVerifiedAgentInputClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -265,6 +266,41 @@ final class SocketTerminalHostClient._(
       'dataBase64': encodeTerminalHostBytes(bytes),
       if (deferredEnter) 'deferredEnter': true,
     });
+  }
+
+  @override
+  Future<void> submitVerifiedAgentPrompt({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String prompt,
+  }) async {
+    final bytes = utf8.encode(prompt);
+    if (sessionId.trim().isEmpty ||
+        workspaceId.trim().isEmpty ||
+        tabId.trim().isEmpty ||
+        prompt.trim().isEmpty ||
+        bytes.length > 4096 ||
+        prompt.contains('\u0000')) {
+      throw ArgumentError(
+        'Agent prompt or Host identity is invalid (4 KiB maximum).',
+      );
+    }
+    // Never auto-start a Host when interacting with an existing global Agent.
+    // Host rechecks the entire identity immediately before queueing the write.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      'agent.writeVerified',
+      <String, Object?>{
+        'sessionId': sessionId,
+        'expectedWorkspaceId': workspaceId,
+        'expectedTabId': tabId,
+        'dataBase64': encodeTerminalHostBytes(bytes),
+        'deferredEnter': true,
+        'bracketedPaste': true,
+      },
+    );
   }
 
   @override

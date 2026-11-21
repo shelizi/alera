@@ -725,6 +725,55 @@ async fn write_reports_missing_exited_and_writerless_sessions_and_empty_writes_n
     assert_eq!(response["ok"], true);
     assert_eq!(response["payload"], json!({}));
 
+    // Global dashboard write must match BOTH current Host identities.
+    // A missing owner, stale tab or moved workspace is rejected before PTY I/O.
+    for (id, payload) in [
+        (
+            11,
+            json!({"sessionId": "s1", "dataBase64": "aGk=",
+                    "expectedWorkspaceId": "workspace"}),
+        ),
+        (
+            12,
+            json!({"sessionId": "s1", "dataBase64": "aGk=",
+                    "expectedWorkspaceId": "other", "expectedTabId": "tab-s1"}),
+        ),
+        (
+            13,
+            json!({"sessionId": "s1", "dataBase64": "aGk=",
+                    "expectedWorkspaceId": "workspace", "expectedTabId": "tab-other"}),
+        ),
+    ] {
+        let response = request(
+            &mut actor,
+            1,
+            id,
+            "agent.writeVerified",
+            payload,
+            &mut receiver,
+            &mut inbox_receiver,
+        )
+        .await;
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("Guarded terminal write"));
+    }
+    let response = request(
+        &mut actor,
+        1,
+        14,
+        "agent.writeVerified",
+        json!({"sessionId": "s1", "dataBase64": "aGk=",
+               "expectedWorkspaceId": "workspace", "expectedTabId": "tab-s1"}),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    // Matching identity gets through to the normal (writerless) PTY rejection.
+    assert_eq!(response["error"], "terminal input writer is unavailable");
+
     // The stub is running but has no PTY writer, matching the post-exit drain
     // window on Windows: the write fails instead of parking.
     let response = request(

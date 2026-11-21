@@ -70,3 +70,35 @@ List<GlobalAgentLiveRow> projectGlobalAgentLiveRows(
   rows.sort((a, b) => b.status.updatedAt.compareTo(a.status.updatedAt));
   return rows;
 }
+
+/// Preflight for Dashboard commands. The Host still validates the identity
+/// atomically immediately before PTY input, preventing transfer races.
+bool globalAgentTargetIsCurrent({
+  required WorkbenchState workbench,
+  required Map<String, AgentStatusEntry> statuses,
+  required String sessionId,
+  required String workspaceId,
+  required String tabId,
+}) {
+  final entry = statuses[sessionId];
+  if (entry == null ||
+      entry.workspaceId != workspaceId ||
+      entry.tabId != tabId ||
+      entry.terminalSessionId != sessionId) {
+    return false;
+  }
+  final registered = workbench.workspacesByProject.values.any(
+    (workspaces) => workspaces.any(
+      (workspace) => workspace.id == workspaceId && workspace.isActive,
+    ),
+  );
+  return registered &&
+      workbench
+          .tabsFor(workspaceId)
+          .any(
+            (tab) =>
+                tab.kind == WorkspaceTabKind.terminal &&
+                tab.id == tabId &&
+                tab.terminalSessionId == sessionId,
+          );
+}

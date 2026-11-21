@@ -50,8 +50,8 @@ Non-goals for v1: automatic cross-provider native transcript import, silent mult
 - [ ] D01 Global dashboard for every project/worktree in Classic and GPUI.
 - [ ] D02 Live working/waiting/blocked/complete/offline with stale guard.
 - [ ] D03 Task-level goal; [ ] D04 latest summary; [ ] D05 bounded timeline.
-- [ ] D06 Direct targeted input with result/ack; [ ] D07 queue/steer with capability guard.
-- [ ] D08 Launch Agent from explicit workspace/profile.
+- [ ] D06 Direct targeted input with result/ack (implementation wired in both UIs; GUI smoke pending); [ ] D07 queue/steer with capability guard.
+- [ ] D08 Launch Agent from explicit workspace/profile (Classic explicit registered worktree and provider, GPUI existing current-worktree launcher; cross-project native picker pending).
 - [ ] D09 Hide, interrupt, end, force-stop semantics and confirmation; [ ] D10 return to original Terminal.
 - [ ] D11 Needs You pending attention queue; [ ] D12 native exact Claude/Codex resume.
 
@@ -85,7 +85,7 @@ Non-goals for v1: automatic cross-provider native transcript import, silent mult
 | 0. Workspace isolation and tracking | Clean idle worktree, feature branch and persisted plan | DONE | Worktree inspected clean; independent branch from main |
 | 1. Search model and deterministic ranker | Bounded, cross-project session projection, explainable exact/token matching, resume classification, unit tests | DONE | `rust/alera-core/src/global_agent_search.rs`; 9/9 Rust tests passed |
 | 2. Existing Host global inventory API and both UI entries | Classic and GPUI can open global list, inspect goal and focus exact live session | IN PROGRESS | Classic dialog and sidebar/welcome entries, 2/2 projection tests; GPUI global panel and cross-workspace focus, cargo check passed; full GUI smoke pending |
-| 3. Targeted commands and creation/lifecycle | Permission-checked routing, no premature PTY termination | TODO | |
+| 3. Targeted commands and creation/lifecycle | Permission-checked routing, no premature PTY termination | IN PROGRESS | Dedicated fail-closed `agent.writeVerified` RPC, CLI and both UIs; Classic explicit worktree creation; GPUI current-worktree launcher; close/terminate and GUI smoke pending |
 | 4. Claude/Codex historical adapters and FTS index | Index real provider records, privacy/retention, dedupe and incremental updates | TODO | |
 | 5. Exact resume from search result | Correct provider UUID, account, registered checkout and safe fallback | TODO | |
 | 6. Local semantic reranker and topic chunks | Natural-language retrieval plus code/error exact-match priority | TODO | |
@@ -97,7 +97,9 @@ Non-goals for v1: automatic cross-provider native transcript import, silent mult
 - 2026-11-21: implemented `rust/alera-core/src/global_agent_search.rs`: bounded exact/token matching, filters, typed account+profile-safe identity, live-over-history deduplication, and guarded exact Claude/Codex resume classification. `cargo test --manifest-path rust/Cargo.toml -p alera-core --lib global_agent_search` passed 9/9.
 - 2026-11-21: implemented Classic `global_agent_live_projection.dart` and `global_agent_dashboard_dialog.dart`, accessible from expanded/collapsed sidebar and Welcome quick start. Projects and worktrees are enumerated globally; verified workspace/tab/terminal-session matching, search, goal/progress and focus. `flutter test --no-pub test/unit/global_agent_dashboard_projection_test.dart` passed 2/2.
 - 2026-11-21: implemented Native GPUI `native_global_agents_ui.rs` in the existing right Agent Context view. Live Host inventory all workspaces, compact goal/progress cards and revalidated cross-workspace focus reuse the existing draft-safe Agent notice navigation. `cargo check --manifest-path desktop_gpui/Cargo.toml --bin alera-gpui-desktop` passed (2 preexisting dead-code warnings).
-- 2026-11-21: Classic full-widget analysis is not validated: `dart analyze` exceeded 180 seconds. An initial UI-dependent Flutter test was blocked on existing unrelated `TerminalTheme` and `GhosttyTerminalShellLaunch` compile issues; extracting the pure projection allowed its 2 tests to pass. Do not mark full Classic GUI compile/desktop smoke complete.
+- 2026-11-21: Classic full-widget analysis is not validated: `dart analyze` exceeded 180 seconds. An initial UI-dependent Flutter test was blocked on existing unrelated `TerminalTheme` and `GhosttyTerminalShellLaunch` compile issues; extracting the pure projection allowed its tests to pass. Do not mark full Classic GUI compile/desktop smoke complete.
+- 2026-11-21 continuation: added fail-closed `agent.writeVerified` RPC and CLI `--expected-workspace-id` / `--expected-tab-id` + `--submit` to route instruction bytes on stdin to the existing PTY only when Host verifies live Session/Workspace/Tab atomically. Older Host rejects the new RPC; missing or mismatched IDs are never downgraded to ordinary write. Existing Terminal `write` remains unchanged. Classic Global Dashboard supports selecting a live Agent, entering a bounded prompt, receiving Host ACK and creating Codex/Claude in an explicitly selected registered worktree. GPUI supports selecting a live Agent and guarded prompting inside its global panel, with current-worktree entry to existing launcher. No auto-retry on ambiguous write ACK.
+- 2026-11-21 continuation verification: Classic pure projection 3/3 passed (`flutter test --no-pub test/unit/global_agent_dashboard_projection_test.dart`); GPUI `cargo check --manifest-path desktop_gpui/Cargo.toml --bin alera-gpui-desktop` passed (two existing dead-code warnings); GPUI terminal CLI command test 1/1 passed; Host `write_reports_missing_exited_and_writerless_sessions_and_empty_writes_noop` 1/1 passed using dedicated RPC; CLI guarded-flag parser 1/1 passed. Host route policy 1/1 passed (`cargo test --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_and_agent_skill_routes_are_typed_deferred_jobs`). Full Classic GUI smoke, true cross-project Native launch, lifecycle controls, history FTS and embeddings remain pending.
 
 ## Test plan
 

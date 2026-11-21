@@ -89,6 +89,17 @@ abstract interface class TerminalHostClient {
   void dispose();
 }
 
+/// Opt-in guarded input for the global Agent control center.
+/// Ordinary TerminalHostClient.write remains backward-compatible.
+abstract interface class TerminalHostVerifiedAgentInputClient {
+  Future<void> submitVerifiedAgentPrompt({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String prompt,
+  });
+}
+
 /// Narrow opt-in view identity port for production hosts. Legacy fake and
 /// older clients keep their original TerminalHostClient methods unchanged.
 abstract interface class TerminalHostViewLeaseClient {

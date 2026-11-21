@@ -1058,6 +1058,10 @@ struct Workbench {
     /// confirmation; never attach to whichever tab happens to be focused.
     agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
+    global_agent_prompt_input: Entity<QuickOpenInput>,
+    global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
+    global_agent_submit_busy: bool,
+    global_agent_submit_status: String,
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
@@ -18053,6 +18057,12 @@ fn main() {
                             agent_pending_tab: None,
                             agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
+                            global_agent_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            global_agent_target: None,
+                            global_agent_submit_busy: false,
+                            global_agent_submit_status: String::new(),
                             terminals: {
                                 let mut dock = TerminalDock::for_workspace(0);
                                 dock.set_scrollback_lines(initial_native_scrollback_lines);

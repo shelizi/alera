@@ -64,6 +64,61 @@ fn terminal_stream_is_explicit_no_start_native_ipc_only() {
 }
 
 #[test]
+fn global_agent_guarded_write_requires_both_host_owner_ids() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "write",
+        "--handle",
+        "session-1",
+        "--stdin",
+        "--submit",
+        "--expected-workspace-id",
+        "workspace-1",
+        "--expected-tab-id",
+        "tab-1",
+    ])
+    .expect("guarded Agent write");
+    match parsed.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::Write(args),
+            ..
+        }) => {
+            assert_eq!(args.expected_workspace_id.as_deref(), Some("workspace-1"));
+            assert_eq!(args.expected_tab_id.as_deref(), Some("tab-1"));
+            assert!(args.submit);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "write",
+        "--handle",
+        "session-1",
+        "--stdin",
+        "--expected-workspace-id",
+        "workspace-1",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "write",
+        "--handle",
+        "session-1",
+        "--stdin",
+        "--expected-tab-id",
+        "tab-1",
+    ])
+    .is_err());
+}
+
+#[test]
 fn terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list() {
     let explicit = Cli::try_parse_from([
         "alera",

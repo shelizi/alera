@@ -210,6 +210,11 @@ pub struct TerminalReadArgs {
 pub struct TerminalWriteArgs {
     #[arg(long)]
     pub handle: String,
+    /// For global Agent steering, enforce both current Host owners atomically.
+    #[arg(long = "expected-workspace-id", requires = "expected_tab_id")]
+    pub expected_workspace_id: Option<String>,
+    #[arg(long = "expected-tab-id", requires = "expected_workspace_id")]
+    pub expected_tab_id: Option<String>,
     #[arg(long, conflicts_with_all = ["file", "stdin"])]
     pub text: Option<String>,
     #[arg(long, conflicts_with_all = ["text", "stdin"])]

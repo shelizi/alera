@@ -5,6 +5,99 @@
 //! reuses the existing verified Agent notice / draft-safe workspace switch.
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct GlobalAgentPromptTarget {
+    handle: String,
+    workspace_id: String,
+    tab_id: String,
+    agent_type: String,
+}
+
+impl GlobalAgentPromptTarget {
+    fn is_live(&self, sessions: &[alera_gpui_desktop::terminal::TerminalSession]) -> bool {
+        sessions.iter().any(|session| {
+            session.running
+                && session.handle == self.handle
+                && session.workspace_id == self.workspace_id
+                && session.tab_id == self.tab_id
+                && session.agent_type.as_deref() == Some(self.agent_type.as_str())
+        })
+    }
+}
+
+impl Workbench {
+    fn submit_global_agent_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.global_agent_submit_busy || self.terminals.session_list_is_stale() {
+            self.global_agent_submit_status =
+                "Host inventory is stale or another send is in progress".into();
+            cx.notify();
+            return;
+        }
+        let Some(target) = self.global_agent_target.clone() else {
+            self.global_agent_submit_status = "Choose a verified Agent row first".into();
+            cx.notify();
+            return;
+        };
+        if !target.is_live(&self.terminals.sessions) {
+            self.global_agent_submit_status = "Agent identity changed. Select it again".into();
+            self.global_agent_target = None;
+            cx.notify();
+            return;
+        }
+        let prompt = self.global_agent_prompt_input.read(cx).query().to_owned();
+        if prompt.trim().is_empty() || prompt.len() > 4096 || prompt.contains('\0') {
+            self.global_agent_submit_status = "Prompt must be nonempty and at most 4 KiB".into();
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_submit_status = "Existing Runtime Host CLI is unavailable".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_submit_busy = true;
+        self.global_agent_submit_status = "Sending to verified Host Agent…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let sent_target = target.clone();
+            let sent_prompt = prompt.clone();
+            let result = cx
+                .background_spawn(async move {
+                    bridge.submit_verified_agent_prompt(
+                        &target.handle,
+                        &target.workspace_id,
+                        &target.tab_id,
+                        &prompt,
+                    )
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.global_agent_submit_busy = false;
+                if view.global_agent_target.as_ref() != Some(&sent_target) {
+                    cx.notify();
+                    return;
+                }
+                view.global_agent_submit_status = if result.is_ok() {
+                    // Only clear the input if it wasn't edited during the send.
+                    view.global_agent_prompt_input.update(cx, |input, cx| {
+                        if input.query() == sent_prompt {
+                            input.clear(cx);
+                        }
+                    });
+                    "Host acknowledged Agent input".into()
+                } else {
+                    // The Host might have enqueued before a response was lost.
+                    // Never retry automatically.
+                    "Delivery unconfirmed. Refresh Host status before retrying".into()
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
 pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
     let fresh = !view.terminals.session_list_is_stale();
     let sessions = view
@@ -18,7 +111,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
 
     let mut list = div()
         .id("global-live-agent-sessions")
-        .h(px(262.0))
+        .h(px(340.0))
         .flex_shrink_0()
         .overflow_y_scroll()
         .px_3()
@@ -39,6 +132,51 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 .text_xs()
                 .text_color(rgb(MUTED))
                 .child("Global Host inventory, all registered workspaces"),
+        )
+        .child(div().text_xs().text_color(rgb(MUTED)).child(
+            view.global_agent_target.as_ref().map_or_else(
+                || "Select an Agent's Steer button to target its live session".to_owned(),
+                |target| format!("Target: {} / {}", target.workspace_id, target.tab_id),
+            ),
+        ))
+        .child(
+            div()
+                .id("global-agent-launch-current-workspace")
+                .cursor_pointer()
+                .text_xs()
+                .child("+ Agent · current worktree launcher")
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.runtime_details_open = true;
+                    view.agent_status =
+                        "Select a Host Agent profile in the launcher for this worktree".into();
+                    cx.notify();
+                })),
+        )
+        .child(view.global_agent_prompt_input.clone())
+        .child(
+            div()
+                .id("global-agent-send-instruction")
+                .cursor_pointer()
+                .text_xs()
+                .text_color(rgb(if view.global_agent_submit_busy {
+                    MUTED
+                } else {
+                    TEXT
+                }))
+                .child(if view.global_agent_submit_busy {
+                    "Sending…"
+                } else {
+                    "Send instruction to selected Agent"
+                })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.submit_global_agent_prompt(cx);
+                })),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(view.global_agent_submit_status.clone()),
         );
 
     if !fresh {
@@ -93,6 +231,10 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         let workspace_id = session.workspace_id.clone();
         let tab_id = session.tab_id.clone();
         let agent_type = agent.clone();
+        let steer_id = session_id.clone();
+        let steer_workspace = workspace_id.clone();
+        let steer_tab = tab_id.clone();
+        let steer_agent = agent_type.clone();
 
         list = list.child(
             div()
@@ -128,46 +270,81 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                             "Waiting for verified Agent state"
                         }),
                 )
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    // Read fresh Host state again; never navigate from a stale
-                    // copied row or a recycled handle.
-                    if view.terminals.session_list_is_stale() {
-                        view.terminals.status =
-                            "Host Agent inventory is stale; refresh before opening".into();
-                        cx.notify();
-                        return;
-                    }
-                    let current = view.terminals.sessions.iter().find(|candidate| {
-                        candidate.running
-                            && candidate.handle == session_id
-                            && candidate.workspace_id == workspace_id
-                            && candidate.tab_id == tab_id
-                            && candidate.agent_type.as_deref() == Some(agent_type.as_str())
-                    });
-                    if let Some(current) = current {
-                        if let Some(current_state) = current.agent_state {
-                            view.activate_agent_notice(
-                                AgentNotice {
-                                    session_id: session_id.clone(),
-                                    workspace_id: workspace_id.clone(),
-                                    tab_id: tab_id.clone(),
-                                    agent_type: agent_type.clone(),
-                                    state: current_state,
-                                },
-                                window,
-                                cx,
-                            );
-                        } else {
-                            view.terminals.status =
-                                "Agent state is unverified; refresh Host status".into();
+                .child(
+                    div()
+                        .id(("global-agent-select-steer", index))
+                        .cursor_pointer()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Steer · select target")
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            let target = GlobalAgentPromptTarget {
+                                handle: steer_id.clone(),
+                                workspace_id: steer_workspace.clone(),
+                                tab_id: steer_tab.clone(),
+                                agent_type: steer_agent.clone(),
+                            };
+                            if view.terminals.session_list_is_stale()
+                                || !target.is_live(&view.terminals.sessions)
+                            {
+                                view.global_agent_target = None;
+                                view.global_agent_submit_status =
+                                    "Agent identity is stale; refresh Host inventory".into();
+                            } else {
+                                view.global_agent_target = Some(target);
+                                view.global_agent_submit_status =
+                                    "Target selected; type an instruction above".into();
+                            }
                             cx.notify();
-                        }
-                    } else {
-                        view.terminals.status =
-                            "Global Agent selection no longer matches the Host".into();
-                        cx.notify();
-                    }
-                })),
+                        })),
+                )
+                .child(
+                    div()
+                        .id(("global-agent-open", index))
+                        .cursor_pointer()
+                        .text_xs()
+                        .child("Open original Agent tab")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            // Read fresh Host state again; never navigate from a stale
+                            // copied row or a recycled handle.
+                            if view.terminals.session_list_is_stale() {
+                                view.terminals.status =
+                                    "Host Agent inventory is stale; refresh before opening".into();
+                                cx.notify();
+                                return;
+                            }
+                            let current = view.terminals.sessions.iter().find(|candidate| {
+                                candidate.running
+                                    && candidate.handle == session_id
+                                    && candidate.workspace_id == workspace_id
+                                    && candidate.tab_id == tab_id
+                                    && candidate.agent_type.as_deref() == Some(agent_type.as_str())
+                            });
+                            if let Some(current) = current {
+                                if let Some(current_state) = current.agent_state {
+                                    view.activate_agent_notice(
+                                        AgentNotice {
+                                            session_id: session_id.clone(),
+                                            workspace_id: workspace_id.clone(),
+                                            tab_id: tab_id.clone(),
+                                            agent_type: agent_type.clone(),
+                                            state: current_state,
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    view.terminals.status =
+                                        "Agent state is unverified; refresh Host status".into();
+                                    cx.notify();
+                                }
+                            } else {
+                                view.terminals.status =
+                                    "Global Agent selection no longer matches the Host".into();
+                                cx.notify();
+                            }
+                        })),
+                ),
         );
     }
     list.into_any_element()

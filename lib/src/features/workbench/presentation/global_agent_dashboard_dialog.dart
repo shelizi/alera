@@ -1,7 +1,12 @@
+import 'dart:convert';
+
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/global_agent_live_projection.dart';
+import 'package:alera/src/features/workbench/presentation/global_agent_launch_dialog.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,6 +29,84 @@ class const GlobalAgentDashboardDialog({super.key})
 class _GlobalAgentDashboardDialogState
     extends ConsumerState<GlobalAgentDashboardDialog> {
   String _query = '';
+  final TextEditingController _instruction = TextEditingController();
+  ({String sessionId, String workspaceId, String tabId})? _target;
+  bool _sending = false;
+  String? _sendFeedback;
+
+  @override
+  void dispose() {
+    _instruction.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitToAgent() async {
+    final target = _target;
+    if (target == null || _sending) return;
+    final instruction = _instruction.text;
+    final bytes = utf8.encode(instruction).length;
+    if (instruction.trim().isEmpty ||
+        bytes > 4096 ||
+        instruction.contains('\u0000')) {
+      setState(() => _sendFeedback = 'Enter a prompt up to 4 KiB.');
+      return;
+    }
+    final stillCurrent = globalAgentTargetIsCurrent(
+      workbench: ref.read(workbenchControllerProvider),
+      statuses: ref.read(agentStatusControllerProvider),
+      sessionId: target.sessionId,
+      workspaceId: target.workspaceId,
+      tabId: target.tabId,
+    );
+    if (!stillCurrent) {
+      setState(() => _sendFeedback = 'Agent target changed. Select it again.');
+      return;
+    }
+    final host = ref.read(terminalHostClientProvider);
+    if (host is! TerminalHostVerifiedAgentInputClient) {
+      setState(
+        () => _sendFeedback =
+            'Current Host does not support guarded Agent input.',
+      );
+      return;
+    }
+    setState(() {
+      _sending = true;
+      _sendFeedback = 'Sending to the verified Host Session…';
+    });
+    try {
+      await host.submitVerifiedAgentPrompt(
+        sessionId: target.sessionId,
+        workspaceId: target.workspaceId,
+        tabId: target.tabId,
+        prompt: instruction,
+      );
+      if (!mounted) return;
+      _instruction.clear();
+      setState(() => _sendFeedback = 'Host acknowledged Agent input.');
+    } catch (_) {
+      if (!mounted) return;
+      // Do not retry automatically: a disconnect after enqueue could have
+      // delivered the prompt despite a missing acknowledgement.
+      setState(
+        () => _sendFeedback =
+            'Could not confirm delivery. Refresh status before retrying.',
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _launch() async {
+    final created = await showDialog<String>(
+      context: context,
+      builder: (_) => const GlobalAgentLaunchDialog(),
+    );
+    if (!mounted || created == null) return;
+    setState(
+      () => _sendFeedback = 'Agent tab created. New sessions appear after Host/Hook confirmation.',
+    );
+  }
 
   Future<void> _focus(GlobalAgentLiveRow row) async {
     final state = ref.read(workbenchControllerProvider);
@@ -77,6 +160,11 @@ class _GlobalAgentDashboardDialogState
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
+                  TextButton.icon(
+                    onPressed: _launch,
+                    icon: const Icon(Icons.add),
+                    label: const Text('New Agent'),
+                  ),
                   IconButton(
                     tooltip: 'Close',
                     onPressed: () => Navigator.of(context).pop(),
@@ -106,6 +194,43 @@ class _GlobalAgentDashboardDialogState
                 style: muted,
               ),
               const SizedBox(height: AleraTokens.space12),
+              if (_target != null) ...[
+                Text(
+                  'Target: ${_target!.workspaceId} / ${_target!.tabId}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: muted,
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _instruction,
+                        enabled: !_sending,
+                        maxLines: 2,
+                        minLines: 1,
+                        maxLength: 4000,
+                        decoration: const InputDecoration(
+                          hintText: 'Send an instruction to this Agent without opening its Tab',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _sending ? null : _submitToAgent,
+                      child: const Text('Send'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (_sendFeedback != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(_sendFeedback!, style: muted),
+                ),
               Expanded(
                 child: rows.isEmpty
                     ? Center(
@@ -173,6 +298,21 @@ class _GlobalAgentDashboardDialogState
                                       style: muted,
                                     ),
                                   ],
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton.icon(
+                                      onPressed: () => setState(() {
+                                        _target = (
+                                          sessionId: row.tab.terminalSessionId,
+                                          workspaceId: row.status.workspaceId,
+                                          tabId: row.tab.id,
+                                        );
+                                        _sendFeedback = null;
+                                      }),
+                                      icon: const Icon(Icons.edit_note),
+                                      label: const Text('Steer'),
+                                    ),
+                                  ),
                                   Align(
                                     alignment: Alignment.centerRight,
                                     child: TextButton.icon(

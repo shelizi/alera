@@ -379,9 +379,15 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             };
             match client
                 .request_value(
-                    "write",
+                    if args.expected_workspace_id.is_some() {
+                        "agent.writeVerified"
+                    } else {
+                        "write"
+                    },
                     &json!({
                         "sessionId": args.handle,
+                        "expectedWorkspaceId": args.expected_workspace_id,
+                        "expectedTabId": args.expected_tab_id,
                         "dataBase64": STANDARD.encode(bytes),
                         "deferredEnter": args.enter || args.submit,
                         "bracketedPaste": args.submit,

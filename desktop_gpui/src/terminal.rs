@@ -102,10 +102,7 @@ impl AgentContextOverview {
                 }
                 let text = Self::text(item.get("text"), 260);
                 let at = item.get("at")?.as_str()?;
-                if text.is_empty()
-                    || at.len() > 64
-                    || agent_host_utc_time_key(at).is_none()
-                {
+                if text.is_empty() || at.len() > 64 || agent_host_utc_time_key(at).is_none() {
                     return None;
                 }
                 Some(AgentContextMilestone {
@@ -386,6 +383,20 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
+    /// Full Host identity validation is performed inside the write request.
+    /// Never resolve a global dashboard target by handle alone.
+    pub fn submit_verified_agent_prompt(
+        &self,
+        handle: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        prompt: &str,
+    ) -> io::Result<()> {
+        let args = verified_agent_prompt_verb(handle, workspace_id, tab_id, prompt)?;
+        self.terminal_json_with_input(&args, prompt.as_bytes())?;
+        Ok(())
+    }
+
     /// List workspaces already registered with the running Host. Uses
     /// --no-start only; a missing Host is an error, never an implicit start.
     pub fn list_registered_workspaces(&self) -> io::Result<Vec<RegisteredHostWorkspace>> {
@@ -455,6 +466,27 @@ pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<
 
 /// List workspaces registered with the running Host. No arguments beyond the
 /// verb itself are permitted by the bridge allowlist.
+pub fn verified_agent_prompt_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    text: &str,
+) -> io::Result<Vec<OsString>> {
+    if !valid_handle(workspace_id) || !valid_handle(tab_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid guarded Agent workspace or tab identity",
+        ));
+    }
+    let mut args = write_terminal_verb(handle, text, false)?;
+    args.extend([
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+        OsString::from("--submit"),
+    ]);
+    Ok(args)
+}
+
 pub fn workspaces_verb() -> Vec<OsString> {
     vec![OsString::from("workspaces")]
 }
@@ -872,7 +904,8 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             return Err(invalid("Duplicate terminal session handle"));
         }
         let agent_context = if running && agent_type.is_some() {
-            item.get("contextOverview").and_then(AgentContextOverview::parse)
+            item.get("contextOverview")
+                .and_then(AgentContextOverview::parse)
         } else {
             None
         };
@@ -3350,6 +3383,21 @@ mod tests {
             assert!(write_terminal_verb("term-1", text, true).is_err());
         }
         assert!(write_terminal_verb("term-1", &"a".repeat(4097), true).is_err());
+
+        let guarded =
+            verified_agent_prompt_verb("term-1", "workspace-1", "tab-1", "修正 Windows 注音")
+                .unwrap();
+        assert_eq!(guarded[0], "write");
+        assert!(guarded.iter().any(|v| v == "--submit"));
+        assert!(guarded
+            .iter()
+            .any(|v| v == "--expected-workspace-id=workspace-1"));
+        assert!(guarded.iter().any(|v| v == "--expected-tab-id=tab-1"));
+        assert!(!guarded.iter().any(|v| v == "修正 Windows 注音"));
+        let routed = terminal_cli_arguments(Path::new("C:/runtime"), &guarded);
+        assert!(routed.iter().any(|v| v == "--no-start"));
+        assert!(verified_agent_prompt_verb("term-1", "", "tab-1", "prompt").is_err());
+        assert!(verified_agent_prompt_verb("term-1", "ws", "../tab", "prompt").is_err());
     }
 
     #[test]

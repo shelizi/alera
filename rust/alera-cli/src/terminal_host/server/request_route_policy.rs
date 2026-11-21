@@ -88,6 +88,7 @@ pub(super) enum WorkspaceDeferredOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TerminalDeferredOperation {
     Write,
+    WriteVerified,
     WriteObserved,
     PulseConfigure,
 }
@@ -431,6 +432,11 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         )),
         "write" => mobile_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::Write,
+        )),
+        // A dedicated RPC keeps old Hosts fail-closed: they do not know this
+        // verb and therefore cannot silently ignore owner identity fields.
+        "agent.writeVerified" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::WriteVerified,
         )),
         "terminal.writeObserved" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::WriteObserved,
@@ -1039,6 +1045,16 @@ mod tests {
         assert_eq!(
             write.deferred_job,
             Some(DeferredJobRoute::Terminal(TerminalDeferredOperation::Write))
+        );
+
+        let verified = request_route_policy("agent.writeVerified");
+        assert!(!verified.mobile_allowed);
+        assert_eq!(verified.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            verified.deferred_job,
+            Some(DeferredJobRoute::Terminal(
+                TerminalDeferredOperation::WriteVerified
+            ))
         );
 
         let pulse = request_route_policy("terminal.pulse.configure");

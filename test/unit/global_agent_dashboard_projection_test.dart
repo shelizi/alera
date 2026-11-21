@@ -98,4 +98,47 @@ void main() {
     );
     expect(projectGlobalAgentLiveRows(state, const {}), isEmpty);
   });
+
+  test(
+    'guarded dashboard input requires current registered workspace and tab',
+    () {
+      final current = WorkbenchState(
+        projects: <Project>[project('alera')],
+        workspacesByProject: <String, List<Workspace>>{
+          'alera': <Workspace>[workspace('worktree', 'alera')],
+        },
+        tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+          'worktree': <WorkspaceTabRecord>[tab('agent', 'worktree')],
+        },
+      );
+      final statuses = <String, AgentStatusEntry>{
+        'session-agent': status('agent', 'worktree'),
+      };
+      bool permitted(
+        WorkbenchState state, {
+        String workspaceId = 'worktree',
+        String tabId = 'agent',
+        String sessionId = 'session-agent',
+      }) => globalAgentTargetIsCurrent(
+        workbench: state,
+        statuses: statuses,
+        sessionId: sessionId,
+        workspaceId: workspaceId,
+        tabId: tabId,
+      );
+      expect(permitted(current), isTrue);
+      expect(permitted(current, workspaceId: 'foreign'), isFalse);
+      expect(permitted(current, tabId: 'recycled-tab'), isFalse);
+      expect(permitted(current, sessionId: 'other-session'), isFalse);
+      expect(
+        permitted(
+          WorkbenchState(
+            projects: <Project>[project('alera')],
+            tabsByWorkspace: current.tabsByWorkspace,
+          ),
+        ),
+        isFalse,
+      );
+    },
+  );
 }
