@@ -812,6 +812,192 @@ async fn write_reports_missing_exited_and_writerless_sessions_and_empty_writes_n
 }
 
 #[tokio::test]
+async fn global_agent_lifecycle_rejects_wrong_owner_plain_terminal_and_moved_pty() {
+    use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_string(), Session::driver_test_stub("s1", 120, 40))]),
+    )
+    .await;
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+    let expected = json!({
+        "sessionId": "s1", "expectedWorkspaceId": "workspace", "expectedTabId": "tab-s1"
+    });
+
+    // A plain Terminal must never be reclassified as an Agent by the UI.
+    for verb in ["agent.interruptVerified", "agent.terminateVerified"] {
+        let response = request(
+            &mut actor,
+            1,
+            if verb.contains("interrupt") { 11 } else { 12 },
+            verb,
+            expected.clone(),
+            &mut receiver,
+            &mut inbox_receiver,
+        )
+        .await;
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("Agent Hook identity"));
+        assert!(actor.sessions.contains_key("s1"));
+    }
+    actor
+        .agent_presence
+        .update("s1", "codex".into(), AgentPresenceState::Working);
+    for (id, payload) in [
+        (
+            13,
+            json!({"sessionId":"s1", "expectedWorkspaceId":"workspace"}),
+        ),
+        (
+            14,
+            json!({"sessionId":"s1", "expectedWorkspaceId":"other", "expectedTabId":"tab-s1"}),
+        ),
+        (
+            15,
+            json!({"sessionId":"s1", "expectedWorkspaceId":"workspace", "expectedTabId":"recycled-tab"}),
+        ),
+    ] {
+        let response = request(
+            &mut actor,
+            1,
+            id,
+            "agent.terminateVerified",
+            payload,
+            &mut receiver,
+            &mut inbox_receiver,
+        )
+        .await;
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("Global Agent control"));
+        assert!(actor.sessions.contains_key("s1"));
+    }
+    // Correct Agent identity reaches PTY write (this test stub has no writer).
+    let response = request(
+        &mut actor,
+        1,
+        16,
+        "agent.interruptVerified",
+        expected.clone(),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"], "terminal input writer is unavailable");
+    assert!(actor.sessions.contains_key("s1"));
+
+    // Moved/ABA Tab must be controlled only from its original view lease.
+    actor
+        .sessions
+        .get_mut("s1")
+        .unwrap()
+        .moved_workspace_fence
+        .insert("workspace".into());
+    for (id, verb) in [
+        (17, "agent.interruptVerified"),
+        (18, "agent.terminateVerified"),
+    ] {
+        let response = request(
+            &mut actor,
+            1,
+            id,
+            verb,
+            expected.clone(),
+            &mut receiver,
+            &mut inbox_receiver,
+        )
+        .await;
+        assert_eq!(response["ok"], false);
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("Transferred Agent"));
+        assert!(actor.sessions.contains_key("s1"));
+    }
+}
+
+#[tokio::test]
+async fn global_agent_terminate_refuses_other_viewers_then_removes_only_exact_session() {
+    use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 80, 24);
+    session.clients.insert(2);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    actor
+        .runtime_store
+        .upsert_workspace_tab(terminal_tab("tab-s1", "workspace"))
+        .await
+        .unwrap();
+    actor
+        .agent_presence
+        .update("s1", "claude".into(), AgentPresenceState::Working);
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+    let expected = json!({
+        "sessionId": "s1", "expectedWorkspaceId": "workspace", "expectedTabId": "tab-s1"
+    });
+
+    let refused = request(
+        &mut actor,
+        1,
+        21,
+        "agent.terminateVerified",
+        expected.clone(),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(refused["ok"], false);
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("another window/device"));
+    assert!(actor.sessions.contains_key("s1"));
+    assert!(actor
+        .runtime_store
+        .find_workspace_tab("tab-s1")
+        .await
+        .unwrap()
+        .is_some());
+
+    actor.sessions.get_mut("s1").unwrap().clients.remove(&2);
+    let stopped = request(
+        &mut actor,
+        1,
+        22,
+        "agent.terminateVerified",
+        expected,
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(stopped["ok"], true, "{stopped}");
+    assert!(!actor.sessions.contains_key("s1"));
+    assert!(actor
+        .runtime_store
+        .find_workspace_tab("tab-s1")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn detach_keeps_the_session_and_terminate_deletes_tab_and_history() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut receiver) = ClientHandle::test_channels();

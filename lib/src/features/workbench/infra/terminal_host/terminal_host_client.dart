@@ -61,6 +61,7 @@ final class SocketTerminalHostClient._(
         TerminalHostClient,
         TerminalHostViewLeaseClient,
         TerminalHostVerifiedAgentInputClient,
+        TerminalHostVerifiedAgentLifecycleClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -299,6 +300,38 @@ final class SocketTerminalHostClient._(
         'dataBase64': encodeTerminalHostBytes(bytes),
         'deferredEnter': true,
         'bracketedPaste': true,
+      },
+    );
+  }
+
+  @override
+  Future<void> controlVerifiedAgent({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required bool terminate,
+  }) async {
+    final ids = [sessionId, workspaceId, tabId];
+    final valid = ids.every(
+      (id) =>
+          id.isNotEmpty &&
+          id.length <= 256 &&
+          RegExp(r'^[a-zA-Z0-9_.:-]+$').hasMatch(id),
+    );
+    if (!valid || sessionId.length > 128) {
+      throw ArgumentError(
+        'Invalid verified Agent Session, Workspace or Tab ID.',
+      );
+    }
+    // Neither operation starts an offline Host; older Hosts fail closed.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      terminate ? 'agent.terminateVerified' : 'agent.interruptVerified',
+      <String, Object?>{
+        'sessionId': sessionId,
+        'expectedWorkspaceId': workspaceId,
+        'expectedTabId': tabId,
       },
     );
   }

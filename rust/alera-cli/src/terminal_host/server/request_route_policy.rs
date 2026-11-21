@@ -89,6 +89,7 @@ pub(super) enum WorkspaceDeferredOperation {
 pub(super) enum TerminalDeferredOperation {
     Write,
     WriteVerified,
+    InterruptVerified,
     WriteObserved,
     PulseConfigure,
 }
@@ -438,6 +439,9 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "agent.writeVerified" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::WriteVerified,
         )),
+        "agent.interruptVerified" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::InterruptVerified,
+        )),
         "terminal.writeObserved" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::WriteObserved,
         )),
@@ -496,7 +500,8 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceActivity.upsertAll"
         | "workspaceTag.assign"
         | "workspaceTag.unassign"
-        | "workspaceTag.upsert" => LOCAL_CONFLICT,
+        | "workspaceTag.upsert"
+        | "agent.terminateVerified" => LOCAL_CONFLICT,
 
         "tab.removeForWorkspace" => {
             serialized_local(SerializedRuntimeMutation::RemoveWorkspaceTabs)
@@ -1056,6 +1061,20 @@ mod tests {
                 TerminalDeferredOperation::WriteVerified
             ))
         );
+
+        let interrupt = request_route_policy("agent.interruptVerified");
+        assert!(!interrupt.mobile_allowed);
+        assert_eq!(interrupt.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            interrupt.deferred_job,
+            Some(DeferredJobRoute::Terminal(
+                TerminalDeferredOperation::InterruptVerified
+            ))
+        );
+        let terminate = request_route_policy("agent.terminateVerified");
+        assert!(!terminate.mobile_allowed);
+        assert_eq!(terminate.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert!(terminate.deferred_job.is_none());
 
         let pulse = request_route_policy("terminal.pulse.configure");
         assert!(!pulse.mobile_allowed);

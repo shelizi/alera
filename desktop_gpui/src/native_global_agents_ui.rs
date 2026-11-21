@@ -37,6 +37,86 @@ enum GlobalAgentCreateReply {
 }
 
 impl Workbench {
+    /// Both interrupt and terminate require two deliberate clicks on the SAME
+    /// live Host identity. Switching target or hiding a card disarms the action.
+    fn confirm_global_agent_control(
+        &mut self,
+        target: GlobalAgentPromptTarget,
+        terminate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.global_agent_control_busy || self.global_agent_submit_busy {
+            return;
+        }
+        if self.terminals.session_list_is_stale() || !target.is_live(&self.terminals.sessions) {
+            self.global_agent_control_armed = None;
+            self.global_agent_control_status =
+                "Agent identity stale; refresh Host inventory before controlling".into();
+            cx.notify();
+            return;
+        }
+        if self.global_agent_control_armed.as_ref() != Some(&(target.clone(), terminate)) {
+            self.global_agent_control_armed = Some((target, terminate));
+            self.global_agent_control_status = if terminate {
+                "Click Confirm Terminate again: this ends the Host PTY and may erase its retained Terminal history. Hide Card to preserve it"
+            } else {
+                "Click Confirm Interrupt again: only the Agent's current turn is interrupted; the PTY stays running"
+            }.into();
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_control_armed = None;
+            self.global_agent_control_status =
+                "Existing Runtime Host CLI unavailable; no action was taken".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_control_armed = None;
+        self.global_agent_control_busy = true;
+        self.global_agent_control_status =
+            "Requesting Host-verified Agent lifecycle control…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let current_target = target.clone();
+            let result = cx.background_spawn(async move {
+                bridge.control_verified_agent(
+                    &target.handle, &target.workspace_id, &target.tab_id, terminate,
+                )
+            }).await;
+            view.update(cx, |view, cx| {
+                view.global_agent_control_busy = false;
+                if result.is_ok() {
+                    view.global_agent_control_status = if terminate {
+                        "Host acknowledged Agent Session termination. Refresh the list"
+                    } else {
+                        "Host accepted Agent interrupt. Check its next Hook state"
+                    }.into();
+                    if terminate {
+                        view.global_agent_hidden.remove(&(
+                            current_target.handle.clone(),
+                            current_target.workspace_id.clone(),
+                            current_target.tab_id.clone(),
+                        ));
+                        if view.global_agent_target.as_ref() == Some(&current_target) {
+                            view.global_agent_target = None;
+                        }
+                    }
+                    view.refresh_terminals(cx);
+                } else {
+                    // The Host may have executed the action before its response
+                    // was lost. Never auto-repeat a terminate or Ctrl-C.
+                    view.global_agent_control_status =
+                        "Control outcome unconfirmed. Inspect refreshed Host inventory before any retry".into();
+                    view.refresh_terminals(cx);
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+}
+
+impl Workbench {
     fn open_global_agent_create(&mut self, cx: &mut Context<Self>) {
         self.global_agent_create_open = true;
         if self.runtime_bridge.is_none() {
@@ -735,6 +815,12 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         .child(view.global_agent_prompt_input.clone())
         .child(
             div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(view.global_agent_control_status.clone()),
+        )
+        .child(
+            div()
                 .id("global-agent-send-instruction")
                 .cursor_pointer()
                 .text_xs()
@@ -823,6 +909,18 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             card_workspace.clone(),
             card_tab.clone(),
         ));
+        let interrupt_target = GlobalAgentPromptTarget {
+            handle: session_id.clone(),
+            workspace_id: workspace_id.clone(),
+            tab_id: tab_id.clone(),
+            agent_type: agent.clone(),
+        };
+        let terminate_target = interrupt_target.clone();
+        let interrupt_armed =
+            view.global_agent_control_armed.as_ref() == Some(&(interrupt_target.clone(), false));
+        let terminate_armed =
+            view.global_agent_control_armed.as_ref() == Some(&(terminate_target.clone(), true));
+        let control_busy = view.global_agent_control_busy;
 
         list = list.child(
             div()
@@ -888,6 +986,36 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 )
                 .child(
                     div()
+                        .id(("global-agent-interrupt", index))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                        .child(if interrupt_armed {
+                            "Confirm Interrupt Turn (keeps PTY)"
+                        } else {
+                            "Interrupt Turn · confirmation required"
+                        })
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.confirm_global_agent_control(interrupt_target.clone(), false, cx);
+                        })),
+                )
+                .child(
+                    div()
+                        .id(("global-agent-terminate", index))
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                        .child(if terminate_armed {
+                            "Confirm Terminate Session (ends PTY)"
+                        } else {
+                            "Terminate Session · confirmation required"
+                        })
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.confirm_global_agent_control(terminate_target.clone(), true, cx);
+                        })),
+                )
+                .child(
+                    div()
                         .id(("global-agent-hide-card", index))
                         .cursor_pointer()
                         .text_xs()
@@ -903,6 +1031,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 view.global_agent_hidden.remove(&key);
                             } else {
                                 view.global_agent_hidden.insert(key.clone());
+                                view.global_agent_control_armed = None;
                                 // A card hidden from the dashboard cannot remain
                                 // an invisible destination for subsequent input.
                                 if view.global_agent_target.as_ref().is_some_and(|target| {

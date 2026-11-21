@@ -9,6 +9,78 @@ use super::ClientKind;
 use super::ServerActor;
 
 impl ServerActor {
+    /// Global lifecycle actions are local-only, Host-authoritative, and
+    /// scoped to the exact running Agent. For transferred PTYs require the
+    /// original attached view's transfer/lease protocol instead.
+    pub(super) fn verify_global_agent_control_target(
+        &self,
+        session_id: &str,
+        payload: &Value,
+    ) -> HostResult<&str> {
+        let expected_workspace = payload
+            .get("expectedWorkspaceId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let expected_tab = payload
+            .get("expectedTabId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let session = self.sessions.get(session_id).ok_or_else(|| {
+            HostError::state("Global Agent is no longer in the Host inventory. Refresh first.")
+        })?;
+        if !session.running()
+            || expected_workspace != Some(session.workspace_id.as_str())
+            || expected_tab != Some(session.tab_id.as_str())
+        {
+            return Err(HostError::state(
+                "Global Agent control rejected: Session, Workspace or Tab changed.",
+            ));
+        }
+        if !session.moved_workspace_fence.is_empty() {
+            return Err(HostError::state(
+                "Transferred Agent requires its original view and transfer lease to control.",
+            ));
+        }
+        let provider = self.agent_presence.agent_type(session_id).ok_or_else(|| {
+            HostError::state(
+                "Agent Hook identity is not verified. Open original Terminal to control.",
+            )
+        })?;
+        if alera_core::agent_descriptor::agent_descriptor(provider).is_none() {
+            return Err(HostError::state(
+                "Unsupported Agent interrupt/terminate adapter.",
+            ));
+        }
+        Ok(provider)
+    }
+
+    /// Enqueue the provider-declared interrupt bytes into a verified, live
+    /// Agent PTY. Never terminate the session or synthesize an Enter/paste.
+    pub(super) fn queue_verified_agent_interrupt(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<bool> {
+        let session_id = self.require_session(payload)?;
+        let provider = self.verify_global_agent_control_target(&session_id, payload)?;
+        let descriptor = alera_core::agent_descriptor::agent_descriptor(provider)
+            .ok_or_else(|| HostError::state("Unsupported Agent interrupt adapter."))?;
+        let interrupt_bytes = descriptor.interrupt_bytes;
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| HostError::state("Agent Session was closed before interrupt."))?;
+        session.queue_write(
+            PtyWriteCompletion::ClientRequest {
+                client_id,
+                request_id,
+            },
+            interrupt_bytes,
+        )?;
+        Ok(true)
+    }
+
     /// Session-specific Native input must stay bound to the same live Host
     /// view after a worktree transfer. No SQLite round trip per keystroke.
     pub(super) fn queue_observed_terminal_input(

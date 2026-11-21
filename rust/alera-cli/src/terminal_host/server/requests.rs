@@ -396,7 +396,7 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.recover_existing_worker(client_id, payload).await
             }
-            "write" | "agent.writeVerified" => {
+            "write" | "agent.writeVerified" | "agent.interruptVerified" => {
                 self.require_auth(client_id)?;
                 Ok(json!({}))
             }
@@ -541,9 +541,27 @@ impl ServerActor {
                 self.immediate_checkpoint(&session_id).await;
                 Ok(json!({}))
             }
-            "terminate" => {
+            "terminate" | "agent.terminateVerified" => {
                 self.require_auth(client_id)?;
                 let session_id = self.require_session_id(payload)?;
+                if request_type == "agent.terminateVerified" {
+                    self.require_request_allowed(client_id, request_type)?;
+                    self.verify_global_agent_control_target(&session_id, payload)?;
+                    // A remote or separate Host client still watching this
+                    // Agent is not permission to kill their PTY.
+                    let other_client_attached =
+                        self.sessions.get(&session_id).is_some_and(|session| {
+                            session
+                                .clients
+                                .iter()
+                                .any(|attached| *attached != client_id)
+                        });
+                    if other_client_attached {
+                        return Err(HostError::state(
+                            "Agent is attached in another window/device. Detach those views before terminating.",
+                        ));
+                    }
+                }
                 self.verify_terminal_termination_owner(client_id, &session_id, payload)
                     .await?;
                 let client_mutation_id = optional_client_mutation_id(payload)?;

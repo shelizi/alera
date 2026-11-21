@@ -164,6 +164,9 @@ pub enum TerminalAction {
     Read(TerminalReadArgs),
     /// Write text, a file, or stdin to a terminal.
     Write(TerminalWriteArgs),
+    /// Local desktop-only lifecycle action on an exact live Agent.
+    #[command(name = "control-agent-verified")]
+    ControlAgentVerified(TerminalControlAgentArgs),
     /// Attach an interactive native terminal client to an existing session.
     Attach(TerminalAttachArgs),
 }
@@ -226,6 +229,27 @@ pub struct TerminalWriteArgs {
     /// Submit to an interactive TUI using bracketed paste and a delayed Enter.
     #[arg(long, conflicts_with = "enter")]
     pub submit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum VerifiedAgentControlAction {
+    Interrupt,
+    Terminate,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalControlAgentArgs {
+    #[arg(long)]
+    pub handle: String,
+    #[arg(long = "expected-workspace-id")]
+    pub expected_workspace_id: String,
+    #[arg(long = "expected-tab-id")]
+    pub expected_tab_id: String,
+    #[arg(long, value_enum)]
+    pub action: VerifiedAgentControlAction,
+    /// Explicit acknowledgment that termination removes the Host Session.
+    #[arg(long, default_value_t = false)]
+    pub confirm_terminate: bool,
 }
 
 #[derive(Debug, Args)]

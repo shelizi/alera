@@ -397,6 +397,20 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
+    /// Explicit local-only lifecycle control of an exact Host Agent.
+    /// Never retries an unknown outcome or opens a new Host process.
+    pub fn control_verified_agent(
+        &self,
+        handle: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        terminate: bool,
+    ) -> io::Result<()> {
+        let args = verified_agent_control_verb(handle, workspace_id, tab_id, terminate)?;
+        self.terminal_json(&args)?;
+        Ok(())
+    }
+
     /// List workspaces already registered with the running Host. Uses
     /// --no-start only; a missing Host is an error, never an implicit start.
     pub fn list_registered_workspaces(&self) -> io::Result<Vec<RegisteredHostWorkspace>> {
@@ -484,6 +498,33 @@ pub fn verified_agent_prompt_verb(
         OsString::from(format!("--expected-tab-id={tab_id}")),
         OsString::from("--submit"),
     ]);
+    Ok(args)
+}
+
+/// Fixed action and exact Host IDs. Never assemble arbitrary process args.
+pub fn verified_agent_control_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    terminate: bool,
+) -> io::Result<Vec<OsString>> {
+    if !valid_handle(handle) || !valid_handle(workspace_id) || !valid_handle(tab_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Agent Session, Workspace or Tab identity",
+        ));
+    }
+    let mut args = vec![
+        OsString::from("control-agent-verified"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+        OsString::from("--action"),
+        OsString::from(if terminate { "terminate" } else { "interrupt" }),
+    ];
+    if terminate {
+        args.push(OsString::from("--confirm-terminate"));
+    }
     Ok(args)
 }
 
@@ -3462,6 +3503,26 @@ mod tests {
         assert!(routed.iter().any(|v| v == "--no-start"));
         assert!(verified_agent_prompt_verb("term-1", "", "tab-1", "prompt").is_err());
         assert!(verified_agent_prompt_verb("term-1", "ws", "../tab", "prompt").is_err());
+        for terminate in [false, true] {
+            let args = verified_agent_control_verb("term-1", "ws-one", "tab-one", terminate)
+                .expect("verified Agent control");
+            assert_eq!(args[0], "control-agent-verified");
+            assert!(args
+                .iter()
+                .any(|arg| arg == "--expected-workspace-id=ws-one"));
+            assert!(args.iter().any(|arg| arg == "--expected-tab-id=tab-one"));
+            assert!(args
+                .iter()
+                .any(|arg| arg == if terminate { "terminate" } else { "interrupt" }));
+            assert_eq!(
+                args.iter().any(|arg| arg == "--confirm-terminate"),
+                terminate
+            );
+            let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
+            assert!(routed.iter().any(|arg| arg == "--no-start"));
+        }
+        assert!(verified_agent_control_verb("term-1", "ws-one", "../bad", true).is_err());
+        assert!(verified_agent_control_verb("", "ws-one", "tab-one", false).is_err());
     }
 
     #[test]

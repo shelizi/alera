@@ -1,5 +1,4 @@
 mod agent_account_environment;
-mod agy_ssh_route;
 mod agent_descriptor_export;
 mod agent_history_snapshots;
 mod agent_history_sync;
@@ -10,6 +9,7 @@ mod agent_prompt_stdin_script;
 mod agent_quota;
 mod agent_quota_commands;
 mod agent_status;
+mod agy_ssh_route;
 mod ai_commit_commands;
 mod automation_autostart;
 mod automation_commands;
@@ -193,6 +193,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::Create(_)
             | TerminalAction::CreateAgent(_)
             | TerminalAction::Resize(_)
+            | TerminalAction::ControlAgentVerified(_)
             | TerminalAction::Stream
     ) && !command.no_start
     {
@@ -402,6 +403,38 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
                 Err(error) => print_error(error),
             }
         }
+        TerminalAction::ControlAgentVerified(args) => {
+            let valid_id = |s: &str, max: usize| {
+                !s.is_empty()
+                    && s.len() <= max
+                    && s.bytes().all(|byte| byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'_' | b'.' | b':'))
+            };
+            if !valid_id(&args.handle, 128)
+                || !valid_id(&args.expected_workspace_id, 256)
+                || !valid_id(&args.expected_tab_id, 256)
+                || (matches!(args.action, crate::cli::VerifiedAgentControlAction::Terminate)
+                    && !args.confirm_terminate)
+            {
+                eprintln!("Verified Agent control requires complete IDs; termination also requires --confirm-terminate");
+                return USAGE_EXIT_CODE;
+            }
+            let verb = match args.action {
+                crate::cli::VerifiedAgentControlAction::Interrupt => "agent.interruptVerified",
+                crate::cli::VerifiedAgentControlAction::Terminate => "agent.terminateVerified",
+            };
+            match client.request_value(verb, &json!({
+                "sessionId": args.handle,
+                "expectedWorkspaceId": args.expected_workspace_id,
+                "expectedTabId": args.expected_tab_id,
+            })).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Agent lifecycle control accepted by Host");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
         TerminalAction::Attach(args) => terminal_attach::run(&mut client, args).await,
     }
 }
@@ -538,7 +571,9 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
                 "projectConfig.remove",
                 &payload,
                 |store| async move { store.remove_project_config(&fallback_id).await },
-            ).await {
+            )
+            .await
+            {
                 Ok(()) => print_value(
                     &json!({"kind": "projectConfigCleared", "projectId": id}),
                     json_output,

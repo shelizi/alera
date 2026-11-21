@@ -100,6 +100,17 @@ abstract interface class TerminalHostVerifiedAgentInputClient {
   });
 }
 
+/// Opt-in, local-only lifecycle operations for a Host-confirmed Agent.
+/// The Host refuses old/unverified targets; legacy client fakes are unchanged.
+abstract interface class TerminalHostVerifiedAgentLifecycleClient {
+  Future<void> controlVerifiedAgent({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required bool terminate,
+  });
+}
+
 /// Narrow opt-in view identity port for production hosts. Legacy fake and
 /// older clients keep their original TerminalHostClient methods unchanged.
 abstract interface class TerminalHostViewLeaseClient {

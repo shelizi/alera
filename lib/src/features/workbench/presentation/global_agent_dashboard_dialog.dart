@@ -32,7 +32,89 @@ class _GlobalAgentDashboardDialogState
   final TextEditingController _instruction = TextEditingController();
   ({String sessionId, String workspaceId, String tabId})? _target;
   bool _sending = false;
+  bool _controlling = false;
+  ({String sessionId, String workspaceId, String tabId, bool terminate})?
+  _armedControl;
   String? _sendFeedback;
+
+  Future<void> _controlAgent(GlobalAgentLiveRow row, bool terminate) async {
+    if (_controlling || _sending) return;
+    final identity = _identity(row);
+    final intent = (
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+      terminate: terminate,
+    );
+    if (_armedControl != intent) {
+      setState(() {
+        _armedControl = intent;
+        _sendFeedback = terminate
+            ? 'Confirm terminate: this ends the Host PTY and may remove its '
+                  'retained Terminal history. Hide card instead to keep working.'
+            : 'Confirm interrupt: this sends the Agent adapter interrupt bytes '
+                  'without terminating its Session.';
+      });
+      return;
+    }
+    final valid = globalAgentTargetIsCurrent(
+      workbench: ref.read(workbenchControllerProvider),
+      statuses: ref.read(agentStatusControllerProvider),
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+    );
+    if (!valid) {
+      setState(() {
+        _armedControl = null;
+        _sendFeedback =
+            'Agent identity changed. Refresh status before controlling.';
+      });
+      return;
+    }
+    final host = ref.read(terminalHostClientProvider);
+    if (host is! TerminalHostVerifiedAgentLifecycleClient) {
+      setState(() {
+        _armedControl = null;
+        _sendFeedback =
+            'Host does not support verified Agent lifecycle control.';
+      });
+      return;
+    }
+    setState(() {
+      _controlling = true;
+      _armedControl = null;
+      _sendFeedback = 'Requesting verified Agent lifecycle action…';
+    });
+    try {
+      await (host as TerminalHostVerifiedAgentLifecycleClient)
+          .controlVerifiedAgent(
+            sessionId: identity.sessionId,
+            workspaceId: identity.workspaceId,
+            tabId: identity.tabId,
+            terminate: terminate,
+          );
+      if (!mounted) return;
+      setState(() {
+        if (terminate && _target == identity) {
+          _target = null;
+          _instruction.clear();
+        }
+        _sendFeedback = terminate
+            ? 'Host confirmed Session termination. Refresh the Agent list.'
+            : 'Host accepted Agent interrupt. Check its next Hook status.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // Lost ACK may still mean the request was executed. Do not retry.
+      setState(
+        () => _sendFeedback = 'Lifecycle result unconfirmed. Inspect Host status before retrying.',
+      );
+    } finally {
+      if (mounted) setState(() => _controlling = false);
+    }
+  }
+
   final Set<({String sessionId, String workspaceId, String tabId})>
   _hiddenCards = {};
   bool _showHidden = false;
@@ -54,6 +136,7 @@ class _GlobalAgentDashboardDialogState
         _target = null;
         _instruction.clear();
       }
+      _armedControl = null;
     });
   }
 
@@ -377,6 +460,55 @@ class _GlobalAgentDashboardDialogState
                                       icon: const Icon(Icons.edit_note),
                                       label: const Text('Steer'),
                                     ),
+                                  ),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      TextButton.icon(
+                                        onPressed: _controlling || _sending
+                                            ? null
+                                            : () => _controlAgent(row, false),
+                                        icon: const Icon(
+                                          Icons.pause_circle_outline,
+                                        ),
+                                        label: Text(
+                                          _armedControl ==
+                                                  (
+                                                    sessionId: row
+                                                        .tab
+                                                        .terminalSessionId,
+                                                    workspaceId:
+                                                        row.status.workspaceId,
+                                                    tabId: row.tab.id,
+                                                    terminate: false,
+                                                  )
+                                              ? 'Confirm interrupt'
+                                              : 'Interrupt turn',
+                                        ),
+                                      ),
+                                      TextButton.icon(
+                                        onPressed: _controlling || _sending
+                                            ? null
+                                            : () => _controlAgent(row, true),
+                                        icon: const Icon(
+                                          Icons.stop_circle_outlined,
+                                        ),
+                                        label: Text(
+                                          _armedControl ==
+                                                  (
+                                                    sessionId: row
+                                                        .tab
+                                                        .terminalSessionId,
+                                                    workspaceId:
+                                                        row.status.workspaceId,
+                                                    tabId: row.tab.id,
+                                                    terminate: true,
+                                                  )
+                                              ? 'Confirm terminate'
+                                              : 'Terminate Session',
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                   Align(
                                     alignment: Alignment.centerRight,
