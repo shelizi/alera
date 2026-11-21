@@ -72,6 +72,14 @@ void main() {
       expect(agents.agentStatusNotificationsEnabled, isFalse);
       expect(agents.keepComputerAwakeWhileAgentsWork, isFalse);
       expect(agents.showTabTitlesInSidebar, isFalse);
+      expect(agents.showTaskSummariesInSidebar, isFalse);
+      expect(
+        AgentSettings.fromJson(<String, Object?>{
+          'showTabTitlesInSidebar': true,
+        }).showTaskSummariesInSidebar,
+        isFalse,
+        reason: 'Old settings cannot silently opt into multiline summaries',
+      );
       expect(agents.defaultAgentProfileId, isNull);
       expect(agents.agentExecutablePaths, isEmpty);
       expect(agents.executablePathFor('devin'), isNull);
@@ -220,6 +228,7 @@ void main() {
         'agentStatusNotificationsEnabled': true,
         'keepComputerAwakeWhileAgentsWork': true,
         'showTabTitlesInSidebar': true,
+        'showTaskSummariesInSidebar': true,
         'defaultAgentProfileId': 'prof_1',
       });
 
@@ -243,6 +252,7 @@ void main() {
       expect(agents.agentStatusNotificationsEnabled, isTrue);
       expect(agents.keepComputerAwakeWhileAgentsWork, isTrue);
       expect(agents.showTabTitlesInSidebar, isTrue);
+      expect(agents.showTaskSummariesInSidebar, isTrue);
       expect(agents.defaultAgentProfileId, 'prof_1');
 
       final hooks = AgentStatusHookSettings.fromJson(<String, Object?>{

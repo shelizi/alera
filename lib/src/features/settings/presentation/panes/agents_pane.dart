@@ -215,6 +215,13 @@ class const AgentsSettingsPane({
                     controller.setShowTabTitlesInSidebar(value),
               ),
               SettingsSwitchRow(
+                title: 'Show Agent Task Summaries in Sidebar',
+                description: 'Show the overall task goal and latest Agent report in expanded multiline sidebar rows. Off by default; the right Agent Context panel stays available.',
+                value: agents.showTaskSummariesInSidebar,
+                onChanged: (value) =>
+                    controller.setShowTaskSummariesInSidebar(value),
+              ),
+              SettingsSwitchRow(
                 title: 'Agent Status Notifications',
                 description: 'Show native notifications when an agent needs attention. Bursts are grouped into one notification.',
                 value: agents.agentStatusNotificationsEnabled,

@@ -21,11 +21,11 @@ badge as the task summary.
 
 ## User interface
 
-- **Classic**: the left Agent row shows up to four lines of overall goal plus
+- **Classic**: the **default-off** Agent Settings switch **Show Agent Task Summaries in Sidebar** opts into task summaries; otherwise the original concise single-line row (and separate Tab Titles setting) is preserved. When enabled, the left Agent row shows up to four lines of overall goal plus
   two lines of recent progress. Users can expand full text. The right sidebar
   adds **Agent Context**, showing goal, progress and dated milestones; switching
   focused Tab changes the Agent whose summary is shown.
-- **Native GPUI**: the authenticated Host terminal inventory provides the same
+- **Native GPUI**: the same Rust Host-owned switch is exposed in its Agents Settings catalog, also default-off. The authenticated Host terminal inventory provides the same
   bounded overview. The right sidebar adds an Agent Context tab bound to the
   focused mixed-pane Host tab (checked against the full live identity). The
   left Runtime / Agents list shows multiline objective and progress.

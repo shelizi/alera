@@ -28,11 +28,18 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
         (settings) => settings.agents.showTabTitlesInSidebar,
       ),
     );
-    final groupLabel = context.tr(workspaceAgentGroupLabel(widget.displayKind));
-    final overview = AgentContextOverview.fromRaw(
-      widget.status.contextOverview,
+    final showTaskSummaries = ref.watch(
+      settingsControllerProvider.select(
+        (settings) => settings.agents.showTaskSummariesInSidebar,
+      ),
     );
+    final groupLabel = context.tr(workspaceAgentGroupLabel(widget.displayKind));
+    // Opt-in only: don't parse or allocate summary history for hidden rows.
+    final overview = showTaskSummaries
+        ? AgentContextOverview.fromRaw(widget.status.contextOverview)
+        : const AgentContextOverview();
     final description = _agentRunLabel(
+      showTaskSummaries: showTaskSummaries,
       overview: overview,
       tab: widget.tab,
       status: widget.status,
@@ -92,17 +99,24 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                           message: description,
                           child: Text(
                             description,
-                            maxLines: _expanded ? null : 4,
-                            overflow: _expanded ? null : TextOverflow.ellipsis,
+                            maxLines: showTaskSummaries
+                                ? (_expanded ? null : 4)
+                                : 1,
+                            overflow: showTaskSummaries && _expanded
+                                ? null
+                                : TextOverflow.ellipsis,
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: isActive
                                   ? AleraTokens.foreground
                                   : AleraTokens.foregroundMuted,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: showTaskSummaries || isActive
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
                             ),
                           ),
                         ),
-                        if (overview.progress.isNotEmpty) ...<Widget>[
+                        if (showTaskSummaries &&
+                            overview.progress.isNotEmpty) ...<Widget>[
                           const SizedBox(height: 3),
                           Text(
                             '最新回報：${overview.progress}',
@@ -113,8 +127,9 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                             ),
                           ),
                         ],
-                        if (description.length > 75 ||
-                            overview.progress.length > 55)
+                        if (showTaskSummaries &&
+                            (description.length > 75 ||
+                                overview.progress.length > 55))
                           InkWell(
                             onTap: () => setState(() => _expanded = !_expanded),
                             child: Padding(
@@ -198,6 +213,7 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
 }
 
 String _agentRunLabel({
+  required bool showTaskSummaries,
   required AgentContextOverview overview,
   required WorkspaceTabRecord tab,
   required AgentStatusEntry status,
@@ -205,9 +221,11 @@ String _agentRunLabel({
   required bool showTabTitle,
   required String groupLabel,
 }) {
-  if (overview.goal.isNotEmpty) return overview.goal;
-  final prompt = status.prompt.trim();
-  if (prompt.isNotEmpty) return prompt;
+  if (showTaskSummaries) {
+    if (overview.goal.isNotEmpty) return overview.goal;
+    final prompt = status.prompt.trim();
+    if (prompt.isNotEmpty) return prompt;
+  }
   if (showTabTitle) {
     final title = tab.title.trim();
     if (title.isNotEmpty) {
@@ -226,7 +244,17 @@ String _agentRunDescription(
   required WorkspaceAgentGroupKind displayKind,
   String? groupLabel,
 }) {
-  // The sidebar represents the overall goal, never the current tool call.
+  // The concise, pre-Agent-Context row is the default presentation.
+  if (displayKind == WorkspaceAgentGroupKind.working) {
+    final toolName = status.toolName?.trim() ?? '';
+    final toolInput = status.toolInput?.trim() ?? '';
+    if (toolName.isNotEmpty && toolInput.isNotEmpty) {
+      return '$toolName: $toolInput';
+    }
+    if (toolName.isNotEmpty) {
+      return toolName;
+    }
+  }
   final assistantMessage = status.lastAssistantMessage?.trim() ?? '';
   if (assistantMessage.isNotEmpty) {
     return assistantMessage;

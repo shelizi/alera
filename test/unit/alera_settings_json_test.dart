@@ -64,6 +64,7 @@ void main() {
           agentStatusNotificationsEnabled: true,
           keepComputerAwakeWhileAgentsWork: true,
           showTabTitlesInSidebar: true,
+          showTaskSummariesInSidebar: true,
           defaultAgentProfileId: 'prof_1',
           gitBashExecutablePath: r'D:\PortableGit\git-bash.exe',
         ),
@@ -158,6 +159,7 @@ void main() {
       expect(restored.agents.agentStatusNotificationsEnabled, isTrue);
       expect(restored.agents.keepComputerAwakeWhileAgentsWork, isTrue);
       expect(restored.agents.showTabTitlesInSidebar, isTrue);
+      expect(restored.agents.showTaskSummariesInSidebar, isTrue);
       expect(restored.agents.defaultAgentProfileId, 'prof_1');
       expect(restored.editor.tabSize, 2);
       expect(restored.editor.themeName, EditorSyntaxThemeNames.nord);

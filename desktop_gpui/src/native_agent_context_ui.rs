@@ -127,3 +127,38 @@ fn section(title: &'static str, value: String) -> gpui::AnyElement {
         .child(div().min_w_0().text_sm().child(value))
         .into_any_element()
 }
+
+/// Sidebar summaries are opt-in. Missing, stale, or non-boolean Host values
+/// must not display task text in the left project/session list.
+pub(super) fn task_summary_sidebar_enabled(
+    host_settings_ready: bool,
+    value: Option<&serde_json::Value>,
+) -> bool {
+    host_settings_ready && value.and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+#[cfg(test)]
+mod task_summary_toggle_tests {
+    use super::*;
+
+    #[test]
+    fn default_off_and_only_explicit_host_true_enables_summary() {
+        assert!(!task_summary_sidebar_enabled(true, None));
+        assert!(!task_summary_sidebar_enabled(
+            true,
+            Some(&serde_json::json!(false))
+        ));
+        assert!(!task_summary_sidebar_enabled(
+            true,
+            Some(&serde_json::json!("true"))
+        ));
+        assert!(!task_summary_sidebar_enabled(
+            false,
+            Some(&serde_json::json!(true))
+        ));
+        assert!(task_summary_sidebar_enabled(
+            true,
+            Some(&serde_json::json!(true))
+        ));
+    }
+}

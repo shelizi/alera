@@ -2,7 +2,7 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 31] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 32] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -32,13 +32,14 @@ pub const SHARED_DESKTOP_PATHS: [&str; 31] = [
     "agents.agentStatusNotificationsEnabled",
     "agents.agentStatusFinishedNotificationsEnabled",
     "agents.showTabTitlesInSidebar",
+    "agents.showTaskSummariesInSidebar",
     "editor.quickOpenExcludedDirectories",
     "agents.quotaUnpinnedKeys",
 ];
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 28] = [
+pub const CLI_WRITABLE_PATHS: [&str; 29] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -65,6 +66,7 @@ pub const CLI_WRITABLE_PATHS: [&str; 28] = [
     "agents.agentStatusNotificationsEnabled",
     "agents.agentStatusFinishedNotificationsEnabled",
     "agents.showTabTitlesInSidebar",
+    "agents.showTaskSummariesInSidebar",
     "editor.quickOpenExcludedDirectories",
     "agents.quotaUnpinnedKeys",
 ];
@@ -117,6 +119,7 @@ pub fn extended_portable(path: &str) -> bool {
             | "agents.agentStatusNotificationsEnabled"
             | "agents.agentStatusFinishedNotificationsEnabled"
             | "agents.showTabTitlesInSidebar"
+            | "agents.showTaskSummariesInSidebar"
             | "editor.quickOpenExcludedDirectories"
     )
 }
@@ -141,7 +144,8 @@ pub fn valid_extended_portable(path: &str, value: &serde_json::Value) -> bool {
         | "terminal.clipboardOnSelect"
         | "agents.agentStatusNotificationsEnabled"
         | "agents.agentStatusFinishedNotificationsEnabled"
-        | "agents.showTabTitlesInSidebar" => value.is_boolean(),
+        | "agents.showTabTitlesInSidebar"
+        | "agents.showTaskSummariesInSidebar" => value.is_boolean(),
         "terminal.lineHeight" => value
             .as_f64()
             .is_some_and(|v| v.is_finite() && (0.8..=2.4).contains(&v)),
@@ -274,6 +278,15 @@ mod tests {
         assert!(CLI_WRITABLE_PATHS.iter().all(|path| unique.contains(path)));
         assert!(cli_writable("editor.twoRowTabs"));
         assert!(cli_writable("agents.quotaUnpinnedKeys"));
+        assert!(cli_writable("agents.showTaskSummariesInSidebar"));
+        assert!(valid_extended_portable(
+            "agents.showTaskSummariesInSidebar",
+            &serde_json::json!(true),
+        ));
+        assert!(!valid_extended_portable(
+            "agents.showTaskSummariesInSidebar",
+            &serde_json::json!("true"),
+        ));
         assert!(!extended_portable("editor.twoRowTabs"));
         assert!(!cli_writable("general.confirmProjectRemoval"));
         assert!(!cli_writable("general.confirmWorkspaceRemoval"));

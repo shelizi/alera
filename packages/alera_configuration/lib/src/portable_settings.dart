@@ -43,6 +43,7 @@ const desktopPortableFields = <String, List<String>>{
     'agentStatusFinishedNotificationsEnabled',
     'defaultAgentProfileId',
     'showTabTitlesInSidebar',
+    'showTaskSummariesInSidebar',
   ],
   'aiTextGeneration': [
     'enabled',

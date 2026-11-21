@@ -472,6 +472,7 @@ AgentStatusEntry _agentStatusEntry({
   String? toolName,
   String? toolInput,
   String? lastAssistantMessage,
+  Map<String, dynamic>? contextOverview,
   bool? interrupted,
 }) {
   return AgentStatusEntry(
@@ -484,6 +485,7 @@ AgentStatusEntry _agentStatusEntry({
     toolName: toolName,
     toolInput: toolInput,
     lastAssistantMessage: lastAssistantMessage,
+    contextOverview: contextOverview,
     interrupted: interrupted,
     updatedAt: .utc(2026, 5, 22),
     stateStartedAt: .utc(2026, 5, 22),

@@ -337,6 +337,7 @@ const _sharedDesktopPaths = <String>[
   'agents.agentStatusNotificationsEnabled',
   'agents.agentStatusFinishedNotificationsEnabled',
   'agents.showTabTitlesInSidebar',
+  'agents.showTaskSummariesInSidebar',
   'editor.quickOpenExcludedDirectories',
   'agents.quotaUnpinnedKeys',
 ];
@@ -376,6 +377,8 @@ Object? _sharedDesktopValue(
   'agents.agentStatusFinishedNotificationsEnabled' =>
     settings.agents.agentStatusFinishedNotificationsEnabled,
   'agents.showTabTitlesInSidebar' => settings.agents.showTabTitlesInSidebar,
+  'agents.showTaskSummariesInSidebar' =>
+    settings.agents.showTaskSummariesInSidebar,
   'editor.quickOpenExcludedDirectories' =>
     settings.editor.quickOpenExcludedDirectories,
   'agents.quotaUnpinnedKeys' =>
@@ -445,6 +448,7 @@ Map<String, Object?> _changedPortableFields(
             'agents.agentStatusNotificationsEnabled',
             'agents.agentStatusFinishedNotificationsEnabled',
             'agents.showTabTitlesInSidebar',
+            'agents.showTaskSummariesInSidebar',
             'editor.quickOpenExcludedDirectories',
           }.contains(path)) {
         continue;
@@ -588,6 +592,10 @@ AleraSettings _applySharedDesktopValues(
               values['agents.showTabTitlesInSidebar'] is bool
               ? values['agents.showTabTitlesInSidebar'] as bool
               : current.agents.showTabTitlesInSidebar,
+          showTaskSummariesInSidebar:
+              values['agents.showTaskSummariesInSidebar'] is bool
+              ? values['agents.showTaskSummariesInSidebar'] as bool
+              : current.agents.showTaskSummariesInSidebar,
         )
         .copyWith(
           defaultAgentProfileId:

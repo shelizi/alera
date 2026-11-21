@@ -111,6 +111,7 @@ class const AgentSettings({
   this.agentStatusFinishedNotificationsEnabled = false,
   this.keepComputerAwakeWhileAgentsWork = false,
   this.showTabTitlesInSidebar = false,
+  this.showTaskSummariesInSidebar = false,
   this.defaultAgentProfileId,
   this.agentExecutablePaths = const <String, String>{},
   this.gitBashExecutablePath,
@@ -134,6 +135,10 @@ class const AgentSettings({
 
   /// Use each agent tab title in the workspace sidebar instead of latest activity.
   final bool showTabTitlesInSidebar;
+
+  /// Opt-in: show overall goals and latest reports in multiline Agent rows.
+  /// The right Agent Context panel remains available when this is disabled.
+  final bool showTaskSummariesInSidebar;
 
   /// Runtime profile selected for flows that need an initial agent choice.
   final String? defaultAgentProfileId;

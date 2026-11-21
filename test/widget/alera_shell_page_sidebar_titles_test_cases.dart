@@ -99,4 +99,69 @@ void _registerAleraShellSidebarTitleTests() {
     );
     expect((entry.leading! as Icon).size, 16);
   });
+
+  for (final enabled in <bool>[false, true]) {
+    testWidgets(
+      'Agent task sidebar summary is ${enabled ? 'enabled' : 'disabled'}',
+      (tester) async {
+        const goal = 'Finish the complete GPUI settings parity task';
+        const report = 'Shared Host controls completed; visual review pending';
+        await _pumpShell(
+          tester,
+          state: _stackedWorkbenchState(),
+          settings: AleraSettings.defaults.copyWith(
+            agents: AgentSettings(showTaskSummariesInSidebar: enabled),
+          ),
+          agentStatuses: <String, AgentStatusEntry>{
+            'tab-1': _agentStatusEntry(
+              terminalSessionId: 'tab-1',
+              workspaceId: 'workspace-1',
+              tabId: 'tab-1',
+              state: .working,
+              prompt: 'short user prompt',
+              toolName: 'Read',
+              toolInput: 'settings.json',
+              lastAssistantMessage: 'Previous reply',
+              contextOverview: <String, dynamic>{
+                'goal': goal,
+                'progress': report,
+                'timeline': <Object?>[],
+              },
+            ),
+            'tab-2': _agentStatusEntry(
+              terminalSessionId: 'tab-2',
+              workspaceId: 'workspace-1',
+              tabId: 'tab-2',
+              state: .waiting,
+              lastAssistantMessage: 'Ready to continue',
+            ),
+          },
+        );
+        await tester.tap(find.byTooltip('Show Agent Runs'));
+        await tester.pumpAndSettle();
+
+        final sidebar = find.byType(ProjectWorkbenchSidebar);
+        final goalRow = find.descendant(of: sidebar, matching: find.text(goal));
+        final legacyRow = find.descendant(
+          of: sidebar,
+          matching: find.text('Read: settings.json'),
+        );
+        final progressRow = find.descendant(
+          of: sidebar,
+          matching: find.text('最新回報：$report'),
+        );
+        if (enabled) {
+          expect(goalRow, findsOneWidget);
+          expect(progressRow, findsOneWidget);
+          expect(legacyRow, findsNothing);
+          expect(tester.widget<Text>(goalRow).maxLines, 4);
+        } else {
+          expect(goalRow, findsNothing);
+          expect(progressRow, findsNothing);
+          expect(legacyRow, findsOneWidget);
+          expect(tester.widget<Text>(legacyRow).maxLines, 1);
+        }
+      },
+    );
+  }
 }

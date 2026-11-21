@@ -135,6 +135,7 @@ pub const SECTIONS: &[SettingsSection] = &[
             group!("Status Hooks" => [row!("Codex Hooks", "Managed status hooks.", Toggle), row!("Claude Code Hooks", "Managed status hooks.", Toggle)]),
             group!("Behavior" => [
                 row!("Show Tab Titles in Sidebar", "Display agent tab titles in the project tree.", Toggle),
+                row!("Show Agent Task Summaries in Sidebar", "Show the overall task and recent report in multiline Agent rows (off by default).", Toggle),
                 row!("Agent Status Notifications", "Notify when an agent needs attention.", Toggle),
                 row!("Agent Finished Notifications", "Also notify when an agent reports completion.", Toggle),
             ]),
@@ -279,6 +280,7 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
         ("editor", "Autosave Delay") => "editor.autosaveDelaySeconds",
         ("editor", "Excluded Directories") => "editor.quickOpenExcludedDirectories",
         ("agents", "Show Tab Titles in Sidebar") => "agents.showTabTitlesInSidebar",
+        ("agents", "Show Agent Task Summaries in Sidebar") => "agents.showTaskSummariesInSidebar",
         ("agents", "Agent Status Notifications") => "agents.agentStatusNotificationsEnabled",
         ("agents", "Agent Finished Notifications") => {
             "agents.agentStatusFinishedNotificationsEnabled"

@@ -80,6 +80,7 @@ void _registerSettingsDialogAgentsTests() {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('Show Tab Titles in Sidebar'), findsOneWidget);
+    expect(find.text('Show Agent Task Summaries in Sidebar'), findsOneWidget);
     expect(find.text('Agent Status Notifications'), findsOneWidget);
     expect(
       find.text('Keep Computer Awake While Agents Are Working'),
@@ -90,6 +91,7 @@ void _registerSettingsDialogAgentsTests() {
       await toggleSwitchRow(label);
     }
     await toggleSwitchRow('Show Tab Titles in Sidebar');
+    await toggleSwitchRow('Show Agent Task Summaries in Sidebar');
     await toggleSwitchRow('Agent Status Notifications');
     await toggleSwitchRow('Agent Finished Notifications');
     await toggleSwitchRow('Keep Computer Awake While Agents Are Working');
@@ -115,6 +117,7 @@ void _registerSettingsDialogAgentsTests() {
     final behavior = container.read(settingsControllerProvider).agents;
     expect(<bool>[
       behavior.showTabTitlesInSidebar,
+      behavior.showTaskSummariesInSidebar,
       behavior.agentStatusNotificationsEnabled,
       behavior.agentStatusFinishedNotificationsEnabled,
       behavior.keepComputerAwakeWhileAgentsWork,

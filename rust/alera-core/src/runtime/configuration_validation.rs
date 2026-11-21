@@ -78,6 +78,7 @@ pub(super) fn validate_settings(settings: &Value) -> Result<()> {
                 | "autosaveEnabled"
                 | "agentStatusNotificationsEnabled"
                 | "agentStatusFinishedNotificationsEnabled"
+                | "showTaskSummariesInSidebar"
                 | "enabled"
                 | "hostFallbackEnabled"
                 | "providerFallbackEnabled"

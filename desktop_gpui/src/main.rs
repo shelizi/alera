@@ -11707,6 +11707,12 @@ impl Render for Workbench {
         let agent_state_summary =
             AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current);
         let agent_ui_locale = self.settings_menu_locale;
+        // Shared Host setting: default-off; a missing/stale snapshot cannot
+        // enable the left summary accidentally.
+        let show_agent_task_summaries = native_agent_context_ui::task_summary_sidebar_enabled(
+            self.settings_native_profile_migrated && self.settings_shared_error.is_none(),
+            self.settings_extra_values.get("agents.showTaskSummariesInSidebar"),
+        );
         let terminal_sessions: Vec<_> = self
             .terminals
             .sessions
@@ -11728,8 +11734,13 @@ impl Render for Workbench {
                     // Host PTY is no longer running.
                     session.running.then(|| session.agent_type.clone()).flatten(),
                     AgentVisualState::for_session(session, agent_inventory_current),
-                    session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.goal.clone()),
-                    session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.progress.clone()),
+                    // Avoid cloning task text on each paint while disabled.
+                    if show_agent_task_summaries {
+                        session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.goal.clone())
+                    } else { String::new() },
+                    if show_agent_task_summaries {
+                        session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.progress.clone())
+                    } else { String::new() },
                 )
             })
             .collect();

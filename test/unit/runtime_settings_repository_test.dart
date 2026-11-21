@@ -480,6 +480,7 @@ void main() {
         'agents.agentStatusNotificationsEnabled': true,
         'agents.agentStatusFinishedNotificationsEnabled': true,
         'agents.showTabTitlesInSidebar': true,
+        'agents.showTaskSummariesInSidebar': true,
       },
     };
     host.responses['runtimeSettings.get'] = {
@@ -503,6 +504,7 @@ void main() {
     ]);
     expect(loaded.general.showTrayIcon, isFalse);
     expect(loaded.agents.showTabTitlesInSidebar, isTrue);
+    expect(loaded.agents.showTaskSummariesInSidebar, isTrue);
     await repo.compareAndSetSharedDesktopChanges(
       loaded,
       loaded.copyWith(
@@ -721,23 +723,27 @@ void main() {
       legacyRepository: legacy,
     );
     final loaded = await repository.load();
-    expect(host.payloads['desktopSettings.seedLocal'], hasLength(1),
-        reason: 'Old Host must not see unknown quota pin migration keys');
+    expect(
+      host.payloads['desktopSettings.seedLocal'],
+      hasLength(1),
+      reason: 'Old Host must not see unknown quota pin migration keys',
+    );
     final changed = loaded.copyWith(
       agents: loaded.agents.copyWith(
         quotas: loaded.agents.quotas.withHost(
           'local',
-          loaded.agents.quotas.forHost('local').copyWith(
-            unpinnedQuotaKeys: ['agy'],
-          ),
+          loaded.agents.quotas
+              .forHost('local')
+              .copyWith(unpinnedQuotaKeys: ['agy']),
         ),
       ),
     );
     await repository.compareAndSetSharedDesktopChanges(loaded, changed);
     expect(host.payloads['desktopSettings.compareAndSetBatch'], isNull);
     await repository.save(changed);
-    expect(legacy.settings.agents.quotas.forHost('local').unpinnedQuotaKeys,
-        ['agy']);
+    expect(legacy.settings.agents.quotas.forHost('local').unpinnedQuotaKeys, [
+      'agy',
+    ]);
   });
 
   test(

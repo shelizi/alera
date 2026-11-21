@@ -135,4 +135,16 @@ mixin _SettingsControllerPortableSettings on _$SettingsController {
           ),
         );
       });
+
+  Future<void> setShowTaskSummariesInSidebar(bool value) =>
+      _controller._serialize(() async {
+        if (state.agents.showTaskSummariesInSidebar == value) {
+          return;
+        }
+        await _controller._save(
+          state.copyWith(
+            agents: state.agents.copyWith(showTaskSummariesInSidebar: value),
+          ),
+        );
+      });
 }

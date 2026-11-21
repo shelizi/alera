@@ -44,6 +44,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `agentStatusFinishedNotificationsEnabled` | portable |
 | `keepComputerAwakeWhileAgentsWork` | local-only |
 | `showTabTitlesInSidebar` | portable |
+| `showTaskSummariesInSidebar` | portable (Rust Host shared; default off) |
 | `defaultAgentProfileId` | runtime + portable |
 | `gitBashExecutablePath` | local-only (per-device executable override) |
 | `quotas` (per-host `enabledProviders`, `providerDefaultsVersion`, `claudeDefault*`, `claudeProfiles`, `environment`) | runtime (`agentQuotas` for host `local`) |
@@ -89,7 +90,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `paddingX`, `paddingY`, `cursorShape`, `cursorBlink`, `cursorOpacity`, `themeName`, `backgroundOpacity`, `wordSeparators`, `colorOverrides`, `tuiScrollSensitivity`, `clipboardOnSelect`, `allowOsc52Clipboard`, `showComposerByDefault`, `toolbarCorner` | portable |
 | `hostEmptyShutdownDelaySeconds`, `hostDetachedSessionShutdownDelaySeconds`, `hostScrollbackBytes`, `loginShell` (as `resolvedLoginShell`) | runtime (`configure`) |
 | `bufferBudgetMegabytes`, `keepRuntimeOpenOnAppQuit` | runtime (consumed by the workbench buffer owner and the runtime-host quit gate) |
-| `scrollbackLines`, `outputRefreshFps`, `powerShell7ExecutablePath`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`; output refresh is device-performance-specific; executable overrides are per-device) |
+| `showCodeBlockCopyButton`, `scrollbackLines`, `outputRefreshFps`, `powerShell7ExecutablePath`, `confirmCloseRunningProcesses` | local-only (`scrollbackLines` also feeds the derived `restoreSnapshotBytes` sent in `configure`; output refresh is device-performance-specific; executable overrides are per-device) |
 
 ### `keyboard`
 

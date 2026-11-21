@@ -81,6 +81,7 @@ fn default_value(path: &str) -> Result<Value> {
         "agents.agentStatusNotificationsEnabled" => json!(false),
         "agents.agentStatusFinishedNotificationsEnabled" => json!(false),
         "agents.showTabTitlesInSidebar" => json!(false),
+        "agents.showTaskSummariesInSidebar" => json!(false),
         _ => bail!("Unsupported shared desktop setting path"),
     })
 }
@@ -857,7 +858,11 @@ mod tests {
         let classic = RuntimeStore::open(temp.path()).await.unwrap();
         let native = RuntimeStore::open(temp.path()).await.unwrap();
         let defaults = native.desktop_shared_settings_snapshot().await.unwrap();
-        assert_eq!(defaults["values"].as_object().unwrap().len(), 30);
+        assert_eq!(defaults["values"].as_object().unwrap().len(), SHARED_DESKTOP_PATHS.len());
+        assert_eq!(
+            defaults["values"]["agents.showTaskSummariesInSidebar"],
+            false
+        );
         assert_eq!(defaults["values"]["editor.twoRowTabs"], false);
         assert_eq!(defaults["values"]["terminal.fontFamily"], "JetBrains Mono");
         assert_eq!(defaults["values"]["editor.autosaveDelaySeconds"], 1);
@@ -882,6 +887,11 @@ mod tests {
                     json!("Tokyo Night Dark"),
                 ),
                 change("agents.showTabTitlesInSidebar", json!(false), json!(true)),
+                change(
+                    "agents.showTaskSummariesInSidebar",
+                    json!(false),
+                    json!(true),
+                ),
                 change("general.showTrayIcon", json!(true), json!(false)),
             ])
             .await
@@ -917,6 +927,11 @@ mod tests {
                     json!("Tokyo Night Dark"),
                 ),
                 change("agents.showTabTitlesInSidebar", json!(false), json!(true)),
+                change(
+                    "agents.showTaskSummariesInSidebar",
+                    json!(false),
+                    json!(true),
+                ),
                 change("general.showTrayIcon", json!(true), json!(false)),
             ])
             .await
@@ -958,6 +973,7 @@ mod tests {
             .await
             .is_err());
         assert_eq!(classic_config["agents"]["showTabTitlesInSidebar"], true);
+        assert_eq!(classic_config["agents"]["showTaskSummariesInSidebar"], true);
         assert_eq!(classic_config["general"]["showTrayIcon"], false);
         assert!(classic
             .desktop_shared_compare_and_set("terminal.cursorShape", &json!("block"), &json!("bar"),)

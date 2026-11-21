@@ -763,6 +763,14 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     opt: true,
     def: false,
   );
+  static bool _$showTaskSummariesInSidebar(AgentSettings v) =>
+      v.showTaskSummariesInSidebar;
+  static const Field<AgentSettings, bool> _f$showTaskSummariesInSidebar = Field(
+    'showTaskSummariesInSidebar',
+    _$showTaskSummariesInSidebar,
+    opt: true,
+    def: false,
+  );
   static String? _$defaultAgentProfileId(AgentSettings v) =>
       v.defaultAgentProfileId;
   static const Field<AgentSettings, String> _f$defaultAgentProfileId = Field(
@@ -802,6 +810,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
         _f$agentStatusFinishedNotificationsEnabled,
     #keepComputerAwakeWhileAgentsWork: _f$keepComputerAwakeWhileAgentsWork,
     #showTabTitlesInSidebar: _f$showTabTitlesInSidebar,
+    #showTaskSummariesInSidebar: _f$showTaskSummariesInSidebar,
     #defaultAgentProfileId: _f$defaultAgentProfileId,
     #agentExecutablePaths: _f$agentExecutablePaths,
     #gitBashExecutablePath: _f$gitBashExecutablePath,
@@ -821,6 +830,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
         _f$keepComputerAwakeWhileAgentsWork,
       ),
       showTabTitlesInSidebar: data.dec(_f$showTabTitlesInSidebar),
+      showTaskSummariesInSidebar: data.dec(_f$showTaskSummariesInSidebar),
       defaultAgentProfileId: data.dec(_f$defaultAgentProfileId),
       agentExecutablePaths: data.dec(_f$agentExecutablePaths),
       gitBashExecutablePath: data.dec(_f$gitBashExecutablePath),
@@ -906,6 +916,7 @@ abstract class AgentSettingsCopyWith<$R, $In extends AgentSettings, $Out>
     bool? agentStatusFinishedNotificationsEnabled,
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
+    bool? showTaskSummariesInSidebar,
     String? defaultAgentProfileId,
     Map<String, String>? agentExecutablePaths,
     String? gitBashExecutablePath,
@@ -947,6 +958,7 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     bool? agentStatusFinishedNotificationsEnabled,
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
+    bool? showTaskSummariesInSidebar,
     Object? defaultAgentProfileId = $none,
     Map<String, String>? agentExecutablePaths,
     Object? gitBashExecutablePath = $none,
@@ -963,6 +975,8 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
         #keepComputerAwakeWhileAgentsWork: keepComputerAwakeWhileAgentsWork,
       if (showTabTitlesInSidebar != null)
         #showTabTitlesInSidebar: showTabTitlesInSidebar,
+      if (showTaskSummariesInSidebar != null)
+        #showTaskSummariesInSidebar: showTaskSummariesInSidebar,
       if (defaultAgentProfileId != $none)
         #defaultAgentProfileId: defaultAgentProfileId,
       if (agentExecutablePaths != null)
@@ -990,6 +1004,10 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     showTabTitlesInSidebar: data.get(
       #showTabTitlesInSidebar,
       or: $value.showTabTitlesInSidebar,
+    ),
+    showTaskSummariesInSidebar: data.get(
+      #showTaskSummariesInSidebar,
+      or: $value.showTaskSummariesInSidebar,
     ),
     defaultAgentProfileId: data.get(
       #defaultAgentProfileId,

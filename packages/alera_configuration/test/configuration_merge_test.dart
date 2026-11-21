@@ -153,6 +153,7 @@ void main() {
           'agentStatusHooks': {'codex': true},
           'quotas': {'token': 'secret'},
           'showTabTitlesInSidebar': true,
+          'showTaskSummariesInSidebar': true,
         },
         'aiDictation': {
           'remoteConsentVersion': 2,
@@ -170,7 +171,10 @@ void main() {
         'tabSize': 2,
         'quickOpenExcludedDirectories': <String>['target', 'vendor'],
       });
-      expect(result['agents'], {'showTabTitlesInSidebar': true});
+      expect(result['agents'], {
+        'showTabTitlesInSidebar': true,
+        'showTaskSummariesInSidebar': true,
+      });
       expect(result['aiDictation'], {'language': 'es'});
       expect(result['aiTextGeneration'], isEmpty);
     },
