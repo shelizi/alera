@@ -70,9 +70,13 @@ class WorkspaceTabService._(
     String? agentType,
     String? agyAccountId,
   }) async {
-    final existing = await _repository.listWorkspaceTabs(workspaceId);
-    final tabId = _uuid.v4();
     final trimmedTitle = title?.trim();
+    // Named Agent/Setup tabs already know their title. Only the default
+    // numbered Terminal needs a Host inventory read for its next ordinal.
+    final existing = trimmedTitle == null || trimmedTitle.isEmpty
+        ? await _repository.listWorkspaceTabs(workspaceId)
+        : const <WorkspaceTabRecord>[];
+    final tabId = _uuid.v4();
     final trimmedCommand = initialCommand?.trim();
     final tab = WorkspaceTabRecord(
       id: tabId,

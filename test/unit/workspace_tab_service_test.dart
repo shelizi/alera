@@ -144,6 +144,26 @@ void main() {
         );
       },
     );
+    test(
+      'named Claude Agent tab skips a redundant tab inventory read',
+      () async {
+        final repository = _FakeWorkbenchRepository();
+        final service = WorkspaceTabService(repository: repository);
+
+        final tab = await service.createTerminalTab(
+          'workspace-1',
+          title: 'Claude Code',
+          initialCommand: 'claude',
+          agentType: 'claude',
+          spawnOnCreate: true,
+        );
+
+        expect(tab.title, 'Claude Code');
+        expect(tab.spawnOnCreate, isTrue);
+        expect(repository.listWorkspaceTabsCalls, 0);
+      },
+    );
+
     test('createTerminalTab builds a named one-shot setup terminal', () async {
       final repository = _FakeWorkbenchRepository();
       final service = WorkspaceTabService(
@@ -1222,6 +1242,7 @@ void main() {
 class _FakeWorkbenchRepository implements WorkbenchRepository {
   final List<WorkspaceTabRecord> tabs = <WorkspaceTabRecord>[];
   final Map<String, WorkbenchLayout> layouts = <String, WorkbenchLayout>{};
+  int listWorkspaceTabsCalls = 0;
 
   @override
   Future<Workspace?> findWorkspaceById(String workspaceId) async => null;
@@ -1243,6 +1264,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Future<List<WorkspaceTabRecord>> listWorkspaceTabs(String workspaceId) async {
+    listWorkspaceTabsCalls += 1;
     return tabs
         .where((tab) => tab.workspaceId == workspaceId)
         .toList(growable: false);

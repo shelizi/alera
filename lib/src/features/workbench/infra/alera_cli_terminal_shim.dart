@@ -58,7 +58,7 @@ class AleraCliTerminalShimService({
       'exec ${_shQuote(command.executable)} ${command.prefixArguments.map(_shQuote).join(' ')} "\$@"',
       '',
     ];
-    await file.writeAsString(lines.join('\n'), flush: true);
+    await _writeShimIfChanged(file, lines.join('\n'));
     setPosixFileMode(file.path, posixExecutableFileMode);
   }
 
@@ -76,10 +76,21 @@ class AleraCliTerminalShimService({
       'exit /b %ERRORLEVEL%',
       '',
     ].join('\r\n');
-    await File(p.join(shimDir.path, 'alera.cmd'))
-        .writeAsString(content, flush: true);
-    await File(p.join(shimDir.path, 'alera.bat'))
-        .writeAsString(content, flush: true);
+    await _writeShimIfChanged(File(p.join(shimDir.path, 'alera.cmd')), content);
+    await _writeShimIfChanged(File(p.join(shimDir.path, 'alera.bat')), content);
+  }
+
+  // A terminal launch may call this for every new tab. Avoid rewriting an
+  // identical script: Windows antivirus and file watchers can add latency.
+  Future<void> _writeShimIfChanged(File file, String content) async {
+    try {
+      if (await file.exists() && await file.readAsString() == content) {
+        return;
+      }
+    } on FileSystemException {
+      // Restore the launcher using the original write path below.
+    }
+    await file.writeAsString(content, flush: true);
   }
 }
 

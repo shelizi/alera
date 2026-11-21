@@ -254,7 +254,7 @@ Future<String> _prepareRuntime(
     await service.install(runtimeHome: runtimeHome);
     return runtimeHome.path;
   }
-  final preparation = await ClaudeRuntimeHomeService(
+  final service = ClaudeRuntimeHomeService(
     homeDirectory: home.path,
     applicationSupportDirectory: () async => support,
     platform: .posix,
@@ -265,6 +265,8 @@ Future<String> _prepareRuntime(
     resourceDeleter: resourceDeleter,
     resourceReconciler: resourceReconciler,
     syncMacOSKeychainCredentials: false,
-  ).prepareForTerminalLaunch();
+  );
+  await service.install();
+  final preparation = await service.prepareForTerminalLaunch();
   return preparation.runtimeHomePath;
 }

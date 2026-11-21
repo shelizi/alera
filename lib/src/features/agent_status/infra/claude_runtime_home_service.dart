@@ -104,7 +104,13 @@ final class ClaudeRuntimeHomeService({
 
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
-    final status = await install(runtimeHome: runtimeHome);
+    // Claude runs against its original home, not this managed hook overlay.
+    // Mirroring projects, history, and caches on every Tab open can traverse
+    // gigabytes of files (or copy them when Windows links are unavailable).
+    final status = await install(
+      runtimeHome: runtimeHome,
+      syncResources: false,
+    );
     // Additional --settings must include only Alera commands. The merged
     // runtime settings.json also contains user hooks, plugins and preferences:
     // passing it as --settings would double-register the user's own hooks.
@@ -168,10 +174,15 @@ final class ClaudeRuntimeHomeService({
 
   Future<ManagedAgentHookInstallStatus> install({
     Directory? runtimeHome,
+    bool syncResources = true,
   }) async {
     final runtime = runtimeHome ?? await _runtimeHomeDirectory();
     final source = _sourceConfigDirectory(runtime);
-    await _syncRuntimeResources(runtime, source);
+    // Full resource reconciliation is for explicit Hook installation, not
+    // the hot path that launches a new Claude terminal.
+    if (syncResources) {
+      await _syncRuntimeResources(runtime, source);
+    }
     await _syncKeychainCredentials(runtime);
 
     final descriptor = _descriptor(runtime);

@@ -38,6 +38,53 @@ void main() {
     });
 
     _registerClaudeRuntimeCcsTests(() => home, () => support, () => service);
+    test(
+      'terminal launch skips mirroring the full Claude resource tree',
+      () async {
+        final sourceProjects = Directory(
+          p.join(home.path, '.claude', 'projects'),
+        )..createSync(recursive: true);
+        File(p.join(sourceProjects.path, 'session.jsonl'))
+            .writeAsStringSync('source session remains untouched');
+        var copied = 0;
+        var fingerprinted = 0;
+        final launchService = ClaudeRuntimeHomeService(
+          homeDirectory: home.path,
+          applicationSupportDirectory: () async => support,
+          platform: .posix,
+          environment: <String, String>{'HOME': home.path},
+          syncMacOSKeychainCredentials: false,
+          resourceLinkCreator: ({required sourcePath, required targetPath}) =>
+              throw const FileSystemException('symlinks disabled'),
+          resourceCopier: ({required sourcePath, required targetPath}) async {
+            copied++;
+          },
+          resourceFingerprinter: (sourcePath) async {
+            fingerprinted++;
+            return 'sha256:test';
+          },
+        );
+
+        final first = await launchService.prepareForTerminalLaunch();
+        final second = await launchService.prepareForTerminalLaunch();
+
+        expect(first.hookStatus.state, ManagedAgentHookInstallState.installed);
+        expect(second.codeCopySettingsPath, isNotNull);
+        expect(copied, 0);
+        expect(fingerprinted, 0);
+        expect(
+          FileSystemEntity.typeSync(
+            p.join(first.runtimeHomePath, 'projects'),
+            followLinks: false,
+          ),
+          FileSystemEntityType.notFound,
+        );
+        expect(
+          File(p.join(sourceProjects.path, 'session.jsonl')).existsSync(),
+          isTrue,
+        );
+      },
+    );
 
     test('prepares a runtime config without mutating user settings', () async {
       final sourceSettingsPath = p.join(home.path, '.claude', 'settings.json');
@@ -55,6 +102,7 @@ void main() {
       final legacyConfig = File(p.join(home.path, '.claude.json'))
         ..writeAsStringSync('{"projects":{}}\n');
 
+      await service.install();
       final preparation = await service.prepareForTerminalLaunch();
 
       // --settings must contain *only* our Hook commands. The normal runtime
@@ -404,7 +452,7 @@ void main() {
           support: support,
         );
 
-        final preparation = await fallbackService.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(fallbackService);
         final runtimeOnlyFile = File(
           p.join(preparation.runtimeHomePath, 'plugins', 'runtime-only.md'),
         )..writeAsStringSync('runtime-side change');
@@ -413,7 +461,7 @@ void main() {
         );
         final markerBefore = marker.readAsStringSync();
 
-        await fallbackService.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(fallbackService);
 
         expect(
           File(p.join(preparation.runtimeHomePath, 'plugins', 'demo.md'))
@@ -438,7 +486,7 @@ void main() {
           support: support,
         );
 
-        final preparation = await fallbackService.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(fallbackService);
         final runtimeOnlyFile = File(
           p.join(preparation.runtimeHomePath, 'plugins', 'runtime-only.md'),
         )..writeAsStringSync('runtime-side change');
@@ -449,7 +497,7 @@ void main() {
 
         File(p.join(sourcePluginsPath, 'new.md'))
             .writeAsStringSync('new source');
-        await fallbackService.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(fallbackService);
 
         expect(runtimeOnlyFile.existsSync(), isFalse);
         expect(
@@ -467,12 +515,12 @@ void main() {
         final sourcePlugins = Directory(p.join(home.path, '.claude', 'plugins'))
           ..createSync(recursive: true);
         File(p.join(sourcePlugins.path, 'demo.md')).writeAsStringSync('plugin');
-        final preparation = await service.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(service);
         final marker = File(
           p.join(preparation.runtimeHomePath, '.alera-copied-plugins.json'),
         )..writeAsStringSync('{}\n');
 
-        await service.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(service);
 
         expect(marker.existsSync(), isFalse);
 
@@ -480,9 +528,9 @@ void main() {
           p.join(home.path, '.claude', 'commands'),
         )..createSync(recursive: true);
         File(p.join(sourceCommands.path, 'demo.md')).writeAsStringSync('cmd');
-        await service.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(service);
         sourceCommands.deleteSync(recursive: true);
-        await service.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(service);
 
         expect(
           FileSystemEntity.typeSync(
@@ -506,12 +554,12 @@ void main() {
           support: support,
         );
 
-        final preparation = await fallbackService.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(fallbackService);
         final marker = File(
           p.join(preparation.runtimeHomePath, '.alera-copied-plugins.json'),
         )..writeAsStringSync('{bad');
         sourcePlugins.deleteSync(recursive: true);
-        await fallbackService.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(fallbackService);
 
         expect(marker.existsSync(), isTrue);
         expect(
@@ -531,9 +579,9 @@ void main() {
           ..createSync(recursive: true);
         File(p.join(sourcePlugins.path, 'demo.md')).writeAsStringSync('plugin');
 
-        final preparation = await service.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(service);
         sourcePlugins.deleteSync(recursive: true);
-        await service.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(service);
 
         expect(
           FileSystemEntity.typeSync(
@@ -560,7 +608,7 @@ void main() {
       File(p.join(runtimeHome.path, '.alera-copied-broken-link.json'))
           .writeAsStringSync('{}\n');
 
-      await service.prepareForTerminalLaunch();
+      await _prepareAfterResourceInstall(service);
 
       expect(
         FileSystemEntity.typeSync(
@@ -598,7 +646,7 @@ void main() {
           p.join(runtimeHome.path, '.alera-copied-plugins.json'),
         )..writeAsStringSync('{}\n');
 
-        await service.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(service);
 
         expect(marker.existsSync(), isFalse);
         expect(
@@ -623,7 +671,7 @@ void main() {
           support: support,
         );
 
-        final preparation = await fallbackService.prepareForTerminalLaunch();
+        final preparation = await _prepareAfterResourceInstall(fallbackService);
         final pluginMarker = File(
           p.join(preparation.runtimeHomePath, '.alera-copied-plugins.json'),
         );
@@ -631,7 +679,7 @@ void main() {
         File(p.join(nested.path, 'next.md'))
             .writeAsStringSync('changed nested source');
 
-        await fallbackService.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(fallbackService);
         expect(_markerFingerprint(pluginMarker), isNot(firstFingerprint));
 
         final runtimeLegacyConfig = File(
@@ -639,7 +687,7 @@ void main() {
         );
         expect(runtimeLegacyConfig.existsSync(), isTrue);
         legacyConfig.deleteSync();
-        await fallbackService.prepareForTerminalLaunch();
+        await _prepareAfterResourceInstall(fallbackService);
 
         expect(runtimeLegacyConfig.existsSync(), isFalse);
       },
@@ -843,6 +891,14 @@ void main() {
       );
     });
   });
+}
+
+// Explicit Hook installation still mirrors resources; terminal launches do not.
+Future<ClaudeRuntimeHomePreparation> _prepareAfterResourceInstall(
+  ClaudeRuntimeHomeService service,
+) async {
+  await service.install();
+  return service.prepareForTerminalLaunch();
 }
 
 ClaudeRuntimeHomeService _serviceWithFailingResourceLinks({
