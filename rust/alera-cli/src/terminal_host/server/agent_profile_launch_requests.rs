@@ -159,6 +159,17 @@ impl ServerActor {
                 Some(AgentProfileLaunchReceiptOutcome::Created) | None => {}
             }
         }
+        if let Some(history) = verified_history.as_ref() {
+            // Only new exact-Resume launches need the duplicate-owner guard.
+            // A retry of the *same* confirmed request must replay the durable
+            // receipt above instead of being mistaken for a second owner.
+            super::agent_history_resume::ensure_history_session_unowned(
+                &self.runtime_store,
+                &workspace_id,
+                history,
+            )
+            .await?;
+        }
         let workspace = self
             .runtime_store
             .find_workspace(&workspace_id)

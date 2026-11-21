@@ -286,6 +286,52 @@ fn existing_tab_owns_source(
         || registered_source == Some(requested_source.as_str())
 }
 
+/// Checked only AFTER an authenticated matching mutation receipt has had a
+/// chance to replay its original Tab. A fresh mutation still cannot launch a
+/// second CLI owner for the exact native conversation.
+pub(super) async fn ensure_history_session_unowned(
+    store: &RuntimeStore,
+    workspace_id: &str,
+    verified: &VerifiedHistoryResume,
+) -> HostResult<()> {
+    let target = ExactResumeRequest {
+        provider: verified.provider.clone(),
+        account: verified.account_id.clone(),
+        project: String::new(),
+        workspace: workspace_id.to_owned(),
+        profile: String::new(),
+        native_id: verified.native_id.clone(),
+        client_mutation_id: String::new(),
+    };
+    let settings = store
+        .agent_quota_settings()
+        .await
+        .map_err(|error| HostError::state(error.to_string()))?;
+    let registered_fingerprints: HashMap<(String, String), String> = search_roots(&settings)
+        .await
+        .into_iter()
+        .filter_map(|root| {
+            let directory = root.path.parent()?.canonicalize().ok()?;
+            Some((
+                (root.provider.to_owned(), root.account_id),
+                source_directory_fingerprint(&directory.to_string_lossy()),
+            ))
+        })
+        .collect();
+    let existing = store
+        .list_workspace_tabs(workspace_id)
+        .await
+        .map_err(|err| HostError::state(err.to_string()))?
+        .into_iter()
+        .any(|tab| existing_tab_owns_source(&tab, &target, verified, &registered_fingerprints));
+    if existing {
+        return Err(HostError::state(
+            "This exact provider session already has an Alera Tab in its original Worktree. Open or restore that Tab instead of creating a duplicate.",
+        ));
+    }
+    Ok(())
+}
+
 impl ServerActor {
     pub(super) async fn resume_exact_agent_history(
         &mut self,
@@ -295,39 +341,6 @@ impl ServerActor {
         // Route policy already rejects mobile and unauthenticated callers.
         let target = ExactResumeRequest::parse(payload)?;
         let verified = verify_native_source(&self.runtime_store, &target).await?;
-        let settings = self
-            .runtime_store
-            .agent_quota_settings()
-            .await
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let registered_fingerprints: HashMap<(String, String), String> = search_roots(&settings)
-            .await
-            .into_iter()
-            .filter_map(|root| {
-                let directory = root.path.parent()?.canonicalize().ok()?;
-                Some((
-                    (root.provider.to_owned(), root.account_id),
-                    source_directory_fingerprint(&directory.to_string_lossy()),
-                ))
-            })
-            .collect();
-        // Prefer an existing Alera-owned tab over spawning a second CLI that
-        // edits/locks the same native provider session concurrently. This
-        // includes stopped tabs that Alera already knows how to restore.
-        let existing = self
-            .runtime_store
-            .list_workspace_tabs(&target.workspace)
-            .await
-            .map_err(|err| HostError::state(err.to_string()))?
-            .into_iter()
-            .any(|tab| {
-                existing_tab_owns_source(&tab, &target, &verified, &registered_fingerprints)
-            });
-        if existing {
-            return Err(HostError::state(
-                "This exact provider session already has an Alera Tab in its original Worktree. Open or restore that Tab instead of creating a duplicate.",
-            ));
-        }
         self.launch_agent_profile_with_verified_history(
             client_id,
             &json!({

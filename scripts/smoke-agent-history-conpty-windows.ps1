@@ -5,6 +5,9 @@
 # Example:
 #   pwsh -NoProfile -File scripts/smoke-agent-history-conpty-windows.ps1 `
 #     -CliPath D:\build\alera.exe
+# Optional deeper isolated Host search→Profile→Tab test:
+#   pwsh -NoProfile -File scripts/smoke-agent-history-conpty-windows.ps1 `
+#     -CliPath D:\build\alera.exe -TestVerifiedHistoryRpc
 #
 # A successful run verifies:
 #   1. Alera Host -> ConPTY -> shell I/O
@@ -18,6 +21,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$CliPath,
     [string]$Root = '',
+    [switch]$TestVerifiedHistoryRpc,
     [switch]$KeepArtifacts
 )
 
@@ -168,6 +172,207 @@ function Wait-TerminalMatch {
     return $false
 }
 
+# Authenticated loopback RPC to the unique test Runtime. Never use a normal
+# Alera control file; no token or provider content is printed or persisted.
+function Invoke-IsolatedHostRpc {
+    param([string]$Method, [hashtable]$Payload)
+    $control = Get-Content -LiteralPath (Join-Path $runtime 'runtime-host.json') -Raw |
+        ConvertFrom-Json
+    $connection = [System.Net.Sockets.TcpClient]::new()
+    $connection.Connect('127.0.0.1', [int]$control.port)
+    $stream = $connection.GetStream()
+    $stream.ReadTimeout = 47000
+    $stream.WriteTimeout = 47000
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $reader = [System.IO.StreamReader]::new($stream, $utf8, $false, 4096, $true)
+    $writer = [System.IO.StreamWriter]::new($stream, $utf8, 4096, $true)
+    $writer.AutoFlush = $true
+    try {
+        $requests = @(
+            @{ id = 1; type = 'hello'; payload = @{
+                protocolVersion = [int]$control.protocolVersion
+                token = [string]$control.token
+                clientKind = 'cli'
+            } },
+            @{ id = 2; type = $Method; payload = $Payload }
+        )
+        foreach ($request in $requests) {
+            $writer.WriteLine(($request | ConvertTo-Json -Depth 64 -Compress))
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            $reply = $null
+            while ([DateTime]::UtcNow -lt $deadline) {
+                $line = $reader.ReadLine()
+                if ($null -eq $line) {
+                    throw "Test Host closed the RPC socket during $($request.type)"
+                }
+                $frame = $line | ConvertFrom-Json
+                # Host may publish asynchronous events without a request id.
+                if (($frame.PSObject.Properties.Name -contains 'id') -and
+                    $null -ne $frame.id -and
+                    [int]$frame.id -eq [int]$request.id) {
+                    $reply = $frame
+                    break
+                }
+            }
+            if ($null -eq $reply) {
+                throw "Test Host did not acknowledge $($request.type)"
+            }
+            if ($reply.ok -ne $true) {
+                $reason = ([string]$reply.error)
+                if ($reason.Length -gt 200) {
+                    $reason = $reason.Substring(0, 200)
+                }
+                throw "Test Host rejected $($request.type): $reason"
+            }
+        }
+        return $reply.payload
+    }
+    finally {
+        $writer.Dispose()
+        $reader.Dispose()
+        $stream.Dispose()
+        $connection.Dispose()
+    }
+}
+
+function Invoke-VerifiedHistoryRpcFixture {
+    # These account directories contain only synthetic native metadata and
+    # NO copied provider credentials, user history or token files.
+    $codexHome = Join-Path $Root 'codex-test-account'
+    $claudeHome = Join-Path $Root 'claude-test-account'
+    $codexSessions = Join-Path $codexHome 'sessions/2026/11/21'
+    $claudeSessions = Join-Path $claudeHome 'projects/-isolated'
+    $null = New-Item -ItemType Directory -Path $codexSessions -Force
+    $null = New-Item -ItemType Directory -Path $claudeSessions -Force
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $codexId = [guid]::NewGuid().ToString('D')
+    $claudeId = [guid]::NewGuid().ToString('D')
+    $codexFile = Join-Path $codexSessions ("rollout-2026-11-21T00-00-00-$codexId.jsonl")
+    $claudeFile = Join-Path $claudeSessions ("$claudeId.jsonl")
+    $codexMeta = @{ type = 'session_meta'; payload = @{
+        id = $codexId; cwd = $project
+    } } | ConvertTo-Json -Compress -Depth 10
+    $codexMessage = @{ type = 'event_msg'; payload = @{
+        type = 'user_message'; message = 'alera protected history fixture codex'
+    } } | ConvertTo-Json -Compress -Depth 10
+    [IO.File]::WriteAllText($codexFile, "$codexMeta`n$codexMessage`n", $encoding)
+    $claudeMeta = @{ type = 'user'; sessionId = $claudeId; cwd = $project;
+        message = @{ role = 'user'; content = 'alera protected history fixture claude' }
+    } | ConvertTo-Json -Compress -Depth 10
+    [IO.File]::WriteAllText($claudeFile, "$claudeMeta`n", $encoding)
+
+    $settings = Invoke-IsolatedHostRpc -Method 'runtimeSettings.get' -Payload @{}
+    $quotas = $settings.agentQuotas
+    $quotas.codexProfiles = @(@{ alias = 'Isolated Codex'; profile = $codexHome })
+    $quotas.claudeProfiles = @(@{
+        alias = 'Isolated Claude'; profile = $claudeHome
+        showInUsage = $true; usageDisplayName = $null
+    })
+    $saved = Invoke-IsolatedHostRpc -Method 'runtimeSettings.update' -Payload @{
+        expectedRevision = [int]$settings.revision
+        agentQuotas = $quotas
+    }
+    if (@($saved.agentQuotas.codexProfiles).Count -ne 1 -or
+        @($saved.agentQuotas.claudeProfiles).Count -ne 1) {
+        throw 'Test Host did not persist isolated provider homes'
+    }
+
+    foreach ($entry in @(
+        @{ provider = 'codex'; home = $codexHome; id = $codexId },
+        @{ provider = 'claude'; home = $claudeHome; id = $claudeId }
+    )) {
+        $profile = Invoke-AleraJson -Arguments @(
+            'agent-profile', '--runtime-dir', $runtime, '--no-start', '--json',
+            'create', '--name', ('isolated-' + $entry.provider),
+            '--agent-type', $entry.provider, '--launch-mode', 'command',
+            '--command', $entry.provider
+        )
+        if ([string]::IsNullOrWhiteSpace([string]$profile.id)) {
+            throw "Missing $($entry.provider) Agent Profile id"
+        }
+
+        # Prove the exact account and original registered Worktree were found.
+        $search = Invoke-IsolatedHostRpc -Method 'agentHistory.search' -Payload @{
+            text = 'alera protected history fixture'
+            consentToIndexUserText = $true
+            provider = $entry.provider
+            accountId = $entry.home
+            projectId = $projectId
+            workspaceId = $workspaceId
+            maxResults = 5
+        }
+        $found = @($search.hits | Where-Object {
+            $_.session.providerSessionId -eq $entry.id -and
+            $_.session.providerAccountId -eq $entry.home
+        })
+        if ($found.Count -ne 1) {
+            throw "History search did not find exactly one isolated $($entry.provider) source"
+        }
+        Write-Output ("$($entry.provider) Host history search: PASS")
+
+        $mutation = [guid]::NewGuid().ToString('D')
+        $resumed = Invoke-AleraJson -Arguments @(
+            'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+            'history-resume', '--provider', $entry.provider,
+            '--account-id', $entry.home,
+            '--project-id', $projectId, '--workspace-id', $workspaceId,
+            '--session-id', $entry.id, '--profile-id', [string]$profile.id,
+            '--client-mutation-id', $mutation,
+            '--confirm-account', '--confirm-resume'
+        )
+        if ([string]::IsNullOrWhiteSpace([string]$resumed.tab.id)) {
+            throw "$($entry.provider) Host did not create a verified Resume Tab"
+        }
+        if ($resumed.tab.payload.PSObject.Properties.Name -contains 'agentHistoryResumeOriginV1') {
+            throw "$($entry.provider) exposed private account origin in Tab response"
+        }
+        foreach ($promptField in @('initialPrompt', 'pendingAgentPrompt')) {
+            if (($resumed.tab.payload.PSObject.Properties.Name -contains $promptField) -and
+                $null -ne $resumed.tab.payload.$promptField) {
+                throw "$($entry.provider) Resume Tab attempted to replay $promptField"
+            }
+        }
+        Write-Output ("$($entry.provider) verified source -> Profile -> Tab: PASS")
+
+        # Ambiguous ACK retries must return the *same* receipt and never
+        # create a second PTY. A new mutation ID for the same UUID must fail.
+        $replayed = Invoke-AleraJson -Arguments @(
+            'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+            'history-resume', '--provider', $entry.provider,
+            '--account-id', $entry.home,
+            '--project-id', $projectId, '--workspace-id', $workspaceId,
+            '--session-id', $entry.id, '--profile-id', [string]$profile.id,
+            '--client-mutation-id', $mutation,
+            '--confirm-account', '--confirm-resume'
+        )
+        if ($replayed.tab.id -ne $resumed.tab.id) {
+            throw "$($entry.provider) ambiguous resume retry did not replay same Tab"
+        }
+        Write-Output ("$($entry.provider) idempotent Resume retry: PASS")
+        $conflict = $false
+        try {
+            $null = Invoke-IsolatedHostRpc -Method 'agentHistory.resumeExact' -Payload @{
+                provider = $entry.provider
+                accountId = $entry.home
+                projectId = $projectId
+                workspaceId = $workspaceId
+                providerSessionId = $entry.id
+                profileId = [string]$profile.id
+                clientMutationId = [guid]::NewGuid().ToString('D')
+                confirmProviderAccount = $true
+                confirmResume = $true
+            }
+        } catch {
+            $conflict = $_.Exception.Message -match 'already has an Alera Tab'
+        }
+        if (-not $conflict) {
+            throw "$($entry.provider) fresh mutation duplicate owner was not rejected"
+        }
+        Write-Output ("$($entry.provider) duplicate Resume owner rejected: PASS")
+    }
+    Write-Output 'Native positive restoration: NOT TESTED (synthetic metadata is not a native conversation)'
+}
+
 try {
     $null = New-Item -ItemType Directory -Path $runtime -Force
     $null = New-Item -ItemType Directory -Path $project -Force
@@ -240,7 +445,12 @@ try {
         throw 'Claude did not reject an absent UUID in Windows ConPTY'
     }
     Write-Output 'Claude exact UUID negative Resume: PASS'
-    Write-Output 'Result: PASS (negative native resume only; real-session restore unverified)'
+    if ($TestVerifiedHistoryRpc) {
+        Invoke-VerifiedHistoryRpcFixture
+        Write-Output 'Result: PASS (native negative + synthetic Host Resume; real-session restore unverified)'
+    } else {
+        Write-Output 'Result: PASS (negative native Resume only; real-session restore unverified)'
+    }
 }
 finally {
     # A failed readiness poll is not proof that the detached Host never
