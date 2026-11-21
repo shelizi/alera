@@ -26,6 +26,91 @@ fn history_preview_text(value: Option<&serde_json::Value>, cap: usize) -> String
         .collect::<String>()
 }
 
+/// A lost Host ACK must reuse the original mutation UUID after a deliberate
+/// second confirmation, never create a different request for the same source.
+fn reserve_history_resume_mutation(
+    pending: &mut std::collections::HashMap<String, String>,
+    identity: &str,
+    create_id: impl FnOnce() -> String,
+) -> String {
+    pending
+        .entry(identity.to_owned())
+        .or_insert_with(create_id)
+        .clone()
+}
+
+/// Collision-free source identity for both confirmation and retry state.
+/// Never combine untrusted account, project or profile labels with '|'.
+fn history_resume_identity(hit: &GlobalHistoryPreview, profile: &str) -> String {
+    serde_json::to_string(&[
+        hit.provider.as_str(),
+        hit.account.as_str(),
+        hit.project.as_str(),
+        hit.workspace.as_str(),
+        hit.native_id.as_str(),
+        profile,
+    ])
+    .expect("history resume identity is a JSON string array")
+}
+
+#[cfg(test)]
+mod exact_history_resume_retry_tests {
+    use super::*;
+
+    fn sample() -> GlobalHistoryPreview {
+        GlobalHistoryPreview {
+            title: "Title".into(),
+            goal: "Goal".into(),
+            provider: "codex".into(),
+            account: "secondary".into(),
+            project: "project".into(),
+            workspace: "workspace".into(),
+            native_id: "550e8400-e29b-41d4-a716-446655440001".into(),
+        }
+    }
+
+    #[test]
+    fn ambiguous_ack_reuses_original_id_until_confirmed() {
+        let hit = sample();
+        let identity = history_resume_identity(&hit, "official-codex");
+        let mut pending = std::collections::HashMap::new();
+        assert_eq!(
+            reserve_history_resume_mutation(&mut pending, &identity, || "mutation-1".into()),
+            "mutation-1"
+        );
+        assert_eq!(
+            reserve_history_resume_mutation(&mut pending, &identity, || panic!(
+                "must not generate a new UUID after a lost acknowledgement"
+            )),
+            "mutation-1"
+        );
+        assert_eq!(pending.remove(&identity).as_deref(), Some("mutation-1"));
+        assert_eq!(
+            reserve_history_resume_mutation(&mut pending, &identity, || "mutation-2".into()),
+            "mutation-2"
+        );
+    }
+
+    #[test]
+    fn source_and_profile_scopes_cannot_alias_even_with_delimiters() {
+        let mut a = sample();
+        a.account = "a|b".into();
+        a.project = "c".into();
+        let mut b = sample();
+        b.account = "a".into();
+        b.project = "b|c".into();
+        let first = history_resume_identity(&a, "official");
+        let second = history_resume_identity(&b, "official");
+        assert_ne!(first, second);
+        assert_ne!(first, history_resume_identity(&a, "other-profile"));
+
+        let mut pending = std::collections::HashMap::new();
+        reserve_history_resume_mutation(&mut pending, &first, || "mutation-1".into());
+        reserve_history_resume_mutation(&mut pending, &second, || "mutation-2".into());
+        assert_eq!(pending.len(), 2);
+    }
+}
+
 fn parse_history_previews(
     value: &serde_json::Value,
 ) -> Result<(Vec<GlobalHistoryPreview>, bool), &'static str> {
@@ -240,14 +325,17 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let identity = format!(
-            "{}|{}|{}|{}|{}|{}",
-            hit.provider, hit.account, hit.project, hit.workspace, hit.native_id, profile
-        );
+        let identity = history_resume_identity(&hit, &profile);
         if self.global_agent_history_resume_armed.as_deref() != Some(identity.as_str()) {
+            let retrying = self
+                .global_agent_history_pending_mutations
+                .contains_key(&identity);
             self.global_agent_history_resume_armed = Some(identity);
-            self.global_agent_history_status =
-                format!("Alera will select the configured {} account '{}', and revalidate its native history. Confirm exact Resume on the SAME result; the provider may reject incompatible credentials", hit.provider, hit.account);
+            self.global_agent_history_status = if retrying {
+                "Previous Resume acknowledgement is unknown. Inspect Live Agents first; then confirm the SAME result to reuse its ORIGINAL request ID".into()
+            } else {
+                format!("Alera will select the configured {} account '{}', and revalidate its native history. Confirm exact Resume on the SAME result; the provider may reject incompatible credentials", hit.provider, hit.account)
+            };
             cx.notify();
             return;
         }
@@ -266,7 +354,11 @@ impl Workbench {
         self.global_agent_history_status =
             "Host revalidating native UUID and original registered Worktree…".into();
         cx.notify();
-        let mutation_id = uuid::Uuid::new_v4().to_string();
+        let mutation_id = reserve_history_resume_mutation(
+            &mut self.global_agent_history_pending_mutations,
+            &identity,
+            || uuid::Uuid::new_v4().to_string(),
+        );
         cx.spawn(async move |view, cx| {
             let reply = cx.background_spawn(async move {
                 bridge.resume_exact_agent_history(
@@ -291,10 +383,11 @@ impl Workbench {
                             .and_then(serde_json::Value::as_str)
                             .is_some() =>
                     {
-                        "Exact Resume Tab created by Host. Open it from Live Agents; do not retry while startup is pending".into()
+                        view.global_agent_history_pending_mutations.remove(&identity);
+                        "Exact Resume Tab confirmed by Host. Open it from Live Agents; no duplicate launch was made".into()
                     }
                     _ => {
-                        "Exact Resume rejected or acknowledgement ambiguous. Inspect Live Agents before retrying".into()
+                        "Exact Resume rejected or acknowledgement ambiguous. Inspect Live Agents first; re-confirm the SAME result to reuse the original request ID".into()
                     }
                 };
                 cx.notify();
@@ -987,10 +1080,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                     }),
             );
         if !hit.account.is_empty() {
-            let identity = format!(
-                "{}|{}|{}|{}|{}|{}",
-                hit.provider, hit.account, hit.project, hit.workspace, hit.native_id, profile
-            );
+            let identity = history_resume_identity(hit, &profile);
             let armed =
                 view.global_agent_history_resume_armed.as_deref() == Some(identity.as_str());
             card = card.child(

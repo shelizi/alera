@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/features/workbench/application/global_agent_history_retry.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +29,7 @@ class _GlobalAgentHistoryPanelState
   bool _busy = false;
   String? _provider;
   String? _armedResumeKey;
+  final _resumeMutations = ExactHistoryResumeRetryTracker();
   String _feedback =
       'Search is off until you explicitly enable local indexing.';
   List<Map<String, Object?>> _hits = const [];
@@ -159,16 +163,38 @@ class _GlobalAgentHistoryPanelState
       );
       return;
     }
-    final identity =
-        '$provider|$account|$project|$workspace|$nativeId|$profile';
+    // JSON-encode the complete tuple rather than joining untrusted Host
+    // fields with a delimiter that may itself appear in an account label.
+    final identity = jsonEncode([
+      provider,
+      account,
+      project,
+      workspace,
+      nativeId,
+      profile,
+    ]);
+    final resumeIdentity = (
+      provider: provider,
+      accountId: account,
+      projectId: project,
+      workspaceId: workspace,
+      providerSessionId: nativeId,
+      profileId: profile,
+    );
     if (_armedResumeKey != identity) {
+      final previousOutcomeUnknown = _resumeMutations.hasUnconfirmed(
+        resumeIdentity,
+      );
       setState(() {
         _armedResumeKey = identity;
-        _feedback =
-            'Alera will select the configured $provider account "$account" '
-            'and verify this Session again. Confirm exact Resume on the SAME '
-            'result to create a Tab. No old prompt is replayed; the provider '
-            'may reject an incompatible login.';
+        _feedback = previousOutcomeUnknown
+            ? 'Previous Resume acknowledgement was unconfirmed. Inspect Live '
+                  'Agents first; then confirm this SAME result again to resend '
+                  'the ORIGINAL request ID. No duplicate Agent is created.'
+            : 'Alera will select the configured $provider account "$account" '
+                  'and verify this Session again. Confirm exact Resume on '
+                  'the SAME result to create a Tab. No old prompt is replayed; '
+                  'the provider may reject an incompatible login.';
       });
       return;
     }
@@ -179,6 +205,12 @@ class _GlobalAgentHistoryPanelState
       _busy = true;
       _feedback = 'Rechecking the native source before exact Resume…';
     });
+    // Keep the same UUID if the Host accepted a previous attempt but the ACK
+    // was lost. A new UUID would be rejected as a duplicate session owner.
+    final mutationId = _resumeMutations.reserve(
+      resumeIdentity,
+      () => const Uuid().v4(),
+    );
     try {
       final reply = await (host as TerminalHostAgentHistoryClient)
           .resumeExactAgentHistory(
@@ -188,11 +220,12 @@ class _GlobalAgentHistoryPanelState
             workspaceId: workspace,
             providerSessionId: nativeId,
             profileId: profile,
-            clientMutationId: const Uuid().v4(),
+            clientMutationId: mutationId,
           );
       if (!mounted) return;
       final tab = reply['tab'];
       final tabId = tab is Map ? tab['id']?.toString() : null;
+      if (tabId != null) _resumeMutations.acknowledge(resumeIdentity);
       setState(
         () => _feedback = tabId == null
             ? 'Host reply did not confirm a Tab. Inspect Live Agents.'
@@ -204,7 +237,8 @@ class _GlobalAgentHistoryPanelState
       setState(
         () => _feedback =
             'Exact Resume failed or its acknowledgement was ambiguous. '
-            'Inspect Live Agents before retrying.',
+            'Inspect Live Agents first; a deliberate retry on this SAME '
+            'result will reuse the original request ID.',
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -349,10 +383,14 @@ class _GlobalAgentHistoryPanelState
                         : const <String, Object?>{};
                     String field(String key) => data[key]?.toString() ?? '';
                     final goal = field('goal');
-                    final resumeKey =
-                        "${field('provider')}|${field('providerAccountId')}|"
-                        "${field('projectId')}|${field('workspaceId')}|"
-                        "${field('providerSessionId')}|${_resumeProfile.text.trim()}";
+                    final resumeKey = jsonEncode([
+                      field('provider'),
+                      field('providerAccountId'),
+                      field('projectId'),
+                      field('workspaceId'),
+                      field('providerSessionId'),
+                      _resumeProfile.text.trim(),
+                    ]);
                     return Container(
                       decoration: BoxDecoration(
                         color: AleraTokens.surface,
