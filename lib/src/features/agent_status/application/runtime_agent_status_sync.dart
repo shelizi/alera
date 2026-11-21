@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/domain/agent_context_overview.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -157,5 +158,8 @@ AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
     toolInput: json['toolInput'] as String?,
     lastAssistantMessage: json['lastAssistantMessage'] as String?,
     interrupted: json['interrupted'] as bool?,
+    contextOverview: json['contextOverview'] is Map
+        ? AgentContextOverview.fromRaw(json['contextOverview']).toJson()
+        : null,
   );
 }

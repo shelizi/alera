@@ -15,6 +15,7 @@ class const _AgentRunRow({
 
 class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
   bool _hovered = false;
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +29,11 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
       ),
     );
     final groupLabel = context.tr(workspaceAgentGroupLabel(widget.displayKind));
+    final overview = AgentContextOverview.fromRaw(
+      widget.status.contextOverview,
+    );
     final description = _agentRunLabel(
+      overview: overview,
       tab: widget.tab,
       status: widget.status,
       displayKind: widget.displayKind,
@@ -79,18 +84,50 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                   ),
                   const SizedBox(width: AleraTokens.space6),
                   Expanded(
-                    child: Text(
-                      description,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: isActive
-                            ? AleraTokens.foreground
-                            : AleraTokens.foregroundMuted,
-                        fontWeight: isActive
-                            ? FontWeight.w600
-                            : FontWeight.w500,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Tooltip(
+                          message: description,
+                          child: Text(
+                            description,
+                            maxLines: _expanded ? null : 4,
+                            overflow: _expanded ? null : TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: isActive
+                                  ? AleraTokens.foreground
+                                  : AleraTokens.foregroundMuted,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (overview.progress.isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 3),
+                          Text(
+                            '最新回報：${overview.progress}',
+                            maxLines: _expanded ? null : 2,
+                            overflow: _expanded ? null : TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: AleraTokens.foregroundMuted,
+                            ),
+                          ),
+                        ],
+                        if (description.length > 75 ||
+                            overview.progress.length > 55)
+                          InkWell(
+                            onTap: () => setState(() => _expanded = !_expanded),
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 3),
+                              child: Text(
+                                _expanded ? '收合' : '展開全文',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: AleraTokens.accent,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   IgnorePointer(
@@ -161,12 +198,16 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
 }
 
 String _agentRunLabel({
+  required AgentContextOverview overview,
   required WorkspaceTabRecord tab,
   required AgentStatusEntry status,
   required WorkspaceAgentGroupKind displayKind,
   required bool showTabTitle,
   required String groupLabel,
 }) {
+  if (overview.goal.isNotEmpty) return overview.goal;
+  final prompt = status.prompt.trim();
+  if (prompt.isNotEmpty) return prompt;
   if (showTabTitle) {
     final title = tab.title.trim();
     if (title.isNotEmpty) {
@@ -185,16 +226,7 @@ String _agentRunDescription(
   required WorkspaceAgentGroupKind displayKind,
   String? groupLabel,
 }) {
-  if (displayKind == WorkspaceAgentGroupKind.working) {
-    final toolName = status.toolName?.trim() ?? '';
-    final toolInput = status.toolInput?.trim() ?? '';
-    if (toolName.isNotEmpty && toolInput.isNotEmpty) {
-      return '$toolName: $toolInput';
-    }
-    if (toolName.isNotEmpty) {
-      return toolName;
-    }
-  }
+  // The sidebar represents the overall goal, never the current tool call.
   final assistantMessage = status.lastAssistantMessage?.trim() ?? '';
   if (assistantMessage.isNotEmpty) {
     return assistantMessage;

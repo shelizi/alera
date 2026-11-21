@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use super::agent_context::AgentContextOverview;
 
 /// Agent state as reported by the Flutter app's agent-status hooks.
 /// `Waiting` includes approval and user-input prompts, so it is not safe for
@@ -53,6 +54,7 @@ pub struct AgentPresence {
     pub tool_input: Option<String>,
     pub last_assistant_message: Option<String>,
     pub interrupted: Option<bool>,
+    pub context: AgentContextOverview,
 }
 
 /// Last known agent presence per terminal handle, fed by the Flutter app's
@@ -96,6 +98,7 @@ impl AgentPresenceRegistry {
                 tool_input: None,
                 last_assistant_message: None,
                 interrupted: None,
+                context: AgentContextOverview::default(),
             },
         );
         state.accepts_injection() && !was_ready

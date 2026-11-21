@@ -368,6 +368,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         };
         let terminal = TerminalSession {
             handle: "plain-terminal".into(),
@@ -379,6 +380,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         };
         let command = NativeMcpUiCommand {
             request_id: "req1".into(),

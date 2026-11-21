@@ -144,6 +144,8 @@ class WorkbenchContextPanelTabMapper
         return WorkbenchContextPanelTab.gitDiff;
       case r'pullRequests':
         return WorkbenchContextPanelTab.pullRequests;
+      case r'agentContext':
+        return WorkbenchContextPanelTab.agentContext;
       default:
         throw MapperException.unknownEnumValue(value);
     }
@@ -162,6 +164,8 @@ class WorkbenchContextPanelTabMapper
         return r'gitDiff';
       case WorkbenchContextPanelTab.pullRequests:
         return r'pullRequests';
+      case WorkbenchContextPanelTab.agentContext:
+        return r'agentContext';
     }
   }
 }

@@ -477,7 +477,8 @@ mod tests {
                     "state": "waiting", "stateStartedAt": "2026-11-11T07:00:00+00:00",
                     "updatedAt": "2026-11-11T07:00:01+00:00",
                     "interrupted": false, "prompt": "SECRET PROMPT",
-                    "toolInput": "API_KEY=SECRET", "lastAssistantMessage": "PRIVATE"
+                    "toolInput": "API_KEY=SECRET", "lastAssistantMessage": "PRIVATE",
+                    "contextOverview": {"goal":"PRIVATE TASK", "progress":"SECRET REPORT"}
                 },
                 {"terminalSessionId": "pty-2", "workspaceId": "ws-2",
                  "tabId": "tab-2", "removed": true}
@@ -490,7 +491,7 @@ mod tests {
         assert_eq!(changes[0]["workspaceId"], "ws-1");
         assert_eq!(changes[0]["tabId"], "tab-1");
         assert_eq!(changes[0]["updatedAt"], "2026-11-11T07:00:01+00:00");
-        for field in ["prompt", "toolName", "toolInput", "lastAssistantMessage"] {
+        for field in ["prompt", "toolName", "toolInput", "lastAssistantMessage", "contextOverview"] {
             assert!(changes[0].get(field).is_none(), "sensitive {field} leaked");
         }
         assert_eq!(changes[1]["removed"], true);

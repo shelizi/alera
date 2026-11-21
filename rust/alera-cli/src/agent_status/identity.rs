@@ -56,6 +56,7 @@ mod tests {
             tool_input: None,
             last_assistant_message: None,
             interrupted: None,
+            context: Default::default(),
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::terminal_host::orchestration::agent_context::AgentContextOverview;
 use alera_core::agent_descriptor::agent_descriptor;
 use serde_json::{json, Value};
 
@@ -164,7 +165,7 @@ impl ServerActor {
                 .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
                 .map(|value| value.with_timezone(&chrono::Utc))
                 .unwrap_or_else(chrono::Utc::now);
-            let presence = AgentPresence {
+            let mut presence = AgentPresence {
                 agent_type: agent_type.clone(),
                 state,
                 state_started_at: started_at,
@@ -185,7 +186,19 @@ impl ServerActor {
                     entry,
                     previous.and_then(|value| value.interrupted),
                 ),
+                context: Default::default(),
             };
+            // A recycled terminal handle can switch Agent adapters. Never
+            // inherit an unrelated Agent's goal or progress in that case.
+            let context_previous = previous.filter(|value| value.agent_type == agent_type);
+            presence.context = AgentContextOverview::observe(
+                context_previous.map(|value| &value.context),
+                context_previous.map(|value| value.prompt.as_str()),
+                context_previous.and_then(|value| value.last_assistant_message.as_deref()),
+                &presence.prompt,
+                presence.last_assistant_message.as_deref(),
+                updated_at,
+            );
             let presence_change = self.sessions.get(handle).map(|session| {
                 json!({
                     "terminalSessionId": handle,
@@ -199,6 +212,7 @@ impl ServerActor {
                     "toolName": presence.tool_name.as_deref(),
                     "toolInput": presence.tool_input.as_deref(),
                     "lastAssistantMessage": presence.last_assistant_message.as_deref(),
+                    "contextOverview": &presence.context,
                     "interrupted": presence.interrupted,
                 })
             });

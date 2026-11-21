@@ -93,6 +93,7 @@ fn new_turn_clears_stale_tool_details() {
         tool_input: Some("old input".into()),
         last_assistant_message: None,
         interrupted: None,
+        context: Default::default(),
     };
     let status = normalize_hook_event(
         &event("codex", "UserPromptSubmit", json!({"prompt": "New prompt"})),
@@ -278,6 +279,7 @@ fn payload_sensitive_custom_handlers_keep_their_irregular_behavior() {
         tool_input: None,
         last_assistant_message: None,
         interrupted: None,
+        context: Default::default(),
     };
     let cursor = normalize_hook_event(
         &event("cursor", "afterAgentResponse", json!({})),

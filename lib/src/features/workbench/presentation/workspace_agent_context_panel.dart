@@ -1,0 +1,164 @@
+import 'package:alera/src/app/theme/alera_tokens.dart';
+import 'package:alera/src/design_system/icons/alera_icons.dart';
+import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
+import 'package:alera/src/features/agent_status/domain/agent_context_overview.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
+import 'package:alera/src/features/workbench/domain/workspace.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+/// Per-Agent overview. Selection is derived from the currently active tab,
+/// not the most recently updated Agent in another workspace.
+class const WorkspaceAgentContextPanel({
+  super.key,
+  required final Workspace workspace,
+}) extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tab = ref.watch(
+      workbenchControllerProvider.select((state) {
+        return state.activeWorkspace?.id == workspace.id
+            ? state.activeWorkspaceTab
+            : null;
+      }),
+    );
+    final status = ref.watch(
+      agentStatusControllerProvider.select((statuses) {
+        return tab == null
+            ? null
+            : matchingAgentStatusForTab(tab: tab, agentStatuses: statuses);
+      }),
+    );
+    if (status == null) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(20),
+          child: Text(
+            '選取一個 Agent Tab，即可查看整體目標與工作時間線。',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    final overview = AgentContextOverview.fromRaw(status.contextOverview);
+    final goal = overview.goal.isNotEmpty
+        ? overview.goal
+        : status.prompt.trim();
+    final progress = overview.progress.isNotEmpty
+        ? overview.progress
+        : (status.lastAssistantMessage?.trim() ?? '');
+    final textStyle = Theme.of(context).textTheme.bodySmall;
+    final timeline = overview.timeline;
+    return ListView(
+      key: ValueKey<String>('agent-context-${status.terminalSessionId}'),
+      padding: const EdgeInsets.all(14),
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            const Icon(AleraIcons.ai, size: 16, color: AleraTokens.accent),
+            const SizedBox(width: 8),
+            Text(
+              'Agent Context',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '由 Hook 追蹤的工作紀錄；Agent 回報不等於完成驗證。',
+          style: textStyle?.copyWith(color: AleraTokens.foregroundMuted),
+        ),
+        const SizedBox(height: 18),
+        _ContextSection(
+          title: '整體作業目標',
+          content: goal.isNotEmpty ? goal : '尚未取得任務目標。請先在 Agent 輸入工作需求。',
+        ),
+        const SizedBox(height: 14),
+        _ContextSection(
+          title: '最新工作回報',
+          content: progress.isNotEmpty ? progress : '等待 Agent 提供工作進度。',
+        ),
+        const SizedBox(height: 18),
+        Text('進度時間線（最新在前）', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        if (timeline.isEmpty)
+          Text(
+            '尚無進度紀錄。',
+            style: textStyle?.copyWith(color: AleraTokens.foregroundMuted),
+          ),
+        for (final event in timeline)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Icon(Icons.circle, size: 7, color: AleraTokens.accent),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        _eventLabel(event.kind),
+                        style: textStyle?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 3),
+                      SelectableText(event.text, style: textStyle),
+                      const SizedBox(height: 2),
+                      Text(
+                        _dateLabel(event.at),
+                        style: textStyle?.copyWith(
+                          color: AleraTokens.foregroundMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class const _ContextSection({
+  required final String title,
+  required final String content,
+}) extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: AleraTokens.surface,
+      borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+      border: Border.all(color: AleraTokens.borderSubtle),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(title, style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 7),
+          SelectableText(content, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    ),
+  );
+}
+
+String _eventLabel(String kind) => switch (kind) {
+  'goal' => '任務目標',
+  'instruction' => '補充指示',
+  'report' => 'Agent 工作回報',
+  _ => '進度更新',
+};
+
+String _dateLabel(DateTime value) {
+  final date = value.toLocal();
+  String two(int x) => x.toString().padLeft(2, '0');
+  return '${date.year}-${two(date.month)}-${two(date.day)} '
+      '${two(date.hour)}:${two(date.minute)}';
+}

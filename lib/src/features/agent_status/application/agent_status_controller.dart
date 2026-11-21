@@ -1,6 +1,7 @@
 import 'package:alera/src/features/agent_status/application/agent_hook_lifecycle_guard.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_identity_resolver.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/domain/agent_context_overview.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_event_normalizer.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -152,6 +153,14 @@ class AgentStatusController extends _$AgentStatusController
         toolInput: normalized.toolInput,
         lastAssistantMessage: normalized.lastAssistantMessage,
         interrupted: normalized.interrupted,
+        contextOverview: AgentContextOverview.observe(
+          previous: AgentContextOverview.fromRaw(previous?.contextOverview),
+          previousPrompt: previous?.prompt,
+          previousAssistant: previous?.lastAssistantMessage,
+          prompt: normalized.prompt,
+          assistant: normalized.lastAssistantMessage,
+          at: receivedAt,
+        ).toJson(),
       );
       next = <String, AgentStatusEntry>{
         ...next,

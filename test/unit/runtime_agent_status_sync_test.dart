@@ -22,6 +22,17 @@ void main() {
           'stateStartedAt': '2026-09-09T13:00:00Z',
           'updatedAt': '2026-09-09T13:00:01Z',
           'prompt': 'Need input',
+          'contextOverview': <String, Object?>{
+            'goal': '將 Agent 的整體任務進度同步到側邊欄',
+            'progress': '完成 Hook 整合',
+            'timeline': <Object?>[
+              <String, Object?>{
+                'kind': 'report',
+                'text': '完成 Hook 整合',
+                'at': '2026-09-09T13:00:01Z',
+              },
+            ],
+          },
         },
         <String, Object?>{'terminalSessionId': 'session-3', 'removed': true},
       ],
@@ -31,6 +42,12 @@ void main() {
     expect(delta!.upserts, hasLength(1));
     expect(delta.upserts.single.terminalSessionId, 'session-2');
     expect(delta.upserts.single.state, AgentStatusState.waiting);
+    expect(
+      delta.upserts.single.contextOverview?['goal'],
+      '將 Agent 的整體任務進度同步到側邊欄',
+    );
+    final timeline = delta.upserts.single.contextOverview?['timeline'] as List;
+    expect(timeline, hasLength(1));
     expect(delta.removedSessionIds, <String>{'session-3'});
   });
 

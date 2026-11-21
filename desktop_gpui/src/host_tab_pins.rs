@@ -218,6 +218,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         };
         let pin = parse_pin_snapshot(&json!([item]), "ws").unwrap().remove(0);
         assert!(pin.matches_session(&session));

@@ -61,6 +61,9 @@ pub struct NativeSidebarLayout {
     pub context_is_references: bool,
     #[serde(default)]
     pub context_is_pull_requests: bool,
+    /// Optional context tab for older Native settings snapshots.
+    #[serde(default)]
+    pub context_is_agent_context: bool,
 }
 
 impl Default for NativeSidebarLayout {
@@ -74,6 +77,7 @@ impl Default for NativeSidebarLayout {
             context_is_search: false,
             context_is_references: false,
             context_is_pull_requests: false,
+            context_is_agent_context: false,
         }
     }
 }
@@ -89,6 +93,7 @@ impl NativeSidebarLayout {
                 self.context_is_search,
                 self.context_is_references,
                 self.context_is_pull_requests,
+                self.context_is_agent_context,
             ]
             .into_iter()
             .filter(|selected| *selected)
@@ -1145,6 +1150,7 @@ mod tests {
             context_is_search: false,
             context_is_references: false,
             context_is_pull_requests: false,
+            context_is_agent_context: false,
         };
         let result = store
             .compare_and_set_sidebar_layout(&initial, &next)
@@ -1203,6 +1209,7 @@ mod tests {
         let review = NativeSidebarLayout {
             context_is_references: false,
             context_is_pull_requests: true,
+            context_is_agent_context: false,
             ..references.clone()
         };
         assert_eq!(

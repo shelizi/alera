@@ -12,6 +12,7 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_explorer.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_agent_context_panel.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_references_panel.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_search_panel.dart';
@@ -207,6 +208,8 @@ class const WorkspaceContextSidebar({
                               ),
                             ],
                           ),
+                          WorkbenchContextPanelTab.agentContext =>
+                            WorkspaceAgentContextPanel(workspace: workspace),
                           WorkbenchContextPanelTab.pullRequests =>
                             sourceControlScope == null
                                 ? const AleraEmptyState(
@@ -385,6 +388,14 @@ class const _CollapsedContextRail({
             icon: AleraIcons.gitPullRequest,
             onPressed: () => onOpenTab(.pullRequests),
           ),
+          const SizedBox(height: AleraTokens.space6),
+          _ContextTabButton(
+            tab: .agentContext,
+            activeTab: activeTab,
+            tooltip: 'Agent Context',
+            icon: AleraIcons.ai,
+            onPressed: () => onOpenTab(.agentContext),
+          ),
           const Spacer(),
           Padding(
             padding: const EdgeInsets.only(bottom: AleraTokens.space8),
@@ -456,6 +467,14 @@ class const _ContextTabHeader({
                 tooltip: 'Pull Request',
                 icon: AleraIcons.gitPullRequest,
                 onPressed: () => onSetActiveTab(.pullRequests),
+              ),
+              const SizedBox(width: AleraTokens.space6),
+              _ContextTabButton(
+                tab: .agentContext,
+                activeTab: activeTab,
+                tooltip: 'Agent Context',
+                icon: AleraIcons.ai,
+                onPressed: () => onSetActiveTab(.agentContext),
               ),
               const Spacer(),
               AleraIconButton(

@@ -2,6 +2,7 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_agent_quota_ui;
+mod native_agent_context_ui;
 mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
@@ -644,6 +645,7 @@ enum RightSidebarView {
     References,
     Git,
     PullRequests,
+    AgentContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6849,6 +6851,7 @@ impl Workbench {
             context_is_search: self.right_sidebar_view == RightSidebarView::Search,
             context_is_references: self.right_sidebar_view == RightSidebarView::References,
             context_is_pull_requests: self.right_sidebar_view == RightSidebarView::PullRequests,
+            context_is_agent_context: self.right_sidebar_view == RightSidebarView::AgentContext,
         }
     }
 
@@ -6894,7 +6897,9 @@ impl Workbench {
             self.projects_sidebar_width = settings.sidebar_layout.projects_width;
             self.right_sidebar_visible = settings.sidebar_layout.context_visible;
             self.right_sidebar_width = settings.sidebar_layout.context_width;
-            self.right_sidebar_view = if settings.sidebar_layout.context_is_pull_requests {
+            self.right_sidebar_view = if settings.sidebar_layout.context_is_agent_context {
+                RightSidebarView::AgentContext
+            } else if settings.sidebar_layout.context_is_pull_requests {
                 RightSidebarView::PullRequests
             } else if settings.sidebar_layout.context_is_references {
                 RightSidebarView::References
@@ -11685,6 +11690,20 @@ impl Render for Workbench {
         let agent_status = self.agent_status.clone();
         let terminal_list_loading = self.terminal_list_loading;
         let agent_inventory_current = !self.terminals.session_list_is_stale();
+        // Full identity checks prevent one pane or recycled Host handle from
+        // showing another Agent's private task context.
+        let agent_context_overview = self.mixed_panes
+            .active_in(self.mixed_panes.focused_pane())
+            .and_then(|identity| match identity {
+                WorkbenchTabIdentity::Host(target) => self.terminals.sessions.iter()
+                    .find(|session| session.running
+                        && session.agent_type.is_some()
+                        && session.handle == target.handle
+                        && session.workspace_id == target.workspace_id()
+                        && session.tab_id == target.tab_id()),
+                _ => None,
+            })
+            .and_then(|session| session.agent_context.clone());
         let agent_state_summary =
             AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current);
         let agent_ui_locale = self.settings_menu_locale;
@@ -11709,6 +11728,8 @@ impl Render for Workbench {
                     // Host PTY is no longer running.
                     session.running.then(|| session.agent_type.clone()).flatten(),
                     AgentVisualState::for_session(session, agent_inventory_current),
+                    session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.goal.clone()),
+                    session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.progress.clone()),
                 )
             })
             .collect();
@@ -12590,6 +12611,14 @@ impl Render for Workbench {
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.open_pull_requests_panel(cx);
                                     })))
+                                    .child(icon_button(
+                                        "right-sidebar-agent-context", UiIcon::List, "Agent Context",
+                                        self.right_sidebar_view == RightSidebarView::AgentContext,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.right_sidebar_view = RightSidebarView::AgentContext;
+                                        view.save_sidebar_layout(cx);
+                                        cx.notify();
+                                    })))
                                     .child(div().flex_1())
                                     .child(icon_button(
                                         "right-sidebar-collapse", UiIcon::ChevronsRight, "Collapse panel", false,
@@ -12598,6 +12627,14 @@ impl Render for Workbench {
                                         this.save_sidebar_layout(cx);
                                         cx.notify();
                                     }))),
+                            )
+                            .child(
+                                div()
+                                    .id("right-agent-context-panel")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .when(self.right_sidebar_view != RightSidebarView::AgentContext, |v| v.hidden())
+                                    .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
                             )
                             .child(
                                 div()
@@ -12616,7 +12653,7 @@ impl Render for Workbench {
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                         if this.explorer_context_menu.take().is_some() { cx.notify(); }
                                     }))
-                                    .when(matches!(self.right_sidebar_view, RightSidebarView::Git | RightSidebarView::References | RightSidebarView::PullRequests), |v| v.hidden())
+                                    .when(matches!(self.right_sidebar_view, RightSidebarView::Git | RightSidebarView::References | RightSidebarView::PullRequests | RightSidebarView::AgentContext), |v| v.hidden())
                             .child(
                                 div()
                                     .id("right-explorer-header")
@@ -17071,9 +17108,9 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("terminal-sessions-scroll")
-                                    .max_h(px(145.0))
+                                    .max_h(px(310.0))
                                     .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type, visual_state))| {
+                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type, visual_state, goal, progress))| {
                                         let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
                                         let row_status_tooltip = visual_state
                                             .map(|state| state.tooltip(&brand, agent_ui_locale));
@@ -17126,6 +17163,13 @@ impl Render for Workbench {
                                                     )
                                                     .child(div().min_w_0().truncate().child(label)),
                                             )
+                                            .when(!goal.is_empty(), |row| row.child(
+                                                div().min_w_0().text_sm().child(goal.clone())
+                                            ))
+                                            .when(!progress.is_empty(), |row| row.child(
+                                                div().min_w_0().text_xs().text_color(rgb(MUTED))
+                                                    .child(format!("Latest report: {progress}"))
+                                            ))
                                             .child(
                                                 div()
                                                     .text_xs()
@@ -17538,7 +17582,9 @@ fn main() {
                             explorer_delete_pending: None,
                             model,
                             center_view: CenterView::Terminal,
-                            right_sidebar_view: if native_settings.sidebar_layout.context_is_pull_requests {
+                            right_sidebar_view: if native_settings.sidebar_layout.context_is_agent_context {
+                                RightSidebarView::AgentContext
+                            } else if native_settings.sidebar_layout.context_is_pull_requests {
                                 RightSidebarView::PullRequests
                             } else if native_settings.sidebar_layout.context_is_references {
                                 RightSidebarView::References

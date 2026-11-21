@@ -229,6 +229,13 @@ class AgentStatusEntryMapper extends ClassMapperBase<AgentStatusEntry> {
     _$interrupted,
     opt: true,
   );
+  static Map<String, dynamic>? _$contextOverview(AgentStatusEntry v) =>
+      v.contextOverview;
+  static const Field<AgentStatusEntry, Map<String, dynamic>> _f$contextOverview = Field(
+    'contextOverview',
+    _$contextOverview,
+    opt: true,
+  );
 
   @override
   final MappableFields<AgentStatusEntry> fields = const {
@@ -244,6 +251,7 @@ class AgentStatusEntryMapper extends ClassMapperBase<AgentStatusEntry> {
     #toolInput: _f$toolInput,
     #lastAssistantMessage: _f$lastAssistantMessage,
     #interrupted: _f$interrupted,
+    #contextOverview: _f$contextOverview,
   };
 
   static AgentStatusEntry _instantiate(DecodingData data) {
@@ -260,6 +268,7 @@ class AgentStatusEntryMapper extends ClassMapperBase<AgentStatusEntry> {
       toolInput: data.dec(_f$toolInput),
       lastAssistantMessage: data.dec(_f$lastAssistantMessage),
       interrupted: data.dec(_f$interrupted),
+      contextOverview: data.dec(_f$contextOverview),
     );
   }
 
@@ -338,6 +347,7 @@ abstract class AgentStatusEntryCopyWith<$R, $In extends AgentStatusEntry, $Out>
     String? toolInput,
     String? lastAssistantMessage,
     bool? interrupted,
+    Map<String, dynamic>? contextOverview,
   });
   AgentStatusEntryCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
@@ -366,6 +376,7 @@ class _AgentStatusEntryCopyWithImpl<$R, $Out>
     Object? toolInput = $none,
     Object? lastAssistantMessage = $none,
     Object? interrupted = $none,
+    Object? contextOverview = $none,
   }) => $apply(
     FieldCopyWithData({
       if (terminalSessionId != null) #terminalSessionId: terminalSessionId,
@@ -381,6 +392,7 @@ class _AgentStatusEntryCopyWithImpl<$R, $Out>
       if (lastAssistantMessage != $none)
         #lastAssistantMessage: lastAssistantMessage,
       if (interrupted != $none) #interrupted: interrupted,
+      if (contextOverview != $none) #contextOverview: contextOverview,
     }),
   );
   @override
@@ -403,6 +415,7 @@ class _AgentStatusEntryCopyWithImpl<$R, $Out>
       or: $value.lastAssistantMessage,
     ),
     interrupted: data.get(#interrupted, or: $value.interrupted),
+    contextOverview: data.get(#contextOverview, or: $value.contextOverview),
   );
 
   @override

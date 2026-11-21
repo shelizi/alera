@@ -72,6 +72,7 @@ class const AgentStatusEntry({
   this.toolInput,
   this.lastAssistantMessage,
   this.interrupted,
+  this.contextOverview,
 }) with AgentStatusEntryMappable {
   final String terminalSessionId;
   final String workspaceId;
@@ -85,4 +86,7 @@ class const AgentStatusEntry({
   final String? toolInput;
   final String? lastAssistantMessage;
   final bool? interrupted;
+
+  /// Local-only Hook-derived task overview; no tool inputs are stored here.
+  final Map<String, dynamic>? contextOverview;
 }

@@ -16,6 +16,7 @@ enum WorkbenchContextPanelTab {
   references,
   gitDiff,
   pullRequests,
+  agentContext,
 }
 
 @MappableEnum()

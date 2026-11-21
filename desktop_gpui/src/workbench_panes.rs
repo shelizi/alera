@@ -585,6 +585,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         }]);
         dock.open(handle);
         WorkbenchTabIdentity::Host(dock.context_target_at(0).unwrap())
@@ -697,6 +698,7 @@ mod tests {
                 interrupted: false,
                 agent_state_started_at: None,
                 agent_updated_at: None,
+            agent_context: None,
             },
             TerminalSession {
                 handle: "right".into(),
@@ -708,6 +710,7 @@ mod tests {
                 interrupted: false,
                 agent_state_started_at: None,
                 agent_updated_at: None,
+            agent_context: None,
             },
         ];
         assert_eq!(

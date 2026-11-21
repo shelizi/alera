@@ -56,6 +56,130 @@ impl AgentActivityState {
     }
 }
 
+/// Bounded text derived from an authenticated Host Agent presence snapshot.
+/// Unlike status-only push events, this is never forwarded to the PTY sidecar.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentContextOverview {
+    pub goal: String,
+    pub progress: String,
+    pub timeline: Vec<AgentContextMilestone>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentContextMilestone {
+    pub kind: String,
+    pub text: String,
+    pub at: String,
+}
+
+impl AgentContextOverview {
+    fn text(value: Option<&Value>, max: usize) -> String {
+        value
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(max)
+            .collect::<String>()
+            .trim()
+            .to_owned()
+    }
+
+    pub fn parse(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let goal = Self::text(object.get("goal"), 600);
+        let progress = Self::text(object.get("progress"), 420);
+        let timeline = object
+            .get("timeline")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(16)
+            .filter_map(|item| {
+                let kind = item.get("kind")?.as_str()?;
+                if !matches!(kind, "goal" | "instruction" | "report") {
+                    return None;
+                }
+                let text = Self::text(item.get("text"), 260);
+                let at = item.get("at")?.as_str()?;
+                if text.is_empty()
+                    || at.len() > 64
+                    || agent_host_utc_time_key(at).is_none()
+                {
+                    return None;
+                }
+                Some(AgentContextMilestone {
+                    kind: kind.to_owned(),
+                    text,
+                    at: at.to_owned(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if goal.is_empty() && progress.is_empty() && timeline.is_empty() {
+            return None;
+        }
+        Some(Self {
+            goal,
+            progress,
+            timeline,
+        })
+    }
+}
+
+#[cfg(test)]
+mod agent_context_overview_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_verified_running_agent_receives_bounded_context() {
+        let long = "任".repeat(900);
+        let at = "2026-11-21T12:00:00+00:00";
+        let value = serde_json::json!({
+            "items": [
+                {
+                    "handle": "pty-one", "workspaceId": "ws-one",
+                    "tabId": "tab-one", "running": true,
+                    "agentType": "claude", "agentState": "working",
+                    "contextOverview": {
+                        "goal": long, "progress": "設定功能對齊中",
+                        "timeline": [
+                            {"kind":"report", "text":"已補設定驗證", "at":at},
+                            {"kind":"toolInput", "text":"SECRET", "at":at},
+                            {"kind":"instruction", "text":"補齊 UI", "at":"invalid"},
+                        ]
+                    }
+                },
+                {
+                    "handle": "pty-two", "workspaceId":"ws-two",
+                    "tabId":"tab-two", "running": false,
+                    "agentType": "claude", "agentState":"done",
+                    "contextOverview": {"goal":"SHOULD NOT DISPLAY"}
+                },
+                {
+                    "handle": "pty-three", "workspaceId":"ws-three",
+                    "tabId":"tab-three", "running":true,
+                    "agentType":null, "agentState":null,
+                    "contextOverview": {"goal":"SHOULD NOT DISPLAY"}
+                }
+            ]
+        });
+        let sessions = parse_terminal_list(&value).unwrap();
+        let context = sessions[0].agent_context.as_ref().unwrap();
+        assert_eq!(context.goal.chars().count(), 600);
+        assert_eq!(context.progress, "設定功能對齊中");
+        assert_eq!(context.timeline.len(), 1);
+        assert_eq!(context.timeline[0].text, "已補設定驗證");
+        assert!(sessions[1].agent_context.is_none());
+        assert!(sessions[2].agent_context.is_none());
+    }
+
+    #[test]
+    fn malformed_context_is_treated_as_unavailable() {
+        assert!(AgentContextOverview::parse(&serde_json::json!(null)).is_none());
+        assert!(AgentContextOverview::parse(&serde_json::json!({"timeline":[]})).is_none());
+    }
+}
+
 /// Sanitized, status-only Host push. No Prompt, tool input, tokens or PTY
 /// bytes cross this model. Exact Host identities prevent recycled-handle
 /// events from changing a different Agent Tab.
@@ -109,6 +233,7 @@ pub struct TerminalSession {
     /// Host revision of the current state. Used to reject stale async lists.
     pub agent_state_started_at: Option<String>,
     pub agent_updated_at: Option<String>,
+    pub agent_context: Option<AgentContextOverview>,
 }
 
 impl TerminalSession {
@@ -746,6 +871,11 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
         {
             return Err(invalid("Duplicate terminal session handle"));
         }
+        let agent_context = if running && agent_type.is_some() {
+            item.get("contextOverview").and_then(AgentContextOverview::parse)
+        } else {
+            None
+        };
         sessions.push(TerminalSession {
             handle: handle.to_string(),
             workspace_id: workspace_id.to_string(),
@@ -756,6 +886,7 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             interrupted,
             agent_state_started_at,
             agent_updated_at,
+            agent_context,
         });
     }
     Ok(sessions)
@@ -2676,6 +2807,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         };
         assert!(expected.matches_running_identity(&expected));
         let mut current = expected.clone();
@@ -3425,6 +3557,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         }
     }
 

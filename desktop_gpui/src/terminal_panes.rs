@@ -139,6 +139,7 @@ mod tests {
             interrupted: false,
             agent_state_started_at: None,
             agent_updated_at: None,
+            agent_context: None,
         }
     }
 
