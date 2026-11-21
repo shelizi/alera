@@ -1066,6 +1066,70 @@ pub fn resolve_registered_host_workspace_path(
     Ok(canonical)
 }
 
+/// Verify a Dashboard new-Agent target against a fresh authenticated Host
+/// snapshot. Both the ID and canonical path must be unique. A renamed,
+/// deleted or re-registered checkout must not receive a stale launch intent.
+pub fn validate_global_agent_launch_workspace(
+    workspace_id: &str,
+    expected_root: &Path,
+    registered: &[RegisteredHostWorkspace],
+) -> io::Result<()> {
+    let actual_root = resolve_registered_host_workspace_path(workspace_id, registered)?;
+    if actual_root != expected_root
+        || select_registered_host_workspace(expected_root, registered)?.as_str() != workspace_id
+    {
+        return Err(invalid(
+            "Global Agent launch target changed; refresh Host workspaces",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod global_agent_launch_workspace_tests {
+    use super::*;
+
+    #[test]
+    fn launch_target_requires_the_same_unique_registered_workspace() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let root_a = dunce::canonicalize(a.path()).unwrap();
+        let root_b = dunce::canonicalize(b.path()).unwrap();
+        let registered = vec![
+            RegisteredHostWorkspace {
+                id: "alera-ws".into(),
+                path: root_a.clone(),
+            },
+            RegisteredHostWorkspace {
+                id: "mcp-ws".into(),
+                path: root_b.clone(),
+            },
+        ];
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &registered).is_ok());
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_a, &registered).is_err());
+        assert!(
+            validate_global_agent_launch_workspace("deleted-ws", &root_b, &registered).is_err()
+        );
+        let mut recycled = registered.clone();
+        recycled[1].path = root_a.clone();
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &recycled).is_err());
+        let mut duplicate_id = registered.clone();
+        duplicate_id.push(RegisteredHostWorkspace {
+            id: "mcp-ws".into(),
+            path: root_b.clone(),
+        });
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &duplicate_id).is_err());
+        let mut duplicate_path = registered.clone();
+        duplicate_path.push(RegisteredHostWorkspace {
+            id: "other-ws".into(),
+            path: root_b.clone(),
+        });
+        assert!(
+            validate_global_agent_launch_workspace("mcp-ws", &root_b, &duplicate_path).is_err()
+        );
+    }
+}
+
 #[cfg(test)]
 mod h03_workspace_notice_tests {
     use super::*;

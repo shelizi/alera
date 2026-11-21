@@ -1062,6 +1062,22 @@ struct Workbench {
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
     global_agent_submit_busy: bool,
     global_agent_submit_status: String,
+    /// Hidden dashboard cards do not detach or terminate Host PTYs.
+    global_agent_hidden: HashSet<(String, String, String)>,
+    global_agent_show_hidden: bool,
+    /// Dashboard-only explicit cross-project Profile launch; no pane reattachment.
+    global_agent_create_open: bool,
+    global_agent_create_workspace: Option<String>,
+    global_agent_create_profile: Option<String>,
+    global_agent_create_prompt_input: Entity<QuickOpenInput>,
+    global_agent_create_busy: bool,
+    global_agent_create_request: u64,
+    global_agent_create_pending: Option<LaunchedAgentTab>,
+    global_agent_create_expected_agent: Option<String>,
+    global_agent_create_journal: Option<(PathBuf, PendingHostCreate)>,
+    global_agent_create_inventory_verified: bool,
+    global_agent_create_ack_armed: bool,
+    global_agent_create_status: String,
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
@@ -8299,6 +8315,9 @@ impl Workbench {
         let create_journal_at_listing = (!self.terminal_create_flow.is_creating())
             .then(|| self.terminal_create_journal.clone())
             .flatten();
+        // Ignore list reads begun before/in-flight with a remote Agent launch.
+        let global_create_ticket_at_listing = (!self.global_agent_create_busy)
+            .then_some(self.global_agent_create_request);
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -8339,6 +8358,26 @@ impl Workbench {
                             view.mixed_tabs
                                 .refresh_agent_statuses(&view.terminals.sessions);
                             view.observe_agent_notification_status();
+                            // Global Dashboard launch is cross-worktree and never
+                            // attaches into a pane. Confirm its exact Host tab
+                            // after a fresh authoritative global inventory.
+                            if view.global_agent_create_journal.is_some()
+                                && !view.global_agent_create_busy
+                                && global_create_ticket_at_listing == Some(view.global_agent_create_request)
+                            {
+                                view.global_agent_create_inventory_verified = true;
+                                let observed = view.terminals.sessions.clone();
+                                view.confirm_global_agent_created(&observed);
+                            }
+                            // Dashboard hide is bounded view state, never a PTY operation.
+                            view.global_agent_hidden.retain(|(handle, workspace, tab)| {
+                                view.terminals.sessions.iter().any(|session| {
+                                    session.running
+                                        && session.handle == *handle
+                                        && session.workspace_id == *workspace
+                                        && session.tab_id == *tab
+                                })
+                            });
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
                             // Direct Agent PTYs may start before Hooks report
@@ -18063,6 +18102,22 @@ fn main() {
                             global_agent_target: None,
                             global_agent_submit_busy: false,
                             global_agent_submit_status: String::new(),
+                            global_agent_hidden: HashSet::new(),
+                            global_agent_show_hidden: false,
+                            global_agent_create_open: false,
+                            global_agent_create_workspace: None,
+                            global_agent_create_profile: None,
+                            global_agent_create_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            global_agent_create_busy: false,
+                            global_agent_create_request: 0,
+                            global_agent_create_pending: None,
+                            global_agent_create_expected_agent: None,
+                            global_agent_create_journal: None,
+                            global_agent_create_inventory_verified: false,
+                            global_agent_create_ack_armed: false,
+                            global_agent_create_status: String::new(),
                             terminals: {
                                 let mut dock = TerminalDock::for_workspace(0);
                                 dock.set_scrollback_lines(initial_native_scrollback_lines);

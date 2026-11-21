@@ -102,7 +102,8 @@ class _GlobalAgentLaunchDialogState
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: active?.workspace.id,
+              key: ValueKey(active?.workspace.id),
+              initialValue: active?.workspace.id,
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Project / Worktree',
@@ -124,7 +125,8 @@ class _GlobalAgentLaunchDialogState
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<AgentType>(
-              value: _agentType,
+              key: ValueKey(_agentType),
+              initialValue: _agentType,
               decoration: const InputDecoration(labelText: 'Agent'),
               items: const [
                 DropdownMenuItem(value: AgentType.codex, child: Text('Codex')),

@@ -33,6 +33,29 @@ class _GlobalAgentDashboardDialogState
   ({String sessionId, String workspaceId, String tabId})? _target;
   bool _sending = false;
   String? _sendFeedback;
+  final Set<({String sessionId, String workspaceId, String tabId})>
+  _hiddenCards = {};
+  bool _showHidden = false;
+
+  ({String sessionId, String workspaceId, String tabId}) _identity(
+    GlobalAgentLiveRow row,
+  ) => (
+    sessionId: row.tab.terminalSessionId,
+    workspaceId: row.status.workspaceId,
+    tabId: row.tab.id,
+  );
+
+  void _toggleHidden(GlobalAgentLiveRow row) {
+    final identity = _identity(row);
+    setState(() {
+      if (!_hiddenCards.add(identity)) _hiddenCards.remove(identity);
+      // Hidden cards cannot silently retain input focus as the target.
+      if (_target == identity) {
+        _target = null;
+        _instruction.clear();
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -75,15 +98,22 @@ class _GlobalAgentDashboardDialogState
       _sendFeedback = 'Sending to the verified Host Session…';
     });
     try {
-      await host.submitVerifiedAgentPrompt(
-        sessionId: target.sessionId,
-        workspaceId: target.workspaceId,
-        tabId: target.tabId,
-        prompt: instruction,
-      );
+      await (host as TerminalHostVerifiedAgentInputClient)
+          .submitVerifiedAgentPrompt(
+            sessionId: target.sessionId,
+            workspaceId: target.workspaceId,
+            tabId: target.tabId,
+            prompt: instruction,
+          );
       if (!mounted) return;
-      _instruction.clear();
-      setState(() => _sendFeedback = 'Host acknowledged Agent input.');
+      if (_target == target && _instruction.text == instruction) {
+        _instruction.clear();
+      }
+      setState(
+        () => _sendFeedback = _target == target
+            ? 'Host acknowledged Agent input.'
+            : 'Host acknowledged input to the previously selected Agent.',
+      );
     } catch (_) {
       if (!mounted) return;
       // Do not retry automatically: a disconnect after enqueue could have
@@ -139,7 +169,12 @@ class _GlobalAgentDashboardDialogState
     final workbench = ref.watch(workbenchControllerProvider);
     final statuses = ref.watch(agentStatusControllerProvider);
     final all = projectGlobalAgentLiveRows(workbench, statuses);
-    final rows = all.where((row) => row.matches(_query)).toList();
+    final liveIdentities = all.map(_identity).toSet();
+    _hiddenCards.removeWhere((identity) => !liveIdentities.contains(identity));
+    final rows = all
+        .where((row) => _showHidden || !_hiddenCards.contains(_identity(row)))
+        .where((row) => row.matches(_query))
+        .toList();
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     return Dialog(
@@ -189,9 +224,23 @@ class _GlobalAgentDashboardDialogState
                 onChanged: (value) => setState(() => _query = value),
               ),
               const SizedBox(height: AleraTokens.space12),
-              Text(
-                '${rows.length} of ${all.length} Agent sessions',
-                style: muted,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${rows.length} of ${all.length} Agent sessions',
+                      style: muted,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() => _showHidden = !_showHidden),
+                    child: Text(
+                      _showHidden
+                          ? 'Show visible only'
+                          : 'Show hidden cards (${_hiddenCards.length})',
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: AleraTokens.space12),
               if (_target != null) ...[
@@ -298,6 +347,22 @@ class _GlobalAgentDashboardDialogState
                                       style: muted,
                                     ),
                                   ],
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton.icon(
+                                      onPressed: () => _toggleHidden(row),
+                                      icon: Icon(
+                                        _hiddenCards.contains(_identity(row))
+                                            ? Icons.visibility
+                                            : Icons.visibility_off,
+                                      ),
+                                      label: Text(
+                                        _hiddenCards.contains(_identity(row))
+                                            ? 'Show card'
+                                            : 'Hide card (Agent keeps running)',
+                                      ),
+                                    ),
+                                  ),
                                   Align(
                                     alignment: Alignment.centerRight,
                                     child: TextButton.icon(
