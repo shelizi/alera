@@ -5,6 +5,7 @@ class const _CollapsedSidebar({
   required final _WorkbenchSidebarCommands commands,
   required final VoidCallback onAddProject,
   required final VoidCallback onOpenSettings,
+  required final VoidCallback onOpenGlobalAgents,
   required final VoidCallback onOpenAutomations,
 }) extends StatelessWidget {
   @override
@@ -42,6 +43,7 @@ class const _CollapsedSidebar({
             const Divider(height: 1, color: AleraTokens.borderSubtle),
             _CollapsedSidebarFooter(
               onOpenSettings: onOpenSettings,
+              onOpenGlobalAgents: onOpenGlobalAgents,
               onOpenAutomations: onOpenAutomations,
             ),
           ],

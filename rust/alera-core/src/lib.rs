@@ -3,6 +3,7 @@ pub mod child_process;
 pub mod desktop_settings_contract;
 pub mod git;
 pub mod git_cli;
+pub mod global_agent_search;
 pub mod managed_agent_launch;
 pub mod process_shell;
 pub mod reading_diff;

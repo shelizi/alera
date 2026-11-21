@@ -3,6 +3,7 @@ mod editor_ui;
 mod native_action_dialog_ui;
 mod native_agent_quota_ui;
 mod native_agent_context_ui;
+mod native_global_agents_ui;
 mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
@@ -12674,7 +12675,7 @@ impl Render for Workbench {
                                         view.open_pull_requests_panel(cx);
                                     })))
                                     .child(icon_button(
-                                        "right-sidebar-agent-context", UiIcon::List, "Agent Context",
+                                        "right-sidebar-agent-context", UiIcon::List, "Global Agents / Context",
                                         self.right_sidebar_view == RightSidebarView::AgentContext,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
@@ -12696,7 +12697,15 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .when(self.right_sidebar_view != RightSidebarView::AgentContext, |v| v.hidden())
-                                    .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(native_global_agents_ui::panel(self, cx))
+                                            .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
+                                    ),
                             )
                             .child(
                                 div()

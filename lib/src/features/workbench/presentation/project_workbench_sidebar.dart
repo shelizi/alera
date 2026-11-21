@@ -50,6 +50,7 @@ import 'package:alera/src/features/resource_manager/presentation/resource_value_
 import 'package:alera/src/features/workbench/presentation/widgets/agent_run_state_indicator.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/workspace_agent_compact_summary.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
+import 'package:alera/src/features/workbench/presentation/global_agent_dashboard_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_graph_dialogs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_graph_indicators.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_tab_drag_data.dart';
