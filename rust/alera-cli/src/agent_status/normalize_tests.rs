@@ -128,6 +128,16 @@ fn lifecycle_events_are_detected_before_state_normalization() {
         "SessionEnd",
         json!({})
     )));
+    assert!(hook_event_closes_session(&event(
+        "codex",
+        "SessionEnd",
+        json!({})
+    )));
+    assert!(hook_event_closes_session(&event(
+        "claude",
+        "SessionEnd",
+        json!({})
+    )));
 }
 
 #[test]

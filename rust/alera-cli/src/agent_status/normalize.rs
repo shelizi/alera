@@ -23,7 +23,9 @@ pub fn hook_event_closes_session(event: &AgentHookEvent) -> bool {
     };
     matches!(
         (event.agent_type.as_str(), event_name.as_str()),
-        ("copilot", "SessionEnd")
+        ("codex", "SessionEnd")
+            | ("claude", "SessionEnd")
+            | ("copilot", "SessionEnd")
             | ("cursor", "sessionEnd")
             | ("pi", "session_shutdown")
             | ("grok", "SessionEnd")

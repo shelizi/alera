@@ -494,6 +494,7 @@ mod tests {
             "New File",
             "Pane changed; reopen New Tab",
             "New Terminal",
+            "Restore saved Agent / Terminal tabs",
             "Installed Agent CLIs",
             "Detecting installed Agent CLIs…",
             "No installed Agent CLIs detected",

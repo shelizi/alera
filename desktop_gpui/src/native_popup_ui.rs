@@ -110,6 +110,29 @@ impl Workbench {
                         });
                     }),
             );
+            // Saved previews are passive on launch: restoring an offline
+            // Host must be an explicit click, never an automatic PTY spawn.
+            let has_saved_tabs = owner
+                .upgrade()
+                .is_some_and(|entity| {
+                    entity
+                        .read(cx)
+                        .terminal_layout_restore
+                        .as_ref()
+                        .is_some_and(|layout| !layout.tabs.is_empty())
+                });
+            if has_saved_tabs {
+                let restore_owner = owner.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Restore saved Agent / Terminal tabs"))
+                        .icon(IconName::RefreshCw)
+                        .on_click(move |_, _, cx| {
+                            let _ = restore_owner.update(cx, |view, cx| {
+                                view.restore_saved_host_tabs(cx);
+                            });
+                        }),
+                );
+            }
             // Classic lists installed local Agent CLIs, not just Host Agent
             // Profiles. Inventory is read-only and works without any Host.
             menu = menu.separator().label(tr(locale, "Installed Agent CLIs"));

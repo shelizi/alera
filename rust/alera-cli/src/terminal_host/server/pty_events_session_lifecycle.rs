@@ -1,4 +1,6 @@
-use super::terminal_startup_commands::auto_closes_on_success;
+use super::terminal_startup_commands::{
+    auto_closes_on_success, provider_resume_id, user_agent_recovery_allowed,
+};
 use super::*;
 
 impl ServerActor {
@@ -10,11 +12,29 @@ impl ServerActor {
         let keep_failed_setup =
             exit_code != 0 && self.should_keep_failed_setup_terminal(&session_id).await;
         let keep_failed_spawn = self.should_keep_failed_owned_spawn(&session_id).await;
+        // A failed provider resume is not permission to destroy the durable
+        // conversation ID; preserve the tab until the user closes it.
+        let keep_resumable_agent = if let Some(tab_id) = self
+            .sessions
+            .get(&session_id)
+            .map(|session| session.tab_id.clone())
+        {
+            self.runtime_store
+                .find_workspace_tab(&tab_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|tab| {
+                    provider_resume_id(&tab).is_some() && user_agent_recovery_allowed(&tab)
+                })
+        } else {
+            false
+        };
         self.cleanup_orchestration_for_closed_session(&session_id, &reason)
             .await;
         let keep_failed_spawn =
             keep_failed_spawn && self.make_failed_owned_spawn_inert(&session_id).await;
-        let keep_terminal = keep_failed_setup || keep_failed_spawn;
+        let keep_terminal = keep_failed_setup || keep_failed_spawn || keep_resumable_agent;
         self.flush_all_output(&session_id);
         let broadcast = self.sessions.get_mut(&session_id).and_then(|session| {
             let payload = session.handle_exit(exit_code)?;

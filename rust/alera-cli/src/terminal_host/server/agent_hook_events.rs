@@ -10,12 +10,6 @@ use super::{agent_hook_settings::AgentHookSettingsQuery, ServerActor};
 
 impl ServerActor {
     pub(super) async fn handle_agent_hook_event(&mut self, mut event: AgentHookEvent) {
-        let Ok(settings) = AgentHookSettingsQuery::new(&self.runtime_store)
-            .load()
-            .await
-        else {
-            return;
-        };
         let Some(session) = self.sessions.get(&event.terminal_session_id) else {
             return;
         };
@@ -62,10 +56,19 @@ impl ServerActor {
                 pending.get("agent").and_then(serde_json::Value::as_str)
                     == Some(event.agent_type.as_str())
             });
+        // Conversation IDs are provider history pointers, not live status.
+        // Persist them even when presence notifications are disabled; only
+        // the exact authenticated Host session/workspace/tab reaches here.
+        self.observe_hook_title(&event).await;
+        let Ok(settings) = AgentHookSettingsQuery::new(&self.runtime_store)
+            .load()
+            .await
+        else {
+            return;
+        };
         if !settings.is_enabled(&event.agent_type) && !pending_prompt {
             return;
         }
-        self.observe_hook_title(&event).await;
         let now = chrono::Utc::now();
         if hook_event_resets_session(&event) {
             if self

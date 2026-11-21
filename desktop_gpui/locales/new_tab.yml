@@ -21,6 +21,11 @@ _version: 2
   zh-TW: "新增終端機"
   zh-CN: "新建终端"
   ja: "新規ターミナル"
+"Restore saved Agent / Terminal tabs":
+  en: "Restore saved Agent / Terminal tabs"
+  zh-TW: "還原先前的 Agent／終端機分頁"
+  zh-CN: "恢复之前的 Agent／终端标签页"
+  ja: "保存した Agent／ターミナルタブを復元"
 "Installed Agent CLIs":
   en: "Installed Agent CLIs"
   zh-TW: "已安裝的 Agent CLI"

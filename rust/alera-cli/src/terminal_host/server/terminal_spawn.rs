@@ -22,9 +22,11 @@ use super::pty_event_forwarder::forward_pty_event;
 use super::terminal_launch_defaults::default_terminal_launch;
 use super::terminal_startup_commands::{
     agent_profile_id, auto_close_setup_command, auto_closes_on_success,
-    delivers_initial_command_once, delivers_initial_prompt_once, initial_command,
-    initial_delivery_mechanism as mechanism, initial_managed_agent_launch, initial_prompt,
-    pending_agent_type, tab_agent_type, terminal_session_id,
+    configure_claude_new_session, configure_provider_resume, delivers_initial_command_once,
+    delivers_initial_prompt_once, initial_command, initial_delivery_mechanism as mechanism,
+    initial_managed_agent_launch, initial_prompt, pending_agent_type, provider_resume_id,
+    resume_bare_agent_command, seed_claude_native_session, tab_agent_type, terminal_session_id,
+    user_agent_recovery_allowed,
 };
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
@@ -64,7 +66,12 @@ impl<'a> TerminalStartupTabPersistence<'a> {
         tab: &WorkspaceTabRecord,
         fields: &[&str],
     ) -> HostResult<Option<WorkspaceTabRecord>> {
-        let mut next = tab.clone();
+        // A Hook or a freshly seeded provider UUID may have been persisted
+        // since this caller's original snapshot was read. Consume the fields
+        // on the latest tab, never overwrite newly captured resume state.
+        let Some(mut next) = self.tabs.find(&tab.id).await? else {
+            return Ok(None);
+        };
         let Some(payload) = next.payload.as_object_mut() else {
             return Ok(None);
         };
@@ -178,6 +185,15 @@ impl ServerActor {
                         );
                         continue;
                     }
+                    // Do not erase a recoverable provider conversation just
+                    // because its CLI or working directory is temporarily
+                    // unavailable on Host restart.
+                    if matches!(tab_agent_type(&tab), Some("codex" | "claude"))
+                        && user_agent_recovery_allowed(&tab)
+                    {
+                        tracing::warn!(tab_id = %tab.id, "preserving Agent tab after failed restore");
+                        continue;
+                    }
                     let _ = TerminalSpawnPersistence::new(&self.runtime_store)
                         .remove_tab(&tab.id)
                         .await;
@@ -191,12 +207,13 @@ impl ServerActor {
         &mut self,
         mut tab: WorkspaceTabRecord,
     ) -> HostResult<WorkspaceTabRecord> {
-        if let Some(stored) = self
+        // Retain a previously saved provider session on a failed retry.
+        let prior = self
             .runtime_store
             .find_workspace_tab(&tab.id)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?
-        {
+            .map_err(|error| HostError::state(error.to_string()))?;
+        if let Some(stored) = prior.as_ref() {
             // A stale window can still send a projected tab.upsert after the
             // terminal was moved in another window. Never silently put that
             // running PTY's persisted tab back into its old workspace; only
@@ -226,7 +243,10 @@ impl ServerActor {
         let saved = match self.ensure_spawn_on_create_terminal(&saved).await {
             Ok(rewritten) => rewritten.unwrap_or(saved),
             Err(error) => {
-                if !saved.payload["lastTerminalTabTransfer"].is_object() {
+                let preserves_saved_agent = prior.as_ref().is_some_and(|stored| {
+                    provider_resume_id(stored).is_some() && user_agent_recovery_allowed(stored)
+                });
+                if !saved.payload["lastTerminalTabTransfer"].is_object() && !preserves_saved_agent {
                     let _ = TerminalSpawnPersistence::new(&self.runtime_store)
                         .remove_tab(&saved.id)
                         .await;
@@ -294,6 +314,25 @@ impl ServerActor {
             workspace.path.clone()
         };
 
+        // Claude can start with a caller-selected native session UUID.
+        // Persist it BEFORE scheduling the first CLI input, so a quick close
+        // or missed SessionStart Hook cannot lose this Tab's conversation.
+        let managed_launch = initial_managed_agent_launch(tab)?;
+        let mut seeded_record = tab.clone();
+        let seeded_claude = managed_launch
+            .as_ref()
+            .and_then(|launch| seed_claude_native_session(&mut seeded_record, launch));
+        let seeded_tab = if seeded_claude.is_some() {
+            Some(
+                TerminalSpawnPersistence::new(&self.runtime_store)
+                    .upsert_tab(seeded_record)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let tab = seeded_tab.as_ref().unwrap_or(tab);
+
         let max_bytes = self.config.scrollback_bytes as usize;
         let (initial_scrollback, initial_output_stream_bytes) = self
             .take_terminal_restart_state(&session_id, &workspace.id, &tab.id, max_bytes)
@@ -314,13 +353,12 @@ impl ServerActor {
             true,
         )
         .await?;
-        let managed_launch = initial_managed_agent_launch(tab)?;
         let prompt = initial_prompt(tab);
         // The snapshot, or the descriptor for a legacy tab, owns prompt shape.
         let descriptor = tab_agent_type(tab).and_then(agent_descriptor);
         let delivery =
             mechanism(tab)?.or_else(|| descriptor.map(|item| item.startup_prompt.into()));
-        let prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
+        let mut prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
             isolate_managed_codex_launch(descriptor.map(|item| item.id), &mut launch);
             // Opt-in alpha: only declared Managed Agent Profiles receive a
@@ -331,6 +369,22 @@ impl ServerActor {
                 if let (Some(descriptor), Ok(exe)) = (descriptor, std::env::current_exe()) {
                     inject_managed_agent_mcp(descriptor.id, &mut launch, &exe, &self.runtime_dir);
                 }
+            }
+            // Use the provider conversation UUID stored per Host tab by
+            // its Hook. Never guess another tab's conversation or replay
+            // an initial prompt when resuming.
+            if let Some(id) = seeded_claude.as_deref() {
+                // First launch uses --session-id; subsequent launches resume.
+                if !configure_claude_new_session(&mut launch, id) {
+                    return Err(HostError::state(
+                        "Claude launch changed after its tab session ID was reserved.",
+                    ));
+                }
+            } else if provider_resume_id(tab)
+                .as_ref()
+                .is_some_and(|(agent, id)| configure_provider_resume(&mut launch, agent, id))
+            {
+                prompt_arguments = None;
             }
             if let Some((mechanism, prompt)) = prompt_arguments {
                 append_initial_prompt_argument_for(mechanism, &mut launch.arguments, prompt);
@@ -348,7 +402,20 @@ impl ServerActor {
             })
         } else {
             initial_command(tab)?.map(|command| {
-                let command = isolate_codex_command(command);
+                // Command-mode profiles using a bare provider CLI can also
+                // resume; never parse or rewrite a custom shell command.
+                let resumed = provider_resume_id(tab).and_then(|(agent, id)| {
+                    resume_bare_agent_command(
+                        &command,
+                        agent,
+                        &id,
+                        &default_launch.interactive_shell,
+                    )
+                });
+                if resumed.is_some() {
+                    prompt_arguments = None;
+                }
+                let command = resumed.unwrap_or_else(|| isolate_codex_command(command));
                 let command = prompt_arguments
                     .map(|(mechanism, prompt)| {
                         command_with_initial_prompt_for(
@@ -394,7 +461,7 @@ impl ServerActor {
                 return Ok(self.clear_initial_prompt(tab).await);
             }
         }
-        Ok(rearmed)
+        Ok(seeded_tab.or(rearmed))
     }
 
     /// Rewrites a launch so the agent reads its prompt from stdin.
@@ -537,6 +604,19 @@ impl ServerActor {
             .await?;
         if let Some(agent) = forced_agent_hook {
             agent_settings.set_enabled(agent, true);
+        }
+        // Capturing a provider UUID is a recovery guarantee, not an opt-in
+        // presence notification. Enable hooks for Alera-owned, auto-launched
+        // Codex/Claude tabs even if the user disabled status notifications.
+        // Only this launch's settings are changed, not the persisted toggle.
+        if let Some(provider @ ("codex" | "claude")) = selected_agent {
+            if tab_for_launch.as_ref().is_some_and(|tab| {
+                tab.kind == "terminal"
+                    && tab.payload["spawnOnCreate"] == true
+                    && tab_agent_type(tab) == Some(provider)
+            }) {
+                agent_settings.set_enabled(provider, true);
+            }
         }
         let runtime_dir = self.runtime_dir.clone();
         let launch_session_id = session_id.clone();
@@ -817,5 +897,48 @@ mod tests {
 
         let stored = store.find_workspace_tab("tab").await.unwrap().unwrap();
         assert_eq!(stored.payload, after_prompt.payload);
+    }
+
+    #[tokio::test]
+    async fn consuming_stale_startup_snapshot_preserves_new_native_resume_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RuntimeStore::open(dir.path()).await.unwrap();
+        let now = Utc::now();
+        let tab = store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab".into(),
+                workspace_id: "workspace".into(),
+                kind: "terminal".into(),
+                title: "Codex".into(),
+                created_at: now,
+                updated_at: now,
+                payload: json!({
+                    "agentType": "codex",
+                    "initialPrompt": "one-shot",
+                    "initialPromptOnce": true,
+                }),
+            })
+            .await
+            .unwrap();
+
+        // The Hook arrives after the original startup Tab was read, before
+        // one-shot delivery cleanup runs. Its UUID must survive the cleanup.
+        let id = "550e8400-e29b-41d4-a716-446655440081";
+        let mut updated = tab.clone();
+        let mut state = super::super::agent_title_state::AgentTitleState::new(false);
+        state.observe("codex", Some(id), "", 0);
+        state.write(&mut updated);
+        store.upsert_workspace_tab(updated).await.unwrap();
+
+        let after_cleanup = TerminalStartupTabPersistence::new(&store)
+            .consume_initial_prompt(&tab)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(after_cleanup.payload.get("initialPrompt").is_none());
+        assert_eq!(
+            super::super::terminal_startup_commands::provider_resume_id(&after_cleanup),
+            Some(("codex", id.to_owned()))
+        );
     }
 }
