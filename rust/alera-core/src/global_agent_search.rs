@@ -76,8 +76,9 @@ impl AgentSessionSearchRecord {
     fn identity(&self) -> AgentSessionIdentity {
         // Typed identity avoids string separator collisions and prevents two
         // different accounts or profiles from becoming one search hit.
-        if self.provider_identity_verified {
-            if let Some(id) = self.provider_session_id.as_deref() {
+        if let Some(id) = self.provider_session_id.as_deref() {
+            if Uuid::parse_str(id).is_ok() {
+                // Untrusted historical UUIDs allow deduplication, not resume.
                 return AgentSessionIdentity::Provider {
                     runtime: self.runtime_instance_id.clone(),
                     project: self.project_id.clone(),
@@ -408,6 +409,21 @@ mod tests {
         other.provider_account_id = Some("account-secondary".into());
         let hits = search_agent_sessions(vec![sample("claude", false), other], &query("Windows"));
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn unverified_history_has_distinct_identities_but_is_preview_only() {
+        let mut first = sample("claude", false);
+        first.provider_identity_verified = false;
+        first.tab_id.clear();
+        first.host_session_id.clear();
+        let mut second = first.clone();
+        second.provider_session_id = Some("7e27d863-b5a5-40a0-8caf-f589c237cdd1".into());
+        let hits = search_agent_sessions(vec![first, second], &query("Windows"));
+        assert_eq!(hits.len(), 2);
+        assert!(hits
+            .iter()
+            .all(|hit| hit.open_action == SessionOpenAction::PreviewOnly));
     }
 
     #[test]
