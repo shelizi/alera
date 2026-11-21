@@ -7,6 +7,118 @@ use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
     AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY,
 };
 
+use crate::terminal_host::orchestration::managed_agent_launch::ManagedAgentLaunch;
+
+use super::agent_title_state::AgentTitleState;
+
+/// A Host terminal handle is not a provider conversation. Only a provider
+/// UUID observed in a tab-scoped Hook can authorize resume. Never use --last:
+/// two Agent tabs in the same workspace can have different conversations.
+pub(super) fn provider_resume_id(tab: &WorkspaceTabRecord) -> Option<(&str, String)> {
+    let agent = tab_agent_type(tab)?;
+    if !matches!(agent, "codex" | "claude") {
+        return None;
+    }
+    let state = AgentTitleState::read(tab)?;
+    if state.agent.as_deref() != Some(agent) {
+        return None;
+    }
+    let id = uuid::Uuid::parse_str(state.native_id.as_deref()?).ok()?;
+    Some((agent, id.to_string()))
+}
+
+/// Only append a resume command to the known provider executable, not to
+/// custom profile wrappers whose argument grammar is unknown.
+pub(super) fn configure_provider_resume(
+    launch: &mut ManagedAgentLaunch,
+    agent: &str,
+    native_id: &str,
+) -> bool {
+    let filename = launch
+        .executable
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let known_cli = match agent {
+        "codex" => matches!(
+            filename.as_str(),
+            "codex" | "codex.exe" | "codex.cmd" | "codex.bat"
+        ),
+        "claude" => matches!(
+            filename.as_str(),
+            "claude" | "claude.exe" | "claude.cmd" | "claude.bat"
+        ),
+        _ => false,
+    };
+    if !known_cli || uuid::Uuid::parse_str(native_id).is_err() {
+        return false;
+    }
+    if launch.arguments.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "resume" | "--resume" | "--last" | "--session-id"
+        ) || arg.starts_with("--resume=")
+            || arg.starts_with("--session-id=")
+            || (agent == "claude" && matches!(arg.as_str(), "-r" | "--continue" | "-c"))
+    }) {
+        return false;
+    }
+    match agent {
+        "codex" => {
+            // --no-daemon is a global flag: retain it BEFORE the resume
+            // subcommand even when the original profile listed it later.
+            let no_daemon = launch.arguments.iter().any(|arg| arg == "--no-daemon");
+            if no_daemon {
+                launch.arguments.retain(|arg| arg != "--no-daemon");
+            }
+            launch.arguments.insert(0, native_id.to_owned());
+            launch.arguments.insert(0, "resume".to_owned());
+            if no_daemon {
+                launch.arguments.insert(0, "--no-daemon".to_owned());
+            }
+        }
+        "claude" => {
+            launch.arguments.push("--resume".to_owned());
+            launch.arguments.push(native_id.to_owned());
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Command-mode Agent Profiles may use a bare canonical CLI without Managed
+/// launch metadata. Resume only those exact simple commands: parsing arbitrary
+/// shell scripts or appending flags to wrappers could execute a different
+/// command. Existing custom commands retain their original behavior.
+pub(super) fn resume_bare_agent_command(
+    command: &str,
+    agent: &str,
+    native_id: &str,
+    shell: &str,
+) -> Option<String> {
+    let executable = command.trim();
+    if !matches!(
+        executable.to_ascii_lowercase().as_str(),
+        "codex" | "codex.exe" | "codex.cmd" | "claude" | "claude.exe" | "claude.cmd"
+    ) {
+        return None;
+    }
+    let mut launch = ManagedAgentLaunch {
+        executable: executable.to_owned(),
+        arguments: if agent == "codex" {
+            vec!["--no-daemon".to_owned()]
+        } else {
+            Vec::new()
+        },
+    };
+    configure_provider_resume(&mut launch, agent, native_id).then(|| {
+        crate::terminal_host::orchestration::managed_launch_shell_rendering::render_managed_launch(
+            &launch, shell,
+        )
+    })
+}
+
 pub(super) fn terminal_session_id(tab: &WorkspaceTabRecord) -> String {
     tab.payload
         .get("terminalSessionId")
@@ -194,6 +306,145 @@ mod tests {
             created_at: now,
             updated_at: now,
             payload,
+        }
+    }
+
+    fn tab_with_native_session(agent: &str, native: &str) -> WorkspaceTabRecord {
+        let mut tab = tab(json!({"agentType": agent}));
+        let mut state = AgentTitleState::new(true);
+        state.observe(agent, Some(native), "User task", 0);
+        state.write(&mut tab);
+        tab
+    }
+
+    #[test]
+    fn codex_resumes_exact_provider_session_not_host_or_title_uuid() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let tab = tab_with_native_session("codex", id);
+        assert_ne!(tab.payload["agentTitleConversationId"].as_str(), Some(id));
+        let (agent, restored_id) = provider_resume_id(&tab).unwrap();
+        assert_eq!((agent, restored_id.as_str()), ("codex", id));
+
+        let mut launch = ManagedAgentLaunch {
+            executable: r"C:\tools\codex.cmd".into(),
+            arguments: vec!["--model".into(), "gpt-6".into()],
+        };
+        assert!(configure_provider_resume(&mut launch, agent, &restored_id));
+        assert_eq!(launch.arguments, vec!["resume", id, "--model", "gpt-6"]);
+    }
+
+    #[test]
+    fn codex_global_no_daemon_precedes_resume_and_tab_identity_survives_json() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let tab = tab_with_native_session("codex", id);
+        let saved_json = serde_json::to_string(&tab).unwrap();
+        let reopened: WorkspaceTabRecord = serde_json::from_str(&saved_json).unwrap();
+        assert_eq!(
+            provider_resume_id(&reopened),
+            Some(("codex", id.to_string()))
+        );
+
+        let mut daemon_launch = ManagedAgentLaunch {
+            executable: "codex".into(),
+            arguments: vec!["--model".into(), "gpt-6".into(), "--no-daemon".into()],
+        };
+        assert!(configure_provider_resume(&mut daemon_launch, "codex", id));
+        assert_eq!(
+            daemon_launch.arguments,
+            vec!["--no-daemon", "resume", id, "--model", "gpt-6"]
+        );
+    }
+
+    #[test]
+    fn claude_resumes_only_own_conversation_and_preserves_existing_flags() {
+        let first = "550e8400-e29b-41d4-a716-446655440001";
+        let second = "550e8400-e29b-41d4-a716-446655440002";
+        let a = tab_with_native_session("claude", first);
+        let b = tab_with_native_session("claude", second);
+        assert_ne!(provider_resume_id(&a), provider_resume_id(&b));
+
+        let (agent, id) = provider_resume_id(&b).unwrap();
+        let mut launch = ManagedAgentLaunch {
+            executable: "/usr/local/bin/claude".into(),
+            arguments: vec!["--model".into(), "sonnet".into()],
+        };
+        assert!(configure_provider_resume(&mut launch, agent, &id));
+        assert_eq!(
+            launch.arguments,
+            vec!["--model", "sonnet", "--resume", second]
+        );
+    }
+
+    #[test]
+    fn malformed_or_mismatched_provider_ids_never_authorize_resume() {
+        for id in [
+            "",
+            "../private",
+            "--last",
+            "$(whoami)",
+            "not-a-provider-uuid",
+        ] {
+            let tab = tab_with_native_session("codex", id);
+            assert_eq!(provider_resume_id(&tab), None);
+        }
+        let mut mismatch = tab_with_native_session("codex", "550e8400-e29b-41d4-a716-446655440003");
+        mismatch.payload["agentType"] = json!("claude");
+        assert!(provider_resume_id(&mismatch).is_none());
+        assert!(provider_resume_id(&tab(json!({"agentType":"pi"}))).is_none());
+    }
+
+    #[test]
+    fn custom_wrappers_and_existing_resume_switches_are_never_rewritten() {
+        let id = "550e8400-e29b-41d4-a716-446655440004";
+        for (exe, agent, args) in [
+            ("custom-agent-wrapper", "codex", vec![]),
+            ("claude", "claude", vec!["--continue".to_owned()]),
+            ("codex", "codex", vec!["resume".to_owned(), id.to_owned()]),
+            ("codex", "codex", vec!["--last".to_owned()]),
+        ] {
+            let mut launch = ManagedAgentLaunch {
+                executable: exe.into(),
+                arguments: args.clone(),
+            };
+            assert!(!configure_provider_resume(&mut launch, agent, id));
+            assert_eq!(launch.arguments, args);
+        }
+    }
+
+    #[test]
+    fn closed_provider_session_retains_resume_id_after_restart() {
+        let id = "550e8400-e29b-41d4-a716-446655440006";
+        let mut saved = tab_with_native_session("claude", id);
+        saved.payload["agentTitleStateV1"]["closed"] = json!(true);
+        let reopened: WorkspaceTabRecord =
+            serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+        assert_eq!(
+            provider_resume_id(&reopened),
+            Some(("claude", id.to_owned()))
+        );
+    }
+
+    #[test]
+    fn command_profiles_resume_only_bare_provider_commands() {
+        let id = "550e8400-e29b-41d4-a716-446655440005";
+        assert_eq!(
+            resume_bare_agent_command("claude", "claude", id, "pwsh.exe"),
+            Some(format!("'claude' '--resume' '{id}'"))
+        );
+        assert_eq!(
+            resume_bare_agent_command("codex", "codex", id, "pwsh.exe"),
+            Some(format!("'codex' '--no-daemon' 'resume' '{id}'"))
+        );
+        for command in [
+            "ccs claude",
+            "claude --print",
+            "codex --model o3",
+            "claude && echo hi",
+        ] {
+            assert_eq!(
+                resume_bare_agent_command(command, "claude", id, "pwsh.exe"),
+                None
+            );
         }
     }
 

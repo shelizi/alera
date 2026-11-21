@@ -1,7 +1,7 @@
 //! Explicit Host Terminal / Agent launch workspace registration for Alera Native.
 //!
 //! Passive startup, polling, reads and writes still use the no-start CLI
-//! bridge. Only explicit New Terminal, New Agent or Agent Profile Launch may
+//! bridge. Only explicit New Terminal, New Agent, Profile Launch or saved-tab restore may
 //! start Host and register the selected *existing* checkout. Registration
 //! changes the Host inventory, not Git branches, files or worktrees.
 
@@ -53,6 +53,25 @@ impl RuntimeCliBridge {
         root: &Path,
     ) -> io::Result<String> {
         self.ensure_host_workspace_for_explicit_terminal(root)
+    }
+
+    /// Explicit user action from Native's New Tab menu. Passive app startup
+    /// remains no-start; opening a saved layout never silently launches every
+    /// persisted Host PTY. Host reconciliation will reuse the existing tab IDs
+    /// and invoke each provider's exact-session resume logic.
+    pub fn restore_saved_host_tabs_explicitly(&self) -> io::Result<()> {
+        if self.probe()? != RuntimeStatus::Stopped {
+            return Ok(());
+        }
+        let (_, runtime) = self.agent_cli_paths();
+        let args = vec![
+            OsString::from("runtime"),
+            OsString::from("--json"),
+            OsString::from("--runtime-dir"),
+            runtime.as_os_str().to_owned(),
+            OsString::from("start"),
+        ];
+        self.start_runtime_host(&args)
     }
 
     fn ensure_host_workspace_for_explicit_terminal(&self, root: &Path) -> io::Result<String> {

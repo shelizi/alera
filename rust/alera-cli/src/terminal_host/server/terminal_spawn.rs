@@ -21,10 +21,11 @@ use super::agent_hook_settings::AgentHookSettingsQuery;
 use super::pty_event_forwarder::forward_pty_event;
 use super::terminal_launch_defaults::default_terminal_launch;
 use super::terminal_startup_commands::{
-    agent_profile_id, auto_close_setup_command, auto_closes_on_success,
+    agent_profile_id, auto_close_setup_command, auto_closes_on_success, configure_provider_resume,
     delivers_initial_command_once, delivers_initial_prompt_once, initial_command,
     initial_delivery_mechanism as mechanism, initial_managed_agent_launch, initial_prompt,
-    pending_agent_type, tab_agent_type, terminal_session_id,
+    pending_agent_type, provider_resume_id, resume_bare_agent_command, tab_agent_type,
+    terminal_session_id,
 };
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
@@ -320,7 +321,7 @@ impl ServerActor {
         let descriptor = tab_agent_type(tab).and_then(agent_descriptor);
         let delivery =
             mechanism(tab)?.or_else(|| descriptor.map(|item| item.startup_prompt.into()));
-        let prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
+        let mut prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
             isolate_managed_codex_launch(descriptor.map(|item| item.id), &mut launch);
             // Opt-in alpha: only declared Managed Agent Profiles receive a
@@ -331,6 +332,15 @@ impl ServerActor {
                 if let (Some(descriptor), Ok(exe)) = (descriptor, std::env::current_exe()) {
                     inject_managed_agent_mcp(descriptor.id, &mut launch, &exe, &self.runtime_dir);
                 }
+            }
+            // Use the provider conversation UUID stored per Host tab by
+            // its Hook. Never guess another tab's conversation or replay
+            // an initial prompt when resuming.
+            if provider_resume_id(tab)
+                .as_ref()
+                .is_some_and(|(agent, id)| configure_provider_resume(&mut launch, agent, id))
+            {
+                prompt_arguments = None;
             }
             if let Some((mechanism, prompt)) = prompt_arguments {
                 append_initial_prompt_argument_for(mechanism, &mut launch.arguments, prompt);
@@ -348,7 +358,20 @@ impl ServerActor {
             })
         } else {
             initial_command(tab)?.map(|command| {
-                let command = isolate_codex_command(command);
+                // Command-mode profiles using a bare provider CLI can also
+                // resume; never parse or rewrite a custom shell command.
+                let resumed = provider_resume_id(tab).and_then(|(agent, id)| {
+                    resume_bare_agent_command(
+                        &command,
+                        agent,
+                        &id,
+                        &default_launch.interactive_shell,
+                    )
+                });
+                if resumed.is_some() {
+                    prompt_arguments = None;
+                }
+                let command = resumed.unwrap_or_else(|| isolate_codex_command(command));
                 let command = prompt_arguments
                     .map(|(mechanism, prompt)| {
                         command_with_initial_prompt_for(

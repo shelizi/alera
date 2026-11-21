@@ -1071,6 +1071,7 @@ struct Workbench {
     terminal_create_inventory_verified: bool,
     terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
+    terminal_restore_loading: bool,
     terminal_list_loading: bool,
     /// Prevent an async inventory started before a status push from
     /// resurrecting stale Agent Hook state after the push arrives.
@@ -6704,6 +6705,7 @@ impl Workbench {
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.terminal_create_pane = None;
+        self.terminal_restore_loading = false;
         self.restore_host_create_journal();
         self.load_terminal_layout();
         self.terminal_key_queue.clear();
@@ -7577,6 +7579,55 @@ impl Workbench {
                 }
             }
         });
+    }
+
+    /// A saved Tab layout is inert while Host is offline. Only a deliberate
+    /// user click may bring back the Host and its own persisted PTYs.
+    fn restore_saved_host_tabs(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_restore_loading
+            || self.terminal_layout_restore.as_ref().is_none_or(|layout| layout.tabs.is_empty())
+        {
+            return;
+        }
+        let Some(bridge) = self
+            .runtime_bridge
+            .clone()
+            .or_else(|| RuntimeCliBridge::discover().ok())
+        else {
+            self.terminals.status = "Cannot restore saved tabs: Alera CLI unavailable".into();
+            cx.notify();
+            return;
+        };
+        self.terminal_restore_loading = true;
+        self.terminals.status = "Restoring saved Host tabs…".into();
+        let generation = self.workspace_generation;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.restore_saved_host_tabs_explicitly() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.terminal_restore_loading = false;
+                match result {
+                    Ok(()) => {
+                        view.terminals.status =
+                            "Host started; reconnecting saved tab identities…".into();
+                        view.refresh_terminals(cx);
+                    }
+                    Err(error) => {
+                        view.terminals.status = format!(
+                            "Unable to restore saved Host tabs: {error}"
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Restore display-only tabs only after an authenticated Host session
@@ -17952,6 +18003,7 @@ fn main() {
                             terminal_create_inventory_verified: false,
                             terminal_create_pane: None,
                             terminal_layout_restore: None,
+                            terminal_restore_loading: false,
                             terminal_list_loading: false,
                             agent_presence_event_generation: 0,
                             agent_notification_delivery: AgentNotificationDelivery::new(),
