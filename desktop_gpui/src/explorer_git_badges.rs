@@ -112,6 +112,8 @@ mod tests {
             branch: "feature".into(),
             upstream: None,
             upstream_configured: false,
+            has_stashes: false,
+            has_head_commit: true,
             repository_root: root.clone(),
             truncated: false,
             changed_files: vec![
@@ -167,6 +169,8 @@ mod tests {
             branch: "feature".into(),
             upstream: None,
             upstream_configured: false,
+            has_stashes: false,
+            has_head_commit: true,
             repository_root: PathBuf::from("C:/repo"),
             truncated: true,
             changed_files: vec![
