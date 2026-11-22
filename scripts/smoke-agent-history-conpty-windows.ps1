@@ -33,6 +33,8 @@
 # verifies it has exactly one worktree so restricted workspace roots are safe.
 # -ValidateGuiGitIsolationOnly verifies this boundary and cleans up without
 # launching a Host, provider shim, or GUI; only disposable fixture paths change.
+# -GuiBootstrapOnly accepts a responsive native window after its bounded hold
+# WITHOUT claiming user click-through. Without it, explicit release is required.
 # Create gui-continue.flag in the unique -Root after visual acceptance; the
 # harness owns and stops ONLY its own GUI/Host. The hold timeout also cleans up.
 # This validates GUI bootstrap, not automated click-through or a native
@@ -50,6 +52,7 @@ param(
     [int]$GuiHoldSeconds = 150,
     [switch]$IsolatedNestedGitFixture,
     [switch]$ValidateGuiGitIsolationOnly,
+    [switch]$GuiBootstrapOnly,
     [switch]$KeepArtifacts
 )
 
@@ -93,6 +96,9 @@ if ($IsolatedNestedGitFixture -and [string]::IsNullOrWhiteSpace($GuiExecutable))
 }
 if ($ValidateGuiGitIsolationOnly -and -not $IsolatedNestedGitFixture) {
     throw 'The Git isolation-only preflight requires -IsolatedNestedGitFixture'
+}
+if ($GuiBootstrapOnly -and ([string]::IsNullOrWhiteSpace($GuiExecutable) -or $ValidateGuiGitIsolationOnly)) {
+    throw 'GUI bootstrap-only mode requires a real isolated GUI run, not a Git-only preflight'
 }
 if ($TestOfflineHistoryCommand -and -not $TestVerifiedHistoryRpc) {
     throw 'Offline mock mode requires -TestVerifiedHistoryRpc'
@@ -517,7 +523,7 @@ function Invoke-VerifiedHistoryRpcFixture {
         }
         # No Host tokens or provider credentials are written in this marker.
         [IO.File]::WriteAllText($guiReady, [string]$script:guiLauncher.Id, [Text.UTF8Encoding]::new($false))
-        Write-Output 'Isolated GPUI GUI: LAUNCHED; waiting for explicit test release'
+        Write-Output 'Isolated GPUI GUI: LAUNCHED; awaiting bounded bootstrap/explicit test release'
         $deadline = [DateTime]::UtcNow.AddSeconds($GuiHoldSeconds)
         while ([DateTime]::UtcNow -lt $deadline) {
             if (Test-Path -LiteralPath $guiContinue) {
@@ -531,7 +537,17 @@ function Invoke-VerifiedHistoryRpcFixture {
             Start-Sleep -Milliseconds 400
         }
         if (-not (Test-Path -LiteralPath $guiContinue)) {
-            throw 'Isolated GPUI GUI acceptance timed out'
+            if (-not $GuiBootstrapOnly) {
+                throw 'Isolated GPUI GUI acceptance timed out'
+            }
+            # A bootstrap-only pass never claims history-card clicks or native
+            # transcript recovery. Verify a live responsive owned HWND, not
+            # merely that Start-Process returned a PID.
+            $guiWindow = Get-Process -Id $script:guiLauncher.Id -ErrorAction Stop
+            if ($guiWindow.MainWindowHandle -eq [IntPtr]::Zero -or -not $guiWindow.Responding) {
+                throw 'Isolated GPUI launched but no responsive native window was verified'
+            }
+            Write-Output 'Isolated GPUI GUI: responsive native window PASS (bootstrap only; no click-through claim)'
         }
         try {
             $script:guiLauncher.Refresh()
