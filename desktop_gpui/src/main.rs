@@ -210,6 +210,7 @@ actions!(
     [
         ToggleFileSearch,
         ToggleContentSearch,
+        OpenGlobalAgentHistory,
         RunContentSearch,
         FindTextReferences,
         ExplorerCopy,
@@ -5530,6 +5531,15 @@ impl Workbench {
         self.toggle_file_search(window, cx);
     }
 
+    fn open_global_agent_history_action(
+        &mut self,
+        _: &OpenGlobalAgentHistory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_global_agent_history(window, cx);
+    }
+
     fn toggle_content_search_action(
         &mut self,
         _: &ToggleContentSearch,
@@ -5652,6 +5662,19 @@ impl Workbench {
             window.focus(&input.read(cx).focus_handle(cx), cx);
         }
         self.save_sidebar_layout(cx);
+        cx.notify();
+    }
+
+    /// Global history is a read-only entrypoint. Open the right side even when
+    /// the user previously collapsed it, and focus search without creating a
+    /// Host, starting an Agent or performing an index scan.
+    fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.right_sidebar_view = RightSidebarView::AgentContext;
+        self.right_sidebar_visible = true;
+        self.global_agent_history_open = true;
+        self.explorer_context_menu = None;
+        self.save_sidebar_layout(cx);
+        window.focus(&self.global_agent_history_input.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -12602,6 +12625,7 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
+            .on_action(cx.listener(Self::open_global_agent_history_action))
             .on_action(cx.listener(Self::run_content_search_action))
             .on_action(cx.listener(Self::find_text_references_action))
             .on_action(cx.listener(Self::explorer_copy_action))
@@ -12743,6 +12767,11 @@ impl Render for Workbench {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
+                                    })))
+                                    .child(icon_button(
+                                        "right-sidebar-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false,
+                                    ).on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_global_agent_history(window, cx);
                                     })))
                                     .child(div().flex_1())
                                     .child(icon_button(
@@ -15118,6 +15147,10 @@ impl Render for Workbench {
                             .child(icon_button("right-rail-pr", UiIcon::PullRequest, "Pull Requests (browser)", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_pull_requests_panel(cx);
+                                })))
+                            .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_global_agent_history(window, cx);
                                 })))
                             .child(div().flex_1())
                             .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
@@ -17575,6 +17608,8 @@ fn main() {
                 KeyBinding::new("cmd-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
+                KeyBinding::new("ctrl-alt-g", OpenGlobalAgentHistory, None),
+                KeyBinding::new("cmd-alt-g", OpenGlobalAgentHistory, None),
                 KeyBinding::new("ctrl-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("cmd-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("shift-f12", FindTextReferences, Some("AleraGpuiEditor")),
