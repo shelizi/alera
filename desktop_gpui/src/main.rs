@@ -19092,9 +19092,12 @@ fn main() {
                                 .timer(Duration::from_millis(220))
                                 .await;
                             view.update(cx, |view, cx| {
-                                if view.workspace_generation != generation { return; }
-                                view.refresh_shared_git_favorites(cx);
-                                view.refresh_agent_profiles(cx);
+                                if view.workspace_generation == generation {
+                                    view.refresh_shared_git_favorites(cx);
+                                    view.refresh_agent_profiles(cx);
+                                }
+                                // Window-global discovery and MCP bridge startup must
+                                // survive an early workspace switch.
                                 view.refresh_installed_agent_clis(cx);
                                 view.connect_mcp_ui_bridge(cx);
                             }).ok();
