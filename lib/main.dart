@@ -20,6 +20,7 @@ import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/shared/infra/logging/global_error_handlers.dart';
 import 'package:alera/src/shared/infra/logging/logging_provider_observer.dart';
 import 'package:alera/src/shared/infra/performance/performance_trace.dart';
+import 'package:alera/src/shared/infra/performance/primary_startup.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
 import 'package:alera/src/shared/infra/storage/storage_providers.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
@@ -203,13 +204,42 @@ Future<void> _finishDetachedTabInitialization(
 }
 
 Future<void> _startApp({bool sharedEngineTabs = false}) async {
-  await RustLib.init();
-  AleraPerformanceTrace.mark('alera_rust_initialized');
-  await code_forge.RustLib.init();
-  AleraPerformanceTrace.mark('code_forge_rust_initialized');
-  final windowBootstrap = await bootstrapAppWindowBeforeRunApp();
-  AleraPerformanceTrace.mark('window_bootstrapped');
-  await initializeGhosttyVteWeb();
+  // Both Rust engines and desktop window/SQLite restore are independent.
+  // Do not serialize all three slow cold-start tasks before first Flutter
+  // frame; detached Editor windows have already used the same safe pattern.
+  final windowBootstrap =
+      await initializePrimaryStartupDependencies<AppWindowBootstrapResult>(
+        initializeAleraRust: () => AleraPerformanceTrace.measureAsync(
+          'main_alera_rust_init',
+          () async {
+            await RustLib.init();
+            AleraPerformanceTrace.mark('alera_rust_initialized');
+          },
+        ),
+        initializeCodeForge: () => AleraPerformanceTrace.measureAsync(
+          'main_code_forge_rust_init',
+          () async {
+            await code_forge.RustLib.init();
+            AleraPerformanceTrace.mark('code_forge_rust_initialized');
+          },
+        ),
+        restoreWindow: () => AleraPerformanceTrace.measureAsync(
+          'main_window_database_restore',
+          () async {
+            final result = await bootstrapAppWindowBeforeRunApp();
+            AleraPerformanceTrace.mark('window_bootstrapped');
+            return result;
+          },
+        ),
+        closeWindowOnFailure: (window) async {
+          await window.database?.close();
+        },
+      );
+  AleraPerformanceTrace.mark('primary_bootstrap_ready');
+  await AleraPerformanceTrace.measureAsync(
+    'main_ghostty_init',
+    initializeGhosttyVteWeb,
+  );
   AleraPerformanceTrace.mark('ghostty_initialized');
   AleraPerformanceTrace.recordFirstFrame();
 
