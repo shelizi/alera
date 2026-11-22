@@ -156,21 +156,50 @@ fn discover_history_with_exact_id(
         .collect();
     let mut seen_files = HashSet::new();
     let mut walked = 0_usize;
-    for root in roots.iter().take(24) {
-        if !matches!(root.provider, "codex" | "claude") || root.account_id.is_empty() {
-            continue;
-        }
-        let Ok(canonical_root) = fs::canonicalize(&root.path) else {
-            continue;
+    // Every configured account must have a chance to contribute results.
+    // A single default account with >256 files previously exhausted the
+    // global budget before later Claude/Codex profiles were even visited.
+    // Divide the REMAINING shared budget among remaining valid roots; spare
+    // allowance from smaller roots rolls forward. Keep the exact UUID scan
+    // unchanged: it uses a filename filter and must not be quota-starved.
+    let eligible_roots: Vec<_> = roots
+        .iter()
+        .take(24)
+        .filter_map(|root| {
+            if !matches!(root.provider, "codex" | "claude") || root.account_id.is_empty() {
+                return None;
+            }
+            let canonical = fs::canonicalize(&root.path).ok()?;
+            canonical.is_dir().then_some((root, canonical))
+        })
+        .collect();
+    for (root_index, (root, canonical_root)) in eligible_roots.iter().enumerate() {
+        let remaining_roots = eligible_roots.len() - root_index;
+        let root_file_budget = if exact_id.is_some() {
+            cap
+        } else {
+            cap.saturating_sub(report.visited_files)
+                .div_ceil(remaining_roots)
         };
-        if !canonical_root.is_dir() {
-            continue;
-        }
-        let mut pending = vec![(canonical_root.clone(), 0_usize)];
-        while let Some((directory, depth)) = pending.pop() {
+        let root_entry_budget = if exact_id.is_some() {
+            MAX_ENTRIES
+        } else {
+            MAX_ENTRIES.saturating_sub(walked).div_ceil(remaining_roots)
+        };
+        let root_file_start = report.visited_files;
+        let root_entry_start = walked;
+        let mut pending = vec![(canonical_root.to_path_buf(), 0_usize)];
+        'scan_root: while let Some((directory, depth)) = pending.pop() {
             if walked >= MAX_ENTRIES || report.visited_files >= cap {
                 report.truncated = true;
                 return report;
+            }
+            if exact_id.is_none()
+                && (report.visited_files - root_file_start >= root_file_budget
+                    || walked - root_entry_start >= root_entry_budget)
+            {
+                report.truncated = true;
+                break 'scan_root;
             }
             let Ok(entries) = fs::read_dir(&directory) else {
                 continue;
@@ -178,6 +207,13 @@ fn discover_history_with_exact_id(
             let mut entries: Vec<_> = entries.flatten().collect();
             entries.sort_by_key(|entry| entry.file_name());
             for entry in entries.into_iter().rev() {
+                if exact_id.is_none()
+                    && (report.visited_files - root_file_start >= root_file_budget
+                        || walked - root_entry_start >= root_entry_budget)
+                {
+                    report.truncated = true;
+                    break 'scan_root;
+                }
                 walked += 1;
                 if walked >= MAX_ENTRIES {
                     report.truncated = true;
@@ -723,5 +759,58 @@ mod tests {
         assert_eq!(bounded.visited_files, 2);
         assert!(bounded.truncated);
         assert_eq!(bounded.records.len(), 2);
+    }
+
+    #[test]
+    fn broad_search_budget_does_not_starve_later_registered_accounts() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let default_sessions = home.path().join("default/sessions/2026/11/21");
+        let secondary_sessions = home.path().join("secondary/sessions/2026/11/21");
+        fs::create_dir_all(&default_sessions).unwrap();
+        fs::create_dir_all(&secondary_sessions).unwrap();
+        for index in 0..12 {
+            let id = format!("550e8400-e29b-41d4-a716-{index:012}");
+            fs::write(
+                default_sessions.join(format!("rollout-default-{id}.jsonl")),
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+                ),
+            )
+            .unwrap();
+        }
+        let later_id = "550e8400-e29b-41d4-a716-999999999999";
+        fs::write(
+            secondary_sessions.join(format!("rollout-later-{later_id}.jsonl")),
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":later_id,"cwd":work.path()}})
+            ),
+        )
+        .unwrap();
+        let first = root("codex", &home.path().join("default/sessions"));
+        let mut later = root("codex", &home.path().join("secondary/sessions"));
+        later.account_id = "secondary".into();
+        let report = discover_history(
+            &[first, later],
+            &[workspace(work.path())],
+            HistoryScanPolicy {
+                max_files: 4,
+                index_user_text: false,
+            },
+        );
+        assert!(
+            report.truncated,
+            "budget exhausted by older default history"
+        );
+        assert!(report.visited_files <= 4, "total scan budget is global");
+        assert!(
+            report.records.iter().any(|record| {
+                record.provider_account_id.as_deref() == Some("secondary")
+                    && record.provider_session_id.as_deref() == Some(later_id)
+            }),
+            "later account must be indexed even when default history exceeds cap"
+        );
     }
 }
