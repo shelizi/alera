@@ -26,13 +26,13 @@ void main() {
     test('uses nearly all of a standard desktop window', () {
       expect(
         globalAgentInspectorDefaultSize(const Size(1500, 900)),
-        const Size(1480, 880),
+        const Size(1436, 836),
       );
     });
     test('scales up past the previous 1490 by 950 dialog cap', () {
       expect(
         globalAgentInspectorDefaultSize(const Size(1920, 1200)),
-        const Size(1900, 1180),
+        const Size(1856, 1136),
       );
     });
     test('caps the dialog on very large desktop windows', () {

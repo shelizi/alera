@@ -22,8 +22,9 @@ bool isAgentInspectorEscape(KeyEvent event) =>
 /// The dimensions remain bounded for large multi-monitor desktops.
 @visibleForTesting
 Size globalAgentInspectorDefaultSize(Size viewport) => Size(
-  math.max(0.0, math.min(2400.0, viewport.width - 20)),
-  math.max(0.0, math.min(1400.0, viewport.height - 20)),
+  // Reserve a 32px tappable backdrop on every edge for outside dismissal.
+  math.max(0.0, math.min(2400.0, viewport.width - 64)),
+  math.max(0.0, math.min(1400.0, viewport.height - 64)),
 );
 
 /// Inspect the *existing* Terminal session without selecting another Tab.
@@ -215,7 +216,7 @@ class _GlobalAgentInspectorDialogState
           canRequestFocus: false,
           child: Dialog(
             backgroundColor: AleraTokens.bg,
-            insetPadding: const EdgeInsets.all(10),
+            insetPadding: const EdgeInsets.all(32),
             child: SizedBox(
               width: inspectorSize.width,
               height: inspectorSize.height,
