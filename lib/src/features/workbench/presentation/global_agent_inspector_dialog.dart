@@ -201,142 +201,154 @@ class _GlobalAgentInspectorDialogState
         ?.copyWith(color: AleraTokens.foregroundMuted);
     final inspectorSize = globalAgentInspectorDefaultSize(size);
 
-    return PopScope(
-      canPop: false,
-      child: Focus(
-        onKeyEvent: _onKeyEvent,
-        canRequestFocus: false,
-        child: Dialog(
-          backgroundColor: AleraTokens.bg,
-          insetPadding: const EdgeInsets.all(10),
-          child: SizedBox(
-            width: inspectorSize.width,
-            height: inspectorSize.height,
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      const Icon(Icons.smart_toy_outlined),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              '${row.project} / ${row.workspace}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            Text(
-                              '${row.status.agentType.key} · ${row.status.state.key} · Live Session',
-                              style: muted,
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.escape): DoNothingIntent(),
+      },
+      child: PopScope(
+        // Allow outside-barrier taps to dismiss this route. The Focus handler
+        // below forwards Escape to the Agent and the shortcut fallback keeps
+        // Escape from dismissing the modal when terminal focus changes.
+        canPop: true,
+        child: Focus(
+          onKeyEvent: _onKeyEvent,
+          canRequestFocus: false,
+          child: Dialog(
+            backgroundColor: AleraTokens.bg,
+            insetPadding: const EdgeInsets.all(10),
+            child: SizedBox(
+              width: inspectorSize.width,
+              height: inspectorSize.height,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        const Icon(Icons.smart_toy_outlined),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                '${row.project} / ${row.workspace}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              Text(
+                                '${row.status.agentType.key} · ${row.status.state.key} · Live Session',
+                                style: muted,
+                              ),
+                            ],
+                          ),
+                        ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Session options',
+                          onSelected: (value) {
+                            if (value == 'terminate')
+                              unawaited(_terminateSession());
+                          },
+                          itemBuilder: (context) => <PopupMenuEntry<String>>[
+                            PopupMenuItem<String>(
+                              value: 'terminate',
+                              enabled: verified && !_terminating,
+                              child: Text(
+                                _confirmTerminate
+                                    ? 'Confirm terminate'
+                                    : 'Terminate Session…',
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                      PopupMenuButton<String>(
-                        tooltip: 'Session options',
-                        onSelected: (value) {
-                          if (value == 'terminate')
-                            unawaited(_terminateSession());
-                        },
-                        itemBuilder: (context) => <PopupMenuEntry<String>>[
-                          PopupMenuItem<String>(
-                            value: 'terminate',
-                            enabled: verified && !_terminating,
-                            child: Text(
-                              _confirmTerminate
-                                  ? 'Confirm terminate'
-                                  : 'Terminate Session…',
-                            ),
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        tooltip: 'Close Agent inspector',
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Type directly in the Terminal. Esc reaches the Agent; close with ×.',
-                    style: muted,
-                  ),
-                  if (!verified)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        'Agent identity is no longer verified; input is disabled.',
-                      ),
+                        IconButton(
+                          tooltip: 'Close Agent inspector',
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
                     ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final wide = constraints.maxWidth >= 830;
-                        final terminal = DecoratedBox(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: AleraTokens.borderSubtle),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(7),
-                            child: ExcludeFocus(
-                              excluding: !verified,
-                              child: IgnorePointer(
-                                ignoring: !verified,
-                                child: TerminalSurface(
-                                  session: widget.session,
-                                  autofocus: true,
+                    const SizedBox(height: 6),
+                    Text(
+                      'Type directly in the Terminal. Esc reaches the Agent; close with ×.',
+                      style: muted,
+                    ),
+                    if (!verified)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Agent identity is no longer verified; input is disabled.',
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final wide = constraints.maxWidth >= 830;
+                          final terminal = DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: AleraTokens.borderSubtle,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(7),
+                              child: ExcludeFocus(
+                                excluding: !verified,
+                                child: IgnorePointer(
+                                  ignoring: !verified,
+                                  child: TerminalSurface(
+                                    session: widget.session,
+                                    autofocus: true,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        );
-                        final contextInfo = DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: AleraTokens.surface,
-                            border: Border.all(color: AleraTokens.borderSubtle),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: _contextPanel(context, row),
-                        );
-                        if (wide) {
-                          return Row(
+                          );
+                          final contextInfo = DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: AleraTokens.surface,
+                              border: Border.all(
+                                color: AleraTokens.borderSubtle,
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: _contextPanel(context, row),
+                          );
+                          if (wide) {
+                            return Row(
+                              children: <Widget>[
+                                Expanded(child: terminal),
+                                const SizedBox(width: 12),
+                                SizedBox(width: 310, child: contextInfo),
+                              ],
+                            );
+                          }
+                          return Column(
                             children: <Widget>[
+                              SizedBox(
+                                height: math.min(
+                                  150,
+                                  constraints.maxHeight * 0.28,
+                                ),
+                                child: contextInfo,
+                              ),
+                              const SizedBox(height: 10),
                               Expanded(child: terminal),
-                              const SizedBox(width: 12),
-                              SizedBox(width: 310, child: contextInfo),
                             ],
                           );
-                        }
-                        return Column(
-                          children: <Widget>[
-                            SizedBox(
-                              height: math.min(
-                                150,
-                                constraints.maxHeight * 0.28,
-                              ),
-                              child: contextInfo,
-                            ),
-                            const SizedBox(height: 10),
-                            Expanded(child: terminal),
-                          ],
-                        );
-                      },
+                        },
+                      ),
                     ),
-                  ),
-                  if (_feedback != null) ...[
-                    const SizedBox(height: 6),
-                    Text(_feedback!, style: muted),
+                    if (_feedback != null) ...[
+                      const SizedBox(height: 6),
+                      Text(_feedback!, style: muted),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

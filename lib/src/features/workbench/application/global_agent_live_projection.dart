@@ -32,11 +32,13 @@ class GlobalAgentDashboardSection {
   final List<GlobalAgentLiveRow> rows;
 }
 
-/// Group live Agent cards by current Hook state, newest first within each
-/// section. Empty sections are omitted, so the viewport stays compact.
+/// Group live Agent cards by current Hook state. The Dashboard may opt in to
+/// persisted Tab pins first; other consumers keep newest-first ordering.
+/// Empty sections are omitted so the viewport stays compact.
 List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
-  Iterable<GlobalAgentLiveRow> rows,
-) {
+  Iterable<GlobalAgentLiveRow> rows, {
+  bool pinnedFirst = false,
+}) {
   final grouped = <GlobalAgentDashboardGroup, List<GlobalAgentLiveRow>>{};
   for (final row in rows) {
     grouped
@@ -51,8 +53,13 @@ List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
       if (grouped[group] case final sectionRows?)
         GlobalAgentDashboardSection(
           group,
-          sectionRows
-            ..sort((a, b) => b.status.updatedAt.compareTo(a.status.updatedAt)),
+          sectionRows..sort((a, b) {
+            if (pinnedFirst && a.tab.isPinned != b.tab.isPinned) {
+              return a.tab.isPinned ? -1 : 1;
+            }
+            final recent = b.status.updatedAt.compareTo(a.status.updatedAt);
+            return recent != 0 ? recent : a.tab.id.compareTo(b.tab.id);
+          }),
         ),
   ];
 }

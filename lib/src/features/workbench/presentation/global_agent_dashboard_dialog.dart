@@ -12,8 +12,22 @@ import 'package:alera/src/features/workbench/presentation/terminal_runtime_provi
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+/// Open the live inspector as a true modal: only tapping its outside barrier
+/// or the explicit Close button dismisses it. The inspector itself routes
+/// Escape to the existing Terminal session rather than popping this route.
+@visibleForTesting
+Future<void> showAgentInspectorModal(BuildContext context, Widget inspector) =>
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close Agent inspector',
+      barrierColor: Colors.black54,
+      transitionDuration: Duration.zero,
+      pageBuilder: (_, _, _) => inspector,
+    );
+
 /// A live status Kanban: one column per present state, not one long list.
-/// The actual Terminal is inspected in a separate, non-dismissing modal.
+/// The actual Terminal is inspected in a separate dismissible modal.
 class GlobalAgentDashboardPage extends ConsumerStatefulWidget {
   const GlobalAgentDashboardPage({super.key});
 
@@ -44,6 +58,7 @@ class _GlobalAgentDashboardPageState
   bool _showHidden = false;
   bool _needsReviewOnly = false;
   bool _openingInspector = false;
+  final Set<String> _pinningTabIds = <String>{};
   String? _feedback;
 
   ({String sessionId, String workspaceId, String tabId}) _identity(
@@ -78,6 +93,36 @@ class _GlobalAgentDashboardPageState
         _hiddenCards.remove(_identity(row));
       }
     });
+  }
+
+  Future<void> _togglePinned(GlobalAgentLiveRow row) async {
+    final identity = _identity(row);
+    if (_pinningTabIds.contains(identity.tabId)) return;
+    if (!globalAgentTargetIsCurrent(
+      workbench: ref.read(workbenchControllerProvider),
+      statuses: ref.read(agentStatusControllerProvider),
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+    )) {
+      setState(() => _feedback = 'Agent Session changed. Pin was not saved.');
+      return;
+    }
+    setState(() => _pinningTabIds.add(identity.tabId));
+    try {
+      // Reuse existing persisted Tab pin state so pins survive app restarts,
+      // stay in sync with the Tab strip and never mutate/stop the Agent.
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .setWorkspaceTabPinned(
+            tabId: identity.tabId,
+            pinned: !row.tab.isPinned,
+          );
+    } on Object {
+      if (mounted) setState(() => _feedback = 'Could not save this Agent pin.');
+    } finally {
+      if (mounted) setState(() => _pinningTabIds.remove(identity.tabId));
+    }
   }
 
   Future<void> _inspect(GlobalAgentLiveRow row) async {
@@ -123,14 +168,9 @@ class _GlobalAgentDashboardPageState
       overlay.open();
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
-      await showGeneralDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        barrierLabel: 'Inspect Agent',
-        barrierColor: Colors.black54,
-        transitionDuration: Duration.zero,
-        pageBuilder: (_, _, _) =>
-            GlobalAgentInspectorDialog(row: row, session: session),
+      await showAgentInspectorModal(
+        context,
+        GlobalAgentInspectorDialog(row: row, session: session),
       );
     } finally {
       // A zero-duration route and one final frame allow its TerminalView to
@@ -170,6 +210,7 @@ class _GlobalAgentDashboardPageState
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     final hidden = _hiddenCards.contains(_identity(row));
+    final pinned = row.tab.isPinned;
     return Material(
       color: AleraTokens.surface,
       borderRadius: BorderRadius.circular(10),
@@ -209,6 +250,19 @@ class _GlobalAgentDashboardPageState
                         color: _groupColor(group),
                       ),
                     ),
+                  IconButton(
+                    tooltip: pinned ? 'Unpin Agent' : 'Pin Agent to top',
+                    icon: Icon(
+                      pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                      color: pinned ? _groupColor(group) : null,
+                      size: 17,
+                    ),
+                    iconSize: 17,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _pinningTabIds.contains(row.tab.id)
+                        ? null
+                        : () => _togglePinned(row),
+                  ),
                   IconButton(
                     tooltip: hidden ? 'Show Agent card' : 'Hide Agent card',
                     icon: Icon(
@@ -364,7 +418,7 @@ class _GlobalAgentDashboardPageState
         .where((row) => !_needsReviewOnly || row.needsReview)
         .where((row) => row.matches(_query))
         .toList(growable: false);
-    final columns = groupGlobalAgentLiveRows(rows);
+    final columns = groupGlobalAgentLiveRows(rows, pinnedFirst: true);
     final needsReviewCount = all.where((row) => row.needsReview).length;
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/application/global_agent_history_retry.dart';
@@ -29,6 +30,8 @@ class _GlobalAgentHistoryPanelState
   final _resumeProfile = TextEditingController();
   bool _consented = false;
   bool _busy = false;
+  bool _advancedFiltersOpen = false;
+  String? _resumeExpandedKey;
   String? _provider;
   String? _armedResumeKey;
   final _resumeMutations = ExactHistoryResumeRetryTracker();
@@ -52,6 +55,18 @@ class _GlobalAgentHistoryPanelState
   String? _optional(TextEditingController controller) {
     final value = controller.text.trim();
     return value.isEmpty ? null : value;
+  }
+
+  /// Search remains on-demand. Changing a scope must never leave actions
+  /// from a previous account/Worktree attached to stale results.
+  void _invalidateSearchResults() {
+    _hits = const <Map<String, Object?>>[];
+    _locatedTabs.clear();
+    _armedResumeKey = null;
+    _resumeExpandedKey = null;
+    _feedback = _consented
+        ? 'Search changed. Press Search History to refresh results.'
+        : 'Search is off until you explicitly enable local indexing.';
   }
 
   String _sourceKey(Map<String, Object?> hit) {
@@ -87,6 +102,7 @@ class _GlobalAgentHistoryPanelState
     setState(() {
       _busy = true;
       _armedResumeKey = null;
+      _resumeExpandedKey = null;
       _locatedTabs.clear();
       _feedback = 'Searching verified workspaces; no Agent will be started…';
     });
@@ -147,6 +163,7 @@ class _GlobalAgentHistoryPanelState
         _hits = const [];
         _consented = false;
         _armedResumeKey = null;
+        _resumeExpandedKey = null;
         _locatedTabs.clear();
         _feedback = 'Local search index cleared. Native Claude/Codex files were not changed.';
       });
@@ -397,94 +414,398 @@ class _GlobalAgentHistoryPanelState
     }
   }
 
+  Future<void> _confirmClearCache() async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear local history index?'),
+        content: const Text(
+          'This removes only the private local search cache. '
+          'Claude and Codex source conversations will not be changed.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Clear index'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await _clearCache();
+  }
+
+  Widget _providerChip(String? value, String label) => ChoiceChip(
+    label: Text(label),
+    selected: _provider == value,
+    onSelected: _busy
+        ? null
+        : (selected) {
+            if (selected) {
+              setState(() {
+                _provider = value;
+                _invalidateSearchResults();
+              });
+            }
+          },
+  );
+
+  Widget _searchControls() => LayoutBuilder(
+    builder: (context, constraints) {
+      final field = TextField(
+        controller: _query,
+        key: const ValueKey<String>('history-search-query'),
+        enabled: !_busy,
+        autofocus: true,
+        maxLength: 256,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.manage_search),
+          labelText: 'Search historical Claude / Codex Sessions',
+          hintText: 'Search by task, code, goal or progress',
+          counterText: '',
+          isDense: true,
+          border: const OutlineInputBorder(),
+          suffixIcon: ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _query,
+            builder: (_, value, _) => value.text.isEmpty
+                ? const Icon(Icons.keyboard_return_outlined, size: 18)
+                : IconButton(
+                    tooltip: 'Clear search text',
+                    icon: const Icon(Icons.close),
+                    onPressed: _busy ? null : () => _query.clear(),
+                  ),
+          ),
+        ),
+        onChanged: (_) => setState(_invalidateSearchResults),
+        onSubmitted: (_) => _searchHistory(),
+      );
+      final button = FilledButton.icon(
+        onPressed: _busy || !_consented ? null : _searchHistory,
+        icon: const Icon(Icons.search),
+        label: const Text('Search History'),
+      );
+      if (constraints.maxWidth < 620) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[field, const SizedBox(height: 8), button],
+        );
+      }
+      return Row(
+        children: <Widget>[
+          Expanded(child: field),
+          const SizedBox(width: 10),
+          button,
+        ],
+      );
+    },
+  );
+
+  Widget _advancedFilters() => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = math.min(310.0, constraints.maxWidth);
+      Widget field(TextEditingController controller, String label) => SizedBox(
+        width: width,
+        child: TextField(
+          controller: controller,
+          enabled: !_busy,
+          maxLength: 256,
+          decoration: InputDecoration(
+            labelText: label,
+            counterText: '',
+            isDense: true,
+            border: const OutlineInputBorder(),
+          ),
+          onChanged: (_) => setState(_invalidateSearchResults),
+          onSubmitted: (_) => _searchHistory(),
+        ),
+      );
+      return Container(
+        key: const ValueKey<String>('history-advanced-filters'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          border: Border.all(color: AleraTokens.borderSubtle),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            field(_project, 'Project ID'),
+            field(_workspace, 'Worktree ID'),
+            field(_account, 'Source account ID'),
+            TextButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () {
+                      _project.clear();
+                      _workspace.clear();
+                      _account.clear();
+                      setState(() {
+                        _provider = null;
+                        _invalidateSearchResults();
+                      });
+                    },
+              icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+              label: const Text('Reset filters'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+
+  Widget _resultCard(BuildContext context, Map<String, Object?> hit) {
+    final session = hit['session'];
+    final data = session is Map ? session : const <String, Object?>{};
+    String field(String key) => data[key]?.toString() ?? '';
+    final sourceKey = _sourceKey(hit);
+    final located = _locatedTabs.containsKey(sourceKey);
+    final expanded = _resumeExpandedKey == sourceKey;
+    final canLocate =
+        field('providerAccountId').isNotEmpty &&
+        const <String>['claude', 'codex'].contains(field('provider'));
+    final goal = field('goal');
+    final progress = field('progress');
+    final title = field('title').trim().isEmpty
+        ? 'Untitled Agent Session'
+        : field('title');
+    final muted = Theme.of(context).textTheme.bodySmall
+        ?.copyWith(color: AleraTokens.foregroundMuted);
+    final resumeKey = jsonEncode(<String>[
+      field('provider'),
+      field('providerAccountId'),
+      field('projectId'),
+      field('workspaceId'),
+      field('providerSessionId'),
+      _resumeProfile.text.trim(),
+    ]);
+    final matchField = hit['matchField']?.toString() ?? 'history';
+
+    return Container(
+      key: ValueKey<String>('history-result-$sourceKey'),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AleraTokens.surface,
+        border: Border.all(
+          color: located
+              ? AleraTokens.foregroundMuted
+              : AleraTokens.borderSubtle,
+        ),
+        borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                field('provider') == 'claude'
+                    ? Icons.smart_toy_outlined
+                    : Icons.code_outlined,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (located)
+                const Tooltip(
+                  message: 'The original Host Tab was found and verified',
+                  child: Icon(Icons.verified_outlined, size: 19),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${field('provider').toUpperCase()} · ${field('providerAccountId').isEmpty ? 'Unknown account' : field('providerAccountId')}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: muted,
+          ),
+          Text(
+            '${field('projectId')} / ${field('workspaceId')}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: muted,
+          ),
+          if (goal.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(goal, maxLines: 3, overflow: TextOverflow.ellipsis),
+          ],
+          if (progress.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 5),
+            Text(
+              progress,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: muted,
+            ),
+          ],
+          const SizedBox(height: 7),
+          Text(
+            canLocate
+                ? 'Matched: $matchField · Preview only (no Agent started)'
+                : 'Preview only · Exact source account unavailable',
+            style: muted,
+          ),
+          if (canLocate) ...<Widget>[
+            const SizedBox(height: 7),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: <Widget>[
+                if (!located)
+                  OutlinedButton.icon(
+                    onPressed: _busy || !_consented
+                        ? null
+                        : () => _locateExisting(hit),
+                    icon: const Icon(Icons.find_in_page_outlined, size: 18),
+                    label: const Text('Find existing Tab'),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: _busy || !_consented
+                        ? null
+                        : () => _openLocatedExisting(hit),
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text('Open verified Tab'),
+                  ),
+                TextButton.icon(
+                  onPressed: _busy || !_consented
+                      ? null
+                      : () => setState(() {
+                          _resumeExpandedKey = expanded ? null : sourceKey;
+                          _armedResumeKey = null;
+                          if (!expanded) _resumeProfile.clear();
+                        }),
+                  icon: Icon(
+                    expanded ? Icons.keyboard_arrow_up : Icons.history_outlined,
+                    size: 18,
+                  ),
+                  label: Text(expanded ? 'Hide Resume' : 'Resume Session…'),
+                ),
+              ],
+            ),
+            if (expanded) ...<Widget>[
+              const SizedBox(height: 8),
+              Container(
+                key: const ValueKey<String>('history-resume-details'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: AleraTokens.borderSubtle),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    const Text(
+                      'Resume creates a new Tab only after identity verification. '
+                      'Find an existing Tab first to avoid duplicates.',
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _resumeProfile,
+                      enabled: !_busy,
+                      decoration: const InputDecoration(
+                        labelText: 'Official Claude / Codex Profile ID',
+                        hintText: 'Exact Profile ID from Settings',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() => _armedResumeKey = null),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: OutlinedButton.icon(
+                        onPressed: _busy || !_consented
+                            ? null
+                            : () => _resumeExact(hit),
+                        icon: const Icon(Icons.play_arrow_outlined, size: 18),
+                        label: Text(
+                          _armedResumeKey == resumeKey
+                              ? 'Confirm exact Resume'
+                              : 'Resume exact Session…',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
+    final activeFilters = <String>[
+      if (_project.text.trim().isNotEmpty) 'Project',
+      if (_workspace.text.trim().isNotEmpty) 'Worktree',
+      if (_account.text.trim().isNotEmpty) 'Account',
+    ].length;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _query,
-          autofocus: true,
-          maxLength: 256,
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.manage_search),
-            labelText: 'Historical Claude / Codex Sessions',
-            hintText: 'Windows 注音, IMM API, git diff…',
-          ),
-          onSubmitted: (_) => _searchHistory(),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<String>(
-                initialValue: _provider,
-                decoration: const InputDecoration(labelText: 'Provider'),
-                items: const [
-                  DropdownMenuItem(value: null, child: Text('All Providers')),
-                  DropdownMenuItem(value: 'claude', child: Text('Claude')),
-                  DropdownMenuItem(value: 'codex', child: Text('Codex')),
-                ],
-                onChanged: _busy
-                    ? null
-                    : (value) => setState(() => _provider = value),
+      children: <Widget>[
+        _searchControls(),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            _providerChip(null, 'All'),
+            _providerChip('claude', 'Claude'),
+            _providerChip('codex', 'Codex'),
+            TextButton.icon(
+              onPressed: () =>
+                  setState(() => _advancedFiltersOpen = !_advancedFiltersOpen),
+              icon: Icon(
+                _advancedFiltersOpen ? Icons.expand_less : Icons.tune_outlined,
+                size: 18,
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _account,
-                decoration: const InputDecoration(
-                  labelText: 'Account ID (optional)',
-                ),
+              label: Text(
+                activeFilters == 0
+                    ? 'Advanced filters'
+                    : 'Advanced filters ($activeFilters)',
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _project,
-                decoration: const InputDecoration(
-                  labelText: 'Project ID (optional)',
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _workspace,
-                decoration: const InputDecoration(
-                  labelText: 'Worktree ID (optional)',
-                ),
-              ),
-            ),
-          ],
-        ),
-        TextField(
-          controller: _resumeProfile,
-          decoration: const InputDecoration(
-            labelText: 'Official Claude/Codex Profile ID (exact Resume)',
-            helperText:
-                'Host uses the source account directory automatically. '
-                'Only official CLI Profiles, no custom wrappers.',
-          ),
-          onChanged: (_) => setState(() => _armedResumeKey = null),
-        ),
+        if (_advancedFiltersOpen) ...<Widget>[
+          const SizedBox(height: 8),
+          _advancedFilters(),
+        ],
         CheckboxListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
           value: _consented,
           onChanged: _busy
               ? null
               : (value) => setState(() {
                   _consented = value == true;
                   if (!_consented) {
-                    _hits = const [];
+                    _hits = const <Map<String, Object?>>[];
                     _armedResumeKey = null;
+                    _resumeExpandedKey = null;
                     _locatedTabs.clear();
                   }
                 }),
@@ -492,138 +813,55 @@ class _GlobalAgentHistoryPanelState
             'Allow local indexing of limited user-message previews',
           ),
           subtitle: const Text(
-            'Explicit opt-in per view. Stored in a private local '
-            'SQLite cache (not encrypted). Manual Resume selects the '
-            'verified source account. No cloud index upload.',
+            'Opt in per view · private local SQLite (not encrypted) · no cloud upload',
+            maxLines: 2,
           ),
         ),
-        Row(
-          children: [
-            FilledButton.icon(
-              onPressed: _busy || !_consented ? null : _searchHistory,
-              icon: const Icon(Icons.search),
-              label: Text(_busy ? 'Working…' : 'Search History'),
-            ),
-            const SizedBox(width: 12),
-            TextButton.icon(
-              onPressed: _busy ? null : _clearCache,
-              icon: const Icon(Icons.delete_outline),
-              label: const Text('Clear local index'),
-            ),
-          ],
-        ),
+        if (_busy) const LinearProgressIndicator(minHeight: 2),
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Text(_feedback, style: muted),
         ),
-        const Divider(),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                '${_hits.length} history results',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _busy ? null : _confirmClearCache,
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text('Clear local index'),
+            ),
+          ],
+        ),
+        const Divider(height: 12),
         Expanded(
           child: _hits.isEmpty
               ? Center(
-                  child: Text(
-                    'No historical previews to display.',
-                    style: muted,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Icon(Icons.history_toggle_off_outlined, size: 34),
+                      const SizedBox(height: 12),
+                      Text(
+                        !_consented
+                            ? 'Enable local preview indexing to search history.'
+                            : 'Search to find a past Claude or Codex Session.',
+                        textAlign: TextAlign.center,
+                        style: muted,
+                      ),
+                    ],
                   ),
                 )
               : ListView.separated(
+                  key: const ValueKey<String>('history-results-list'),
                   itemCount: _hits.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (_, index) {
-                    final hit = _hits[index];
-                    final session = hit['session'];
-                    final data = session is Map
-                        ? session
-                        : const <String, Object?>{};
-                    String field(String key) => data[key]?.toString() ?? '';
-                    final goal = field('goal');
-                    final resumeKey = jsonEncode([
-                      field('provider'),
-                      field('providerAccountId'),
-                      field('projectId'),
-                      field('workspaceId'),
-                      field('providerSessionId'),
-                      _resumeProfile.text.trim(),
-                    ]);
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: AleraTokens.surface,
-                        border: Border.all(color: AleraTokens.borderSubtle),
-                        borderRadius: BorderRadius.circular(
-                          AleraTokens.radiusMd,
-                        ),
-                      ),
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            field('title'),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${field('provider')} · ${field('providerAccountId')} · '
-                            '${field('projectId')} / ${field('workspaceId')}',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: muted,
-                          ),
-                          if (goal.isNotEmpty)
-                            Text(
-                              goal,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          Text(
-                            field('providerAccountId').isNotEmpty
-                                ? 'Matched ${hit['matchField']} · Select Resume to '
-                                      'verify the source account, UUID, and Worktree'
-                                : 'Preview only · source account unavailable',
-                            style: muted,
-                          ),
-                          if (field('providerAccountId').isNotEmpty)
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Wrap(
-                                spacing: 8,
-                                children: [
-                                  TextButton.icon(
-                                    onPressed: _busy || !_consented
-                                        ? null
-                                        : () => _locateExisting(hit),
-                                    icon: const Icon(
-                                      Icons.find_in_page_outlined,
-                                    ),
-                                    label: const Text('Find existing Tab'),
-                                  ),
-                                  if (_locatedTabs.containsKey(_sourceKey(hit)))
-                                    TextButton.icon(
-                                      onPressed: _busy || !_consented
-                                          ? null
-                                          : () => _openLocatedExisting(hit),
-                                      icon: const Icon(Icons.open_in_new),
-                                      label: const Text('Open verified Tab'),
-                                    ),
-                                  TextButton.icon(
-                                    onPressed: _busy || !_consented
-                                        ? null
-                                        : () => _resumeExact(hit),
-                                    icon: const Icon(Icons.history),
-                                    label: Text(
-                                      _armedResumeKey == resumeKey
-                                          ? 'Confirm exact Resume'
-                                          : 'Resume exact Session…',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  },
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) =>
+                      _resultCard(context, _hits[index]),
                 ),
         ),
       ],
