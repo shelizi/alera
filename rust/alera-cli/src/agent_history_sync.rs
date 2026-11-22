@@ -28,6 +28,25 @@ struct HistoryAccount {
     history_root: PathBuf,
 }
 
+/// Reuse account-separated native history roots for an explicit local search.
+/// Never infer additional roots from untrusted transcript content.
+pub(crate) async fn search_roots(
+    settings: &RuntimeAgentQuotaSettings,
+) -> Vec<crate::agent_session_history_scan::ProviderHistoryRoot> {
+    resolve_accounts(settings)
+        .await
+        .into_iter()
+        .filter(|account| account.history_root.is_absolute())
+        .map(
+            |account| crate::agent_session_history_scan::ProviderHistoryRoot {
+                provider: account.provider,
+                account_id: account.account_id,
+                path: account.history_root,
+            },
+        )
+        .collect()
+}
+
 #[derive(Default, Debug, PartialEq, Eq)]
 struct MirrorStats {
     copied: usize,

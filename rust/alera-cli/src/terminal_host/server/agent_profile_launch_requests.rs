@@ -3,11 +3,14 @@ use alera_core::runtime::{AgentProfileLaunchReceiptOutcome, WorkspaceStatus, Wor
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
+use super::agent_history_resume::VerifiedHistoryResume;
 use super::agent_prompt_composition::compose_agent_prompt;
+use super::agent_title_state::AgentTitleState;
 use super::client_delivery::LocalClientRole;
 use super::host_service_requests::required_non_blank;
 use super::orchestration_profile_spawn::launch_for_profile;
 use super::tab_compatibility::redact_private_tab_payload;
+use super::terminal_startup_commands::{configure_provider_resume, resume_bare_agent_command};
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::{ClientKind, ServerActor};
 use crate::terminal_host::host_error::{HostError, HostResult};
@@ -41,6 +44,28 @@ impl ServerActor {
         &mut self,
         client_id: Option<u64>,
         payload: &Value,
+    ) -> HostResult<Value> {
+        self.launch_agent_profile_inner(client_id, payload, None)
+            .await
+    }
+
+    /// Called exclusively after the local Host verified the exact original
+    /// native source. Remote/mobile profile launch cannot supply this proof.
+    pub(super) async fn launch_agent_profile_with_verified_history(
+        &mut self,
+        client_id: u64,
+        payload: &Value,
+        verified: VerifiedHistoryResume,
+    ) -> HostResult<Value> {
+        self.launch_agent_profile_inner(Some(client_id), payload, Some(verified))
+            .await
+    }
+
+    async fn launch_agent_profile_inner(
+        &mut self,
+        client_id: Option<u64>,
+        payload: &Value,
+        verified_history: Option<VerifiedHistoryResume>,
     ) -> HostResult<Value> {
         let workspace_id = required_non_blank(payload, "workspaceId")?;
         let profile_id = required_non_blank(payload, "profileId")?;
@@ -88,13 +113,22 @@ impl ServerActor {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let payload_digest = client_mutation_id.as_ref().map(|_| {
-            let digest = agent_profile_launch_payload_digest(
+            let mut digest = agent_profile_launch_payload_digest(
                 &workspace_id,
                 &profile_id,
                 &prompt,
                 automation_run_id.as_deref(),
                 automation_owned,
             );
+            if let Some(history) = verified_history.as_ref() {
+                digest = hex::encode(Sha256::digest(
+                    format!(
+                        "{digest}\0exact_history:{}:{}:{}",
+                        history.provider, history.account_id, history.native_id
+                    )
+                    .as_bytes(),
+                ));
+            }
             if let Some(account_id) = selected_agy_account {
                 hex::encode(Sha256::digest(
                     format!("{digest}\0agy:{account_id}").as_bytes(),
@@ -125,6 +159,17 @@ impl ServerActor {
                 Some(AgentProfileLaunchReceiptOutcome::Created) | None => {}
             }
         }
+        if let Some(history) = verified_history.as_ref() {
+            // Only new exact-Resume launches need the duplicate-owner guard.
+            // A retry of the *same* confirmed request must replay the durable
+            // receipt above instead of being mistaken for a second owner.
+            super::agent_history_resume::ensure_history_session_unowned(
+                &self.runtime_store,
+                &workspace_id,
+                history,
+            )
+            .await?;
+        }
         let workspace = self
             .runtime_store
             .find_workspace(&workspace_id)
@@ -153,6 +198,16 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
             .ok_or_else(|| HostError::state(format!("Agent profile not found: {profile_id}")))?;
+        if let Some(history) = verified_history.as_ref() {
+            if profile.agent_type != history.provider
+                || automation_owned
+                || automation_run_id.is_some()
+            {
+                return Err(HostError::state(
+                    "Exact history resume requires an ordinary matching Claude/Codex profile",
+                ));
+            }
+        }
         if let Some(account_id) = selected_agy_account {
             if !matches!(profile.agent_type.as_str(), "agy" | "antigravity") {
                 return Err(HostError::format(
@@ -174,15 +229,52 @@ impl ServerActor {
                 .map_err(|error| HostError::state(format!("AGY SSH Host not verified: {error}")))?;
         }
         let title_prompt = prompt.clone();
-        let prompt = compose_agent_prompt(
-            &prompt,
-            &profile.custom_prompt,
-            &effective_config.config.new_workspace.prompt_append,
-        );
+        // Resuming an existing conversation must NOT send a new task,
+        // profile custom prompt or project append instructions.
+        let prompt = if verified_history.is_some() {
+            String::new()
+        } else {
+            compose_agent_prompt(
+                &prompt,
+                &profile.custom_prompt,
+                &effective_config.config.new_workspace.prompt_append,
+            )
+        };
         let descriptor = agent_descriptor(&profile.agent_type).ok_or_else(|| {
             HostError::format(format!("Unsupported agent type: {}", profile.agent_type))
         })?;
         let (command, managed_launch) = launch_for_profile(&profile).map_err(HostError::format)?;
+        if let Some(history) = verified_history.as_ref() {
+            let supported = match (command.as_deref(), managed_launch.as_ref()) {
+                (None, Some(launch)) => {
+                    // Profile launch arguments can choose a different auth/config
+                    // home. For v1 permit only the standard CLI with no flags
+                    // (or Codex's known --no-daemon flag).
+                    let allowed = launch.arguments.is_empty()
+                        || (history.provider == "codex" && launch.arguments == ["--no-daemon"]);
+                    let mut candidate = launch.clone();
+                    allowed
+                        && configure_provider_resume(
+                            &mut candidate,
+                            &history.provider,
+                            &history.native_id,
+                        )
+                }
+                (Some(command), None) => resume_bare_agent_command(
+                    command,
+                    &history.provider,
+                    &history.native_id,
+                    "pwsh.exe",
+                )
+                .is_some(),
+                _ => false,
+            };
+            if !supported {
+                return Err(HostError::state(
+                    "Resume requires a bare official Claude/Codex CLI profile without account overrides, wrappers, or existing resume flags",
+                ));
+            }
+        }
         let launch_snapshot = AgentProfileLaunchSnapshotV1::new(
             &profile,
             descriptor,
@@ -191,15 +283,16 @@ impl ServerActor {
             AgentInitialDeliveryReplayV1::Once,
         )
         .map_err(HostError::format)?;
-        let prompt_after_ready = launch_snapshot.initial_delivery.mechanism
-            == AgentInitialDeliveryMechanismV1::TerminalAfterReady;
+        let prompt_after_ready = verified_history.is_none()
+            && launch_snapshot.initial_delivery.mechanism
+                == AgentInitialDeliveryMechanismV1::TerminalAfterReady;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
         let mut tab_payload = json!({
             "terminalSessionId": id,
             // Most adapters take the prompt at launch. fx receives it
             // after its built-in lifecycle reports that the TUI is ready.
-            "initialPrompt": (!prompt_after_ready).then(|| prompt.clone()),
+            "initialPrompt": (verified_history.is_none() && !prompt_after_ready).then(|| prompt.clone()),
             "pendingAgentPrompt": prompt_after_ready.then(|| json!({
                 "agent": descriptor.id,
                 "prompt": prompt,
@@ -225,6 +318,9 @@ impl ServerActor {
             payload: tab_payload,
         };
         super::agent_title_state::initialize(&mut tab, &title_prompt);
+        if let Some(history) = verified_history.as_ref() {
+            configure_exact_history_checkpoint(&mut tab, history)?;
+        }
         let mut projected_tab = tab.clone();
         redact_private_tab_payload(&mut projected_tab);
         let result = json!({
@@ -378,6 +474,42 @@ impl ServerActor {
     }
 }
 
+fn configure_exact_history_checkpoint(
+    tab: &mut WorkspaceTabRecord,
+    history: &VerifiedHistoryResume,
+) -> HostResult<()> {
+    let mut state = AgentTitleState::read(tab).ok_or_else(|| {
+        HostError::state("Could not initialize exact historical resume checkpoint")
+    })?;
+    if !matches!(history.provider.as_str(), "claude" | "codex")
+        || uuid::Uuid::parse_str(&history.native_id).is_err()
+    {
+        return Err(HostError::state(
+            "Exact historical resume identity is invalid",
+        ));
+    }
+    state.agent = Some(history.provider.clone());
+    state.native_id = Some(history.native_id.clone());
+    state.codex_transcript_path = history.codex_transcript_path.clone();
+    state.eligible = false;
+    state.attempted = true;
+    state.closed = false;
+    state.initial_prompt.clear();
+    tab.payload[super::agent_history_resume::RESUME_ORIGIN_KEY] = json!({
+        "provider": history.provider,
+        "accountId": history.account_id,
+        "sourceDirectoryFingerprint": super::agent_history_resume::source_directory_fingerprint(
+            &history.config_directory,
+        ),
+    });
+    // Future prompt-path changes must not inject a new task into an existing
+    // provider conversation or silently reinterpret Resume as a fresh chat.
+    tab.payload["initialPrompt"] = Value::Null;
+    tab.payload["pendingAgentPrompt"] = Value::Null;
+    state.write(tab);
+    Ok(())
+}
+
 fn redact_agent_profile_launch_result(mut result: Value) -> Value {
     let Some(tab_value) = result.get_mut("tab") else {
         return result;
@@ -416,6 +548,59 @@ mod tests {
     use crate::terminal_host::client::ClientHandle;
     use crate::terminal_host::host_error::{HostError, OutcomeClass};
     use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
+
+    #[test]
+    fn verified_history_checkpoint_retains_exact_uuid_without_replaying_a_prompt() {
+        let now = chrono::Utc::now();
+        let mut tab = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Original".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({
+                "agentType":"codex",
+                "spawnOnCreate":true,
+                "initialPrompt":"DO NOT REPLAY",
+                "pendingAgentPrompt":{"agent":"codex","prompt":"DO NOT REPLAY"},
+            }),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "DO NOT REPLAY");
+        let native = "550e8400-e29b-41d4-a716-446655440001";
+        configure_exact_history_checkpoint(
+            &mut tab,
+            &VerifiedHistoryResume {
+                provider: "codex".into(),
+                account_id: "other".into(),
+                native_id: native.into(),
+                codex_transcript_path: Some("verified/native/transcript.jsonl".into()),
+                config_directory: "provider-config-dir".into(),
+            },
+        )
+        .unwrap();
+        let state = AgentTitleState::read(&tab).unwrap();
+        assert_eq!(state.native_id.as_deref(), Some(native));
+        assert_eq!(state.agent.as_deref(), Some("codex"));
+        assert!(!state.eligible);
+        assert!(!state.closed);
+        assert!(state.initial_prompt.is_empty());
+        assert!(tab.payload["initialPrompt"].is_null());
+        assert!(tab.payload["pendingAgentPrompt"].is_null());
+        assert_eq!(
+            tab.payload[super::super::agent_history_resume::RESUME_ORIGIN_KEY]["accountId"],
+            "other"
+        );
+        assert_eq!(
+            tab.payload[super::super::agent_history_resume::RESUME_ORIGIN_KEY]
+                ["sourceDirectoryFingerprint"],
+            super::super::agent_history_resume::source_directory_fingerprint("provider-config-dir")
+        );
+        assert_eq!(
+            super::super::terminal_startup_commands::provider_resume_id(&tab),
+            Some(("codex", native.to_owned()))
+        );
+    }
 
     #[test]
     fn agent_profile_launch_validates_google_account_scope_before_host_mutation() {

@@ -60,6 +60,9 @@ final class SocketTerminalHostClient._(
     implements
         TerminalHostClient,
         TerminalHostViewLeaseClient,
+        TerminalHostVerifiedAgentInputClient,
+        TerminalHostVerifiedAgentLifecycleClient,
+        TerminalHostAgentHistoryClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -265,6 +268,172 @@ final class SocketTerminalHostClient._(
       'dataBase64': encodeTerminalHostBytes(bytes),
       if (deferredEnter) 'deferredEnter': true,
     });
+  }
+
+  @override
+  Future<void> submitVerifiedAgentPrompt({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String prompt,
+  }) async {
+    final bytes = utf8.encode(prompt);
+    if (sessionId.trim().isEmpty ||
+        workspaceId.trim().isEmpty ||
+        tabId.trim().isEmpty ||
+        prompt.trim().isEmpty ||
+        bytes.length > 4096 ||
+        prompt.contains('\u0000')) {
+      throw ArgumentError(
+        'Agent prompt or Host identity is invalid (4 KiB maximum).',
+      );
+    }
+    // Never auto-start a Host when interacting with an existing global Agent.
+    // Host rechecks the entire identity immediately before queueing the write.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      'agent.writeVerified',
+      <String, Object?>{
+        'sessionId': sessionId,
+        'expectedWorkspaceId': workspaceId,
+        'expectedTabId': tabId,
+        'dataBase64': encodeTerminalHostBytes(bytes),
+        'deferredEnter': true,
+        'bracketedPaste': true,
+      },
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> searchAgentHistory({
+    required String text,
+    String? projectId,
+    String? workspaceId,
+    String? provider,
+    String? accountId,
+  }) async {
+    if (text.trim().isEmpty ||
+        text.runes.length > 256 ||
+        text.contains('\u0000')) {
+      throw ArgumentError('History search requires 1–256 characters.');
+    }
+    // No implicit Host startup; the UI prompts for explicit opt-in before
+    // calling this endpoint. The Host independently validates consent.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.search',
+      <String, Object?>{
+        'text': text,
+        'consentToIndexUserText': true,
+        if (projectId != null) 'projectId': projectId,
+        if (workspaceId != null) 'workspaceId': workspaceId,
+        if (provider != null) 'provider': provider,
+        if (accountId != null) 'accountId': accountId,
+        'maxResults': 30,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'agent history search');
+  }
+
+  @override
+  Future<void> clearAgentHistorySearchCache() async {
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      'agentHistory.clear',
+      const <String, Object?>{},
+      timeout: const Duration(seconds: 20),
+    );
+  }
+
+  @override
+  Future<Map<String, Object?>> locateExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+  }) async {
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.locateExact',
+      <String, Object?>{
+        'provider': provider,
+        'accountId': accountId,
+        'projectId': projectId,
+        'workspaceId': workspaceId,
+        'providerSessionId': providerSessionId,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'existing historical Agent Tab lookup');
+  }
+
+  @override
+  Future<Map<String, Object?>> resumeExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+    required String profileId,
+    required String clientMutationId,
+  }) async {
+    // Never start an old/missing Host or downgrade exact resume to a new Tab.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.resumeExact',
+      <String, Object?>{
+        'provider': provider,
+        'accountId': accountId,
+        'projectId': projectId,
+        'workspaceId': workspaceId,
+        'providerSessionId': providerSessionId,
+        'profileId': profileId,
+        'clientMutationId': clientMutationId,
+        'confirmResume': true,
+        'confirmProviderAccount': true,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'exact historical Agent resume');
+  }
+
+  @override
+  Future<void> controlVerifiedAgent({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required bool terminate,
+  }) async {
+    final ids = [sessionId, workspaceId, tabId];
+    final valid = ids.every(
+      (id) =>
+          id.isNotEmpty &&
+          id.length <= 256 &&
+          RegExp(r'^[a-zA-Z0-9_.:-]+$').hasMatch(id),
+    );
+    if (!valid || sessionId.length > 128) {
+      throw ArgumentError(
+        'Invalid verified Agent Session, Workspace or Tab ID.',
+      );
+    }
+    // Neither operation starts an offline Host; older Hosts fail closed.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    await _requestOnConnection(
+      connection,
+      terminate ? 'agent.terminateVerified' : 'agent.interruptVerified',
+      <String, Object?>{
+        'sessionId': sessionId,
+        'expectedWorkspaceId': workspaceId,
+        'expectedTabId': tabId,
+      },
+    );
   }
 
   @override

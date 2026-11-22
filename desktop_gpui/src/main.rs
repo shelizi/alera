@@ -3,6 +3,7 @@ mod editor_ui;
 mod native_action_dialog_ui;
 mod native_agent_quota_ui;
 mod native_agent_context_ui;
+mod native_global_agents_ui;
 mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
@@ -37,14 +38,18 @@ extern crate gpui_kit as gpui;
 use alera_core::git::{
     prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
+use alera_gpui_desktop::agent_navigation_queue::{
+    exact_navigation_focus_matches, AgentNavigationQueue, AgentNavigationSource,
+};
 use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileContentFields, AgentProfileManagedSelectionFields,
     AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
 use alera_gpui_desktop::agent_quota::{AgentUsageSummary, QuotaSnapshot};
 use alera_gpui_desktop::agent_status_notifications::{
-    enabled_notice_sessions, validated_notice_pane_target, validated_notice_target, AgentNotice,
-    AgentNotificationDelivery, AgentNotificationPolicy,
+    enabled_notice_sessions, validated_agent_navigation_pane_target,
+    validated_agent_navigation_target, AgentNavigationTarget, AgentNotificationDelivery,
+    AgentNotificationPolicy,
 };
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
@@ -208,6 +213,7 @@ actions!(
     [
         ToggleFileSearch,
         ToggleContentSearch,
+        OpenGlobalAgentHistory,
         RunContentSearch,
         FindTextReferences,
         ExplorerCopy,
@@ -1057,6 +1063,44 @@ struct Workbench {
     /// confirmation; never attach to whichever tab happens to be focused.
     agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
+    global_agent_prompt_input: Entity<QuickOpenInput>,
+    global_agent_history_open: bool,
+    global_agent_history_consent: bool,
+    global_agent_history_input: Entity<QuickOpenInput>,
+    global_agent_history_account_input: Entity<QuickOpenInput>,
+    global_agent_history_workspace_input: Entity<QuickOpenInput>,
+    global_agent_history_resume_profile_input: Entity<QuickOpenInput>,
+    global_agent_history_resume_armed: Option<String>,
+    /// Reuse unconfirmed Host mutation UUIDs on an explicit user retry.
+    global_agent_history_pending_mutations: std::collections::HashMap<String, String>,
+    global_agent_history_located: std::collections::HashMap<String, (String, String)>,
+    global_agent_history_provider: Option<String>,
+    global_agent_history_busy: bool,
+    global_agent_history_request: u64,
+    global_agent_history_status: String,
+    global_agent_history_results: Vec<native_global_agents_ui::GlobalHistoryPreview>,
+    global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
+    global_agent_submit_busy: bool,
+    global_agent_submit_status: String,
+    global_agent_control_armed: Option<(native_global_agents_ui::GlobalAgentPromptTarget, bool)>,
+    global_agent_control_busy: bool,
+    global_agent_control_status: String,
+    /// Hidden dashboard cards do not detach or terminate Host PTYs.
+    global_agent_hidden: HashSet<(String, String, String)>,
+    global_agent_show_hidden: bool,
+    /// Dashboard-only explicit cross-project Profile launch; no pane reattachment.
+    global_agent_create_open: bool,
+    global_agent_create_workspace: Option<String>,
+    global_agent_create_profile: Option<String>,
+    global_agent_create_prompt_input: Entity<QuickOpenInput>,
+    global_agent_create_busy: bool,
+    global_agent_create_request: u64,
+    global_agent_create_pending: Option<LaunchedAgentTab>,
+    global_agent_create_expected_agent: Option<String>,
+    global_agent_create_journal: Option<(PathBuf, PendingHostCreate)>,
+    global_agent_create_inventory_verified: bool,
+    global_agent_create_ack_armed: bool,
+    global_agent_create_status: String,
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
@@ -1092,8 +1136,7 @@ struct Workbench {
     agent_hook_switches_last_refresh: Instant,
     #[cfg(windows)]
     agent_windows_toast: WindowsAgentToastPresenter,
-    agent_toast_activation: Option<AgentNotice>,
-    agent_toast_activation_retries: u8,
+    agent_navigation: AgentNavigationQueue,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -5490,6 +5533,15 @@ impl Workbench {
         self.toggle_file_search(window, cx);
     }
 
+    fn open_global_agent_history_action(
+        &mut self,
+        _: &OpenGlobalAgentHistory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_global_agent_history(window, cx);
+    }
+
     fn toggle_content_search_action(
         &mut self,
         _: &ToggleContentSearch,
@@ -5612,6 +5664,19 @@ impl Workbench {
             window.focus(&input.read(cx).focus_handle(cx), cx);
         }
         self.save_sidebar_layout(cx);
+        cx.notify();
+    }
+
+    /// Global history is a read-only entrypoint. Open the right side even when
+    /// the user previously collapsed it, and focus search without creating a
+    /// Host, starting an Agent or performing an index scan.
+    fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.right_sidebar_view = RightSidebarView::AgentContext;
+        self.right_sidebar_visible = true;
+        self.global_agent_history_open = true;
+        self.explorer_context_menu = None;
+        self.save_sidebar_layout(cx);
+        window.focus(&self.global_agent_history_input.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -6481,6 +6546,10 @@ impl Workbench {
         // credentials. Other workspaces never inherit this local layout.
         self.save_mixed_pane_layout(cx);
         self.save_terminal_layout();
+        // Explicit workspace switches retire any queued or already-deferred
+        // navigation into the old workspace. A navigation-triggered switch
+        // requeues its exact verified target after the switch succeeds.
+        self.agent_navigation.cancel();
         self.model = next;
         self.refresh_review_browser_url();
         self.center_view = CenterView::Terminal;
@@ -8294,6 +8363,9 @@ impl Workbench {
         let create_journal_at_listing = (!self.terminal_create_flow.is_creating())
             .then(|| self.terminal_create_journal.clone())
             .flatten();
+        // Ignore list reads begun before/in-flight with a remote Agent launch.
+        let global_create_ticket_at_listing = (!self.global_agent_create_busy)
+            .then_some(self.global_agent_create_request);
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -8334,6 +8406,26 @@ impl Workbench {
                             view.mixed_tabs
                                 .refresh_agent_statuses(&view.terminals.sessions);
                             view.observe_agent_notification_status();
+                            // Global Dashboard launch is cross-worktree and never
+                            // attaches into a pane. Confirm its exact Host tab
+                            // after a fresh authoritative global inventory.
+                            if view.global_agent_create_journal.is_some()
+                                && !view.global_agent_create_busy
+                                && global_create_ticket_at_listing == Some(view.global_agent_create_request)
+                            {
+                                view.global_agent_create_inventory_verified = true;
+                                let observed = view.terminals.sessions.clone();
+                                view.confirm_global_agent_created(&observed);
+                            }
+                            // Dashboard hide is bounded view state, never a PTY operation.
+                            view.global_agent_hidden.retain(|(handle, workspace, tab)| {
+                                view.terminals.sessions.iter().any(|session| {
+                                    session.running
+                                        && session.handle == *handle
+                                        && session.workspace_id == *workspace
+                                        && session.tab_id == *tab
+                                })
+                            });
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
                             // Direct Agent PTYs may start before Hooks report
@@ -10213,6 +10305,9 @@ impl Workbench {
             cx.notify();
             return;
         }
+        // Selecting or dragging an actual Tab is a newer user focus intent.
+        // Never let an older Host recheck or deferred navigation steal it.
+        self.agent_navigation.cancel();
         // The temporary read-only Diff only covers the primary viewport.
         // Selecting a primary Editor/Terminal tab restores it immediately,
         // while interactions with the secondary pane can continue alongside.
@@ -10860,55 +10955,57 @@ impl Workbench {
         }
         #[cfg(windows)]
         if let Some(clicked) = self.agent_windows_toast.take_activation() {
-            self.agent_toast_activation = Some(clicked);
-            self.agent_toast_activation_retries = 0;
+            self.agent_navigation
+                .begin(clicked.into(), AgentNavigationSource::Toast);
             cx.notify();
         }
     }
 
-    fn activate_agent_notice(
+    fn activate_agent_target(
         &mut self,
-        notice: AgentNotice,
+        notice: AgentNavigationTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Clicking a WinRT notification never gives the Host permission to
-        // start/terminate a PTY. Cross-workspace changes must use the normal
-        // confirmed selection path; fail closed until it is implemented.
-        // The COM-launched Native process starts with no Host inventory.
-        // An empty list is not proof the clicked session has gone away.
-        // Wait for the authenticated async read, counting actual attempts,
-        // not GPUI render frames (which can complete before the CLI read).
+        // This identity has already been checked against the live Host.
+        // Focus is allowed only while the original user-navigation intent
+        // remains current; the deferred caller verifies the queue epoch.
+        let source = self
+            .agent_navigation
+            .source()
+            .unwrap_or(AgentNavigationSource::Dashboard);
+
         if self.terminal_list_loading {
-            self.agent_toast_activation = Some(notice);
+            self.agent_navigation.hold(notice);
             return;
         }
         if self.terminals.session_list_is_stale() || self.terminals.sessions.is_empty() {
-            if self.agent_toast_activation_retries < 3 {
-                self.agent_toast_activation_retries += 1;
-                self.agent_toast_activation = Some(notice);
+            if self.agent_navigation.retry(notice) {
                 self.refresh_terminals(cx);
             } else {
+                self.agent_navigation.cancel();
                 self.terminals.status =
-                    "Cannot verify Agent notice: Host session list is unavailable".into();
+                    "Cannot verify Agent navigation: Host session list is unavailable".into();
                 cx.notify();
             }
             return;
         }
-        if validated_notice_target(&notice, &self.terminals.sessions).is_none() {
-            self.terminals.status = "Agent notice is stale; Host session no longer exists".into();
+        if validated_agent_navigation_target(&notice, &self.terminals.sessions).is_none() {
+            self.agent_navigation.cancel();
+            self.terminals.status =
+                "Agent navigation target is stale; Host session no longer exists".into();
             cx.notify();
             return;
         }
+
         let current_workspace =
             select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces).ok();
         if current_workspace.as_deref() != Some(notice.workspace_id.as_str()) {
-            // An OS toast click is an explicit request to navigate to the
-            // Agent. Use the exact authenticated Host workspace ID, never
-            // guess from the repo name or toast payload, and reuse the normal
-            // draft-safe workspace switch.
+            // Never infer a Host workspace from a repo label. A successful
+            // cross-workspace switch invalidates the old deferred epoch, and
+            // the exact Host identity is explicitly requeued for fresh checks.
             if self.mcp_host_workspaces_loading {
-                self.agent_toast_activation = Some(notice);
+                self.agent_navigation.hold(notice);
                 return;
             }
             match resolve_registered_host_workspace_path(
@@ -10916,72 +11013,101 @@ impl Workbench {
                 &self.mcp_host_workspaces,
             ) {
                 Ok(target_root) => {
-                    if self.model.root() != target_root.as_path() {
-                        self.switch_workspace(target_root.clone(), cx);
-                        if self.model.root() != target_root.as_path() {
-                            self.terminals.status =
-                                "Agent notice cannot switch workspace; save your draft first"
-                                    .into();
-                            cx.notify();
-                            return;
-                        }
+                    if self.model.root() == target_root.as_path() {
+                        self.agent_navigation.cancel();
+                        self.terminals.status =
+                            "Host registered multiple Workspace IDs at one path; cannot select exact owner"
+                                .into();
+                        cx.notify();
+                        return;
                     }
-                    // The new workspace reads Host sessions and restores pane
-                    // layout asynchronously. Focus only after those are fresh.
-                    self.agent_toast_activation = Some(notice);
-                    self.agent_toast_activation_retries = 0;
+                    self.switch_workspace(target_root.clone(), cx);
+                    if self.model.root() != target_root.as_path() {
+                        self.agent_navigation.cancel();
+                        self.terminals.status =
+                            "Cannot switch Agent workspace; save your draft first".into();
+                        cx.notify();
+                        return;
+                    }
+                    self.agent_navigation.begin(notice, source);
                     cx.notify();
                 }
                 Err(_)
-                    if self.mcp_host_workspaces.is_empty()
-                        && self.agent_toast_activation_retries < 3 =>
+                    if self.mcp_host_workspaces.is_empty() =>
                 {
                     if self.runtime_bridge.is_none() {
                         self.runtime_bridge = RuntimeCliBridge::discover().ok();
                     }
-                    if self.runtime_bridge.is_some() {
-                        self.agent_toast_activation_retries += 1;
-                        self.agent_toast_activation = Some(notice);
+                    if self.runtime_bridge.is_some() && self.agent_navigation.retry(notice) {
                         self.refresh_mcp_host_workspaces(cx);
                     } else {
+                        self.agent_navigation.cancel();
                         self.terminals.status =
-                            "Cannot navigate Agent notice: Alera Host CLI unavailable".into();
+                            "Cannot verify the registered Agent Workspace from Host".into();
                         cx.notify();
                     }
                 }
                 Err(error) => {
+                    self.agent_navigation.cancel();
                     self.terminals.status =
-                        format!("Cannot navigate Agent notice to registered workspace: {error}");
+                        format!("Cannot navigate to registered Agent workspace: {error}");
                     cx.notify();
                 }
             }
             return;
         }
+
         if !self.terminals.tabs.iter().any(|tab| {
             tab.handle == notice.session_id
                 && tab.workspace_id == notice.workspace_id
                 && tab.tab_id == notice.tab_id
         }) {
-            // Only opens a local view of a previously verified running Host
-            // session. Native never creates/starts a Shell here.
+            // Open only a local view of an existing, authenticated Host PTY.
+            // This never starts a Shell, Agent or new provider Session.
             self.select_terminal(notice.session_id.clone(), cx);
             self.sync_mixed_tabs(cx);
         }
-        let target = validated_notice_pane_target(
+        let target = validated_agent_navigation_pane_target(
             &notice,
             &self.terminals.sessions,
             &self.mixed_tabs,
             &self.mixed_panes,
         );
         if let Some((id, _pane)) = target {
-            self.agent_toast_activation_retries = 0;
+            let from_history = source == AgentNavigationSource::History;
+            self.agent_navigation.reset_retries();
             self.focus_mixed_tab(&id, window, cx);
+            let original_pane_active = [PaneSlot::Primary, PaneSlot::Secondary]
+                .into_iter()
+                .any(|pane| self.mixed_panes.active_in(pane) == Some(&id));
+            let selected_exact = exact_navigation_focus_matches(
+                &notice,
+                self.terminals.active().and_then(|tab| {
+                    self.terminals
+                        .sessions
+                        .iter()
+                        .find(|session| session.handle == tab.handle)
+                }),
+                original_pane_active,
+            );
+            if selected_exact && from_history {
+                // Keep the history results and explanatory failure status on
+                // screen until the verified original Tab is actually focused.
+                self.global_agent_history_open = false;
+                self.global_agent_history_status =
+                    "Opened original verified Agent Tab; no Agent started".into();
+                cx.notify();
+            } else if !selected_exact {
+                self.terminals.status =
+                    "Agent Host Tab could not be focused; history results preserved".into();
+                cx.notify();
+            }
         } else {
+            self.agent_navigation.cancel();
             self.terminals.status = "Agent Host tab is no longer available".into();
             cx.notify();
         }
     }
-
     fn pump_native_terminal_stream(&mut self, cx: &mut Context<Self>) {
         let live_views: Vec<_> = self
             .terminals
@@ -11355,15 +11481,17 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
-        if let Some(notice) = self.agent_toast_activation.take() {
-            // Toast clicks arrive on a WinRT callback thread. Resolve them
-            // on GPUI's actual Window context, after layout is available;
-            // verify Host session identity again before focusing anything.
+        if let Some((epoch, notice)) = self.agent_navigation.take_deferred() {
+            // Toast clicks and historical Host lookups share this queued
+            // identity-only navigation. Resolve it on GPUI's actual Window
+            // context and verify the Host again before focusing anything.
             let owner = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
                 if let Some(workbench) = owner.upgrade() {
                     workbench.update(cx, |view, cx| {
-                        view.activate_agent_notice(notice, window, cx);
+                        if view.agent_navigation.is_current(epoch) {
+                            view.activate_agent_target(notice, window, cx);
+                        }
                     });
                 }
             });
@@ -12539,6 +12667,7 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
+            .on_action(cx.listener(Self::open_global_agent_history_action))
             .on_action(cx.listener(Self::run_content_search_action))
             .on_action(cx.listener(Self::find_text_references_action))
             .on_action(cx.listener(Self::explorer_copy_action))
@@ -12674,12 +12803,17 @@ impl Render for Workbench {
                                         view.open_pull_requests_panel(cx);
                                     })))
                                     .child(icon_button(
-                                        "right-sidebar-agent-context", UiIcon::List, "Agent Context",
+                                        "right-sidebar-agent-context", UiIcon::List, "Global Agents / Context",
                                         self.right_sidebar_view == RightSidebarView::AgentContext,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
+                                    })))
+                                    .child(icon_button(
+                                        "right-sidebar-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false,
+                                    ).on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_global_agent_history(window, cx);
                                     })))
                                     .child(div().flex_1())
                                     .child(icon_button(
@@ -12696,7 +12830,15 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .when(self.right_sidebar_view != RightSidebarView::AgentContext, |v| v.hidden())
-                                    .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(native_global_agents_ui::panel(self, cx))
+                                            .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
+                                    ),
                             )
                             .child(
                                 div()
@@ -15047,6 +15189,10 @@ impl Render for Workbench {
                             .child(icon_button("right-rail-pr", UiIcon::PullRequest, "Pull Requests (browser)", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_pull_requests_panel(cx);
+                                })))
+                            .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_global_agent_history(window, cx);
                                 })))
                             .child(div().flex_1())
                             .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
@@ -17504,6 +17650,8 @@ fn main() {
                 KeyBinding::new("cmd-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
+                KeyBinding::new("ctrl-alt-g", OpenGlobalAgentHistory, None),
+                KeyBinding::new("cmd-alt-g", OpenGlobalAgentHistory, None),
                 KeyBinding::new("ctrl-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("cmd-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("shift-f12", FindTextReferences, Some("AleraGpuiEditor")),
@@ -18044,6 +18192,53 @@ fn main() {
                             agent_pending_tab: None,
                             agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
+                            global_agent_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            global_agent_history_open: false,
+                            global_agent_history_consent: false,
+                            global_agent_history_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Find a previous Agent session…", cx)
+                            }),
+                            global_agent_history_account_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Account ID (optional)", cx)
+                            }),
+                            global_agent_history_workspace_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Worktree ID (optional)", cx)
+                            }),
+                            global_agent_history_resume_profile_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Official Claude/Codex Profile ID to resume…", cx)
+                            }),
+                            global_agent_history_resume_armed: None,
+                            global_agent_history_pending_mutations: std::collections::HashMap::new(),
+                            global_agent_history_located: std::collections::HashMap::new(),
+                            global_agent_history_provider: None,
+                            global_agent_history_busy: false,
+                            global_agent_history_request: 0,
+                            global_agent_history_status: "Native history search is off until you explicitly opt in".into(),
+                            global_agent_history_results: Vec::new(),
+                            global_agent_target: None,
+                            global_agent_submit_busy: false,
+                            global_agent_submit_status: String::new(),
+                            global_agent_control_armed: None,
+                            global_agent_control_busy: false,
+                            global_agent_control_status: String::new(),
+                            global_agent_hidden: HashSet::new(),
+                            global_agent_show_hidden: false,
+                            global_agent_create_open: false,
+                            global_agent_create_workspace: None,
+                            global_agent_create_profile: None,
+                            global_agent_create_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            global_agent_create_busy: false,
+                            global_agent_create_request: 0,
+                            global_agent_create_pending: None,
+                            global_agent_create_expected_agent: None,
+                            global_agent_create_journal: None,
+                            global_agent_create_inventory_verified: false,
+                            global_agent_create_ack_armed: false,
+                            global_agent_create_status: String::new(),
                             terminals: {
                                 let mut dock = TerminalDock::for_workspace(0);
                                 dock.set_scrollback_lines(initial_native_scrollback_lines);
@@ -18079,8 +18274,7 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             #[cfg(windows)]
                             agent_windows_toast: WindowsAgentToastPresenter::new(),
-                            agent_toast_activation: None,
-                            agent_toast_activation_retries: 0,
+                            agent_navigation: AgentNavigationQueue::default(),
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),

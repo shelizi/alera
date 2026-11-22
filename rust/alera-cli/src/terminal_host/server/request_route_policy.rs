@@ -30,6 +30,8 @@ pub(super) enum DeferredReadRoute {
     ProjectBranchesList,
     WorkspaceRepositoryWebUrl,
     HostDirectoryList,
+    AgentHistorySearch,
+    AgentHistoryClear,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +90,8 @@ pub(super) enum WorkspaceDeferredOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TerminalDeferredOperation {
     Write,
+    WriteVerified,
+    InterruptVerified,
     WriteObserved,
     PulseConfigure,
 }
@@ -296,6 +300,12 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceTag.remove"
         | "workspaceTag.setForWorkspace" => MOBILE_CONFLICT,
 
+        // Private opt-in transcript metadata is never exposed to remote/mobile.
+        "agentHistory.search" => local_deferred(DeferredReadRoute::AgentHistorySearch),
+        "agentHistory.clear" => local_deferred(DeferredReadRoute::AgentHistoryClear),
+        "agentHistory.locateExact" => LOCAL,
+        "agentHistory.resumeExact" => LOCAL_CONFLICT,
+
         "project.register" => {
             mobile_conflicting_deferred_write(DeferredWriteRoute::ProjectRegister)
         }
@@ -432,6 +442,14 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "write" => mobile_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::Write,
         )),
+        // A dedicated RPC keeps old Hosts fail-closed: they do not know this
+        // verb and therefore cannot silently ignore owner identity fields.
+        "agent.writeVerified" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::WriteVerified,
+        )),
+        "agent.interruptVerified" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::InterruptVerified,
+        )),
         "terminal.writeObserved" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::WriteObserved,
         )),
@@ -490,7 +508,8 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workspaceActivity.upsertAll"
         | "workspaceTag.assign"
         | "workspaceTag.unassign"
-        | "workspaceTag.upsert" => LOCAL_CONFLICT,
+        | "workspaceTag.upsert"
+        | "agent.terminateVerified" => LOCAL_CONFLICT,
 
         "tab.removeForWorkspace" => {
             serialized_local(SerializedRuntimeMutation::RemoveWorkspaceTabs)
@@ -619,6 +638,13 @@ const fn serialized_mobile(kind: SerializedRuntimeMutation) -> RequestRoutePolic
 const fn mobile_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
     RequestRoutePolicy {
         mobile_allowed: true,
+        deferred_read: Some(route),
+        ..LOCAL
+    }
+}
+
+const fn local_deferred(route: DeferredReadRoute) -> RequestRoutePolicy {
+    RequestRoutePolicy {
         deferred_read: Some(route),
         ..LOCAL
     }
@@ -1040,6 +1066,30 @@ mod tests {
             write.deferred_job,
             Some(DeferredJobRoute::Terminal(TerminalDeferredOperation::Write))
         );
+
+        let verified = request_route_policy("agent.writeVerified");
+        assert!(!verified.mobile_allowed);
+        assert_eq!(verified.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            verified.deferred_job,
+            Some(DeferredJobRoute::Terminal(
+                TerminalDeferredOperation::WriteVerified
+            ))
+        );
+
+        let interrupt = request_route_policy("agent.interruptVerified");
+        assert!(!interrupt.mobile_allowed);
+        assert_eq!(interrupt.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert_eq!(
+            interrupt.deferred_job,
+            Some(DeferredJobRoute::Terminal(
+                TerminalDeferredOperation::InterruptVerified
+            ))
+        );
+        let terminate = request_route_policy("agent.terminateVerified");
+        assert!(!terminate.mobile_allowed);
+        assert_eq!(terminate.runtime_mutation, RuntimeMutationPolicy::Conflicts);
+        assert!(terminate.deferred_job.is_none());
 
         let pulse = request_route_policy("terminal.pulse.configure");
         assert!(!pulse.mobile_allowed);

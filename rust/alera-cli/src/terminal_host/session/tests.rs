@@ -66,6 +66,7 @@ fn test_session() -> Session {
         id: "session-1".to_string(),
         workspace_id: "workspace-1".to_string(),
         tab_id: "tab-1".to_string(),
+        verified_history_provider: None,
         working_directory: "/repo".to_string(),
         clients: HashSet::new(),
         view_leases: HashMap::new(),

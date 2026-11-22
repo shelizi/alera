@@ -102,10 +102,7 @@ impl AgentContextOverview {
                 }
                 let text = Self::text(item.get("text"), 260);
                 let at = item.get("at")?.as_str()?;
-                if text.is_empty()
-                    || at.len() > 64
-                    || agent_host_utc_time_key(at).is_none()
-                {
+                if text.is_empty() || at.len() > 64 || agent_host_utc_time_key(at).is_none() {
                     return None;
                 }
                 Some(AgentContextMilestone {
@@ -358,6 +355,141 @@ pub fn read_terminal_verb_bounded(
 }
 
 impl RuntimeCliBridge {
+    /// Read only already-registered Host history. Consent is supplied by the
+    /// Native view on each deliberate click, and transcript text uses stdin.
+    pub fn search_agent_history(
+        &self,
+        text: &str,
+        provider: Option<&str>,
+        account_id: Option<&str>,
+        workspace_id: Option<&str>,
+    ) -> io::Result<Value> {
+        if text.trim().is_empty()
+            || text.chars().count() > 256
+            || text.len() > 1024
+            || text.contains('\0')
+            || provider.is_some_and(|value| !matches!(value, "claude" | "codex"))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid or oversized historical Agent search",
+            ));
+        }
+        let mut args = vec![
+            OsString::from("history-search"),
+            OsString::from("--stdin"),
+            OsString::from("--consent-index-user-text"),
+        ];
+        for (flag, value) in [
+            ("--provider", provider),
+            ("--account-id", account_id),
+            ("--workspace-id", workspace_id),
+        ] {
+            if let Some(value) = value {
+                if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Invalid history scope",
+                    ));
+                }
+                args.push(OsString::from(flag));
+                args.push(OsString::from(value));
+            }
+        }
+        self.terminal_json_with_input(&args, text.as_bytes())
+    }
+
+    /// Provider-native transcripts are never modified by this operation.
+    pub fn clear_agent_history_search_cache(&self) -> io::Result<()> {
+        self.terminal_json(&[OsString::from("history-clear")])?;
+        Ok(())
+    }
+
+    /// Native exact history resume is a user-confirmed Host mutation. No
+    /// caller-supplied paths, shell snippets, prompts, or ambient Host startup.
+    pub fn resume_exact_agent_history(
+        &self,
+        provider: &str,
+        account_id: &str,
+        project_id: &str,
+        workspace_id: &str,
+        native_id: &str,
+        profile_id: &str,
+        mutation_id: &str,
+    ) -> io::Result<Value> {
+        if !matches!(provider, "claude" | "codex")
+            || account_id.is_empty()
+            || account_id.len() > 256
+            || account_id.chars().any(char::is_control)
+            || uuid::Uuid::parse_str(native_id).is_err()
+            || uuid::Uuid::parse_str(mutation_id).is_err()
+            || [project_id, workspace_id, profile_id]
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Exact Resume requires a verified default account and canonical identity",
+            ));
+        }
+        let args = vec![
+            OsString::from("history-resume"),
+            OsString::from("--provider"),
+            OsString::from(provider),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--project-id"),
+            OsString::from(project_id),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+            OsString::from("--session-id"),
+            OsString::from(native_id),
+            OsString::from("--profile-id"),
+            OsString::from(profile_id),
+            OsString::from("--client-mutation-id"),
+            OsString::from(mutation_id),
+            OsString::from("--confirm-account"),
+            OsString::from("--confirm-resume"),
+        ];
+        self.terminal_json(&args)
+    }
+
+    /// Look up an already saved native Agent Tab after UI restart without
+    /// starting a Host, running a CLI Agent or touching its history files.
+    pub fn locate_exact_agent_history(
+        &self,
+        provider: &str,
+        account_id: &str,
+        project_id: &str,
+        workspace_id: &str,
+        native_id: &str,
+    ) -> io::Result<Value> {
+        if !matches!(provider, "codex" | "claude")
+            || [account_id, project_id, workspace_id].iter().any(|value| {
+                value.is_empty() || value.len() > 256 || value.chars().any(char::is_control)
+            })
+            || !uuid::Uuid::parse_str(native_id).is_ok_and(|parsed| parsed.to_string() == native_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "History Tab lookup requires a canonical verified source identity",
+            ));
+        }
+        self.terminal_json(&[
+            OsString::from("history-locate"),
+            OsString::from("--provider"),
+            OsString::from(provider),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--project-id"),
+            OsString::from(project_id),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+            OsString::from("--session-id"),
+            OsString::from(native_id),
+        ])
+    }
+
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
         let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)
@@ -383,6 +515,34 @@ impl RuntimeCliBridge {
     pub fn write_terminal(&self, handle: &str, text: &str, enter: bool) -> io::Result<()> {
         let args = write_terminal_verb(handle, text, enter)?;
         self.terminal_json_with_input(&args, text.as_bytes())?;
+        Ok(())
+    }
+
+    /// Full Host identity validation is performed inside the write request.
+    /// Never resolve a global dashboard target by handle alone.
+    pub fn submit_verified_agent_prompt(
+        &self,
+        handle: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        prompt: &str,
+    ) -> io::Result<()> {
+        let args = verified_agent_prompt_verb(handle, workspace_id, tab_id, prompt)?;
+        self.terminal_json_with_input(&args, prompt.as_bytes())?;
+        Ok(())
+    }
+
+    /// Explicit local-only lifecycle control of an exact Host Agent.
+    /// Never retries an unknown outcome or opens a new Host process.
+    pub fn control_verified_agent(
+        &self,
+        handle: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        terminate: bool,
+    ) -> io::Result<()> {
+        let args = verified_agent_control_verb(handle, workspace_id, tab_id, terminate)?;
+        self.terminal_json(&args)?;
         Ok(())
     }
 
@@ -455,6 +615,54 @@ pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<
 
 /// List workspaces registered with the running Host. No arguments beyond the
 /// verb itself are permitted by the bridge allowlist.
+pub fn verified_agent_prompt_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    text: &str,
+) -> io::Result<Vec<OsString>> {
+    if !valid_handle(workspace_id) || !valid_handle(tab_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid guarded Agent workspace or tab identity",
+        ));
+    }
+    let mut args = write_terminal_verb(handle, text, false)?;
+    args.extend([
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+        OsString::from("--submit"),
+    ]);
+    Ok(args)
+}
+
+/// Fixed action and exact Host IDs. Never assemble arbitrary process args.
+pub fn verified_agent_control_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    terminate: bool,
+) -> io::Result<Vec<OsString>> {
+    if !valid_handle(handle) || !valid_handle(workspace_id) || !valid_handle(tab_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Agent Session, Workspace or Tab identity",
+        ));
+    }
+    let mut args = vec![
+        OsString::from("control-agent-verified"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+        OsString::from("--action"),
+        OsString::from(if terminate { "terminate" } else { "interrupt" }),
+    ];
+    if terminate {
+        args.push(OsString::from("--confirm-terminate"));
+    }
+    Ok(args)
+}
+
 pub fn workspaces_verb() -> Vec<OsString> {
     vec![OsString::from("workspaces")]
 }
@@ -872,7 +1080,8 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             return Err(invalid("Duplicate terminal session handle"));
         }
         let agent_context = if running && agent_type.is_some() {
-            item.get("contextOverview").and_then(AgentContextOverview::parse)
+            item.get("contextOverview")
+                .and_then(AgentContextOverview::parse)
         } else {
             None
         };
@@ -1031,6 +1240,70 @@ pub fn resolve_registered_host_workspace_path(
         return Err(invalid("Agent workspace directory is not available"));
     }
     Ok(canonical)
+}
+
+/// Verify a Dashboard new-Agent target against a fresh authenticated Host
+/// snapshot. Both the ID and canonical path must be unique. A renamed,
+/// deleted or re-registered checkout must not receive a stale launch intent.
+pub fn validate_global_agent_launch_workspace(
+    workspace_id: &str,
+    expected_root: &Path,
+    registered: &[RegisteredHostWorkspace],
+) -> io::Result<()> {
+    let actual_root = resolve_registered_host_workspace_path(workspace_id, registered)?;
+    if actual_root != expected_root
+        || select_registered_host_workspace(expected_root, registered)?.as_str() != workspace_id
+    {
+        return Err(invalid(
+            "Global Agent launch target changed; refresh Host workspaces",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod global_agent_launch_workspace_tests {
+    use super::*;
+
+    #[test]
+    fn launch_target_requires_the_same_unique_registered_workspace() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let root_a = dunce::canonicalize(a.path()).unwrap();
+        let root_b = dunce::canonicalize(b.path()).unwrap();
+        let registered = vec![
+            RegisteredHostWorkspace {
+                id: "alera-ws".into(),
+                path: root_a.clone(),
+            },
+            RegisteredHostWorkspace {
+                id: "mcp-ws".into(),
+                path: root_b.clone(),
+            },
+        ];
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &registered).is_ok());
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_a, &registered).is_err());
+        assert!(
+            validate_global_agent_launch_workspace("deleted-ws", &root_b, &registered).is_err()
+        );
+        let mut recycled = registered.clone();
+        recycled[1].path = root_a.clone();
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &recycled).is_err());
+        let mut duplicate_id = registered.clone();
+        duplicate_id.push(RegisteredHostWorkspace {
+            id: "mcp-ws".into(),
+            path: root_b.clone(),
+        });
+        assert!(validate_global_agent_launch_workspace("mcp-ws", &root_b, &duplicate_id).is_err());
+        let mut duplicate_path = registered.clone();
+        duplicate_path.push(RegisteredHostWorkspace {
+            id: "other-ws".into(),
+            path: root_b.clone(),
+        });
+        assert!(
+            validate_global_agent_launch_workspace("mcp-ws", &root_b, &duplicate_path).is_err()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3350,6 +3623,41 @@ mod tests {
             assert!(write_terminal_verb("term-1", text, true).is_err());
         }
         assert!(write_terminal_verb("term-1", &"a".repeat(4097), true).is_err());
+
+        let guarded =
+            verified_agent_prompt_verb("term-1", "workspace-1", "tab-1", "修正 Windows 注音")
+                .unwrap();
+        assert_eq!(guarded[0], "write");
+        assert!(guarded.iter().any(|v| v == "--submit"));
+        assert!(guarded
+            .iter()
+            .any(|v| v == "--expected-workspace-id=workspace-1"));
+        assert!(guarded.iter().any(|v| v == "--expected-tab-id=tab-1"));
+        assert!(!guarded.iter().any(|v| v == "修正 Windows 注音"));
+        let routed = terminal_cli_arguments(Path::new("C:/runtime"), &guarded);
+        assert!(routed.iter().any(|v| v == "--no-start"));
+        assert!(verified_agent_prompt_verb("term-1", "", "tab-1", "prompt").is_err());
+        assert!(verified_agent_prompt_verb("term-1", "ws", "../tab", "prompt").is_err());
+        for terminate in [false, true] {
+            let args = verified_agent_control_verb("term-1", "ws-one", "tab-one", terminate)
+                .expect("verified Agent control");
+            assert_eq!(args[0], "control-agent-verified");
+            assert!(args
+                .iter()
+                .any(|arg| arg == "--expected-workspace-id=ws-one"));
+            assert!(args.iter().any(|arg| arg == "--expected-tab-id=tab-one"));
+            assert!(args
+                .iter()
+                .any(|arg| arg == if terminate { "terminate" } else { "interrupt" }));
+            assert_eq!(
+                args.iter().any(|arg| arg == "--confirm-terminate"),
+                terminate
+            );
+            let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
+            assert!(routed.iter().any(|arg| arg == "--no-start"));
+        }
+        assert!(verified_agent_control_verb("term-1", "ws-one", "../bad", true).is_err());
+        assert!(verified_agent_control_verb("", "ws-one", "tab-one", false).is_err());
     }
 
     #[test]

@@ -164,6 +164,21 @@ pub enum TerminalAction {
     Read(TerminalReadArgs),
     /// Write text, a file, or stdin to a terminal.
     Write(TerminalWriteArgs),
+    /// Local desktop-only lifecycle action on an exact live Agent.
+    #[command(name = "control-agent-verified")]
+    ControlAgentVerified(TerminalControlAgentArgs),
+    /// Explicit consent-gated, local-only historical Agent search.
+    #[command(name = "history-search")]
+    HistorySearch(TerminalHistorySearchArgs),
+    /// Explicit, local-only exact native UUID resume into a new Host Agent Tab.
+    #[command(name = "history-resume")]
+    HistoryResume(TerminalHistoryResumeArgs),
+    /// Read-only lookup of an already resumed native Session Tab; no PTY.
+    #[command(name = "history-locate")]
+    HistoryLocate(TerminalHistoryLocateArgs),
+    /// Clear only the local Agent search cache, never native transcripts.
+    #[command(name = "history-clear")]
+    HistoryClear,
     /// Attach an interactive native terminal client to an existing session.
     Attach(TerminalAttachArgs),
 }
@@ -210,6 +225,11 @@ pub struct TerminalReadArgs {
 pub struct TerminalWriteArgs {
     #[arg(long)]
     pub handle: String,
+    /// For global Agent steering, enforce both current Host owners atomically.
+    #[arg(long = "expected-workspace-id", requires = "expected_tab_id")]
+    pub expected_workspace_id: Option<String>,
+    #[arg(long = "expected-tab-id", requires = "expected_workspace_id")]
+    pub expected_tab_id: Option<String>,
     #[arg(long, conflicts_with_all = ["file", "stdin"])]
     pub text: Option<String>,
     #[arg(long, conflicts_with_all = ["text", "stdin"])]
@@ -221,6 +241,82 @@ pub struct TerminalWriteArgs {
     /// Submit to an interactive TUI using bracketed paste and a delayed Enter.
     #[arg(long, conflicts_with = "enter")]
     pub submit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum VerifiedAgentControlAction {
+    Interrupt,
+    Terminate,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalControlAgentArgs {
+    #[arg(long)]
+    pub handle: String,
+    #[arg(long = "expected-workspace-id")]
+    pub expected_workspace_id: String,
+    #[arg(long = "expected-tab-id")]
+    pub expected_tab_id: String,
+    #[arg(long, value_enum)]
+    pub action: VerifiedAgentControlAction,
+    /// Explicit acknowledgment that termination removes the Host Session.
+    #[arg(long, default_value_t = false)]
+    pub confirm_terminate: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistorySearchArgs {
+    /// Search query read from stdin, never from a process-visible argument.
+    #[arg(long, default_value_t = false)]
+    pub stdin: bool,
+    #[arg(long = "consent-index-user-text", default_value_t = false)]
+    pub consent: bool,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long = "project-id")]
+    pub project_id: Option<String>,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: Option<String>,
+    #[arg(long = "account-id")]
+    pub account_id: Option<String>,
+    #[arg(long = "max-results", default_value_t = 30)]
+    pub max_results: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistoryResumeArgs {
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long = "account-id")]
+    pub account_id: String,
+    #[arg(long = "project-id")]
+    pub project_id: String,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "session-id")]
+    pub session_id: String,
+    #[arg(long = "profile-id")]
+    pub profile_id: String,
+    #[arg(long = "client-mutation-id")]
+    pub client_mutation_id: String,
+    #[arg(long = "confirm-account", default_value_t = false)]
+    pub confirm_account: bool,
+    #[arg(long = "confirm-resume", default_value_t = false)]
+    pub confirm_resume: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistoryLocateArgs {
+    #[arg(long)]
+    pub provider: String,
+    #[arg(long = "account-id")]
+    pub account_id: String,
+    #[arg(long = "project-id")]
+    pub project_id: String,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "session-id")]
+    pub session_id: String,
 }
 
 #[derive(Debug, Args)]

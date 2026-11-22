@@ -20,6 +20,7 @@ class const _EmptyProjectsView({required final VoidCallback onAddProject})
 class const _SidebarFooter({
   required final VoidCallback onAddProject,
   required final VoidCallback onOpenSettings,
+  required final VoidCallback onOpenGlobalAgents,
   required final VoidCallback onOpenAutomations,
 }) extends StatelessWidget {
   @override
@@ -42,6 +43,12 @@ class const _SidebarFooter({
               ),
               const Spacer(),
               _FooterIconButton(
+                tooltip: 'Global Agents',
+                onPressed: onOpenGlobalAgents,
+                icon: AleraIcons.ai,
+              ),
+              const SizedBox(width: AleraTokens.space8),
+              _FooterIconButton(
                 tooltip: 'Automations',
                 onPressed: onOpenAutomations,
                 icon: AleraIcons.checks,
@@ -62,18 +69,25 @@ class const _SidebarFooter({
 
 class const _CollapsedSidebarFooter({
   required final VoidCallback onOpenSettings,
+  required final VoidCallback onOpenGlobalAgents,
   required final VoidCallback onOpenAutomations,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: AleraTokens.collapsedSidebarFooterHeight,
+      height: AleraTokens.collapsedSidebarFooterHeight + 40.0,
       child: DecoratedBox(
         decoration: const BoxDecoration(color: AleraTokens.surface),
         child: Center(
           child: Column(
             mainAxisSize: .min,
             children: <Widget>[
+              _FooterIconButton(
+                tooltip: 'Global Agents',
+                onPressed: onOpenGlobalAgents,
+                icon: AleraIcons.ai,
+              ),
+              const SizedBox(width: AleraTokens.space8),
               _FooterIconButton(
                 tooltip: 'Automations',
                 onPressed: onOpenAutomations,

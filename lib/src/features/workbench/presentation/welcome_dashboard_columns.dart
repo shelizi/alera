@@ -72,6 +72,13 @@ class const _LeftColumn({required final WorkbenchState state})
           child: Column(
             children: [
               _ActionRow(
+                icon: AleraIcons.ai,
+                title: 'Global Agent Dashboard',
+                description: 'Find and focus Agent sessions across projects',
+                onTap: () => unawaited(showGlobalAgentDashboard(context)),
+              ),
+              const Divider(height: 1, color: AleraTokens.borderSubtle),
+              _ActionRow(
                 icon: AleraIcons.newFolder,
                 title: 'Add Project',
                 description: 'Open a local folder or clone a repository',

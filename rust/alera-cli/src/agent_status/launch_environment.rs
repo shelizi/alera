@@ -52,6 +52,14 @@ pub fn prepare_launch_environment(
     strip_managed_primary(environment, "CLAUDE_CONFIG_DIR", "ALERA_CLAUDE_CONFIG_DIR");
     strip_managed_wrapper_path(environment);
     environment.retain(|key, _| !is_managed_hook_key(key));
+    // A verified native default Claude transcript must keep the CLI's normal
+    // home initialization, not masquerade as a separate CLAUDE_CONFIG_DIR.
+    // Fail closed on a stale or forged native-default directory marker.
+    let native_claude = dirs::home_dir().map(|home| home.join(".claude"));
+    apply_native_default_claude_history_route(
+        environment,
+        native_claude.as_deref().unwrap_or_else(|| Path::new("")),
+    )?;
     // Explicit account selection survives inherited-hook cleanup and shell rc files.
     for (selection, primary, startup) in [
         ("ALERA_ACCOUNT_CODEX_HOME", "CODEX_HOME", "ALERA_CODEX_HOME"),
@@ -171,6 +179,29 @@ fn restore_or_strip_managed_overlay(
     environment.remove(source);
 }
 
+/// Only Host-verified native default Claude history can remove account
+/// overlays. Use the exact canonical default root; never accept an arbitrary
+/// inherited hint to silently switch to a different CLI login.
+fn apply_native_default_claude_history_route(
+    environment: &mut BTreeMap<String, String>,
+    native_claude_home: &Path,
+) -> anyhow::Result<()> {
+    let Some(pinned) = environment.remove("ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT") else {
+        return Ok(());
+    };
+    let requested = std::fs::canonicalize(pinned)
+        .map_err(|_| anyhow::anyhow!("Native Claude source directory is missing"))?;
+    let expected = std::fs::canonicalize(native_claude_home)
+        .map_err(|_| anyhow::anyhow!("Default Claude home is missing"))?;
+    if !same_path(&requested, &expected) {
+        anyhow::bail!("Native Claude history source is not the default account directory");
+    }
+    environment.remove("CLAUDE_CONFIG_DIR");
+    environment.remove("ALERA_CLAUDE_CONFIG_DIR");
+    environment.remove("ALERA_ACCOUNT_CLAUDE_CONFIG_DIR");
+    Ok(())
+}
+
 fn strip_managed_primary(environment: &mut BTreeMap<String, String>, primary: &str, overlay: &str) {
     if environment.get(overlay) == environment.get(primary) {
         environment.remove(primary);
@@ -282,6 +313,55 @@ fn is_managed_hook_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn native_claude_default_removes_inherited_and_explicit_wrong_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join(".claude");
+        std::fs::create_dir_all(&native).unwrap();
+        let mut environment = BTreeMap::from([
+            (
+                "ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT".into(),
+                native
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ("CLAUDE_CONFIG_DIR".into(), "other-account".into()),
+            ("ALERA_CLAUDE_CONFIG_DIR".into(), "other-account".into()),
+            (
+                "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR".into(),
+                "other-account".into(),
+            ),
+            ("CODEX_HOME".into(), "untouched".into()),
+        ]);
+        super::apply_native_default_claude_history_route(&mut environment, &native).unwrap();
+        assert!(!environment.contains_key("CLAUDE_CONFIG_DIR"));
+        assert!(!environment.contains_key("ALERA_CLAUDE_CONFIG_DIR"));
+        assert!(!environment.contains_key("ALERA_ACCOUNT_CLAUDE_CONFIG_DIR"));
+        assert!(!environment.contains_key("ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT"));
+        assert_eq!(
+            environment.get("CODEX_HOME").map(String::as_str),
+            Some("untouched")
+        );
+    }
+
+    #[test]
+    fn forged_native_default_claude_home_fails_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join(".claude");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let mut environment = BTreeMap::from([(
+            "ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT".into(),
+            other.to_string_lossy().into_owned(),
+        )]);
+        assert!(
+            super::apply_native_default_claude_history_route(&mut environment, &native).is_err()
+        );
+    }
 
     #[test]
     fn account_selection_survives_inherited_overlay_cleanup() {

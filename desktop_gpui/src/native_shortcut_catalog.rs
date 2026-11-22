@@ -25,6 +25,12 @@ pub const COMMON_NATIVE_SHORTCUTS: &[NativeShortcut] = &[
         mac: "Cmd+Shift+F",
     },
     NativeShortcut {
+        scope: "Global",
+        action: "Search Agent history",
+        windows: "Ctrl+Alt+G",
+        mac: "Cmd+Alt+G",
+    },
+    NativeShortcut {
         scope: "Explorer",
         action: "New file",
         windows: "Ctrl+N",
@@ -175,6 +181,14 @@ mod tests {
             "Search contents"
         );
         assert_eq!(search_native_shortcuts("explorer f2")[0].action, "Rename");
+        assert_eq!(
+            search_native_shortcuts("global agent history")[0].windows,
+            "Ctrl+Alt+G"
+        );
+        assert_eq!(
+            search_native_shortcuts("cmd+alt+g")[0].action,
+            "Search Agent history"
+        );
         assert!(search_native_shortcuts("never-mapped-shortcut").is_empty());
         assert_eq!(
             search_native_shortcuts(" ").len(),

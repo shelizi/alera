@@ -89,6 +89,62 @@ abstract interface class TerminalHostClient {
   void dispose();
 }
 
+/// Opt-in guarded input for the global Agent control center.
+/// Ordinary TerminalHostClient.write remains backward-compatible.
+abstract interface class TerminalHostVerifiedAgentInputClient {
+  Future<void> submitVerifiedAgentPrompt({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String prompt,
+  });
+}
+
+/// Opt-in, local-only lifecycle operations for a Host-confirmed Agent.
+/// The Host refuses old/unverified targets; legacy client fakes are unchanged.
+abstract interface class TerminalHostVerifiedAgentLifecycleClient {
+  Future<void> controlVerifiedAgent({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required bool terminate,
+  });
+}
+
+/// Optional privacy-gated, local-only Host history search capability.
+/// Older Hosts and fake clients need not implement this port.
+abstract interface class TerminalHostAgentHistoryClient {
+  Future<Map<String, Object?>> searchAgentHistory({
+    required String text,
+    String? projectId,
+    String? workspaceId,
+    String? provider,
+    String? accountId,
+  });
+
+  Future<void> clearAgentHistorySearchCache();
+
+  /// Read-only, local-only lookup of an existing saved exact native Session
+  /// Tab. Never starts a Host or creates a new Agent/terminal.
+  Future<Map<String, Object?>> locateExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+  });
+
+  Future<Map<String, Object?>> resumeExactAgentHistory({
+    required String provider,
+    required String accountId,
+    required String projectId,
+    required String workspaceId,
+    required String providerSessionId,
+    required String profileId,
+    required String clientMutationId,
+  });
+}
+
 /// Narrow opt-in view identity port for production hosts. Legacy fake and
 /// older clients keep their original TerminalHostClient methods unchanged.
 abstract interface class TerminalHostViewLeaseClient {

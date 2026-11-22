@@ -43,6 +43,156 @@ void _registerWorkbenchControllerNavigationTests() {
     },
   );
 
+  test('opens a verified saved history tab across worktrees without duplicate tabs or stale focus', () async {
+    await _controller.bootstrap();
+    final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
+    final otherWorkspace = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/exact-history-owner',
+    )).workspace;
+    final existingTab = _controller.state.tabsFor(otherWorkspace.id).first;
+    final savedHistory = existingTab.copyWith(
+      id: 'historical-claude-tab',
+      title: 'Verified Claude history',
+    );
+    final saved = [
+      ...await _harness.workbenchRepository.listWorkspaceTabs(
+        otherWorkspace.id,
+      ),
+      savedHistory,
+    ];
+    _harness.workbenchRepository._tabsByWorkspace[otherWorkspace.id] = saved;
+
+    await _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: mainWorkspace,
+    );
+    expect(_controller.state.activeWorkspaceId, mainWorkspace.id);
+    expect(
+      _controller.state
+          .tabsFor(otherWorkspace.id)
+          .any((tab) => tab.id == savedHistory.id),
+      isFalse,
+    );
+
+    await _controller.openPersistedWorkspaceTab(
+      workspaceId: otherWorkspace.id,
+      tabId: savedHistory.id,
+    );
+    expect(_controller.state.activeWorkspaceId, otherWorkspace.id);
+    expect(_controller.state.activeWorkspaceTab?.id, savedHistory.id);
+    expect(
+      _controller.state.layoutFor(otherWorkspace.id)?.activeTabId,
+      savedHistory.id,
+    );
+    await _controller.openPersistedWorkspaceTab(
+      workspaceId: otherWorkspace.id,
+      tabId: savedHistory.id,
+    );
+    _harness.workbenchRepository._tabControllers[otherWorkspace.id]?.add(saved);
+    await _flush();
+    expect(_controller.state.activeWorkspaceId, otherWorkspace.id);
+    expect(_controller.state.activeWorkspaceTab?.id, savedHistory.id);
+    expect(
+      _controller.state
+          .tabsFor(otherWorkspace.id)
+          .where((tab) => tab.id == savedHistory.id),
+      hasLength(1),
+    );
+    expect(
+      _controller.state
+          .tabsFor(mainWorkspace.id)
+          .where((tab) => tab.id == savedHistory.id),
+      isEmpty,
+    );
+  });
+
+  test(
+    'persisted history refuses to open a Tab in a different Worktree',
+    () async {
+      await _controller.bootstrap();
+      final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
+      final otherWorkspace = (await _controller.createWorkspace(
+        project: _harness.project,
+        sourceBranch: 'main',
+        newBranchName: 'feature/history-wrong-owner',
+      )).workspace;
+      final otherTab = _controller.state.tabsFor(otherWorkspace.id).first;
+      await _controller.selectWorkspace(
+        project: _harness.project,
+        workspace: mainWorkspace,
+      );
+
+      await expectLater(
+        _controller.openPersistedWorkspaceTab(
+          workspaceId: mainWorkspace.id,
+          tabId: otherTab.id,
+        ),
+        throwsStateError,
+      );
+      expect(_controller.state.activeWorkspaceId, mainWorkspace.id);
+      expect(
+        _controller.state
+            .tabsFor(mainWorkspace.id)
+            .where((tab) => tab.id == otherTab.id),
+        isEmpty,
+      );
+    },
+  );
+  test('late history hydration cannot steal focus after another Worktree is selected', () async {
+    await _controller.bootstrap();
+    final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
+    final otherWorkspace = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/history-navigation-race',
+    )).workspace;
+    final savedHistory = _controller.state
+        .tabsFor(otherWorkspace.id)
+        .first
+        .copyWith(id: 'history-navigation-race-tab');
+    _harness.workbenchRepository._tabsByWorkspace[otherWorkspace.id] = [
+      ...await _harness.workbenchRepository.listWorkspaceTabs(
+        otherWorkspace.id,
+      ),
+      savedHistory,
+    ];
+    await _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: mainWorkspace,
+    );
+
+    final started = Completer<void>();
+    final release = Completer<void>();
+    _harness.workbenchRepository.blockNextWorkspaceTabsList(
+      workspaceId: otherWorkspace.id,
+      started: started,
+      release: release,
+    );
+    final navigating = _controller.openPersistedWorkspaceTab(
+      workspaceId: otherWorkspace.id,
+      tabId: savedHistory.id,
+    );
+    await started.future;
+    // An explicit newer selection must invalidate the old navigation.
+    await _controller.selectWorkspace(
+      project: _harness.project,
+      workspace: mainWorkspace,
+    );
+    release.complete();
+    await navigating;
+    await _flush();
+
+    expect(_controller.state.activeWorkspaceId, mainWorkspace.id);
+    expect(_controller.state.activeWorkspaceTab?.id, isNot(savedHistory.id));
+    expect(
+      _controller.state
+          .tabsFor(mainWorkspace.id)
+          .where((tab) => tab.id == savedHistory.id),
+      isEmpty,
+    );
+  });
   test(
     'records worktree selection and replays back and forward safely',
     () async {

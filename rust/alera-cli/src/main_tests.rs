@@ -71,6 +71,8 @@ fn terminal_actions_require_the_capability_for_their_rpc_surface() {
     let write = |enter, submit| {
         TerminalAction::Write(TerminalWriteArgs {
             handle: "term-1".to_string(),
+            expected_workspace_id: None,
+            expected_tab_id: None,
             text: Some("input".to_string()),
             file: None,
             stdin: false,

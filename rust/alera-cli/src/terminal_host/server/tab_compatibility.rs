@@ -5,8 +5,9 @@ use alera_core::runtime::WorkspaceTabRecord;
 use super::terminal_pulse::TERMINAL_PULSE_PAYLOAD_KEY;
 use super::{ClientKind, ServerActor};
 
-const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 13] = [
+const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 14] = [
     "agentProfileLaunchV1",
+    super::agent_history_resume::RESUME_ORIGIN_KEY,
     "initialPrompt",
     "pendingAgentPrompt",
     super::agent_title_state::PRIVATE_KEY,
@@ -34,6 +35,7 @@ pub(super) fn redact_private_tab_payload(tab: &mut WorkspaceTabRecord) {
             "initialPrompt",
             "pendingAgentPrompt",
             super::agent_title_state::PRIVATE_KEY,
+            super::agent_history_resume::RESUME_ORIGIN_KEY,
         ] {
             payload.remove(key);
         }
@@ -114,5 +116,56 @@ impl ServerActor {
         tabs.into_iter()
             .filter_map(|tab| self.workspace_tab_for_client(client_id, tab))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod history_account_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn historical_source_account_is_host_owned_and_redacted_from_ui_tab() {
+        let now = chrono::Utc::now();
+        let original = WorkspaceTabRecord {
+            id: "tab".into(),
+            workspace_id: "worktree".into(),
+            kind: "terminal".into(),
+            title: "History".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({
+                "agentHistoryResumeOriginV1": {
+                    "provider": "codex",
+                    "accountId": "/private/account",
+                    "sourceDirectoryFingerprint": "private-fingerprint"
+                },
+                "agentProfileLaunchV1": {"test":"managed"},
+                "visible": true,
+            }),
+        };
+        let mut projected = original.clone();
+        redact_private_tab_payload(&mut projected);
+        assert!(projected
+            .payload
+            .get(super::super::agent_history_resume::RESUME_ORIGIN_KEY)
+            .is_none());
+        projected.title = "Renamed".into();
+        projected.payload["agentHistoryResumeOriginV1"] =
+            json!({"provider":"claude", "accountId":"forged"});
+        preserve_host_owned_tab_payload(&original, &mut projected);
+        assert_eq!(
+            projected.payload["agentHistoryResumeOriginV1"]["accountId"],
+            "/private/account"
+        );
+        assert_eq!(
+            projected.payload["agentHistoryResumeOriginV1"]["provider"],
+            "codex"
+        );
+        assert_eq!(
+            projected.payload["agentHistoryResumeOriginV1"]["sourceDirectoryFingerprint"],
+            "private-fingerprint"
+        );
+        assert_eq!(projected.title, "Renamed");
     }
 }

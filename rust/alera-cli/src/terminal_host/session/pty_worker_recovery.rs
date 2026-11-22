@@ -114,6 +114,18 @@ fn manifest_path(runtime_dir: &Path, session_id: &str) -> PathBuf {
     runtime_dir.join("pty-workers").join(format!("{name}.json"))
 }
 
+/// The final manifest already has a 64-character hashed name. Appending a
+/// second full UUID to that name for its atomic temporary file exceeded
+/// Windows MAX_PATH in otherwise valid nested worktrees (error 123).
+/// Keep the temporary file in the SAME private directory for atomic rename,
+/// with an independent 128-bit nonce and no repeated session hash.
+fn temporary_manifest_path(registry: &Path) -> PathBuf {
+    registry
+        .parent()
+        .expect("PTY worker registry has a private parent directory")
+        .join(format!(".pty-{}.tmp", uuid::Uuid::new_v4().simple()))
+}
+
 fn read_record(path: &Path) -> HostResult<Option<WorkerRecord>> {
     if let Some(parent) = path.parent() {
         if parent.exists() {
@@ -418,7 +430,7 @@ impl WorkerRecoveryServer {
         };
         // No shell environment or API credentials ever enter the manifest.
         let body = serde_json::to_vec(&record)?;
-        let tmp = registry.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+        let tmp = temporary_manifest_path(&registry);
         let write_result = (|| -> io::Result<()> {
             let mut file = create_private_runtime_file(&tmp)?;
             file.write_all(&body)?;
@@ -432,7 +444,8 @@ impl WorkerRecoveryServer {
         if write_result.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
-        write_result?;
+        write_result
+            .map_err(|error| anyhow::anyhow!("PTY worker registry atomic publish: {error}"))?;
 
         let tail = Arc::new(Mutex::new(OutputTail {
             end: initial_cursor,

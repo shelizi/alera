@@ -12,6 +12,7 @@ impl Session {
             id: id.to_string(),
             workspace_id: "workspace".to_string(),
             tab_id: format!("tab-{id}"),
+            verified_history_provider: None,
             working_directory: ".".to_string(),
             clients: HashSet::new(),
             view_leases: HashMap::new(),

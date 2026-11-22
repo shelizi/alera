@@ -1,5 +1,4 @@
 mod agent_account_environment;
-mod agy_ssh_route;
 mod agent_descriptor_export;
 mod agent_history_snapshots;
 mod agent_history_sync;
@@ -9,7 +8,11 @@ mod agent_profile_launch;
 mod agent_prompt_stdin_script;
 mod agent_quota;
 mod agent_quota_commands;
+mod agent_session_history_fts;
+mod agent_session_history_scan;
+mod agent_session_history_service;
 mod agent_status;
+mod agy_ssh_route;
 mod ai_commit_commands;
 mod automation_autostart;
 mod automation_commands;
@@ -193,6 +196,11 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::Create(_)
             | TerminalAction::CreateAgent(_)
             | TerminalAction::Resize(_)
+            | TerminalAction::ControlAgentVerified(_)
+            | TerminalAction::HistorySearch(_)
+            | TerminalAction::HistoryResume(_)
+            | TerminalAction::HistoryLocate(_)
+            | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
     {
@@ -379,9 +387,15 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             };
             match client
                 .request_value(
-                    "write",
+                    if args.expected_workspace_id.is_some() {
+                        "agent.writeVerified"
+                    } else {
+                        "write"
+                    },
                     &json!({
                         "sessionId": args.handle,
+                        "expectedWorkspaceId": args.expected_workspace_id,
+                        "expectedTabId": args.expected_tab_id,
                         "dataBase64": STANDARD.encode(bytes),
                         "deferredEnter": args.enter || args.submit,
                         "bracketedPaste": args.submit,
@@ -391,6 +405,152 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             {
                 Ok(value) => {
                     print_value(&value, command.output.json, "terminal input written");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::ControlAgentVerified(args) => {
+            let valid_id = |s: &str, max: usize| {
+                !s.is_empty()
+                    && s.len() <= max
+                    && s.bytes().all(|byte| byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'-' | b'_' | b'.' | b':'))
+            };
+            if !valid_id(&args.handle, 128)
+                || !valid_id(&args.expected_workspace_id, 256)
+                || !valid_id(&args.expected_tab_id, 256)
+                || (matches!(args.action, crate::cli::VerifiedAgentControlAction::Terminate)
+                    && !args.confirm_terminate)
+            {
+                eprintln!("Verified Agent control requires complete IDs; termination also requires --confirm-terminate");
+                return USAGE_EXIT_CODE;
+            }
+            let verb = match args.action {
+                crate::cli::VerifiedAgentControlAction::Interrupt => "agent.interruptVerified",
+                crate::cli::VerifiedAgentControlAction::Terminate => "agent.terminateVerified",
+            };
+            match client.request_value(verb, &json!({
+                "sessionId": args.handle,
+                "expectedWorkspaceId": args.expected_workspace_id,
+                "expectedTabId": args.expected_tab_id,
+            })).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Agent lifecycle control accepted by Host");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistorySearch(args) => {
+            if !args.stdin || !args.consent {
+                eprintln!("History search requires --stdin and --consent-index-user-text");
+                return USAGE_EXIT_CODE;
+            }
+            // Explicitly bound the pipe before UTF-8 validation; no query
+            // string is passed in argv or echoed to standard error.
+            let mut input = Vec::new();
+            if let Err(error) = std::io::stdin().take(1025).read_to_end(&mut input) {
+                return print_error(error);
+            }
+            let query = match String::from_utf8(input) {
+                Ok(text) if !text.trim().is_empty() && text.chars().count() <= 256
+                    && text.len() <= 1024 && !text.contains('\0') => text,
+                _ => {
+                    eprintln!("Search text must be UTF-8 and at most 256 characters");
+                    return USAGE_EXIT_CODE;
+                }
+            };
+            match client.request_value_with_deadline("agentHistory.search", &json!({
+                "text": query,
+                "consentToIndexUserText": true,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "maxResults": args.max_results,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Historical Agent matches");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryResume(args) => {
+            let ids = [
+                args.project_id.as_str(),
+                args.workspace_id.as_str(),
+                args.profile_id.as_str(),
+            ];
+            if !args.confirm_account
+                || !args.confirm_resume
+                || !matches!(args.provider.as_str(), "codex" | "claude")
+                || args.account_id.is_empty()
+                || args.account_id.len() > 256
+                || args.account_id.chars().any(char::is_control)
+                || ids.iter().any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+                || uuid::Uuid::parse_str(&args.session_id).is_err()
+                || uuid::Uuid::parse_str(&args.client_mutation_id).is_err()
+            {
+                eprintln!("Exact resume requires canonical native/session mutation UUIDs, a configured provider account and explicit confirmations.");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value_with_deadline("agentHistory.resumeExact", &json!({
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "providerSessionId": args.session_id,
+                "profileId": args.profile_id,
+                "clientMutationId": args.client_mutation_id,
+                "confirmProviderAccount": true,
+                "confirmResume": true,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Exact Agent history Resume Tab");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryLocate(args) => {
+            let valid = matches!(args.provider.as_str(), "codex" | "claude")
+                && [
+                    args.account_id.as_str(),
+                    args.project_id.as_str(),
+                    args.workspace_id.as_str(),
+                ]
+                .iter()
+                .all(|value| {
+                    !value.is_empty()
+                        && value.len() <= 256
+                        && !value.chars().any(char::is_control)
+                })
+                && uuid::Uuid::parse_str(&args.session_id)
+                    .is_ok_and(|uuid| uuid.to_string() == args.session_id);
+            if !valid {
+                eprintln!("History lookup requires a canonical provider-native UUID and registered source identity");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value_with_deadline("agentHistory.locateExact", &json!({
+                "provider": args.provider,
+                "accountId": args.account_id,
+                "projectId": args.project_id,
+                "workspaceId": args.workspace_id,
+                "providerSessionId": args.session_id,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Existing historical Agent Tab");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryClear => {
+            match client.request_value("agentHistory.clear", &json!({})).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "History search cache cleared");
                     0
                 }
                 Err(error) => print_error(error),
@@ -532,7 +692,9 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
                 "projectConfig.remove",
                 &payload,
                 |store| async move { store.remove_project_config(&fallback_id).await },
-            ).await {
+            )
+            .await
+            {
                 Ok(()) => print_value(
                     &json!({"kind": "projectConfigCleared", "projectId": id}),
                     json_output,

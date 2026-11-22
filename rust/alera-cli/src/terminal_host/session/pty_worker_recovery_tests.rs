@@ -171,3 +171,56 @@ fn manifest_paths_do_not_interpret_session_id_as_paths() {
     assert_eq!(path.parent().unwrap(), root.join("pty-workers"));
     assert_eq!(path.extension().unwrap(), "json");
 }
+
+#[test]
+fn worker_registry_temp_file_keeps_atomic_rename_in_the_same_directory_without_max_path_bloat() {
+    // The original registry file stays recognizable by its hashed session ID,
+    // but its temporary path must not append another full UUID to that hash.
+    let runtime = Path::new("C:/").join("nested".repeat(25));
+    let registry = manifest_path(&runtime, "original-native-session");
+    let old_temp = registry.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let new_temp = temporary_manifest_path(&registry);
+    let second_temp = temporary_manifest_path(&registry);
+
+    assert!(old_temp.to_string_lossy().len() >= 260);
+    assert!(new_temp.to_string_lossy().len() < 260);
+    assert!(new_temp.to_string_lossy().len() + 30 < old_temp.to_string_lossy().len());
+    assert_eq!(
+        new_temp.parent(),
+        registry.parent(),
+        "atomic rename must remain on one volume"
+    );
+    assert_eq!(new_temp.extension().unwrap(), "tmp");
+    assert_ne!(
+        new_temp, second_temp,
+        "independent retries must never share a temporary file"
+    );
+}
+#[cfg(windows)]
+#[test]
+fn deep_windows_worker_registry_temp_can_be_privately_published() {
+    let sandbox = tempfile::tempdir().unwrap();
+    // One valid directory component; the final manifest fits normal Windows
+    // paths while the old <hash>.<uuid>.tmp would cross MAX_PATH.
+    let runtime = sandbox.path().join("deep".repeat(31));
+    let registry = manifest_path(&runtime, "isolated-worker-session");
+    let old_temp = registry.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    assert!(old_temp.to_string_lossy().len() >= 260);
+
+    let directory = registry.parent().unwrap();
+    prepare_private_runtime_directory(directory).unwrap();
+    acl::protect_path(directory, true).unwrap();
+
+    let temporary = temporary_manifest_path(&registry);
+    let mut file = create_private_runtime_file(&temporary).unwrap();
+    file.write_all(b"synthetic worker registry").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    acl::protect_path(&temporary, false).unwrap();
+    std::fs::rename(&temporary, &registry).unwrap();
+    acl::protect_path(&registry, false).unwrap();
+    assert_eq!(
+        std::fs::read(registry).unwrap(),
+        b"synthetic worker registry"
+    );
+}

@@ -109,6 +109,7 @@ impl ServerActor {
             DeferredReadRequestHandler::new(
                 self.runtime_store.clone(),
                 self.deferred_request_scheduler(),
+                self.runtime_dir.clone(),
             )
             .start(route, client_id, request_id, request_type, payload)?;
             return Ok(true);
@@ -234,6 +235,12 @@ impl ServerActor {
                 DeferredJobRoute::Terminal(operation) => match operation {
                     TerminalDeferredOperation::Write => {
                         self.queue_terminal_input(client_id, request_id, payload)?
+                    }
+                    TerminalDeferredOperation::WriteVerified => {
+                        self.queue_verified_agent_input(client_id, request_id, payload)?
+                    }
+                    TerminalDeferredOperation::InterruptVerified => {
+                        self.queue_verified_agent_interrupt(client_id, request_id, payload)?
                     }
                     TerminalDeferredOperation::WriteObserved => {
                         self.queue_observed_terminal_input(client_id, request_id, payload)?

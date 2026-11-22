@@ -31,6 +31,7 @@ notify = "=8.2.0"
 dunce = "=1.0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
 base64 = "0.22.1"
 unicode-segmentation = "1.12"
 rust-i18n = "=4.2.4"

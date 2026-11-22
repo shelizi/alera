@@ -1,9 +1,11 @@
 use alera_core::runtime::RuntimeStore;
 use serde_json::Value;
+use std::path::PathBuf;
 
 use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
+use super::agent_session_history_requests::AgentSessionHistoryRequestHandler;
 use super::deferred_request_scheduler::DeferredRequestScheduler;
 use super::project_requests::{load_effective_project_config, load_project_branches};
 use super::request_route_policy::DeferredReadRoute;
@@ -13,13 +15,19 @@ use super::workspace_sidebar_requests::load_workspace_repository_web_url;
 pub(super) struct DeferredReadRequestHandler {
     runtime_store: RuntimeStore,
     scheduler: DeferredRequestScheduler,
+    runtime_dir: PathBuf,
 }
 
 impl DeferredReadRequestHandler {
-    pub(super) fn new(runtime_store: RuntimeStore, scheduler: DeferredRequestScheduler) -> Self {
+    pub(super) fn new(
+        runtime_store: RuntimeStore,
+        scheduler: DeferredRequestScheduler,
+        runtime_dir: PathBuf,
+    ) -> Self {
         Self {
             runtime_store,
             scheduler,
+            runtime_dir,
         }
     }
 
@@ -32,6 +40,23 @@ impl DeferredReadRequestHandler {
         payload: &Value,
     ) -> HostResult<()> {
         match route {
+            DeferredReadRoute::AgentHistorySearch | DeferredReadRoute::AgentHistoryClear => {
+                let handler = AgentSessionHistoryRequestHandler::new(
+                    self.runtime_store.clone(),
+                    self.runtime_dir.clone(),
+                );
+                let search_payload = payload.clone();
+                self.scheduler
+                    .schedule(client_id, request_id, request_type, async move {
+                        match route {
+                            DeferredReadRoute::AgentHistorySearch => {
+                                handler.search(&search_payload).await
+                            }
+                            DeferredReadRoute::AgentHistoryClear => handler.clear().await,
+                            _ => unreachable!(),
+                        }
+                    })
+            }
             DeferredReadRoute::ProjectConfigEffective => {
                 let project_id = require_string_key(payload, "projectId")?.to_string();
                 self.scheduler.schedule(
@@ -78,6 +103,22 @@ impl DeferredReadRequestHandler {
         payload: &Value,
     ) -> HostResult<Value> {
         match route {
+            DeferredReadRoute::AgentHistorySearch => {
+                AgentSessionHistoryRequestHandler::new(
+                    self.runtime_store.clone(),
+                    self.runtime_dir.clone(),
+                )
+                .search(payload)
+                .await
+            }
+            DeferredReadRoute::AgentHistoryClear => {
+                AgentSessionHistoryRequestHandler::new(
+                    self.runtime_store.clone(),
+                    self.runtime_dir.clone(),
+                )
+                .clear()
+                .await
+            }
             DeferredReadRoute::ProjectConfigEffective => {
                 let project_id = require_string_key(payload, "projectId")?.to_string();
                 load_effective_project_config(self.runtime_store.clone(), project_id).await

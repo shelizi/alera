@@ -90,11 +90,18 @@ pub struct PendingHostCreate {
     root: PathBuf,
     nonce: String,
     agent_id: Option<String>,
+    /// Optional origin tag for restart-time recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 impl PendingHostCreate {
     pub fn agent_id(&self) -> Option<&str> {
         self.agent_id.as_deref()
+    }
+
+    pub fn is_global_agent_profile(&self) -> bool {
+        self.source.as_deref() == Some("global-agent-profile")
     }
 }
 
@@ -703,6 +710,10 @@ impl PreviewSessionStore {
                 .nonce
                 .bytes()
                 .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'-')
+            || record
+                .source
+                .as_deref()
+                .is_some_and(|source| source != "global-agent-profile")
             || record.agent_id.as_deref().is_some_and(|id| {
                 id.is_empty()
                     || id.len() > 64
@@ -726,6 +737,23 @@ impl PreviewSessionStore {
         &self,
         root: &Path,
         agent_id: Option<&str>,
+    ) -> io::Result<PendingHostCreate> {
+        self.reserve_host_create_with_source(root, agent_id, None)
+    }
+
+    /// Distinct Dashboard marker, shared per-root create_new fence.
+    pub fn reserve_global_agent_profile_create(
+        &self,
+        root: &Path,
+    ) -> io::Result<PendingHostCreate> {
+        self.reserve_host_create_with_source(root, None, Some("global-agent-profile"))
+    }
+
+    fn reserve_host_create_with_source(
+        &self,
+        root: &Path,
+        agent_id: Option<&str>,
+        source: Option<&str>,
     ) -> io::Result<PendingHostCreate> {
         let path = self.host_create_journal_path(root)?;
         if agent_id.is_some_and(|id| {
@@ -751,6 +779,7 @@ impl PreviewSessionStore {
             root: root.to_path_buf(),
             nonce: format!("{}-{now}-{sequence}", std::process::id()),
             agent_id: agent_id.map(str::to_owned),
+            source: source.map(str::to_owned),
         };
         let bytes = encode_json(&record)?;
         fs::create_dir_all(&self.state_dir)?;
@@ -961,6 +990,49 @@ fn is_safe_relative(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_profile_launch_marker_is_distinct_and_survives_restart() {
+        let state = tempfile::tempdir().unwrap();
+        let normal_root = tempfile::tempdir().unwrap();
+        let global_root = tempfile::tempdir().unwrap();
+        let normal = dunce::canonicalize(normal_root.path()).unwrap();
+        let global = dunce::canonicalize(global_root.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+
+        let ordinary = store.reserve_host_create(&normal, None).unwrap();
+        assert!(!ordinary.is_global_agent_profile());
+        let dashboard = store.reserve_global_agent_profile_create(&global).unwrap();
+        assert!(dashboard.is_global_agent_profile());
+        assert_eq!(dashboard.agent_id(), None);
+        drop(store);
+
+        let recovered = PreviewSessionStore::new(state.path());
+        assert_eq!(
+            recovered.pending_host_create(&global).unwrap(),
+            Some(dashboard.clone())
+        );
+        assert!(recovered
+            .pending_host_create(&global)
+            .unwrap()
+            .unwrap()
+            .is_global_agent_profile());
+        assert!(!recovered
+            .pending_host_create(&normal)
+            .unwrap()
+            .unwrap()
+            .is_global_agent_profile());
+        assert_eq!(
+            recovered
+                .reserve_host_create(&global, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists,
+            "a restarted UI cannot create a second Host Agent while launch outcome is unknown"
+        );
+        recovered.resolve_host_create(&global, &dashboard).unwrap();
+        assert!(recovered.pending_host_create(&global).unwrap().is_none());
+    }
 
     #[test]
     fn unconfirmed_host_create_survives_restart_and_blocks_duplicate_shell() {

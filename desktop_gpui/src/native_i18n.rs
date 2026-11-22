@@ -223,7 +223,7 @@ mod tests {
         // same active language for every button and its status caption.
         let source = include_str!("main.rs");
         let editor_toolbar = source
-            .split_once(".when(!show_editor_toolbar || show_center_git_diff").unwrap().1
+            .split_once(".h(px(EDITOR_TOOLBAR_HEIGHT))").unwrap().1
             .split_once(r#".id("mixed-pane-layout")"#).unwrap().0;
         assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "Editing")"#));
         assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "read-only preview")"#));
