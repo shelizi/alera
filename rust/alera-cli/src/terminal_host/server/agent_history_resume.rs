@@ -7,6 +7,7 @@ use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::path::Path;
 use uuid::Uuid;
 
 use super::terminal_startup_commands::provider_resume_id;
@@ -40,6 +41,30 @@ pub(super) fn source_directory_fingerprint(canonical_dir: &str) -> String {
         canonical_dir.to_owned()
     };
     hex::encode(Sha256::digest(identity.as_bytes()))
+}
+
+/// Native Claude uses its normal user-home config path when no override is
+/// selected. Pinning its default history directory as CLAUDE_CONFIG_DIR
+/// invents a second first-run config home and blocks interactive Resume.
+/// Custom CCS/account directories still require the explicit override.
+fn verified_history_launch_variable(
+    provider: &str,
+    config_directory: &str,
+    native_default_claude: Option<&Path>,
+) -> HostResult<&'static str> {
+    match provider {
+        "codex" => Ok("ALERA_ACCOUNT_CODEX_HOME"),
+        "claude"
+            if native_default_claude.is_some_and(|default| {
+                source_directory_fingerprint(&default.to_string_lossy())
+                    == source_directory_fingerprint(config_directory)
+            }) =>
+        {
+            Ok("ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT")
+        }
+        "claude" => Ok("ALERA_ACCOUNT_CLAUDE_CONFIG_DIR"),
+        _ => Err(HostError::state("Unsupported history provider environment")),
+    }
 }
 
 fn bounded_identifier(payload: &Value, key: &str, max: usize) -> HostResult<String> {
@@ -251,11 +276,13 @@ pub(super) async fn verified_history_launch_environment(
             ));
         }
     }
-    let variable = match proof.provider.as_str() {
-        "codex" => "ALERA_ACCOUNT_CODEX_HOME",
-        "claude" => "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR",
-        _ => return Err(HostError::state("Unsupported history provider environment")),
-    };
+    let native_default_claude =
+        dirs::home_dir().and_then(|home| std::fs::canonicalize(home.join(".claude")).ok());
+    let variable = verified_history_launch_variable(
+        &proof.provider,
+        &proof.config_directory,
+        native_default_claude.as_deref(),
+    )?;
     Ok(Some((variable, proof.config_directory)))
 }
 
@@ -443,6 +470,39 @@ mod tests {
             "confirmResume":true,
             "confirmProviderAccount":true,
         })
+    }
+
+    #[test]
+    fn native_claude_default_history_must_not_route_into_nested_fresh_config() {
+        let root = tempfile::tempdir().unwrap();
+        let native = root.path().join(".claude");
+        let secondary = root.path().join("ccs-instance");
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::create_dir_all(&secondary).unwrap();
+        let native = native.canonicalize().unwrap();
+        let secondary = secondary.canonicalize().unwrap();
+        assert_eq!(
+            verified_history_launch_variable(
+                "claude",
+                &native.to_string_lossy(),
+                Some(native.as_path()),
+            )
+            .unwrap(),
+            "ALERA_ACCOUNT_CLAUDE_NATIVE_DEFAULT"
+        );
+        assert_eq!(
+            verified_history_launch_variable(
+                "claude",
+                &secondary.to_string_lossy(),
+                Some(native.as_path()),
+            )
+            .unwrap(),
+            "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR"
+        );
+        assert_eq!(
+            verified_history_launch_variable("codex", &native.to_string_lossy(), None).unwrap(),
+            "ALERA_ACCOUNT_CODEX_HOME"
+        );
     }
 
     #[test]
