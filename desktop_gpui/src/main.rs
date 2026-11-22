@@ -1110,6 +1110,8 @@ struct Workbench {
     global_agent_show_hidden: bool,
     /// Present Global Agents as a near-full-window workspace overlay.
     global_agent_maximized: bool,
+    /// Collapsed status sections only affect rendering; Host sessions remain live.
+    global_agent_collapsed_groups: HashSet<u8>,
     /// Review-only view never writes to Host or hides waiting Agent PTYs.
     global_agent_needs_review_only: bool,
     /// At most one expanded live context timeline; avoids unbounded UI cache.
@@ -5950,6 +5952,7 @@ impl Workbench {
     fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.right_sidebar_view = RightSidebarView::AgentContext;
         self.right_sidebar_visible = true;
+        self.global_agent_maximized = true;
         self.global_agent_history_open = true;
         self.explorer_context_menu = None;
         self.save_sidebar_layout(cx);
@@ -11429,14 +11432,21 @@ impl Workbench {
                 }),
                 original_pane_active,
             );
-            if selected_exact && from_history {
-                // Keep the history results and explanatory failure status on
-                // screen until the verified original Tab is actually focused.
-                self.global_agent_history_open = false;
-                self.global_agent_history_status =
-                    "Opened original verified Agent Tab; no Agent started".into();
+            if selected_exact {
+                // Close the fullscreen Dashboard only after the exact Host
+                // Session and original Pane/Tab were successfully selected.
+                // Failed navigation must preserve the user's Agent cards or
+                // historical search results for safe retry and diagnosis.
+                if self.global_agent_maximized {
+                    self.global_agent_maximized = false;
+                }
+                if from_history {
+                    self.global_agent_history_open = false;
+                    self.global_agent_history_status =
+                        "Opened original verified Agent Tab; no Agent started".into();
+                }
                 cx.notify();
-            } else if !selected_exact {
+            } else {
                 self.terminals.status =
                     "Agent Host Tab could not be focused; history results preserved".into();
                 cx.notify();
@@ -13233,6 +13243,7 @@ impl Render for Workbench {
                                         self.right_sidebar_view == RightSidebarView::AgentContext,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
+                                        view.global_agent_history_open = false;
                                         view.global_agent_maximized = true;
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
@@ -15625,6 +15636,7 @@ impl Render for Workbench {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.right_sidebar_view = RightSidebarView::AgentContext;
                             this.right_sidebar_visible = true;
+                            this.global_agent_history_open = false;
                             this.global_agent_maximized = true;
                             cx.notify();
                         })))
@@ -18763,6 +18775,7 @@ fn main() {
                             global_agent_hidden: HashSet::new(),
                             global_agent_show_hidden: false,
                             global_agent_maximized: false,
+                            global_agent_collapsed_groups: HashSet::new(),
                             global_agent_needs_review_only: false,
                             global_agent_expanded_timeline: None,
                             global_agent_create_open: false,

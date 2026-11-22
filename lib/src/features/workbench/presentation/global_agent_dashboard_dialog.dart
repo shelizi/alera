@@ -124,6 +124,9 @@ class _GlobalAgentDashboardDialogState
   final Set<({String sessionId, String workspaceId, String tabId})>
   _expandedTimelines = {};
 
+  /// Keep busy sessions readable; collapse whole status sections explicitly.
+  final Set<GlobalAgentDashboardGroup> _collapsedGroups = {};
+
   ({String sessionId, String workspaceId, String tabId}) _identity(
     GlobalAgentLiveRow row,
   ) => (
@@ -274,10 +277,7 @@ class _GlobalAgentDashboardDialogState
         .where((row) => !_needsReviewOnly || row.needsReview)
         .where((row) => row.matches(_query))
         .toList();
-    final groups = groupGlobalAgentLiveRows(rows);
-    final items = <Object>[
-      for (final section in groups) ...<Object>[section, ...section.rows],
-    ];
+    final items = globalAgentDashboardVisibleItems(rows, _collapsedGroups);
     final viewport = MediaQuery.sizeOf(context);
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
@@ -381,6 +381,7 @@ class _GlobalAgentDashboardDialogState
                     TextButton.icon(
                       onPressed: () => setState(() {
                         _needsReviewOnly = !_needsReviewOnly;
+                        _collapsedGroups.clear();
                         _target = null;
                         _armedControl = null;
                         _sendFeedback =
@@ -454,22 +455,53 @@ class _GlobalAgentDashboardDialogState
                           itemBuilder: (context, index) {
                             final item = items[index];
                             if (item is GlobalAgentDashboardSection) {
-                              return Padding(
-                                padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
-                                child: Row(
-                                  children: [
-                                    Text(
-                                      item.group.label,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      '${item.rows.length} Agents',
-                                      style: muted,
-                                    ),
-                                  ],
+                              final collapsed = _collapsedGroups.contains(
+                                item.group,
+                              );
+                              return InkWell(
+                                onTap: () => setState(() {
+                                  if (!_collapsedGroups.add(item.group)) {
+                                    _collapsedGroups.remove(item.group);
+                                  }
+                                  // Collapsing a group must not leave an
+                                  // invisible target or armed destructive action.
+                                  _target = null;
+                                  _instruction.clear();
+                                  _armedControl = null;
+                                }),
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    4,
+                                    12,
+                                    4,
+                                    4,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        collapsed
+                                            ? Icons.chevron_right
+                                            : Icons.expand_more,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        item.group.label,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '${item.rows.length} Agents',
+                                        style: muted,
+                                      ),
+                                      const Spacer(),
+                                      Text(
+                                        collapsed ? 'Expand' : 'Collapse',
+                                        style: muted,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               );
                             }

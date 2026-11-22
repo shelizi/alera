@@ -1299,8 +1299,10 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
         .unwrap_or("all");
     let mut list = div()
         .id("global-agent-history-panel")
-        .h(px(590.0))
-        .flex_shrink_0()
+        .when(view.global_agent_maximized, |panel| panel.flex_1().min_h_0())
+        .when(!view.global_agent_maximized, |panel| {
+            panel.h(px(590.0)).flex_shrink_0()
+        })
         .overflow_y_scroll()
         .px_3()
         .py_2()
@@ -1830,6 +1832,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                     })
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.global_agent_needs_review_only = !view.global_agent_needs_review_only;
+                        view.global_agent_collapsed_groups.clear();
                         // A view change must not retain an invisible input target
                         // or a previously armed destructive action.
                         view.global_agent_control_armed = None;
@@ -1934,26 +1937,50 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                     .0 == group_rank
                 })
                 .count();
+            let collapsed = view.global_agent_collapsed_groups.contains(&group_rank);
             list = list.child(
                 div()
                     .id(("global-agent-state-section", group_rank as usize))
                     .w_full()
                     .mt_2()
                     .py_2()
+                    .cursor_pointer()
                     .border_b_1()
                     .border_color(rgb(BORDER))
                     .flex()
                     .items_center()
                     .gap_2()
+                    .child(div().text_xs().child(if collapsed { "▸" } else { "▾" }))
                     .child(div().font_weight(gpui::FontWeight::BOLD).child(group_label))
                     .child(
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
                             .child(format!("{count} Agents")),
-                    ),
+                    )
+                    .child(div().flex_1())
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(if collapsed {
+                        "Expand"
+                    } else {
+                        "Collapse"
+                    }))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if !view.global_agent_collapsed_groups.insert(group_rank) {
+                            view.global_agent_collapsed_groups.remove(&group_rank);
+                        }
+                        // No hidden card may retain a PTY input target or
+                        // a previously armed lifecycle confirmation.
+                        view.global_agent_target = None;
+                        view.global_agent_control_armed = None;
+                        view.global_agent_submit_status =
+                            "State section changed; select an Agent before sending".into();
+                        cx.notify();
+                    })),
             );
             last_group = Some(group_rank);
+        }
+        if view.global_agent_collapsed_groups.contains(&group_rank) {
+            continue;
         }
         let agent = session.agent_type.clone().unwrap_or_default();
         let state = session.agent_state;
@@ -2268,8 +2295,8 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                             },
                                             AgentNavigationSource::Dashboard,
                                         );
-                                        // The selected original Tab must not remain behind this view.
-                                        view.global_agent_maximized = false;
+                                        // Keep the Dashboard visible until the Host's
+                                        // exact Tab selection is confirmed by navigation.
                                         cx.notify();
                                     } else {
                                         view.terminals.status =

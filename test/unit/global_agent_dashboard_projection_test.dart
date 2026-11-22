@@ -152,6 +152,19 @@ void main() {
       ],
     );
     expect(sections.every((section) => section.rows.length == 1), isTrue);
+    final folded = globalAgentDashboardVisibleItems(
+      rows,
+      <GlobalAgentDashboardGroup>{
+        GlobalAgentDashboardGroup.blocked,
+        GlobalAgentDashboardGroup.working,
+      },
+    );
+    // A collapsed state still shows its header/count but not hidden Agent cards.
+    expect(folded.whereType<GlobalAgentDashboardSection>(), hasLength(5));
+    expect(
+      folded.whereType<GlobalAgentLiveRow>().map((row) => row.tab.id).toSet(),
+      <String>{'wait', 'done', 'interrupted'},
+    );
     expect(
       sections
           .expand((section) => section.rows)

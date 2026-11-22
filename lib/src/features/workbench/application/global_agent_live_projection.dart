@@ -57,6 +57,19 @@ List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
   ];
 }
 
+/// Flatten status sections for a single-card-per-row Dashboard. A collapsed
+/// section still renders its label/count and hides only its Agent cards;
+/// no Host data or Session ownership is changed.
+List<Object> globalAgentDashboardVisibleItems(
+  Iterable<GlobalAgentLiveRow> rows,
+  Set<GlobalAgentDashboardGroup> collapsed,
+) => <Object>[
+  for (final section in groupGlobalAgentLiveRows(rows)) ...<Object>[
+    section,
+    if (!collapsed.contains(section.group)) ...section.rows,
+  ],
+];
+
 /// Live, verified workspace-tab projection. Historical provider transcripts
 /// are intentionally excluded until the shared Host search API is available.
 class GlobalAgentLiveRow {
