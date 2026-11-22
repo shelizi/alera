@@ -81,7 +81,7 @@ function Invoke-IsolatedNativeContentProbe {
             # Classify only the synthetic test output. Never echo a terminal
             # transcript or other raw provider text into the test log.
             $output = Read-TerminalText $handle
-            $reason = if ($output -match '(?i)login|sign in|authenticate|auth.*required|api.key') {
+            $reason = if ($output -match '(?i)\b(?:login|log in|sign in|authenticate|authentication required)\b') {
                 'isolated account not authenticated'
             } elseif ($output -match '(?i)no.saved.session|no.conversation.found|session.not.found') {
                 'provider did not recognize fixture history format'
