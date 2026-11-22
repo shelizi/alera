@@ -513,6 +513,24 @@ function Invoke-VerifiedHistoryRpcFixture {
         Write-Output ("$($entry.provider) duplicate Resume owner rejected: PASS")
     }
     if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
+        # A printed shim sentinel is not proof of an active Host Agent.
+        # Require BOTH synthetic source Tabs to be alive and provider-typed
+        # before claiming positive GUI navigation can be tested.
+        $liveInventory = Invoke-AleraJson -Arguments @(
+            'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+            'list', '--workspace', $workspaceId
+        )
+        foreach ($saved in $savedTabs) {
+            $matched = @($liveInventory.items | Where-Object {
+                $_.tabId -eq $saved.tabId -and $_.workspaceId -eq $workspaceId
+            })
+            $running = $matched.Count -eq 1 -and $matched[0].running -eq $true
+            $typed = $matched.Count -eq 1 -and $matched[0].agentType -eq $saved.provider
+            Write-Output ("$($saved.provider) pre-GUI inventory: matched=$($matched.Count), running=$running, providerMatched=$typed")
+            if (-not ($running -and $typed)) {
+                throw "$($saved.provider) GUI fixture is not a verified RUNNING Agent"
+            }
+        }
         # GUI obtains ONLY the fixture Runtime and isolated preview settings.
         # Both provider CLI scripts remain synthetic and unauthenticated.
         $guiState = Join-Path $Root 'gui-state'

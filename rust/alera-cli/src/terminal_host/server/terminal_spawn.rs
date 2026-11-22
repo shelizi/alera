@@ -557,6 +557,9 @@ impl ServerActor {
         let tab_for_launch = WorkspaceTabStoreHandler::new(&self.runtime_store)
             .find(&tab_id)
             .await?;
+        // Only a successful exact native-source verification may supply the
+        // Hook-free provider identity for the Host's active Tab inventory.
+        let mut verified_history_provider = None;
         if let Some(tab) = tab_for_launch.as_ref() {
             if let Some((key, directory)) =
                 super::agent_history_resume::verified_history_launch_environment(
@@ -565,6 +568,9 @@ impl ServerActor {
                 )
                 .await?
             {
+                verified_history_provider = tab_agent_type(tab)
+                    .filter(|provider| matches!(*provider, "codex" | "claude"))
+                    .map(str::to_owned);
                 // Bind the shell to the scanned provider account before the
                 // hook overlay and login-shell environment are prepared.
                 // Overrides any stale globally selected account and remains
@@ -699,13 +705,14 @@ impl ServerActor {
             move |event| forward_pty_event(&inbox, &reader_session_id, event),
         ))
         .await;
-        let session = match session {
+        let mut session = match session {
             Ok(session) => session,
             Err(error) => {
                 self.mcp_ui.revoke(&session_id);
                 return Err(error);
             }
         };
+        session.verified_history_provider = verified_history_provider;
         self.sessions.insert(session_id, session);
         Ok(())
     }

@@ -8,6 +8,32 @@ use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
 use super::orchestration_validation::{optional_string, require_string, state_error};
 use super::ServerActor;
 
+/// The exact native-history source checked at PTY launch can identify a
+/// running Agent before its first Hook arrives. A conflicting Hook takes
+/// precedence so an incorrectly typed live Tab fails exact navigation closed.
+fn reported_agent_type<'a>(
+    hook_provider: Option<&'a str>,
+    verified_history_provider: Option<&'a str>,
+) -> Option<&'a str> {
+    hook_provider.or(verified_history_provider)
+}
+
+#[cfg(test)]
+mod verified_history_agent_type_tests {
+    use super::reported_agent_type;
+
+    #[test]
+    fn only_verified_history_can_supply_hook_free_identity() {
+        assert_eq!(reported_agent_type(None, None), None);
+        assert_eq!(reported_agent_type(None, Some("codex")), Some("codex"));
+        assert_eq!(reported_agent_type(None, Some("claude")), Some("claude"));
+        assert_eq!(
+            reported_agent_type(Some("claude"), Some("codex")),
+            Some("claude")
+        );
+    }
+}
+
 impl ServerActor {
     pub(super) fn orchestration_terminals(&self, payload: &Value) -> Value {
         let workspace = optional_string(payload, "workspace");
@@ -21,12 +47,16 @@ impl ServerActor {
             })
             .map(|(session_id, session)| {
                 let presence = self.agent_presence.get(session_id);
+                let agent_type = reported_agent_type(
+                    presence.map(|entry| entry.agent_type.as_str()),
+                    session.verified_history_provider.as_deref(),
+                );
                 json!({
                     "handle": session_id,
                     "workspaceId": session.workspace_id,
                     "tabId": session.tab_id,
                     "running": session.running(),
-                    "agentType": presence.map(|entry| entry.agent_type.clone()),
+                    "agentType": agent_type,
                     "agentState": presence.map(|entry| entry.state.as_str()),
                     "stateStartedAt": presence.map(|entry| entry.state_started_at),
                     "updatedAt": presence.map(|entry| entry.updated_at),
@@ -57,6 +87,10 @@ impl ServerActor {
             .get(&handle)
             .ok_or_else(|| HostError::state(format!("terminal not found: {handle}")))?;
         let presence = self.agent_presence.get(&handle);
+        let agent_type = reported_agent_type(
+            presence.map(|entry| entry.agent_type.as_str()),
+            session.verified_history_provider.as_deref(),
+        );
         let active_dispatch = self
             .runtime_store
             .active_orchestration_dispatch_for_handle(&handle)
@@ -110,7 +144,7 @@ impl ServerActor {
             "workspaceId": session.workspace_id,
             "tabId": session.tab_id,
             "running": session.running(),
-            "agentType": presence.map(|entry| entry.agent_type.clone()),
+            "agentType": agent_type,
             "agentState": presence.map(|entry| entry.state.as_str()),
             "startupState": startup_state,
             "startupError": dispatch

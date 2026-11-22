@@ -29,6 +29,7 @@ impl Session {
             id: session_id,
             workspace_id,
             tab_id,
+            verified_history_provider: None,
             working_directory: checkpoint.working_directory,
             clients: HashSet::new(),
             view_leases: HashMap::new(),

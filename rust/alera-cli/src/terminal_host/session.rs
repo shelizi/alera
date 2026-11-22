@@ -133,6 +133,9 @@ pub struct Session {
     pub id: String,
     pub workspace_id: String,
     pub tab_id: String,
+    /// Provider verified against an exact, registered native history source
+    /// before THIS PTY was launched. This is a Tab identity, NOT a Hook state.
+    pub(crate) verified_history_provider: Option<String>,
     pub working_directory: String,
     pub clients: HashSet<u64>,
     /// Multiple UI windows can share one Host client connection. Keep their
@@ -334,6 +337,7 @@ impl Session {
             id,
             workspace_id,
             tab_id,
+            verified_history_provider: None,
             working_directory: recovered_working_directory.unwrap_or(working_directory),
             clients: HashSet::new(),
             view_leases: HashMap::new(),
