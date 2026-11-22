@@ -14,6 +14,9 @@
 #   2. Claude and Codex accept their native exact UUID grammar in a PTY
 #   3. Both reject a deliberately absent UUID, without starting a new chat
 #
+# Optional: -TestNativeContentProbe uses fresh EMPTY Claude/Codex account homes,
+# attempts to display fake native transcript markers with installed CLIs, and
+# explicitly reports NOT VERIFIED when authentication is required.
 # It does NOT prove successful resume of a real session or GUI rendering.
 
 [CmdletBinding()]
@@ -22,6 +25,7 @@ param(
     [string]$CliPath,
     [string]$Root = '',
     [switch]$TestVerifiedHistoryRpc,
+    [switch]$TestNativeContentProbe,
     [switch]$KeepArtifacts
 )
 
@@ -548,6 +552,10 @@ try {
         throw 'Claude did not reject an absent UUID in Windows ConPTY'
     }
     Write-Output 'Claude exact UUID negative Resume: PASS'
+    if ($TestNativeContentProbe) {
+        . "$PSScriptRoot/native-session-content-probe.ps1"
+        Invoke-IsolatedNativeContentProbe -FixtureRoot $Root -WorkspacePath $project
+    }
     if ($TestVerifiedHistoryRpc) {
         Invoke-VerifiedHistoryRpcFixture
         Write-Output 'Result: PASS (native negative + synthetic Host Resume; real-session restore unverified)'

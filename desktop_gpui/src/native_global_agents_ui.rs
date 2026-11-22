@@ -105,6 +105,23 @@ fn parse_located_history_tab(
     }
 }
 
+/// A Host Tab UUID alone is not a terminal attachment. The last
+/// authenticated inventory must still contain an explicitly running Agent
+/// with the same Worktree, Tab ID and Provider before we schedule navigation.
+fn verified_running_history_session<'a>(
+    sessions: &'a [TerminalSession],
+    workspace: &str,
+    tab_id: &str,
+    provider: &str,
+) -> Option<&'a TerminalSession> {
+    sessions.iter().find(|session| {
+        session.running
+            && session.workspace_id == workspace
+            && session.tab_id == tab_id
+            && session.agent_type.as_deref() == Some(provider)
+    })
+}
+
 #[cfg(test)]
 mod exact_history_resume_retry_tests {
     use super::*;
@@ -137,6 +154,58 @@ mod exact_history_resume_retry_tests {
             history_source_identity(&first),
             history_source_identity(&first.clone())
         );
+    }
+
+    #[test]
+    fn verified_history_navigation_rejects_recycled_or_stopped_host_tabs() {
+        let live = TerminalSession {
+            handle: "host-session".into(),
+            workspace_id: "original-worktree".into(),
+            tab_id: "verified-tab".into(),
+            running: true,
+            agent_type: Some("codex".into()),
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
+            agent_context: None,
+        };
+        assert!(verified_running_history_session(
+            &[live.clone()],
+            "original-worktree",
+            "verified-tab",
+            "codex"
+        )
+        .is_some());
+        for wrong in [
+            TerminalSession {
+                tab_id: "recycled-tab".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                workspace_id: "other-worktree".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                agent_type: Some("claude".into()),
+                ..live.clone()
+            },
+            TerminalSession {
+                running: false,
+                ..live.clone()
+            },
+        ] {
+            assert!(
+                verified_running_history_session(
+                    &[wrong],
+                    "original-worktree",
+                    "verified-tab",
+                    "codex"
+                )
+                .is_none(),
+                "never navigate from a recycled handle or stopped/mismatched Agent"
+            );
+        }
     }
 
     #[test]
@@ -474,68 +543,133 @@ impl Workbench {
         .detach();
     }
 
-    /// A separate user click may focus only a fresh, already-running Host
-    /// session with the same verified workspace/Tab/provider identities.
+    /// A second explicit click must recheck the *same* Host-pinned source
+    /// before any navigation. A stale history card and an old live inventory
+    /// are never authority to focus a Tab, even if a handle was recycled.
     /// A persisted but stopped Tab never triggers an implicit Agent launch.
-    fn open_located_global_agent_history(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_located_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.global_agent_history_busy || !self.global_agent_history_consent {
             return;
         }
         let Some(hit) = self.global_agent_history_results.get(index).cloned() else {
             return;
         };
-        let key = history_source_identity(&hit);
-        let Some((workspace, tab_id)) = self.global_agent_history_located.get(&key).cloned() else {
+        let source_key = history_source_identity(&hit);
+        let Some((expected_workspace, expected_tab)) =
+            self.global_agent_history_located.get(&source_key).cloned()
+        else {
             return;
         };
-        if self.terminals.session_list_is_stale() {
-            self.global_agent_history_status =
-                "Host inventory is stale; refresh Live Agents before opening".into();
-            self.refresh_terminals(cx);
-            cx.notify();
-            return;
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
-        let session = self
-            .terminals
-            .sessions
-            .iter()
-            .find(|session| {
-                session.running
-                    && session.workspace_id == workspace
-                    && session.tab_id == tab_id
-                    && session.agent_type.as_deref() == Some(hit.provider.as_str())
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_history_status =
+                "Cannot recheck verified Tab without the existing Host CLI".into();
+            cx.notify();
+            return;
+        };
+        self.global_agent_history_busy = true;
+        self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
+        let ticket = self.global_agent_history_request;
+        let original_generation = self.workspace_generation;
+        self.global_agent_history_status =
+            "Rechecking the original Host account and Tab before navigation…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let live_provider = hit.provider.clone();
+            let response = cx
+                .background_spawn(async move {
+                    bridge.locate_exact_agent_history(
+                        &hit.provider,
+                        &hit.account,
+                        &hit.project,
+                        &hit.workspace,
+                        &hit.native_id,
+                    )
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_history_request != ticket {
+                    return;
+                }
+                view.global_agent_history_busy = false;
+                let verified = response
+                    .as_ref()
+                    .map_err(|_| "Host unavailable")
+                    .and_then(|value| parse_located_history_tab(value, &expected_workspace));
+                if !matches!(
+                    verified,
+                    Ok(LocatedHistoryTab::Found { ref workspace, ref tab_id })
+                        if workspace == &expected_workspace && tab_id == &expected_tab
+                ) {
+                    view.global_agent_history_located.remove(&source_key);
+                    view.global_agent_history_status =
+                        "Original Host account or Tab changed. Find it again; no Agent started"
+                            .into();
+                    cx.notify();
+                    return;
+                }
+                if view.workspace_generation != original_generation {
+                    view.global_agent_history_status =
+                        "Workspace changed during Host recheck; click Open again".into();
+                    cx.notify();
+                    return;
+                }
+                if view.terminals.session_list_is_stale() {
+                    view.global_agent_history_status =
+                        "Live Host inventory is stale. Refresh before opening".into();
+                    view.refresh_terminals(cx);
+                    cx.notify();
+                    return;
+                }
+                let live = verified_running_history_session(
+                    &view.terminals.sessions,
+                    &expected_workspace,
+                    &expected_tab,
+                    &live_provider,
+                );
+                let Some(live) = live.cloned() else {
+                    view.global_agent_history_status =
+                        "Verified Tab is saved but not running. Open it explicitly from the original Worktree"
+                            .into();
+                    cx.notify();
+                    return;
+                };
+                let Some(state) = live.agent_state else {
+                    view.global_agent_history_status =
+                        "Agent state cannot be verified; refresh Host inventory first".into();
+                    view.refresh_terminals(cx);
+                    cx.notify();
+                    return;
+                };
+                if view.agent_toast_activation.is_some() {
+                    view.global_agent_history_status =
+                        "Another Agent navigation is pending; try again".into();
+                    cx.notify();
+                    return;
+                }
+                // Reuse the draft-safe Host session and pane navigation path.
+                // GPUI render owns Window, so schedule a verified navigation
+                // instead of manipulating a Window from a background task.
+                view.agent_toast_activation = Some(AgentNotice {
+                    session_id: live.handle,
+                    workspace_id: expected_workspace,
+                    tab_id: expected_tab,
+                    agent_type: live_provider,
+                    state,
+                });
+                view.agent_toast_activation_retries = 0;
+                // Navigation waits for a post-click Host inventory refresh.
+                view.refresh_terminals(cx);
+                view.global_agent_history_open = false;
+                view.global_agent_history_status =
+                    "Navigating to the exact verified running Agent Tab".into();
+                cx.notify();
             })
-            .cloned();
-        let Some(session) = session else {
-            self.global_agent_history_status =
-                "Verified saved Tab is not running. Open it from its original Worktree to resume; Find never starts a PTY".into();
-            cx.notify();
-            return;
-        };
-        let Some(state) = session.agent_state else {
-            self.global_agent_history_status =
-                "Verified Tab is running but Agent state is not confirmed. Refresh Host inventory"
-                    .into();
-            self.refresh_terminals(cx);
-            cx.notify();
-            return;
-        };
-        self.activate_agent_notice(
-            AgentNotice {
-                session_id: session.handle,
-                workspace_id: workspace,
-                tab_id,
-                agent_type: hit.provider.clone(),
-                state,
-            },
-            window,
-            cx,
-        );
+            .ok();
+        })
+        .detach();
     }
 
     fn resume_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1343,8 +1477,8 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .cursor_pointer()
                         .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
                         .child("Open verified running Tab")
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.open_located_global_agent_history(index, window, cx);
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.open_located_global_agent_history(index, cx);
                         })),
                 );
             }
