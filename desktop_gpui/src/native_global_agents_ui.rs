@@ -1513,6 +1513,16 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         return history_panel(view, cx);
     }
     let fresh = !view.terminals.session_list_is_stale();
+    let needs_review_count = view
+        .terminals
+        .sessions
+        .iter()
+        .filter(|session| {
+            alera_gpui_desktop::agent_status_visual::AgentVisualState::needs_host_review(
+                session, fresh,
+            )
+        })
+        .count();
     let sessions = view
         .terminals
         .sessions
@@ -1520,7 +1530,12 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         .filter(|session| {
             session.running
                 && session.agent_type.is_some()
-                && (view.global_agent_show_hidden
+                && (!view.global_agent_needs_review_only
+                    || alera_gpui_desktop::agent_status_visual::AgentVisualState::needs_host_review(
+                        session, fresh,
+                    ))
+                && (view.global_agent_needs_review_only
+                    || view.global_agent_show_hidden
                     || !view.global_agent_hidden.contains(&(
                         session.handle.clone(),
                         session.workspace_id.clone(),
@@ -1730,115 +1745,141 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         create_form = form.into_any_element();
     }
 
-    let mut list = div()
-        .id("global-live-agent-sessions")
-        .h(px(if view.global_agent_create_open {
-            580.0
-        } else {
-            340.0
-        }))
-        .flex_shrink_0()
-        .overflow_y_scroll()
-        .px_3()
-        .py_2()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .border_b_1()
-        .border_color(rgb(BORDER))
-        .child(
-            div()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_sm()
-                .child(format!("All Agent Sessions ({})", sessions.len())),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child("Global Host inventory, all registered workspaces"),
-        )
-        .child(
-            div()
-                .id("global-agent-open-history")
-                .text_xs()
-                .cursor_pointer()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child("Search historical Claude / Codex Sessions")
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.global_agent_history_open = true;
-                    cx.notify();
-                })),
-        )
-        .child(
-            div()
-                .id("global-agent-show-hidden")
-                .text_xs()
-                .cursor_pointer()
-                .text_color(rgb(MUTED))
-                .child(if view.global_agent_show_hidden {
-                    format!(
-                        "Show only visible cards ({} hidden)",
-                        view.global_agent_hidden.len()
-                    )
-                } else {
-                    format!("Show hidden cards ({})", view.global_agent_hidden.len())
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.global_agent_show_hidden = !view.global_agent_show_hidden;
-                    cx.notify();
-                })),
-        )
-        .child(div().text_xs().text_color(rgb(MUTED)).child(
-            view.global_agent_target.as_ref().map_or_else(
-                || "Select an Agent's Steer button to target its live session".to_owned(),
-                |target| format!("Target: {} / {}", target.workspace_id, target.tab_id),
-            ),
-        ))
-        .child(
-            div()
-                .id("global-agent-launch-current-workspace")
-                .cursor_pointer()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child("+ New Agent · choose any registered Worktree")
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.open_global_agent_create(cx);
-                })),
-        )
-        .child(create_form)
-        .child(view.global_agent_prompt_input.clone())
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(view.global_agent_control_status.clone()),
-        )
-        .child(
-            div()
-                .id("global-agent-send-instruction")
-                .cursor_pointer()
-                .text_xs()
-                .text_color(rgb(if view.global_agent_submit_busy {
-                    MUTED
-                } else {
-                    TEXT
-                }))
-                .child(if view.global_agent_submit_busy {
-                    "Sending…"
-                } else {
-                    "Send instruction to selected Agent"
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.submit_global_agent_prompt(cx);
-                })),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(view.global_agent_submit_status.clone()),
-        );
+    let mut list =
+        div()
+            .id("global-live-agent-sessions")
+            .h(px(if view.global_agent_create_open {
+                580.0
+            } else {
+                340.0
+            }))
+            .flex_shrink_0()
+            .overflow_y_scroll()
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_sm()
+                    .child(format!("All Agent Sessions ({})", sessions.len())),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Global Host inventory, all registered workspaces"),
+            )
+            .child(
+                div()
+                    .id("global-agent-open-history")
+                    .text_xs()
+                    .cursor_pointer()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("Search historical Claude / Codex Sessions")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.global_agent_history_open = true;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("global-agent-show-hidden")
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(rgb(MUTED))
+                    .child(if view.global_agent_show_hidden {
+                        format!(
+                            "Show only visible cards ({} hidden)",
+                            view.global_agent_hidden.len()
+                        )
+                    } else {
+                        format!("Show hidden cards ({})", view.global_agent_hidden.len())
+                    })
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.global_agent_show_hidden = !view.global_agent_show_hidden;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("global-agent-needs-review-toggle")
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(if view.global_agent_needs_review_only {
+                        "Show all Agent Sessions".to_owned()
+                    } else {
+                        format!("Needs You · review Waiting/Blocked ({needs_review_count})")
+                    })
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.global_agent_needs_review_only = !view.global_agent_needs_review_only;
+                        // A view change must not retain an invisible input target
+                        // or a previously armed destructive action.
+                        view.global_agent_control_armed = None;
+                        view.global_agent_target = None;
+                        view.global_agent_submit_status =
+                            "Filter changed; select an Agent before sending".into();
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                "Host Hook state only · this is a review queue, not proof of pending approval",
+            ))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                view.global_agent_target.as_ref().map_or_else(
+                    || "Select an Agent's Steer button to target its live session".to_owned(),
+                    |target| format!("Target: {} / {}", target.workspace_id, target.tab_id),
+                ),
+            ))
+            .child(
+                div()
+                    .id("global-agent-launch-current-workspace")
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("+ New Agent · choose any registered Worktree")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.open_global_agent_create(cx);
+                    })),
+            )
+            .child(create_form)
+            .child(view.global_agent_prompt_input.clone())
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(view.global_agent_control_status.clone()),
+            )
+            .child(
+                div()
+                    .id("global-agent-send-instruction")
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(rgb(if view.global_agent_submit_busy {
+                        MUTED
+                    } else {
+                        TEXT
+                    }))
+                    .child(if view.global_agent_submit_busy {
+                        "Sending…"
+                    } else {
+                        "Send instruction to selected Agent"
+                    })
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.submit_global_agent_prompt(cx);
+                    })),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(view.global_agent_submit_status.clone()),
+            );
 
     if !fresh {
         return list
@@ -1853,12 +1894,13 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
 
     if sessions.is_empty() {
         return list
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(MUTED))
-                    .child("No running Agent sessions in the connected Host."),
-            )
+            .child(div().text_sm().text_color(rgb(MUTED)).child(
+                if view.global_agent_needs_review_only {
+                    "No verified Waiting/Blocked Agents need review."
+                } else {
+                    "No running Agent sessions in the connected Host."
+                },
+            ))
             .into_any_element();
     }
 
@@ -1916,6 +1958,66 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         let terminate_armed =
             view.global_agent_control_armed.as_ref() == Some(&(terminate_target.clone(), true));
         let control_busy = view.global_agent_control_busy;
+        let timeline_identity = (session_id.clone(), workspace_id.clone(), tab_id.clone());
+        let timeline_expanded =
+            view.global_agent_expanded_timeline.as_ref() == Some(&timeline_identity);
+        let timeline_events = session
+            .agent_context
+            .as_ref()
+            .map(|context| context.timeline.clone())
+            .unwrap_or_default();
+        let mut timeline_panel = div().flex().flex_col().gap_1();
+        if !timeline_events.is_empty() {
+            timeline_panel = timeline_panel.child(
+                div()
+                    .id(("global-agent-timeline-toggle", index))
+                    .cursor_pointer()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!(
+                        "{} Timeline ({})",
+                        if timeline_expanded { "▾" } else { "▸" },
+                        timeline_events.len()
+                    ))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if view.global_agent_expanded_timeline.as_ref() == Some(&timeline_identity)
+                        {
+                            view.global_agent_expanded_timeline = None;
+                        } else {
+                            view.global_agent_expanded_timeline = Some(timeline_identity.clone());
+                        }
+                        cx.notify();
+                    })),
+            );
+            if timeline_expanded {
+                for (event_index, event) in timeline_events.iter().take(16).enumerate() {
+                    let label = match event.kind.as_str() {
+                        "goal" => "Goal",
+                        "instruction" => "Follow-up",
+                        "report" => "Agent report",
+                        _ => "Update",
+                    };
+                    timeline_panel = timeline_panel.child(
+                        div()
+                            .id(("global-agent-timeline-item", index * 16 + event_index))
+                            .rounded_md()
+                            .bg(rgb(PANEL))
+                            .px_2()
+                            .py_2()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("{label} · {}", event.at)),
+                            )
+                            .child(div().min_w_0().text_xs().child(event.text.clone())),
+                    );
+                }
+            }
+        }
 
         list = list.child(
             div()
@@ -1941,6 +2043,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 )
                 .child(div().text_sm().child(goal))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(progress))
+                .child(timeline_panel)
                 .child(
                     div()
                         .text_xs()

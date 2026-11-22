@@ -42,6 +42,19 @@ impl AgentVisualState {
         Some(Self::from_hook(session.agent_state?, session.interrupted))
     }
 
+    /// Dashboard review queue: waiting/blocked Host statuses only. A
+    /// completed or interrupted turn must not be mistaken for user approval.
+    pub const fn needs_review(self) -> bool {
+        matches!(self, Self::Waiting | Self::Blocked)
+    }
+
+    /// Requires an active Host inventory and excludes explicitly interrupted
+    /// sessions even when an older Hook still reports waiting/blocked.
+    pub fn needs_host_review(session: &TerminalSession, inventory_current: bool) -> bool {
+        !session.interrupted
+            && Self::for_session(session, inventory_current).is_some_and(Self::needs_review)
+    }
+
     pub const fn color(self) -> u32 {
         match self {
             Self::Working => AGENT_WORKING,
@@ -209,6 +222,34 @@ mod tests {
         );
         assert_eq!(AgentVisualState::Interrupted.color(), AGENT_BLOCKED);
         assert_eq!(AgentVisualState::Interrupted.label(), "Interrupted");
+    }
+
+    #[test]
+    fn dashboard_needs_review_respects_host_freshness_and_state() {
+        for state in [AgentActivityState::Waiting, AgentActivityState::Blocked] {
+            let current = session("review", Some(state));
+            assert!(AgentVisualState::needs_host_review(&current, true));
+            assert!(!AgentVisualState::needs_host_review(&current, false));
+            let mut interrupted = current.clone();
+            interrupted.interrupted = true;
+            assert!(!AgentVisualState::needs_host_review(&interrupted, true));
+            let mut stopped = current.clone();
+            stopped.running = false;
+            assert!(AgentVisualState::for_session(&stopped, true).is_none());
+            let mut unverified = current;
+            unverified.agent_type = None;
+            assert!(AgentVisualState::for_session(&unverified, true).is_none());
+        }
+        for state in [AgentActivityState::Working, AgentActivityState::Done] {
+            assert!(
+                !AgentVisualState::for_session(&session("other", Some(state)), true)
+                    .is_some_and(AgentVisualState::needs_review)
+            );
+        }
+        let mut interrupted = session("i", Some(AgentActivityState::Done));
+        interrupted.interrupted = true;
+        assert!(!AgentVisualState::for_session(&interrupted, true)
+            .is_some_and(AgentVisualState::needs_review));
     }
 
     #[test]

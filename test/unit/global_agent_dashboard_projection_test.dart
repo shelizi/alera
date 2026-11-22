@@ -40,19 +40,26 @@ void main() {
     },
   );
 
-  AgentStatusEntry status(String id, String workspaceId) => AgentStatusEntry(
+  AgentStatusEntry status(
+    String id,
+    String workspaceId, {
+    AgentStatusState state = AgentStatusState.working,
+    bool? interrupted,
+    List<Object?>? timeline,
+  }) => AgentStatusEntry(
     terminalSessionId: 'session-$id',
     workspaceId: workspaceId,
     tabId: id,
     agentType: AgentType.claude,
-    state: AgentStatusState.working,
+    state: state,
+    interrupted: interrupted,
     prompt: 'Windows IME repair',
     updatedAt: now,
     stateStartedAt: now,
     contextOverview: <String, dynamic>{
       'goal': 'Fix Windows IME',
       'progress': 'Checking IMM API',
-      'timeline': <Object>[],
+      'timeline': timeline ?? <Object>[],
     },
   );
 
@@ -78,6 +85,75 @@ void main() {
     expect(rows.map((row) => row.project).toSet(), <String>{'alera', 'mcp'});
     expect(rows.where((row) => row.matches('IMM API')), hasLength(2));
     expect(rows.where((row) => row.matches('no-such-context')), isEmpty);
+  });
+
+  test('Needs You queues only waiting/blocked verified agents with bounded timeline', () {
+    final current = WorkbenchState(
+      projects: <Project>[project('alera')],
+      workspacesByProject: <String, List<Workspace>>{
+        'alera': <Workspace>[workspace('worktree', 'alera')],
+      },
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'worktree': <WorkspaceTabRecord>[
+          for (final id in <String>[
+            'wait',
+            'blocked',
+            'working',
+            'done',
+            'interrupted',
+          ])
+            tab(id, 'worktree'),
+        ],
+      },
+    );
+    final timeline = <Object?>[
+      for (var i = 0; i < 19; i++)
+        <String, Object?>{
+          'kind': 'report',
+          'text': 'Report $i',
+          'at': DateTime.utc(2026, 11, 21, 12, i).toIso8601String(),
+        },
+      <String, Object?>{
+        'kind': 'toolInput',
+        'text': 'Never expose tool payloads',
+        'at': now.toIso8601String(),
+      },
+    ];
+    final rows = projectGlobalAgentLiveRows(current, <String, AgentStatusEntry>{
+      'session-wait': status(
+        'wait',
+        'worktree',
+        state: AgentStatusState.waiting,
+        timeline: timeline,
+      ),
+      'session-blocked': status(
+        'blocked',
+        'worktree',
+        state: AgentStatusState.blocked,
+      ),
+      'session-working': status('working', 'worktree'),
+      'session-done': status('done', 'worktree', state: AgentStatusState.done),
+      'session-interrupted': status(
+        'interrupted',
+        'worktree',
+        state: AgentStatusState.done,
+        interrupted: true,
+      ),
+    });
+    final needsReview = rows.where((row) => row.needsReview).toList();
+    expect(needsReview.map((row) => row.tab.id).toSet(), <String>{
+      'wait',
+      'blocked',
+    });
+    final waiting = rows.singleWhere((row) => row.tab.id == 'wait');
+    expect(waiting.timeline, hasLength(16));
+    expect(waiting.timeline.first.text, 'Report 15');
+    expect(waiting.timeline.last.text, 'Report 0');
+    expect(waiting.timeline.every((event) => event.kind == 'report'), isTrue);
+    expect(
+      waiting.timeline.any((event) => event.text.contains('tool')),
+      isFalse,
+    );
   });
 
   test('rejects stale and foreign workspace-tab Host identity', () {

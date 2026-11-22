@@ -31,6 +31,7 @@ class _GlobalAgentDashboardDialogState
     extends ConsumerState<GlobalAgentDashboardDialog> {
   String _query = '';
   bool _historyMode = false;
+  bool _needsReviewOnly = false;
   final TextEditingController _instruction = TextEditingController();
   ({String sessionId, String workspaceId, String tabId})? _target;
   bool _sending = false;
@@ -120,6 +121,8 @@ class _GlobalAgentDashboardDialogState
   final Set<({String sessionId, String workspaceId, String tabId})>
   _hiddenCards = {};
   bool _showHidden = false;
+  final Set<({String sessionId, String workspaceId, String tabId})>
+  _expandedTimelines = {};
 
   ({String sessionId, String workspaceId, String tabId}) _identity(
     GlobalAgentLiveRow row,
@@ -256,8 +259,19 @@ class _GlobalAgentDashboardDialogState
     final all = projectGlobalAgentLiveRows(workbench, statuses);
     final liveIdentities = all.map(_identity).toSet();
     _hiddenCards.removeWhere((identity) => !liveIdentities.contains(identity));
+    _expandedTimelines.removeWhere(
+      (identity) => !liveIdentities.contains(identity),
+    );
+    final needsReviewCount = all.where((row) => row.needsReview).length;
+    // A hidden card cannot hide a waiting/blocked Agent from the review queue.
     final rows = all
-        .where((row) => _showHidden || !_hiddenCards.contains(_identity(row)))
+        .where(
+          (row) =>
+              _needsReviewOnly ||
+              _showHidden ||
+              !_hiddenCards.contains(_identity(row)),
+        )
+        .where((row) => !_needsReviewOnly || row.needsReview)
         .where((row) => row.matches(_query))
         .toList();
     final muted = Theme.of(context).textTheme.bodySmall
@@ -349,7 +363,37 @@ class _GlobalAgentDashboardDialogState
                     ),
                   ],
                 ),
-                const SizedBox(height: AleraTokens.space12),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Needs You is a review queue based on last verified Waiting/Blocked Hook state; approval is not inferred.',
+                        style: muted,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => setState(() {
+                        _needsReviewOnly = !_needsReviewOnly;
+                        _target = null;
+                        _armedControl = null;
+                        _sendFeedback =
+                            'Filter changed; select an Agent before sending.';
+                      }),
+                      icon: Icon(
+                        _needsReviewOnly
+                            ? Icons.filter_alt_off_outlined
+                            : Icons.notification_important_outlined,
+                      ),
+                      label: Text(
+                        _needsReviewOnly
+                            ? 'Show all Agents'
+                            : 'Needs You ($needsReviewCount)',
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AleraTokens.space8),
                 if (_target != null) ...[
                   Text(
                     'Target: ${_target!.workspaceId} / ${_target!.tabId}',
@@ -403,6 +447,10 @@ class _GlobalAgentDashboardDialogState
                               const SizedBox(height: AleraTokens.space8),
                           itemBuilder: (context, index) {
                             final row = rows[index];
+                            final identity = _identity(row);
+                            final expanded = _expandedTimelines.contains(
+                              identity,
+                            );
                             return DecoratedBox(
                               decoration: BoxDecoration(
                                 color: AleraTokens.surface,
@@ -439,6 +487,15 @@ class _GlobalAgentDashboardDialogState
                                         ),
                                       ],
                                     ),
+                                    if (row.needsReview) ...[
+                                      const SizedBox(
+                                        height: AleraTokens.space4,
+                                      ),
+                                      Text(
+                                        'Needs review · ${row.status.state.key} · last reported ${row.status.updatedAt.toLocal()}',
+                                        style: muted,
+                                      ),
+                                    ],
                                     const SizedBox(height: AleraTokens.space8),
                                     Text(
                                       row.goal.isEmpty
@@ -457,6 +514,43 @@ class _GlobalAgentDashboardDialogState
                                         overflow: TextOverflow.ellipsis,
                                         style: muted,
                                       ),
+                                    ],
+                                    if (row.timeline.isNotEmpty) ...[
+                                      TextButton.icon(
+                                        onPressed: () => setState(() {
+                                          if (!_expandedTimelines.add(
+                                            identity,
+                                          )) {
+                                            _expandedTimelines.remove(identity);
+                                          }
+                                        }),
+                                        icon: Icon(
+                                          expanded
+                                              ? Icons.expand_less
+                                              : Icons.expand_more,
+                                        ),
+                                        label: Text(
+                                          'Timeline (${row.timeline.length})',
+                                        ),
+                                      ),
+                                      if (expanded)
+                                        for (final event in row.timeline)
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 4,
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  '${event.kind} · ${event.at.toLocal()}',
+                                                  style: muted,
+                                                ),
+                                                Text(event.text),
+                                              ],
+                                            ),
+                                          ),
                                     ],
                                     Align(
                                       alignment: Alignment.centerRight,

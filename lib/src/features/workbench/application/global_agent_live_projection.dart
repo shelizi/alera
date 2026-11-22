@@ -13,6 +13,7 @@ class GlobalAgentLiveRow {
     required this.status,
     required this.goal,
     required this.progress,
+    required this.timeline,
   });
 
   final String project;
@@ -21,6 +22,15 @@ class GlobalAgentLiveRow {
   final AgentStatusEntry status;
   final String goal;
   final String progress;
+
+  /// Host-validated context events; no raw terminal output or tool inputs.
+  final List<AgentContextMilestone> timeline;
+
+  /// Last verified Hook state suggests review, not proven user approval.
+  bool get needsReview =>
+      status.interrupted != true &&
+      (status.state == AgentStatusState.waiting ||
+          status.state == AgentStatusState.blocked);
 
   bool matches(String query) {
     final q = query.trim().toLowerCase();
@@ -62,6 +72,7 @@ List<GlobalAgentLiveRow> projectGlobalAgentLiveRows(
             progress: overview.progress.isNotEmpty
                 ? overview.progress
                 : (status.lastAssistantMessage ?? ''),
+            timeline: overview.timeline,
           ),
         );
       }

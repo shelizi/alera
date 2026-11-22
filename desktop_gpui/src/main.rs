@@ -1108,6 +1108,10 @@ struct Workbench {
     /// Hidden dashboard cards do not detach or terminate Host PTYs.
     global_agent_hidden: HashSet<(String, String, String)>,
     global_agent_show_hidden: bool,
+    /// Review-only view never writes to Host or hides waiting Agent PTYs.
+    global_agent_needs_review_only: bool,
+    /// At most one expanded live context timeline; avoids unbounded UI cache.
+    global_agent_expanded_timeline: Option<(String, String, String)>,
     /// Dashboard-only explicit cross-project Profile launch; no pane reattachment.
     global_agent_create_open: bool,
     global_agent_create_workspace: Option<String>,
@@ -18702,6 +18706,8 @@ fn main() {
                             global_agent_control_status: String::new(),
                             global_agent_hidden: HashSet::new(),
                             global_agent_show_hidden: false,
+                            global_agent_needs_review_only: false,
+                            global_agent_expanded_timeline: None,
                             global_agent_create_open: false,
                             global_agent_create_workspace: None,
                             global_agent_create_profile: None,
