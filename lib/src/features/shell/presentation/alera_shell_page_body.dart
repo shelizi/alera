@@ -161,6 +161,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
       },
     );
     final dashboardOpen = ref.watch(globalAgentDashboardNavigationProvider);
+    final inspectingAgent = ref.watch(globalAgentInspectionOpenProvider);
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
     // Keep the native hook receiver and Host presence forwarding alive while
@@ -273,24 +274,29 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              ExcludeFocus(
-                                excluding: dashboardOpen,
-                                child: Offstage(
-                                  offstage: dashboardOpen,
-                                  child: TickerMode(
-                                    enabled: !dashboardOpen,
-                                    child: _buildContent(
-                                      bootstrapped: shell.bootstrapped,
-                                      hasProjects: shell.hasProjects,
-                                      project: project,
-                                      workspace: workspace,
-                                      sourceControlScope: sourceControlScope,
-                                      tabs: shell.tabs,
-                                      layout: shell.layout,
+                              // A terminal session has one GlobalKey-backed
+                              // renderer. Temporarily unmount the hidden
+                              // workbench while its view is shown in the Agent
+                              // inspector. The runtime and Host PTY stay alive.
+                              if (!inspectingAgent)
+                                ExcludeFocus(
+                                  excluding: dashboardOpen,
+                                  child: Offstage(
+                                    offstage: dashboardOpen,
+                                    child: TickerMode(
+                                      enabled: !dashboardOpen,
+                                      child: _buildContent(
+                                        bootstrapped: shell.bootstrapped,
+                                        hasProjects: shell.hasProjects,
+                                        project: project,
+                                        workspace: workspace,
+                                        sourceControlScope: sourceControlScope,
+                                        tabs: shell.tabs,
+                                        layout: shell.layout,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
                               if (dashboardOpen)
                                 const GlobalAgentDashboardPage(),
                             ],
