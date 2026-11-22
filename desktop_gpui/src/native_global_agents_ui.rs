@@ -1323,6 +1323,11 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 .text_color(rgb(TEXT))
                 .child("← Back to live Agent dashboard")
                 .on_click(cx.listener(|view, _, _, cx| {
+                    // Leaving History is an explicit newer focus choice, even
+                    // when no Workspace or Tab was selected. Retire pending
+                    // Host rechecks/deferred focus without discarding the
+                    // acknowledgement of an in-flight explicit Resume.
+                    view.agent_navigation.cancel();
                     view.global_agent_history_open = false;
                     cx.notify();
                 })),

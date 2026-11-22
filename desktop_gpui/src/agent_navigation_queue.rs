@@ -226,4 +226,17 @@ mod tests {
         queue.begin(target("later"), AgentNavigationSource::Toast);
         assert!(!queue.is_current(observed));
     }
+    #[test]
+    fn leaving_history_without_switching_tabs_invalidates_read_and_deferred_focus() {
+        let mut queue = AgentNavigationQueue::default();
+        let in_flight_history_epoch = queue.epoch();
+        queue.cancel(); // Back to dashboard during a read-only Host recheck
+        assert_ne!(queue.epoch(), in_flight_history_epoch);
+
+        queue.begin(target("original"), AgentNavigationSource::History);
+        let (deferred_epoch, _) = queue.take_deferred().unwrap();
+        queue.cancel(); // Back before the deferred Window callback
+        assert!(!queue.is_current(deferred_epoch));
+        assert!(queue.take_deferred().is_none());
+    }
 }
