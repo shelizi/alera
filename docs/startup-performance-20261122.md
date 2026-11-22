@@ -52,6 +52,26 @@ process and once from a warm launch; repeat three times per revision:
 5. Compare startup read/write I/O and sustained CPU/RAM after five minutes.
    The new scheduling must not create extra periodic background jobs.
 
+## Reproducible Windows A/B measurement
+
+Use tool/development/measure_windows_startup.ps1 to alternate three baseline/candidate launches with an isolated ALERA_GPUI_STATE_DIR for each. An optional **sanitized** StateTemplateDir is copied anew per trial; no production state is read or modified by default. It records binary SHA-256 hashes, per-run top-level window visibility, Windows message-loop responsiveness, CPU, working/private memory and process read/write bytes in JSON under a ScratchRoot outside Dropbox.
+
+Build exact revisions f3d55c7ab (baseline) and d2e35a645 (candidate) with the same Rust toolchain, Cargo profile, dependencies and Windows SDK. From each checkout run tool/development/prepare_windows_build_storage.ps1 in the same PowerShell session before cargo build --manifest-path desktop_gpui/Cargo.toml --locked -j 4. Find the configured target directory using cargo metadata --manifest-path desktop_gpui/Cargo.toml --no-deps --format-version 1. Copy the baseline EXE to a distinct location on the approved local build-storage drive before building the candidate.
+
+~~~powershell
+$baseline = 'D:\alera-build\startup-benchmark-20261122\baseline.exe'
+$candidate = 'D:\alera-build\startup-benchmark-20261122\candidate.exe'
+$workspace = 'E:\example-workspace'
+$stateTemplate = 'D:\alera-build\startup-benchmark-20261122\sanitized-state'
+pwsh -File tool/development/measure_windows_startup.ps1 -BaselineExe $baseline -CandidateExe $candidate -WorkspacePath $workspace -ScratchRoot 'D:\alera-build\startup-benchmark-20261122' -StateTemplateDir $stateTemplate -Runs 3 -ObservationSeconds 300
+~~~
+
+The script closes only test-launched GPUI processes, never existing Agent/Host processes. Do not run alongside another interactive Alera Native instance. MainWindowHandle and Process.Responding are **proxies, not actual first paint or usable Editor/Agent readiness**. Manually verify 20 restored file tabs, split/pinned tabs, Editor input, stale-workspace suppression and native Claude/Codex historical dialogue. Process-cold launches are not reboot-level cold starts.
+
+**Environment blocker (2026-11-22):** MCP policy prohibits subprocess writes outside its Workspace, whereas this project's Windows build-storage policy requires compilation outside Dropbox. The exact version-matched executable pair could not be built here (WORKSPACE_PATH_PROTECTED). The PowerShell script parser and read-only PlanOnly flow passed; GUI before/after measurements have **not** been performed. Do not claim acceleration or merge based solely on static/unit tests.
+
+A separate three-second sample found 20 older alera.exe CLI/Runtime Host sidecar processes consuming approximately 767 MB combined working set and 2.1% of one CPU core, not 20 GUI instances. Keep them running until ownership is established, and record them as background-load context during later trials.
+
 ## Status
 
 GPUI full binary regression tests: **84/84 PASS** after the final
