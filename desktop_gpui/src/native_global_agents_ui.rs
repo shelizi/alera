@@ -573,6 +573,7 @@ impl Workbench {
         self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
         let ticket = self.global_agent_history_request;
         let original_generation = self.workspace_generation;
+        let navigation_epoch = self.agent_navigation.epoch();
         self.global_agent_history_status =
             "Rechecking the original Host account and Tab before navigation…".into();
         cx.notify();
@@ -594,6 +595,13 @@ impl Workbench {
                     return;
                 }
                 view.global_agent_history_busy = false;
+                if view.agent_navigation.epoch() != navigation_epoch {
+                    view.global_agent_history_status =
+                        "Another Tab or Workspace was selected during Host recheck; click Open again"
+                            .into();
+                    cx.notify();
+                    return;
+                }
                 let verified = response
                     .as_ref()
                     .map_err(|_| "Host unavailable")
@@ -637,27 +645,23 @@ impl Workbench {
                     return;
                 };
 
-                if view.agent_navigation_pending.is_some() {
-                    view.global_agent_history_status =
-                        "Another Agent navigation is pending; try again".into();
-                    cx.notify();
-                    return;
-                }
-                // Reuse the draft-safe Host session and pane navigation path.
-                // GPUI render owns Window, so schedule a verified navigation
-                // instead of manipulating a Window from a background task.
-                view.agent_navigation_pending = Some(AgentNavigationTarget {
-                    session_id: live.handle,
-                    workspace_id: expected_workspace,
-                    tab_id: expected_tab,
-                    agent_type: live_provider,
-                });
-                view.agent_navigation_retries = 0;
-                // Navigation waits for a post-click Host inventory refresh.
+                // Reuse the draft-safe Host session/pane navigation path.
+                // The next render owns Window; the queue epoch protects an
+                // explicit newer Tab or Workspace selection while it defers.
+                view.agent_navigation.begin(
+                    AgentNavigationTarget {
+                        session_id: live.handle,
+                        workspace_id: expected_workspace,
+                        tab_id: expected_tab,
+                        agent_type: live_provider,
+                    },
+                    AgentNavigationSource::History,
+                );
+                // An authenticated refresh rechecks the Host before focus.
+                // Keep the search visible until focus really succeeds.
                 view.refresh_terminals(cx);
-                view.global_agent_history_open = false;
                 view.global_agent_history_status =
-                    "Navigating to the exact verified running Agent Tab".into();
+                    "Navigating to exact verified Tab; history stays open if focus fails".into();
                 cx.notify();
             })
             .ok();
@@ -2039,7 +2043,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         .cursor_pointer()
                         .text_xs()
                         .child("Open original Agent tab")
-                        .on_click(cx.listener(move |view, _, window, cx| {
+                        .on_click(cx.listener(move |view, _, _, cx| {
                             // Read fresh Host state again; never navigate from a stale
                             // copied row or a recycled handle.
                             if view.terminals.session_list_is_stale() {
@@ -2056,16 +2060,16 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                     && candidate.agent_type.as_deref() == Some(agent_type.as_str())
                             });
                             if current.is_some() {
-                                view.activate_agent_target(
+                                view.agent_navigation.begin(
                                     AgentNavigationTarget {
                                         session_id: session_id.clone(),
                                         workspace_id: workspace_id.clone(),
                                         tab_id: tab_id.clone(),
                                         agent_type: agent_type.clone(),
                                     },
-                                    window,
-                                    cx,
+                                    AgentNavigationSource::Dashboard,
                                 );
+                                cx.notify();
                             } else {
                                 view.terminals.status =
                                     "Global Agent selection no longer matches the Host".into();

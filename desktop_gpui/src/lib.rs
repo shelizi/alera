@@ -2,6 +2,7 @@
 //! Tests can build this library without the heavyweight GPUI renderer.
 rust_i18n::i18n!("locales", fallback = "en");
 
+pub mod agent_navigation_queue;
 pub mod agent_profiles;
 pub mod agent_quota;
 mod agent_runtime_bridge;
