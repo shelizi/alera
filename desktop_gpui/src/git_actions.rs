@@ -982,6 +982,15 @@ impl GitActions {
         Ok("Applied latest stash; original stash retained until explicitly dropped".into())
     }
 
+    /// Classic Stash Pop consumes the latest stash only after a successful apply.
+    /// On refusal libgit2 leaves the stash entry available for recovery.
+    pub fn pop_latest_stash(&mut self) -> Result<String, String> {
+        self.require_clean_worktree()?;
+        self.repo.stash_pop(0, None)
+            .map_err(|error| format!("Stash Pop failed; check the retained stash: {error}"))?;
+        Ok("Restored and popped latest stash".into())
+    }
+
     /// Resolve only the current local branch's exact configured upstream.
     /// Arbitrary refspec, upstream-branch inference or force flags supplied
     /// through the UI are never accepted.
@@ -4056,6 +4065,25 @@ mod tests {
         assert!(actions.apply_latest_stash().is_err());
         assert_eq!(actions.repo.head().unwrap().target().unwrap(), before);
         assert!(actions.stash_tracked_changes().is_ok());
+    }
+
+    #[test]
+    fn classic_stash_pop_restores_changes_and_consumes_only_successful_stash() {
+        let (dir, mut actions) = repo_fixture();
+        fs::write(dir.path().join("a.txt"), "stash pop should restore this").unwrap();
+        actions.stash_tracked_changes().unwrap();
+        assert!(actions.pop_latest_stash().unwrap().contains("popped"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "stash pop should restore this",
+        );
+        let mut count = 0usize;
+        actions.repo.stash_foreach(|_, _, _| {
+            count += 1;
+            true
+        }).unwrap();
+        assert_eq!(count, 0, "Classic Stash Pop must consume the applied stash");
+        assert!(actions.pop_latest_stash().is_err());
     }
 
     #[test]

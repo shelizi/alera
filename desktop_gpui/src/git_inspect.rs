@@ -118,11 +118,11 @@ pub enum GitPrimaryAction {
     Fetch,
     Pull,
     Push,
-    ReviewDivergence,
+    Sync,
 }
 
 /// Classic precedence, using only the already captured local index/upstream snapshot.
-/// Never label diverged histories as safe to automatically sync.
+/// Match Classic's Sync label; the Git writer still refuses non-fast-forward divergence.
 pub fn classic_primary_action(
     snapshot: Option<&GitSnapshot>,
     message: &str,
@@ -141,7 +141,7 @@ pub fn classic_primary_action(
     }
     if let Some(upstream) = &snapshot.upstream {
         if upstream.ahead > 0 && upstream.behind > 0 {
-            return Some(GitPrimaryAction::ReviewDivergence);
+            return Some(GitPrimaryAction::Sync);
         }
         if upstream.behind > 0 {
             return Some(GitPrimaryAction::Pull);
@@ -175,6 +175,8 @@ pub struct GitSnapshot {
     pub upstream: Option<GitUpstreamState>,
     /// Includes stale/unfetched tracking config, so Publish never guesses.
     pub upstream_configured: bool,
+    pub has_stashes: bool,
+    pub has_head_commit: bool,
     pub changed_files: Vec<GitChange>,
     pub truncated: bool,
     pub repository_root: PathBuf,
@@ -182,11 +184,16 @@ pub struct GitSnapshot {
 
 impl GitSnapshot {
     pub fn load(workspace: &Path) -> Result<Self, String> {
-        let repo = git2::Repository::discover(workspace).map_err(|e| e.to_string())?;
+        let mut repo = git2::Repository::discover(workspace).map_err(|e| e.to_string())?;
         let workdir = repo
             .workdir()
             .ok_or("A bare repository has no editable working tree")?;
         let root = dunce::canonicalize(workdir).map_err(|e| e.to_string())?;
+        let mut has_stashes = false;
+        repo.stash_foreach(|_, _, _| {
+            has_stashes = true;
+            false
+        }).map_err(|e| e.to_string())?;
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(true)
@@ -244,6 +251,8 @@ impl GitSnapshot {
             branch,
             upstream,
             upstream_configured,
+            has_stashes,
+            has_head_commit: head.and_then(|head| head.target()).is_some(),
             changed_files,
             truncated,
             repository_root: root,
@@ -372,6 +381,8 @@ mod classic_source_control_parity_tests {
         GitSnapshot {
             branch: "main".into(),
             upstream_configured: tracking.is_some(),
+            has_stashes: false,
+            has_head_commit: true,
             upstream: tracking.map(|(ahead, behind)| GitUpstreamState {
                 name: "origin/main".into(),
                 ahead,
@@ -392,7 +403,7 @@ mod classic_source_control_parity_tests {
     }
 
     #[test]
-    fn adaptive_actions_follow_classic_with_safe_divergence_review() {
+    fn adaptive_actions_follow_classic_sync_label_and_safe_upstream_actions() {
         use GitPrimaryAction::*;
         assert_eq!(classic_primary_action(None, "message", false), None);
         let staged = snapshot(&[Status::INDEX_MODIFIED], None, false);
@@ -421,7 +432,7 @@ mod classic_source_control_parity_tests {
             (0, 0, Fetch),
             (0, 3, Pull),
             (2, 0, Push),
-            (2, 3, ReviewDivergence),
+            (2, 3, Sync),
         ] {
             let repo = snapshot(&[], Some((ahead, behind)), false);
             assert_eq!(classic_primary_action(Some(&repo), "", false), Some(expected));
