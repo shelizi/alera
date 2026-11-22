@@ -46,28 +46,32 @@ pub fn normalize_hook_event(
     let tool_name = tool_name(&event.payload);
     let state = dispatch::normalize_state(event, &event_name, tool_name.as_deref(), previous)?;
     let starts_turn = starts_new_turn(event, &event_name);
-    let prompt = (if matches!(event.agent_type.as_str(), "opencode" | "opencode2")
+    let user_message_part = matches!(event.agent_type.as_str(), "opencode" | "opencode2")
         && event_name == "MessagePart"
-        && event.payload["role"] == "user"
-    {
-        first_string(&event.payload, &["text"])
-    } else {
-        None
+        && event.payload["role"] == "user";
+    // `message` on Stop is often the *assistant* reply, never a new user
+    // objective. Lifecycle/tool hooks may still carry explicit prompt fields.
+    let prompt = first_string(
+        &event.payload,
+        &[
+            "prompt",
+            "user_prompt",
+            "userPrompt",
+            "initial_prompt",
+            "initialPrompt",
+            "user_message",
+            "userMessage",
+        ],
+    )
+    .or_else(|| {
+        user_message_part
+            .then(|| first_string(&event.payload, &["text"]))
+            .flatten()
     })
     .or_else(|| {
-        first_string(
-            &event.payload,
-            &[
-                "prompt",
-                "user_prompt",
-                "userPrompt",
-                "initial_prompt",
-                "initialPrompt",
-                "user_message",
-                "userMessage",
-                "message",
-            ],
-        )
+        starts_turn
+            .then(|| first_string(&event.payload, &["message"]))
+            .flatten()
     })
     .unwrap_or_else(|| {
         previous
@@ -230,6 +234,25 @@ fn assistant_message(event: &AgentHookEvent, name: &str) -> Option<String> {
     }
     if event.agent_type == "amp" && name == "agent.end" {
         return last_assistant_message(&event.payload);
+    }
+    if matches!(event.agent_type.as_str(), "claude" | "codex") {
+        // Native Stop fields differ between Claude Code and Codex versions.
+        // Never promote tool/result/notification payloads into an Agent
+        // report; only a completed model turn can update this field.
+        if !matches!(name, "Stop" | "StopFailure" | "SessionEnd") {
+            return None;
+        }
+        return first_string(
+            &event.payload,
+            &[
+                "last_assistant_message",
+                "lastAssistantMessage",
+                "last_agent_message",
+                "lastAgentMessage",
+                "assistant_message",
+                "assistantMessage",
+            ],
+        );
     }
     first_string(
         &event.payload,

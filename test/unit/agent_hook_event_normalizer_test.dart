@@ -98,6 +98,25 @@ void main() {
       );
     });
 
+    test('native Claude and Codex completed-turn final reply aliases', () {
+      for (final provider in <AgentType>[AgentType.claude, AgentType.codex]) {
+        for (final key in const <String>[
+          'last_assistant_message',
+          'last_agent_message',
+          'lastAgentMessage',
+        ]) {
+          final entry = normalizeAgentHookEvent(
+            _event(
+              agentType: provider,
+              hookEventName: 'Stop',
+              payload: <String, Object?>{key: '已完成回覆'},
+            ),
+          );
+          expect(entry?.lastAssistantMessage, '已完成回覆');
+        }
+      }
+    });
+
     test('reads assistant messages from Codex transcript formats', () {
       expect(
         _normalizeStopWithTranscript(<String>[

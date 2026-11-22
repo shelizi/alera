@@ -171,6 +171,42 @@ mod agent_context_overview_tests {
     }
 
     #[test]
+    fn host_context_delivers_evolving_goal_and_two_model_reports_to_right_sidebar() {
+        let at = "2026-11-22T08:00:00+00:00";
+        let newer = "2026-11-22T09:00:00+00:00";
+        let reply = serde_json::json!({
+            "items": [{
+                "handle":"active-agent","workspaceId":"project-worktree",
+                "tabId":"agent-tab","running":true,"agentType":"codex",
+                "agentState":"done",
+                "contextOverview":{
+                    "goal":"修正 Agent Context｜目前重點：顯示完成回覆與最新匯報",
+                    "progress":"已加入回覆摘要與時間線，測試通過",
+                    "initialGoal":"修正 Agent Context",
+                    "currentFocus":"顯示完成回覆與最新匯報",
+                    "timeline":[
+                        {"kind":"report","text":"已加入回覆摘要與時間線，測試通過","at":newer},
+                        {"kind":"instruction","text":"顯示完成回覆與最新匯報","at":newer},
+                        {"kind":"report","text":"第一輪已完成","at":at},
+                        {"kind":"toolInput","text":"PRIVATE TOOL OUTPUT","at":at}
+                    ]
+                }
+            }]
+        });
+        let sessions = parse_terminal_list(&reply).unwrap();
+        let context = sessions[0].agent_context.as_ref().unwrap();
+        assert!(context.goal.contains("目前重點"));
+        assert!(context.progress.contains("測試通過"));
+        assert_eq!(context.timeline.len(), 3);
+        assert_eq!(context.timeline[0].kind, "report");
+        assert_eq!(context.timeline[2].text, "第一輪已完成");
+        assert!(!context
+            .timeline
+            .iter()
+            .any(|event| event.text.contains("PRIVATE")));
+    }
+
+    #[test]
     fn malformed_context_is_treated_as_unavailable() {
         assert!(AgentContextOverview::parse(&serde_json::json!(null)).is_none());
         assert!(AgentContextOverview::parse(&serde_json::json!({"timeline":[]})).is_none());
@@ -190,6 +226,8 @@ pub struct AgentPresenceChange {
     pub state_started_at: String,
     pub updated_at: String,
     pub interrupted: bool,
+    /// Non-sensitive invalidation bit. Private Context text never crosses status stream.
+    pub context_changed: bool,
     pub removed: bool,
 }
 
@@ -4415,6 +4453,7 @@ mod tests {
             state_started_at: "2026-11-13T13:00:01Z".into(),
             updated_at: "2026-11-13T13:00:02Z".into(),
             interrupted: false,
+            context_changed: false,
             removed: false,
         };
         assert!(dock.apply_agent_presence_changes(&[change.clone()]));
@@ -4478,6 +4517,7 @@ mod tests {
             updated_at: newer.into(),
             state_started_at: start.into(),
             interrupted: false,
+            context_changed: false,
             removed: false,
         };
         assert!(dock.apply_agent_presence_changes(&[delta.clone()]));
@@ -4528,6 +4568,7 @@ mod tests {
                 state_started_at: time.into(),
                 updated_at: time.into(),
                 interrupted: false,
+                context_changed: false,
                 removed,
             };
         assert!(
@@ -4594,6 +4635,7 @@ mod tests {
             state_started_at: "2026-11-16T12:00:06Z".into(),
             updated_at: "2026-11-16T12:00:06Z".into(),
             interrupted: false,
+            context_changed: false,
             removed: true,
         };
         assert!(dock.apply_agent_presence_changes(&[removed]));
@@ -4676,6 +4718,7 @@ mod tests {
             state_started_at: "2026-11-16T12:00:04Z".into(),
             updated_at: "2026-11-16T12:00:04Z".into(),
             interrupted: false,
+            context_changed: false,
             removed: false,
         };
         assert!(dock.apply_agent_presence_changes(&[change]));

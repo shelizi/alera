@@ -156,12 +156,19 @@ fn sanitize_agent_presence_event(message: &Value) -> Option<Value> {
         let [Some(started_at), Some(updated_at)] = timestamps else {
             continue;
         };
-        allowed.push(json!({
+        let mut status = json!({
             "terminalSessionId": session_id, "workspaceId": workspace_id,
             "tabId": tab_id, "agentType": agent_type, "state": state,
             "stateStartedAt": started_at, "updatedAt": updated_at,
             "interrupted": change.get("interrupted").and_then(Value::as_bool),
-        }));
+        });
+        // One non-sensitive invalidation bit lets the GPUI desktop fetch a
+        // Host-authenticated context snapshot without exposing any task text
+        // (or flooding refreshes for every tool/status Hook event).
+        if change.get("contextChanged") == Some(&Value::Bool(true)) {
+            status["contextChanged"] = Value::Bool(true);
+        }
+        allowed.push(status);
     }
     Some(json!({"event": "agentPresenceChanged", "payload": {"changes": allowed}}))
 }
@@ -478,7 +485,8 @@ mod tests {
                     "updatedAt": "2026-11-11T07:00:01+00:00",
                     "interrupted": false, "prompt": "SECRET PROMPT",
                     "toolInput": "API_KEY=SECRET", "lastAssistantMessage": "PRIVATE",
-                    "contextOverview": {"goal":"PRIVATE TASK", "progress":"SECRET REPORT"}
+                    "contextOverview": {"goal":"PRIVATE TASK", "progress":"SECRET REPORT"},
+                    "contextChanged": true
                 },
                 {"terminalSessionId": "pty-2", "workspaceId": "ws-2",
                  "tabId": "tab-2", "removed": true}
@@ -491,7 +499,17 @@ mod tests {
         assert_eq!(changes[0]["workspaceId"], "ws-1");
         assert_eq!(changes[0]["tabId"], "tab-1");
         assert_eq!(changes[0]["updatedAt"], "2026-11-11T07:00:01+00:00");
-        for field in ["prompt", "toolName", "toolInput", "lastAssistantMessage", "contextOverview"] {
+        assert_eq!(
+            changes[0]["contextChanged"], true,
+            "only a non-sensitive Context invalidation bit may cross sidecar stdio"
+        );
+        for field in [
+            "prompt",
+            "toolName",
+            "toolInput",
+            "lastAssistantMessage",
+            "contextOverview",
+        ] {
             assert!(changes[0].get(field).is_none(), "sensitive {field} leaked");
         }
         assert_eq!(changes[1]["removed"], true);

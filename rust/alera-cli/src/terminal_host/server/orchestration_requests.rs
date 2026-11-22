@@ -196,9 +196,20 @@ impl ServerActor {
                 context_previous.map(|value| value.prompt.as_str()),
                 context_previous.and_then(|value| value.last_assistant_message.as_deref()),
                 &presence.prompt,
-                presence.last_assistant_message.as_deref(),
+                if state == AgentPresenceState::Done && presence.interrupted != Some(true) {
+                    presence.last_assistant_message.as_deref()
+                } else {
+                    // Running/waiting tool snapshots are not model-completed
+                    // work reports and must never appear in the timeline.
+                    None
+                },
                 updated_at,
             );
+            // The private context is never forwarded through the status-only
+            // sidecar. Emit only whether the user task/report/timeline changed
+            // so native GPUI can fetch an authenticated inventory on demand.
+            let context_changed =
+                context_previous.is_none_or(|old| old.context != presence.context);
             let presence_change = self.sessions.get(handle).map(|session| {
                 json!({
                     "terminalSessionId": handle,
@@ -213,6 +224,7 @@ impl ServerActor {
                     "toolInput": presence.tool_input.as_deref(),
                     "lastAssistantMessage": presence.last_assistant_message.as_deref(),
                     "contextOverview": &presence.context,
+                    "contextChanged": context_changed,
                     "interrupted": presence.interrupted,
                 })
             });

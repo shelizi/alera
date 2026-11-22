@@ -42,6 +42,7 @@ mod account_requests;
 mod account_requests_tests;
 #[cfg(test)]
 mod actor_test_harness;
+mod agent_context_transcript;
 mod agent_history_resume;
 mod agent_history_transcript;
 mod agent_hook_events;

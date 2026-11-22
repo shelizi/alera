@@ -330,6 +330,7 @@ fn parse_agent_presence_stream_event(value: &Value) -> Option<StreamEvent> {
                     | "stateStartedAt"
                     | "updatedAt"
                     | "interrupted"
+                    | "contextChanged"
                     | "removed"
             )
         }) {
@@ -373,6 +374,13 @@ fn parse_agent_presence_stream_event(value: &Value) -> Option<StreamEvent> {
             let updated = timestamp("updatedAt")?;
             (Some(agent_type), Some(state), started, updated)
         };
+        // Reject non-boolean invalidations, preventing arbitrary JSON in the
+        // status-only sidecar and keeping provider messages private.
+        let context_changed = match item.get("contextChanged") {
+            None | Some(Value::Bool(false)) => false,
+            Some(Value::Bool(true)) => !removed,
+            _ => return None,
+        };
         changes.push(AgentPresenceChange {
             session_id,
             workspace_id,
@@ -382,6 +390,7 @@ fn parse_agent_presence_stream_event(value: &Value) -> Option<StreamEvent> {
             state_started_at,
             updated_at,
             interrupted: item.get("interrupted").and_then(Value::as_bool) == Some(true),
+            context_changed,
             removed,
         });
     }
@@ -1115,7 +1124,8 @@ mod tests {
                 "tabId":"tab-1", "agentType":"codex", "state":"waiting",
                 "stateStartedAt":"2026-11-11T07:00:00+00:00",
                 "updatedAt":"2026-11-11T07:00:01+00:00",
-                "interrupted":false
+                "interrupted":false,
+                "contextChanged":true
             }]}
         });
         let StreamEvent::AgentPresenceChanged { changes } =
@@ -1129,6 +1139,10 @@ mod tests {
         assert_eq!(changes[0].workspace_id, "ws-1");
         assert_eq!(changes[0].tab_id, "tab-1");
         assert_eq!(changes[0].state, Some(AgentActivityState::Waiting));
+        assert!(
+            changes[0].context_changed,
+            "private report changes should request an authenticated Context snapshot"
+        );
         assert_eq!(changes[0].updated_at, "2026-11-11T07:00:01+00:00");
         assert!(
             matches!(
@@ -1140,6 +1154,23 @@ mod tests {
         assert!(
             parse_stream_event(&json!({"event":"mcpUiCommand", "payload":event["payload"]}))
                 .is_none()
+        );
+        let mut malformed = event.clone();
+        malformed["payload"]["changes"][0]["contextChanged"] = json!("SECRET");
+        assert!(
+            parse_stream_event(&malformed).is_none(),
+            "context invalidation must be boolean, never private message text"
+        );
+        malformed["payload"]["changes"][0]["contextChanged"] = json!(false);
+        let Some(StreamEvent::AgentPresenceChanged {
+            changes: Some(safe),
+        }) = parse_stream_event(&malformed)
+        else {
+            panic!("valid false invalidation");
+        };
+        assert!(
+            !safe[0].context_changed,
+            "unrelated tool/status events must not refresh private Context"
         );
         assert!(
             parse_stream_event(&json!({"event":"agentPresenceChanged", "payload":{

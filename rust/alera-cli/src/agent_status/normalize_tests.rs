@@ -14,6 +14,67 @@ fn event(agent_type: &str, event_name: &str, payload: Value) -> AgentHookEvent {
 }
 
 #[test]
+fn completed_claude_and_codex_hooks_capture_native_final_assistant_text() {
+    for (provider, key) in [
+        ("claude", "last_assistant_message"),
+        ("codex", "last_agent_message"),
+    ] {
+        let status = normalize_hook_event(
+            &event(provider, "Stop", json!({key:"測試完成，下一步驗收"})),
+            None,
+        )
+        .unwrap();
+        assert_eq!(status.state, AgentPresenceState::Done);
+        assert_eq!(
+            status.last_assistant_message.as_deref(),
+            Some("測試完成，下一步驗收")
+        );
+    }
+    let tool = normalize_hook_event(
+        &event(
+            "claude",
+            "PostToolUse",
+            json!({"tool_result":"SECRET TOOL OUTPUT"}),
+        ),
+        None,
+    )
+    .unwrap();
+    assert!(tool.last_assistant_message.is_none());
+}
+
+#[test]
+fn a_stop_message_is_not_mistaken_for_a_new_user_objective() {
+    let previous = AgentPresence {
+        agent_type: "claude".into(),
+        state: AgentPresenceState::Working,
+        state_started_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        prompt: "原始工作：修正 GPUI".into(),
+        tool_name: None,
+        tool_input: None,
+        last_assistant_message: None,
+        interrupted: None,
+        context: Default::default(),
+    };
+    let stop = normalize_hook_event(
+        &event(
+            "claude",
+            "Stop",
+            json!({
+                "message":"已經修正並驗證",
+                "last_assistant_message":"已經修正並驗證"
+            }),
+        ),
+        Some(&previous),
+    )
+    .unwrap();
+    assert_eq!(stop.prompt, "原始工作：修正 GPUI");
+    assert_eq!(
+        stop.last_assistant_message.as_deref(),
+        Some("已經修正並驗證")
+    );
+}
+#[test]
 fn every_supported_agent_reports_working() {
     for (agent_type, event_name) in [
         ("codex", "UserPromptSubmit"),

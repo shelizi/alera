@@ -22,7 +22,8 @@ void main() {
         assistant: '已加入表單狀態驗證，尚需實機檢查',
         at: now.add(const Duration(minutes: 7)),
       );
-      expect(updated.goal, first.goal);
+      expect(updated.goal, contains(first.goal));
+      expect(updated.goal, contains('先把儲存按鈕修好'));
       expect(updated.progress, '已加入表單狀態驗證，尚需實機檢查');
       expect(updated.timeline.map((e) => e.kind), <String>[
         'report',
@@ -38,7 +39,106 @@ void main() {
         at: now.add(const Duration(minutes: 8)),
       );
       expect(same.timeline.length, updated.timeline.length);
-      expect(same.goal, first.goal);
+      expect(same.goal, updated.goal);
+    },
+  );
+
+  test(
+    'multi-turn goal keeps the anchor, ignores continue, and honors changes',
+    () {
+      final at = DateTime.utc(2026, 11, 22, 8);
+      final first = AgentContextOverview.observe(
+        previous: const AgentContextOverview(),
+        previousPrompt: null,
+        previousAssistant: null,
+        prompt: '完成 GPUI 與 Classic 的設定對齊',
+        assistant: null,
+        at: at,
+      );
+      final second = AgentContextOverview.observe(
+        previous: first,
+        previousPrompt: first.initialGoal,
+        previousAssistant: null,
+        prompt: '修正字體選擇和 Terminal 配色',
+        assistant: '字體設定完成，Terminal 配色驗證中',
+        at: at.add(const Duration(minutes: 1)),
+      );
+      expect(second.goal, contains('完成 GPUI 與 Classic 的設定對齊'));
+      expect(second.goal, contains('修正字體選擇和 Terminal 配色'));
+      expect(second.progress, '字體設定完成，Terminal 配色驗證中');
+      expect(second.timeline.first.kind, 'report');
+      final continuation = AgentContextOverview.observe(
+        previous: second,
+        previousPrompt: second.currentFocus,
+        previousAssistant: second.progress,
+        prompt: '繼續',
+        assistant: null,
+        at: at.add(const Duration(minutes: 2)),
+      );
+      expect(continuation.goal, second.goal);
+      final changed = AgentContextOverview.observe(
+        previous: continuation,
+        previousPrompt: '繼續',
+        previousAssistant: second.progress,
+        prompt: '改成修正 Agent Dashboard 的歷史檢視',
+        assistant: null,
+        at: at.add(const Duration(minutes: 3)),
+      );
+      expect(changed.goal, contains('Agent Dashboard'));
+      expect(changed.goal, isNot(contains('Terminal 配色')));
+      expect(AgentContextOverview.fromRaw(changed.toJson()).goal, changed.goal);
+    },
+  );
+
+  test('late follow-up stays in timeline without overwriting newer goal', () {
+    final later = DateTime.utc(2026, 11, 22, 10);
+    final current = AgentContextOverview(
+      goal: '最初目標｜目前重點：新工作',
+      initialGoal: '最初目標',
+      currentFocus: '新工作',
+      focusUpdatedAt: later,
+    );
+    final result = AgentContextOverview.observe(
+      previous: current,
+      previousPrompt: '先前要求',
+      previousAssistant: null,
+      prompt: '延遲到達的舊要求',
+      assistant: null,
+      at: later.subtract(const Duration(minutes: 2)),
+    );
+    expect(result.goal, current.goal);
+    expect(result.timeline.last.text, contains('延遲到達'));
+  });
+
+  test(
+    'long Agent final replies retain their latest conclusion in reports',
+    () {
+      final start = DateTime.utc(2026, 11, 22);
+      final firstReply =
+          '工作匯報。${List<String>.filled(150, '檢查過程').join()}最後結論：測試成功';
+      final first = AgentContextOverview.observe(
+        previous: const AgentContextOverview(),
+        previousPrompt: null,
+        previousAssistant: null,
+        prompt: '修正狀態面板',
+        assistant: firstReply,
+        at: start,
+      );
+      expect(first.progress, contains('最後結論：測試成功'));
+      expect(first.timeline.first.text, contains('最後結論：測試成功'));
+      final newReply =
+          '工作匯報。${List<String>.filled(150, '檢查過程').join()}最後結論：修正完成';
+      final next = AgentContextOverview.observe(
+        previous: first,
+        previousPrompt: '修正狀態面板',
+        previousAssistant: firstReply,
+        prompt: '修正狀態面板',
+        assistant: newReply,
+        at: start.add(const Duration(seconds: 1)),
+      );
+      expect(next.progress, contains('最後結論：修正完成'));
+      expect(next.timeline.first.kind, 'report');
+      expect(next.timeline, hasLength(3));
     },
   );
 

@@ -111,9 +111,23 @@ impl ServerActor {
             return;
         }
         let previous = self.agent_presence.get(&event.terminal_session_id);
-        let Some(normalized) = normalize_hook_event(&event, previous) else {
+        let Some(mut normalized) = normalize_hook_event(&event, previous) else {
             return;
         };
+        // Native Claude/Codex Stop hooks can omit the final model message.
+        // Previous-turn text is a status fallback, not evidence of a new
+        // completed reply. Resolve only the exact registered provider source
+        // and native UUID; never trust a caller-supplied arbitrary path.
+        let fresh_report =
+            normalize_hook_event(&event, None).and_then(|value| value.last_assistant_message);
+        if fresh_report.is_none() {
+            if let Some(report) =
+                super::agent_context_transcript::completed_hook_report(&self.runtime_store, &event)
+                    .await
+            {
+                normalized.last_assistant_message = Some(report);
+            }
+        }
         let identity = resolve_agent_status_identity(
             previous,
             &event.agent_type,
@@ -174,6 +188,68 @@ mod tests {
                 "session_id": "disposable-native-claude",
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn real_host_hook_updates_goal_and_assistant_report_across_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([(
+                "recipient".into(),
+                Session::driver_test_stub("recipient", 80, 24),
+            )]),
+        )
+        .await;
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"claude":true}"#)
+            .await
+            .unwrap();
+
+        let mut first = native_hook("UserPromptSubmit");
+        first.payload["prompt"] = json!("完成 GPUI 設定頁與 Classic 對齊");
+        actor.handle_agent_hook_event(first).await;
+        let mut stop = native_hook("Stop");
+        stop.payload["last_assistant_message"] = json!("已完成設定搜尋，剩餘主題驗收");
+        actor.handle_agent_hook_event(stop).await;
+        let first = actor.agent_presence.get("recipient").unwrap();
+        assert_eq!(first.context.progress, "已完成設定搜尋，剩餘主題驗收");
+        assert_eq!(first.context.timeline.first().unwrap().kind, "report");
+
+        let mut followup = native_hook("UserPromptSubmit");
+        followup.payload["prompt"] = json!("新增跨分頁 Agent 狀態顯示");
+        actor.handle_agent_hook_event(followup).await;
+        let mut next = native_hook("Stop");
+        next.payload["last_assistant_message"] = json!("已補上多窗格即時狀態及測試");
+        actor.handle_agent_hook_event(next).await;
+        let current = actor.agent_presence.get("recipient").unwrap();
+        assert!(current
+            .context
+            .goal
+            .contains("完成 GPUI 設定頁與 Classic 對齊"));
+        assert!(current.context.goal.contains("新增跨分頁 Agent 狀態顯示"));
+        assert_eq!(current.context.progress, "已補上多窗格即時狀態及測試");
+        assert_eq!(current.context.timeline[0].kind, "report");
+        assert_eq!(current.context.timeline[1].kind, "instruction");
+        assert!(current
+            .context
+            .timeline
+            .iter()
+            .any(|event| event.kind == "report" && event.text == "已完成設定搜尋，剩餘主題驗收"));
+        assert!(!current
+            .context
+            .timeline
+            .iter()
+            .any(|event| event.text.contains("SECRET TOOL")));
+        let saved = current.context.clone();
+        actor.handle_agent_hook_event(native_hook("Stop")).await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().context,
+            saved,
+            "duplicate Stop with no reply must not invent another report"
+        );
     }
 
     #[tokio::test]

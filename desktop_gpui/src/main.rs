@@ -11603,11 +11603,30 @@ impl Workbench {
                     self.agent_presence_event_generation =
                         self.agent_presence_event_generation.wrapping_add(1);
                     if let Some(changes) = changes {
+                        // Agent Context strings are intentionally removed by
+                        // the status-only sidecar. On genuine content updates,
+                        // fetch fresh private text from the authenticated Host
+                        // without polling for every tool event.
+                        let needs_context_refresh = changes.iter().any(|change| {
+                            change.context_changed
+                                && self.terminals.sessions.iter().any(|session| {
+                                    session.running
+                                        && session.handle == change.session_id
+                                        && session.workspace_id == change.workspace_id
+                                        && session.tab_id == change.tab_id
+                                        && (session.agent_type.is_none()
+                                            || session.agent_type.as_deref()
+                                                == change.agent_type.as_deref())
+                                })
+                        });
                         if self.terminals.apply_agent_presence_changes(&changes) {
                             self.mixed_tabs
                                 .refresh_agent_statuses(&self.terminals.sessions);
                             self.observe_agent_notification_status();
                             repaint = true;
+                        }
+                        if needs_context_refresh {
+                            self.refresh_terminals(cx);
                         }
                         // Never auto-attach or create any Host session on
                         // account of an unrecognized/recycled event.

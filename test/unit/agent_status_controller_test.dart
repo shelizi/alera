@@ -1,5 +1,6 @@
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/domain/agent_context_overview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,6 +41,79 @@ void main() {
     _registerGrokAgentStatusControllerTests(() => container);
     _registerAgyAgentStatusControllerTests(() => container);
     _registerAgentStatusSnapshotTests(() => container);
+
+    test(
+      'Context timeline records only completed Codex replies, not tool output',
+      () {
+        final controller = container.read(
+          agentStatusControllerProvider.notifier,
+        );
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{'prompt': '改善 Agent Context'},
+          ),
+        );
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'PostToolUse',
+            payload: <String, Object?>{
+              'tool_name': 'Bash',
+              'tool_response': <String, Object?>{
+                'message': 'PRIVATE TOOL OUTPUT',
+              },
+            },
+          ),
+        );
+        var entry = container.read(agentStatusControllerProvider)['session-1']!;
+        var context = AgentContextOverview.fromRaw(entry.contextOverview);
+        expect(context.progress, isEmpty);
+        expect(context.timeline.where((e) => e.kind == 'report'), isEmpty);
+
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'Stop',
+            payload: <String, Object?>{'last_agent_message': '已完成摘要流程第一輪，測試通過'},
+          ),
+        );
+        entry = container.read(agentStatusControllerProvider)['session-1']!;
+        context = AgentContextOverview.fromRaw(entry.contextOverview);
+        expect(context.progress, '已完成摘要流程第一輪，測試通過');
+        expect(context.timeline.first.kind, 'report');
+        expect(context.timeline.first.text, contains('第一輪'));
+
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{'prompt': '補上跨分頁進度時間線'},
+          ),
+        );
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'Stop',
+            payload: <String, Object?>{'last_agent_message': '第二輪已補時間線與回覆'},
+          ),
+        );
+        context = AgentContextOverview.fromRaw(
+          container
+              .read(agentStatusControllerProvider)['session-1']!
+              .contextOverview,
+        );
+        expect(context.goal, contains('改善 Agent Context'));
+        expect(context.goal, contains('補上跨分頁進度時間線'));
+        expect(context.progress, '第二輪已補時間線與回覆');
+        expect(context.timeline.where((e) => e.kind == 'report'), hasLength(2));
+        expect(
+          context.timeline.any((e) => e.text.contains('PRIVATE TOOL OUTPUT')),
+          isFalse,
+        );
+      },
+    );
 
     test('normalizes Codex events and preserves state start time', () {
       final controller = container.read(agentStatusControllerProvider.notifier);

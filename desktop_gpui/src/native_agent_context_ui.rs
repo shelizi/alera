@@ -24,7 +24,7 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
                     .child("Agent Context"),
             )
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Hook activity overview. Reports are not independently verified completion.",
+                "Overall goal follows task changes. Agent replies are excerpts, not independently verified results.",
             ));
 
     let Some(context) = context else {
@@ -50,7 +50,7 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
     };
     let mut body = body
         .child(section("OVERALL OBJECTIVE", goal))
-        .child(section("LATEST PROGRESS", progress))
+        .child(section("LATEST AGENT REPORT", progress))
         .child(
             div()
                 .text_xs()

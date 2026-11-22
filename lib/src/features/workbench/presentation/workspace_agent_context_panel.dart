@@ -67,7 +67,7 @@ class const WorkspaceAgentContextPanel({
         ),
         const SizedBox(height: 8),
         Text(
-          '由 Hook 追蹤的工作紀錄；Agent 回報不等於完成驗證。',
+          '整體目標會隨任務重點更新；工作回報取自 Agent 回覆摘錄，不代表已完成驗證。',
           style: textStyle?.copyWith(color: AleraTokens.foregroundMuted),
         ),
         const SizedBox(height: 18),
@@ -77,7 +77,7 @@ class const WorkspaceAgentContextPanel({
         ),
         const SizedBox(height: 14),
         _ContextSection(
-          title: '最新工作回報',
+          title: '最新工作回報（Agent 回覆）',
           content: progress.isNotEmpty ? progress : '等待 Agent 提供工作進度。',
         ),
         const SizedBox(height: 18),

@@ -53,6 +53,8 @@ _ToolSnapshot _extractToolSnapshot(
       _readFirstString(payload, const <String>[
         'last_assistant_message',
         'lastAssistantMessage',
+        'last_agent_message',
+        'lastAgentMessage',
         'message',
       ]) ??
       (eventName == 'Notification'

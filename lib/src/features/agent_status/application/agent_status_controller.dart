@@ -158,7 +158,14 @@ class AgentStatusController extends _$AgentStatusController
           previousPrompt: previous?.prompt,
           previousAssistant: previous?.lastAssistantMessage,
           prompt: normalized.prompt,
-          assistant: normalized.lastAssistantMessage,
+          // A tool result or waiting-state message is not a completed
+          // model report. Keep the broader status field for legacy UIs, but
+          // only completed non-interrupted turns enter Agent Context.
+          assistant:
+              normalized.state == AgentStatusState.done &&
+                  normalized.interrupted != true
+              ? normalized.lastAssistantMessage
+              : null,
           at: receivedAt,
         ).toJson(),
       );
