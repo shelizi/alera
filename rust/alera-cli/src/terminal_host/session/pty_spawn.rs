@@ -45,7 +45,7 @@ pub(super) fn spawn_pty(
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|error| HostError::state(error.to_string()))?;
+        .map_err(|error| HostError::state(format!("PTY openpty failed: {error}")))?;
     #[cfg(windows)]
     let mut command = process_job.bootstrap_command(
         &launch.shell,
@@ -75,7 +75,7 @@ pub(super) fn spawn_pty(
     let child = pair
         .slave
         .spawn_command(command)
-        .map_err(|error| HostError::state(error.to_string()))?;
+        .map_err(|error| HostError::state(format!("PTY bootstrap spawn failed: {error}")))?;
     // The master must be the only remaining PTY endpoint owned by the host.
     drop(pair.slave);
     let killer = child.clone_killer();
