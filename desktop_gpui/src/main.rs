@@ -125,8 +125,8 @@ use alera_gpui_desktop::native_settings::{
 };
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
-    project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
-    ProjectTreeGroup,
+    project_title_matches_search, reconcile_sidebar_on_workspace_switch,
+    sidebar_workspaces_for_group, worktree_matches_search, ProjectTreeGroup,
 };
 use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
@@ -7063,10 +7063,16 @@ impl Workbench {
         self.host_pins_busy = false;
         self.host_pins_request = self.host_pins_request.wrapping_add(1);
         self.host_pins_error = None;
+        // Keep the global project tree visible during the asynchronous
+        // refresh instead of removing every Worktree row on each click.
+        // Repository-scoped Git rows only survive a same-repo switch.
+        reconcile_sidebar_on_workspace_switch(
+            &mut self.project_tree_groups,
+            &mut self.worktrees,
+            &canonical,
+        );
         self.project_tree_loading = false;
-        self.project_tree_groups.clear();
         self.project_tree_request = self.project_tree_request.wrapping_add(1);
-        self.worktrees.clear();
         self.worktree_error = None;
         self.worktree_loading = false;
         self.worktree_busy = false;

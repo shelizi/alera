@@ -104,6 +104,24 @@ pub fn sidebar_workspaces_for_group(
     }]
 }
 
+/// Retain the global project tree while the replacement snapshot loads.
+/// Selection follows the target immediately; the separate Git Worktrees list
+/// is only retained when the target is a known checkout of that repository.
+/// Call with canonical paths after a successful workspace switch.
+pub fn reconcile_sidebar_on_workspace_switch(
+    groups: &mut [ProjectTreeGroup],
+    worktrees: &mut Vec<WorktreeEntry>,
+    active: &Path,
+) {
+    for group in groups {
+        group.is_active =
+            group.root == active || group.worktrees.iter().any(|entry| entry.path == active);
+    }
+    if !worktrees.iter().any(|entry| entry.path == active) {
+        worktrees.clear();
+    }
+}
+
 #[derive(Default)]
 struct State {
     groups: Vec<ProjectTreeGroup>,
@@ -295,6 +313,102 @@ mod tests {
     use super::*;
     use git2::{Repository, Signature};
     use std::fs;
+
+    #[test]
+    fn switching_known_worktrees_keeps_both_sidebar_lists_and_updates_selection() {
+        let primary = PathBuf::from("C:/repo/primary");
+        let linked = PathBuf::from("C:/repo/.worktrees/feature");
+        let entries = vec![
+            WorktreeEntry {
+                path: primary.clone(),
+                branch: Some("main".into()),
+                detached: false,
+                locked: false,
+                prunable: false,
+                is_primary: true,
+            },
+            WorktreeEntry {
+                path: linked.clone(),
+                branch: Some("feature".into()),
+                detached: false,
+                locked: false,
+                prunable: false,
+                is_primary: false,
+            },
+        ];
+        let mut groups = vec![ProjectTreeGroup {
+            root: primary.clone(),
+            label: "repo".into(),
+            is_saved: true,
+            is_active: true,
+            worktrees: entries.clone(),
+            error: None,
+        }];
+        let mut visible_worktrees = entries.clone();
+
+        reconcile_sidebar_on_workspace_switch(&mut groups, &mut visible_worktrees, &linked);
+        assert_eq!(
+            groups.len(),
+            1,
+            "project tree must not disappear during refresh"
+        );
+        assert!(groups[0].is_saved);
+        assert!(groups[0].is_active);
+        assert_eq!(
+            visible_worktrees, entries,
+            "same-repo worktree rows stay visible"
+        );
+
+        reconcile_sidebar_on_workspace_switch(&mut groups, &mut visible_worktrees, &primary);
+        assert!(groups[0].is_active);
+        assert_eq!(visible_worktrees, entries);
+    }
+
+    #[test]
+    fn switching_projects_preserves_global_tree_but_clears_unrelated_git_rows() {
+        let first = PathBuf::from("C:/repo/first");
+        let second = PathBuf::from("C:/repo/second");
+        let entry = WorktreeEntry {
+            path: first.clone(),
+            branch: Some("main".into()),
+            detached: false,
+            locked: false,
+            prunable: false,
+            is_primary: true,
+        };
+        let mut groups = vec![
+            ProjectTreeGroup {
+                root: first.clone(),
+                label: "first".into(),
+                is_saved: true,
+                is_active: true,
+                worktrees: vec![entry.clone()],
+                error: None,
+            },
+            ProjectTreeGroup {
+                root: second.clone(),
+                label: "second".into(),
+                is_saved: true,
+                is_active: false,
+                worktrees: vec![],
+                error: None,
+            },
+        ];
+        let mut visible_worktrees = vec![entry];
+
+        reconcile_sidebar_on_workspace_switch(&mut groups, &mut visible_worktrees, &second);
+        assert_eq!(
+            groups.len(),
+            2,
+            "global project navigation must remain visible"
+        );
+        assert!(!groups[0].is_active);
+        assert!(groups[1].is_active);
+        assert!(
+            visible_worktrees.is_empty(),
+            "do not display a different repository's Git list"
+        );
+    }
 
     fn canonical(path: &Path) -> PathBuf {
         dunce::canonicalize(path).unwrap()
