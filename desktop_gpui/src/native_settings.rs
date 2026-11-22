@@ -899,9 +899,16 @@ mod tests {
             "agents.agentStatusNotificationsEnabled":true,
             "agents.agentStatusFinishedNotificationsEnabled":false,
             "agents.showTabTitlesInSidebar":true,
+            "agents.showTaskSummariesInSidebar":false,
             "editor.quickOpenExcludedDirectories":["node_modules","target","Generated"],
             "agents.quotaUnpinnedKeys":["claude:default","agy"]
         }});
+        for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
+            assert!(
+                snapshot["values"].get(path).is_some(),
+                "Native Settings test fixture missing Host contract path: {path}"
+            );
+        }
         assert_eq!(
             state.apply_shared_snapshot(&snapshot).unwrap(),
             "traditionalChinese"
