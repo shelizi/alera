@@ -53,6 +53,58 @@ fn history_resume_identity(hit: &GlobalHistoryPreview, profile: &str) -> String 
     .expect("history resume identity is a JSON string array")
 }
 
+/// Account aliases may include separators: identify the full native tuple
+/// without allowing adjacent fields to collide.
+fn history_source_identity(hit: &GlobalHistoryPreview) -> String {
+    serde_json::to_string(&[
+        hit.provider.as_str(),
+        hit.account.as_str(),
+        hit.project.as_str(),
+        hit.workspace.as_str(),
+        hit.native_id.as_str(),
+    ])
+    .expect("history source identity is a JSON array")
+}
+
+/// Parse only a Host-confirmed read-only lookup tied to the requested
+/// Worktree. This never authorizes a new PTY or chooses an unrelated Tab.
+#[derive(Debug, PartialEq, Eq)]
+enum LocatedHistoryTab {
+    Found { workspace: String, tab_id: String },
+    Missing,
+}
+
+fn parse_located_history_tab(
+    response: &serde_json::Value,
+    expected_workspace: &str,
+) -> Result<LocatedHistoryTab, &'static str> {
+    if response
+        .get("noAgentStarted")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("History lookup did not prove that no Agent was started");
+    }
+    match (
+        response.get("found").and_then(serde_json::Value::as_bool),
+        response.get("tabId").and_then(serde_json::Value::as_str),
+        response
+            .get("workspaceId")
+            .and_then(serde_json::Value::as_str),
+    ) {
+        (Some(true), Some(tab_id), Some(workspace))
+            if !tab_id.is_empty() && tab_id.len() <= 256 && workspace == expected_workspace =>
+        {
+            Ok(LocatedHistoryTab::Found {
+                workspace: workspace.to_owned(),
+                tab_id: tab_id.to_owned(),
+            })
+        }
+        (Some(false), None, None) => Ok(LocatedHistoryTab::Missing),
+        _ => Err("Host history lookup returned an inconsistent Tab identity"),
+    }
+}
+
 #[cfg(test)]
 mod exact_history_resume_retry_tests {
     use super::*;
@@ -67,6 +119,57 @@ mod exact_history_resume_retry_tests {
             workspace: "workspace".into(),
             native_id: "550e8400-e29b-41d4-a716-446655440001".into(),
         }
+    }
+
+    #[test]
+    fn located_tab_identity_is_exact_and_profile_independent() {
+        let mut first = sample();
+        first.account = "one|two".into();
+        first.project = "three".into();
+        let mut second = sample();
+        second.account = "one".into();
+        second.project = "two|three".into();
+        assert_ne!(
+            history_source_identity(&first),
+            history_source_identity(&second)
+        );
+        assert_eq!(
+            history_source_identity(&first),
+            history_source_identity(&first.clone())
+        );
+    }
+
+    #[test]
+    fn located_tab_requires_exact_no_start_host_identity() {
+        let good = serde_json::json!({
+            "found": true,
+            "tabId": "saved-tab",
+            "workspaceId": "workspace",
+            "noAgentStarted": true,
+        });
+        assert_eq!(
+            parse_located_history_tab(&good, "workspace"),
+            Ok(LocatedHistoryTab::Found {
+                workspace: "workspace".into(),
+                tab_id: "saved-tab".into(),
+            })
+        );
+        assert!(parse_located_history_tab(&good, "other-worktree").is_err());
+        for bad in [
+            serde_json::json!({"found":true,"tabId":"saved-tab","workspaceId":"workspace"}),
+            serde_json::json!({"found":true,"tabId":"saved-tab","workspaceId":"workspace","noAgentStarted":false}),
+            serde_json::json!({"found":true,"tabId":"","workspaceId":"workspace","noAgentStarted":true}),
+            serde_json::json!({"found":false,"tabId":"forged-tab","noAgentStarted":true}),
+        ] {
+            assert!(parse_located_history_tab(&bad, "workspace").is_err());
+        }
+        assert_eq!(
+            parse_located_history_tab(
+                &serde_json::json!({"found": false, "noAgentStarted": true}),
+                "workspace",
+            ),
+            Ok(LocatedHistoryTab::Missing)
+        );
     }
 
     #[test]
@@ -208,6 +311,7 @@ impl Workbench {
         self.global_agent_history_request = self.global_agent_history_request.wrapping_add(1);
         let ticket = self.global_agent_history_request;
         self.global_agent_history_results.clear();
+        self.global_agent_history_located.clear();
         self.global_agent_history_status = "Scanning registered Worktrees; preview only…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -281,6 +385,7 @@ impl Workbench {
                 view.global_agent_history_busy = false;
                 if result.is_ok() {
                     view.global_agent_history_results.clear();
+                    view.global_agent_history_located.clear();
                     view.global_agent_history_consent = false;
                     view.global_agent_history_resume_armed = None;
                     view.global_agent_history_status =
@@ -329,6 +434,7 @@ impl Workbench {
             "Locating an existing verified Tab; no Agent will start…".into();
         cx.notify();
         let expected_workspace = hit.workspace.clone();
+        let source_key = history_source_identity(&hit);
         cx.spawn(async move |view, cx| {
             let reply = cx
                 .background_spawn(async move {
@@ -346,31 +452,90 @@ impl Workbench {
                     return;
                 }
                 view.global_agent_history_busy = false;
-                view.global_agent_history_status = match reply {
-                    Ok(result) if result.get("noAgentStarted").and_then(serde_json::Value::as_bool) == Some(true) =>
-                    {
-                        match (
-                            result.get("found").and_then(serde_json::Value::as_bool),
-                            result.get("tabId").and_then(serde_json::Value::as_str),
-                            result.get("workspaceId").and_then(serde_json::Value::as_str),
-                        ) {
-                            (Some(true), Some(tab_id), Some(workspace))
-                                if !tab_id.is_empty() && workspace == expected_workspace =>
-                            {
-                                format!("Existing Tab {tab_id} found in Worktree {workspace}; open it from its saved Tabs. No new Agent started")
-                            }
-                            (Some(false), None, None) =>
-                                "No verified existing Tab. Use confirmed Resume only if you intend to create one".into(),
-                            _ => "Host lookup identity inconsistent; no action taken".into(),
-                        }
+                view.global_agent_history_located.remove(&source_key);
+                view.global_agent_history_status = match reply
+                    .as_ref()
+                    .map_err(|_| "Host unavailable")
+                    .and_then(|value| parse_located_history_tab(value, &expected_workspace))
+                {
+                    Ok(LocatedHistoryTab::Found { workspace, tab_id }) => {
+                        view.global_agent_history_located
+                            .insert(source_key, (workspace, tab_id.clone()));
+                        format!("Existing Tab {tab_id} verified. Choose Open verified running Tab to navigate; no Agent started")
                     }
-                    _ => "Existing Tab lookup unavailable or source changed; no Agent started".into(),
+                    Ok(LocatedHistoryTab::Missing) =>
+                        "No verified existing Tab. Use confirmed Resume only if you intend to create one".into(),
+                    Err(_) => "Existing Tab lookup unavailable or source changed; no Agent started".into(),
                 };
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// A separate user click may focus only a fresh, already-running Host
+    /// session with the same verified workspace/Tab/provider identities.
+    /// A persisted but stopped Tab never triggers an implicit Agent launch.
+    fn open_located_global_agent_history(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.global_agent_history_busy || !self.global_agent_history_consent {
+            return;
+        }
+        let Some(hit) = self.global_agent_history_results.get(index).cloned() else {
+            return;
+        };
+        let key = history_source_identity(&hit);
+        let Some((workspace, tab_id)) = self.global_agent_history_located.get(&key).cloned() else {
+            return;
+        };
+        if self.terminals.session_list_is_stale() {
+            self.global_agent_history_status =
+                "Host inventory is stale; refresh Live Agents before opening".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        }
+        let session = self
+            .terminals
+            .sessions
+            .iter()
+            .find(|session| {
+                session.running
+                    && session.workspace_id == workspace
+                    && session.tab_id == tab_id
+                    && session.agent_type.as_deref() == Some(hit.provider.as_str())
+            })
+            .cloned();
+        let Some(session) = session else {
+            self.global_agent_history_status =
+                "Verified saved Tab is not running. Open it from its original Worktree to resume; Find never starts a PTY".into();
+            cx.notify();
+            return;
+        };
+        let Some(state) = session.agent_state else {
+            self.global_agent_history_status =
+                "Verified Tab is running but Agent state is not confirmed. Refresh Host inventory"
+                    .into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        };
+        self.activate_agent_notice(
+            AgentNotice {
+                session_id: session.handle,
+                workspace_id: workspace,
+                tab_id,
+                agent_type: hit.provider.clone(),
+                state,
+            },
+            window,
+            cx,
+        );
     }
 
     fn resume_global_agent_history(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1079,6 +1244,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                     view.global_agent_history_consent = !view.global_agent_history_consent;
                     if !view.global_agent_history_consent {
                         view.global_agent_history_results.clear();
+                        view.global_agent_history_located.clear();
                         view.global_agent_history_resume_armed = None;
                     }
                     cx.notify();
@@ -1166,6 +1332,22 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         view.locate_global_agent_history(index, cx);
                     })),
             );
+            if view
+                .global_agent_history_located
+                .contains_key(&history_source_identity(hit))
+            {
+                card = card.child(
+                    div()
+                        .id(("global-history-open-verified", index))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
+                        .child("Open verified running Tab")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.open_located_global_agent_history(index, window, cx);
+                        })),
+                );
+            }
             let identity = history_resume_identity(hit, &profile);
             let armed =
                 view.global_agent_history_resume_armed.as_deref() == Some(identity.as_str());

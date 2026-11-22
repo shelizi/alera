@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/application/global_agent_history_retry.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +31,9 @@ class _GlobalAgentHistoryPanelState
   String? _provider;
   String? _armedResumeKey;
   final _resumeMutations = ExactHistoryResumeRetryTracker();
+
+  /// Only verified Host-backed Tab identities can be offered for navigation.
+  final Map<String, ({String workspaceId, String tabId})> _locatedTabs = {};
   String _feedback =
       'Search is off until you explicitly enable local indexing.';
   List<Map<String, Object?>> _hits = const [];
@@ -47,6 +51,21 @@ class _GlobalAgentHistoryPanelState
   String? _optional(TextEditingController controller) {
     final value = controller.text.trim();
     return value.isEmpty ? null : value;
+  }
+
+  String _sourceKey(Map<String, Object?> hit) {
+    final source = hit['session'];
+    if (source is! Map) return '';
+    return jsonEncode([
+      for (final field in [
+        'provider',
+        'providerAccountId',
+        'projectId',
+        'workspaceId',
+        'providerSessionId',
+      ])
+        source[field]?.toString() ?? '',
+    ]);
   }
 
   Future<void> _searchHistory() async {
@@ -67,6 +86,7 @@ class _GlobalAgentHistoryPanelState
     setState(() {
       _busy = true;
       _armedResumeKey = null;
+      _locatedTabs.clear();
       _feedback = 'Searching verified workspaces; no Agent will be started…';
     });
     try {
@@ -126,6 +146,7 @@ class _GlobalAgentHistoryPanelState
         _hits = const [];
         _consented = false;
         _armedResumeKey = null;
+        _locatedTabs.clear();
         _feedback = 'Local search index cleared. Native Claude/Codex files were not changed.';
       });
     } catch (_) {
@@ -151,6 +172,7 @@ class _GlobalAgentHistoryPanelState
     final project = field('projectId');
     final workspace = field('workspaceId');
     final nativeId = field('providerSessionId');
+    final sourceKey = _sourceKey(hit);
     final host = ref.read(terminalHostClientProvider);
     if (host is! TerminalHostAgentHistoryClient ||
         account.isEmpty ||
@@ -181,13 +203,20 @@ class _GlobalAgentHistoryPanelState
       final tabId = reply['tabId']?.toString();
       final matchedWorkspace = reply['workspaceId']?.toString();
       setState(() {
-        _feedback =
+        final found =
             reply['found'] == true &&
-                tabId != null &&
-                tabId.isNotEmpty &&
-                matchedWorkspace == workspace
+            tabId != null &&
+            tabId.isNotEmpty &&
+            tabId.length <= 256 &&
+            matchedWorkspace == workspace;
+        if (found) {
+          _locatedTabs[sourceKey] = (workspaceId: workspace, tabId: tabId);
+        } else {
+          _locatedTabs.remove(sourceKey);
+        }
+        _feedback = found
             ? 'Existing Tab $tabId found in Worktree $workspace. '
-                  'Open it from your Workspace Tabs; no new Agent was started.'
+                  'Select Open verified Tab to navigate; no Agent was started.'
             : reply['found'] == false
             ? 'No verified existing Tab found. You can explicitly Resume '
                   'after confirming the source account.'
@@ -198,6 +227,68 @@ class _GlobalAgentHistoryPanelState
       setState(
         () => _feedback = 'Cannot confirm an existing Tab on this Host. No Agent was started.',
       );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Navigation is a separate, explicit action from read-only Find.
+  /// Recheck the Host tuple to prevent a stale search result selecting
+  /// a different saved Tab after the account or Worktree changes.
+  Future<void> _openLocatedExisting(Map<String, Object?> hit) async {
+    if (_busy || !_consented) return;
+    final source = hit['session'];
+    if (source is! Map) return;
+    final key = _sourceKey(hit);
+    final located = _locatedTabs[key];
+    final host = ref.read(terminalHostClientProvider);
+    if (located == null || host is! TerminalHostAgentHistoryClient) return;
+    String field(String name) => source[name]?.toString() ?? '';
+    setState(() {
+      _busy = true;
+      _feedback = 'Rechecking the saved Tab before navigation…';
+    });
+    try {
+      final reply = await (host as TerminalHostAgentHistoryClient)
+          .locateExactAgentHistory(
+            provider: field('provider'),
+            accountId: field('providerAccountId'),
+            projectId: field('projectId'),
+            workspaceId: field('workspaceId'),
+            providerSessionId: field('providerSessionId'),
+          );
+      if (reply['noAgentStarted'] != true ||
+          reply['found'] != true ||
+          reply['tabId'] != located.tabId ||
+          reply['workspaceId'] != located.workspaceId) {
+        throw const FormatException('Saved Tab identity changed');
+      }
+      if (!mounted) return;
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .openPersistedWorkspaceTab(
+            workspaceId: located.workspaceId,
+            tabId: located.tabId,
+          );
+      if (!mounted) return;
+      final state = ref.read(workbenchControllerProvider);
+      if (state.activeWorkspaceId != located.workspaceId ||
+          state.activeWorkspaceTab?.id != located.tabId) {
+        throw StateError('Saved Tab could not be selected');
+      }
+      setState(() {
+        _feedback =
+            'Opened verified Tab in the original Worktree. '
+            'No duplicate Agent Tab was created.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _locatedTabs.remove(key);
+        _feedback =
+            'Saved Tab changed or could not be opened. '
+            'Find it again; no duplicate Resume was attempted.';
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -397,6 +488,7 @@ class _GlobalAgentHistoryPanelState
                   if (!_consented) {
                     _hits = const [];
                     _armedResumeKey = null;
+                    _locatedTabs.clear();
                   }
                 }),
           title: const Text(
@@ -509,6 +601,14 @@ class _GlobalAgentHistoryPanelState
                                     ),
                                     label: const Text('Find existing Tab'),
                                   ),
+                                  if (_locatedTabs.containsKey(_sourceKey(hit)))
+                                    TextButton.icon(
+                                      onPressed: _busy || !_consented
+                                          ? null
+                                          : () => _openLocatedExisting(hit),
+                                      icon: const Icon(Icons.open_in_new),
+                                      label: const Text('Open verified Tab'),
+                                    ),
                                   TextButton.icon(
                                     onPressed: _busy || !_consented
                                         ? null
