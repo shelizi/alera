@@ -98,6 +98,7 @@ pub async fn run(
         | TerminalAction::HistorySearch(_)
         | TerminalAction::HistoryResume(_)
         | TerminalAction::HistoryLocate(_)
+        | TerminalAction::HistoryMessages(_)
         | TerminalAction::HistoryClear
         | TerminalAction::Attach(_)
         | TerminalAction::Workspaces

@@ -42,12 +42,13 @@ mod account_requests;
 mod account_requests_tests;
 #[cfg(test)]
 mod actor_test_harness;
+mod agent_history_resume;
+mod agent_history_transcript;
 mod agent_hook_events;
 mod agent_hook_settings;
 mod agent_profile_catalog_requests;
 mod agent_profile_launch_requests;
 mod agent_prompt_composition;
-mod agent_history_resume;
 mod agent_session_history_requests;
 #[cfg(test)]
 mod agent_settings_contract_tests;

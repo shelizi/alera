@@ -145,6 +145,17 @@ abstract interface class TerminalHostAgentHistoryClient {
   });
 }
 
+/// Optional local-only native history reader. Unlike PTY scrollback, these
+/// messages belong to a provider's original restored Session. Old Hosts and
+/// fake clients need not implement this capability.
+abstract interface class TerminalHostAgentHistoryMessagesClient {
+  Future<Map<String, Object?>> readRestoredAgentMessages({
+    required String workspaceId,
+    required String tabId,
+    int? before,
+  });
+}
+
 /// Narrow opt-in view identity port for production hosts. Legacy fake and
 /// older clients keep their original TerminalHostClient methods unchanged.
 abstract interface class TerminalHostViewLeaseClient {

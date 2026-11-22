@@ -176,6 +176,9 @@ pub enum TerminalAction {
     /// Read-only lookup of an already resumed native Session Tab; no PTY.
     #[command(name = "history-locate")]
     HistoryLocate(TerminalHistoryLocateArgs),
+    /// Local read-only paged user/assistant messages from a recovered native Tab.
+    #[command(name = "history-messages")]
+    HistoryMessages(TerminalHistoryMessagesArgs),
     /// Clear only the local Agent search cache, never native transcripts.
     #[command(name = "history-clear")]
     HistoryClear,
@@ -317,6 +320,22 @@ pub struct TerminalHistoryLocateArgs {
     pub workspace_id: String,
     #[arg(long = "session-id")]
     pub session_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalHistoryMessagesArgs {
+    /// Only a saved and Host-verified original resumed Agent Tab is accepted.
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "tab-id")]
+    pub tab_id: String,
+    #[arg(long = "before")]
+    pub before: Option<u64>,
+    #[arg(long = "max-messages", default_value_t = 30)]
+    pub max_messages: usize,
+    /// Explicit human action; no ambient or periodic private transcript reads.
+    #[arg(long = "confirm-read", default_value_t = false)]
+    pub confirm_read: bool,
 }
 
 #[derive(Debug, Args)]

@@ -135,6 +135,140 @@ class _GlobalAgentDashboardDialogState
     tabId: row.tab.id,
   );
 
+  ({String sessionId, String workspaceId, String tabId})? _historicalTarget;
+  final List<({String role, String text, String? timestamp})>
+  _historicalMessages = [];
+  int? _historicalBefore;
+  bool _historicalBusy = false;
+  String? _historicalStatus;
+  int _historicalRequest = 0;
+
+  void _closeHistoricalMessages() {
+    _historicalRequest++;
+    _historicalTarget = null;
+    _historicalMessages.clear();
+    _historicalBefore = null;
+    _historicalStatus = null;
+    _historicalBusy = false;
+  }
+
+  Future<void> _readHistoricalMessages(
+    GlobalAgentLiveRow row, {
+    bool older = false,
+  }) async {
+    final identity = _identity(row);
+    if (_historicalBusy) return;
+    if (!globalAgentTargetIsCurrent(
+      workbench: ref.read(workbenchControllerProvider),
+      statuses: ref.read(agentStatusControllerProvider),
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+    )) {
+      setState(
+        () => _sendFeedback =
+            'The original Agent identity changed. Refresh before reading.',
+      );
+      return;
+    }
+    final host = ref.read(terminalHostClientProvider);
+    if (host is! TerminalHostAgentHistoryMessagesClient) {
+      setState(
+        () => _sendFeedback =
+            'This Host version does not support restored conversations.',
+      );
+      return;
+    }
+    if (older && (_historicalTarget != identity || _historicalBefore == null)) {
+      return;
+    }
+    setState(() {
+      if (!older) {
+        _closeHistoricalMessages();
+        _historicalTarget = identity;
+      }
+      _historicalBusy = true;
+      _historicalStatus =
+          'Reading original native Session messages (read only)…';
+    });
+    final ticket = ++_historicalRequest;
+    try {
+      final reply = await (host as TerminalHostAgentHistoryMessagesClient)
+          .readRestoredAgentMessages(
+            workspaceId: identity.workspaceId,
+            tabId: identity.tabId,
+            before: older ? _historicalBefore : null,
+          );
+      if (!mounted ||
+          ticket != _historicalRequest ||
+          _historicalTarget != identity) {
+        return;
+      }
+      if (reply['readOnly'] != true || reply['source'] != 'nativeProvider') {
+        throw const FormatException('History reply failed source validation');
+      }
+      final raw = reply['messages'];
+      if (raw is! List || raw.length > 60) {
+        throw const FormatException('History reply too large');
+      }
+      final received = <({String role, String text, String? timestamp})>[];
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final role = item['role'];
+        final text = item['text'];
+        if (role is! String ||
+            !['user', 'assistant'].contains(role) ||
+            text is! String ||
+            text.runes.length > 8000) {
+          throw const FormatException('Invalid history message');
+        }
+        received.add((
+          role: role,
+          text: text,
+          timestamp: item['timestamp'] is String
+              ? (item['timestamp'] as String).substring(
+                  0,
+                  (item['timestamp'] as String).length > 64
+                      ? 64
+                      : (item['timestamp'] as String).length,
+                )
+              : null,
+        ));
+      }
+      final next = reply['nextBefore'];
+      final hasMore = reply['hasMore'] == true;
+      if (hasMore && (next is! int || next <= 0)) {
+        throw const FormatException('Invalid history cursor');
+      }
+      setState(() {
+        if (older) {
+          _historicalMessages.insertAll(0, received);
+          // Limit retained plaintext even when browsing very long Sessions.
+          if (_historicalMessages.length > 360) {
+            _historicalMessages.removeRange(360, _historicalMessages.length);
+          }
+        } else {
+          _historicalMessages
+            ..clear()
+            ..addAll(received);
+        }
+        _historicalBefore = hasMore ? next as int : null;
+        _historicalStatus = _historicalMessages.isEmpty
+            ? 'No native user/assistant messages found in this page.'
+            : 'Native conversation history · read-only (Terminal remains live)';
+      });
+    } catch (_) {
+      if (!mounted || ticket != _historicalRequest) return;
+      setState(
+        () => _historicalStatus = 'History unavailable: only exact resumed Claude/Codex Tabs with a verified original account can be read.',
+      );
+    } finally {
+      if (mounted && ticket == _historicalRequest) {
+        setState(() => _historicalBusy = false);
+      }
+    }
+  }
+
   void _toggleHidden(GlobalAgentLiveRow row) {
     final identity = _identity(row);
     setState(() {
@@ -144,6 +278,7 @@ class _GlobalAgentDashboardDialogState
         _target = null;
         _instruction.clear();
       }
+      if (_historicalTarget == identity) _closeHistoricalMessages();
       _armedControl = null;
     });
   }
@@ -381,6 +516,7 @@ class _GlobalAgentDashboardDialogState
                     TextButton.icon(
                       onPressed: () => setState(() {
                         _needsReviewOnly = !_needsReviewOnly;
+                        _closeHistoricalMessages();
                         _collapsedGroups.clear();
                         _target = null;
                         _armedControl = null;
@@ -467,6 +603,7 @@ class _GlobalAgentDashboardDialogState
                                   // invisible target or armed destructive action.
                                   _target = null;
                                   _instruction.clear();
+                                  _closeHistoricalMessages();
                                   _armedControl = null;
                                 }),
                                 child: Padding(
@@ -630,6 +767,22 @@ class _GlobalAgentDashboardDialogState
                                           icon: const Icon(Icons.edit_note),
                                           label: const Text('Steer'),
                                         ),
+                                        if (row.status.agentType.key ==
+                                                'claude' ||
+                                            row.status.agentType.key == 'codex')
+                                          TextButton.icon(
+                                            onPressed: _historicalBusy
+                                                ? null
+                                                : () => _readHistoricalMessages(
+                                                    row,
+                                                  ),
+                                            icon: const Icon(
+                                              Icons.menu_book_outlined,
+                                            ),
+                                            label: const Text(
+                                              'Original conversation',
+                                            ),
+                                          ),
                                         TextButton.icon(
                                           onPressed: () => _focus(row),
                                           icon: const Icon(Icons.open_in_new),
@@ -696,6 +849,91 @@ class _GlobalAgentDashboardDialogState
                                         ),
                                       ],
                                     ),
+                                    if (_historicalTarget == identity) ...[
+                                      const Divider(height: 16),
+                                      Row(
+                                        children: [
+                                          const Icon(Icons.history, size: 16),
+                                          const SizedBox(width: 8),
+                                          const Expanded(
+                                            child: Text(
+                                              'Original Claude/Codex conversation · read only',
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip:
+                                                'Close original conversation',
+                                            onPressed: () => setState(
+                                              _closeHistoricalMessages,
+                                            ),
+                                            icon: const Icon(
+                                              Icons.close,
+                                              size: 18,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      if (_historicalStatus != null)
+                                        Text(_historicalStatus!, style: muted),
+                                      if (_historicalBusy)
+                                        const LinearProgressIndicator(
+                                          minHeight: 2,
+                                        ),
+                                      if (_historicalMessages.isNotEmpty)
+                                        SizedBox(
+                                          height: 340,
+                                          child: ListView.builder(
+                                            itemCount:
+                                                _historicalMessages.length,
+                                            itemBuilder: (context, itemIndex) {
+                                              final message =
+                                                  _historicalMessages[itemIndex];
+                                              return Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 5,
+                                                    ),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      message.role == 'user'
+                                                          ? 'You'
+                                                          : 'Agent',
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .labelMedium,
+                                                    ),
+                                                    if (message.timestamp !=
+                                                        null)
+                                                      Text(
+                                                        message.timestamp!,
+                                                        style: muted,
+                                                      ),
+                                                    SelectableText(
+                                                      message.text,
+                                                    ),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      if (_historicalBefore != null)
+                                        TextButton.icon(
+                                          onPressed: _historicalBusy
+                                              ? null
+                                              : () => _readHistoricalMessages(
+                                                  row,
+                                                  older: true,
+                                                ),
+                                          icon: const Icon(Icons.expand_less),
+                                          label: const Text(
+                                            'Load older conversation messages',
+                                          ),
+                                        ),
+                                    ],
                                   ],
                                 ),
                               ),

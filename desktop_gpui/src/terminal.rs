@@ -490,6 +490,41 @@ impl RuntimeCliBridge {
         ])
     }
 
+    /// Explicitly fetch a Host-authenticated original resumed Session's
+    /// historical user/assistant messages. Never touch the live PTY buffer.
+    pub fn read_resumed_agent_messages(
+        &self,
+        workspace_id: &str,
+        tab_id: &str,
+        before: Option<u64>,
+    ) -> io::Result<Value> {
+        if [workspace_id, tab_id]
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+            || before == Some(0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid original resumed Tab identity/cursor",
+            ));
+        }
+        let mut args = vec![
+            OsString::from("history-messages"),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+            OsString::from("--tab-id"),
+            OsString::from(tab_id),
+            OsString::from("--max-messages"),
+            OsString::from("30"),
+            OsString::from("--confirm-read"),
+        ];
+        if let Some(cursor) = before {
+            args.push(OsString::from("--before"));
+            args.push(OsString::from(cursor.to_string()));
+        }
+        self.terminal_json(&args)
+    }
+
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
         let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)

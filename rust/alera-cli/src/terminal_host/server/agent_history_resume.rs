@@ -7,7 +7,7 @@ use alera_core::runtime::{RuntimeStore, WorkspaceStatus, WorkspaceTabRecord};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::terminal_startup_commands::provider_resume_id;
@@ -25,6 +25,8 @@ pub(super) struct VerifiedHistoryResume {
     pub account_id: String,
     pub native_id: String,
     pub codex_transcript_path: Option<String>,
+    /// Host-private canonical native file; never serialized to desktop clients.
+    pub source_file: PathBuf,
     /// Derived from a configured, canonical provider root; never caller input.
     pub config_directory: String,
 }
@@ -225,6 +227,7 @@ async fn verify_native_source(
         native_id: target.native_id.clone(),
         codex_transcript_path: (target.provider == "codex")
             .then(|| proof.canonical_file.to_string_lossy().into_owned()),
+        source_file: proof.canonical_file.clone(),
         config_directory,
     })
 }
@@ -392,6 +395,41 @@ pub(super) async fn ensure_history_session_unowned(
     Ok(())
 }
 
+/// A local desktop user must deliberately request the transcript of an
+/// existing resumed Host Tab. No file path, provider root or account is
+/// accepted from the caller.
+fn parse_messages_request(payload: &Value) -> HostResult<(String, String, Option<u64>, usize)> {
+    if payload.get("consentToReadMessages") != Some(&Value::Bool(true)) {
+        return Err(HostError::state(
+            "Open Historical Messages explicitly before reading",
+        ));
+    }
+    let workspace = bounded_identifier(payload, "workspaceId", 256)?;
+    let tab_id = bounded_identifier(payload, "tabId", 256)?;
+    let before = match payload.get("before") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(value)) => Some(
+            value
+                .as_u64()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HostError::format("Invalid history page cursor"))?,
+        ),
+        _ => return Err(HostError::format("Invalid history page cursor")),
+    };
+    let limit = match payload.get("maxMessages") {
+        None | Some(Value::Null) => 30,
+        Some(Value::Number(value)) => value
+            .as_u64()
+            .filter(|count| {
+                (1..=super::agent_history_transcript::MAX_MESSAGES as u64).contains(count)
+            })
+            .ok_or_else(|| HostError::format("History page size must be 1 to 60"))?
+            as usize,
+        _ => return Err(HostError::format("Invalid history page size")),
+    };
+    Ok((workspace, tab_id, before, limit))
+}
+
 impl ServerActor {
     /// Read-only recovery after a client restart or a lost Resume ACK. It
     /// never starts a PTY and never guesses an owner's account from its UUID.
@@ -424,6 +462,78 @@ impl ServerActor {
             }),
             None => json!({"found": false, "noAgentStarted": true}),
         })
+    }
+
+    /// Read only the conversational text of a Host-pinned, provider-native
+    /// resumed session. This does not attach, resize, start or write to a PTY.
+    /// The source proof is checked afresh on every explicitly requested page.
+    pub(super) async fn read_exact_agent_history_messages(
+        &mut self,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let (workspace_id, tab_id, before, limit) = parse_messages_request(payload)?;
+        let workspace = self
+            .runtime_store
+            .find_workspace(&workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .ok_or_else(|| HostError::state("Original historical Workspace no longer exists"))?;
+        if workspace.status != WorkspaceStatus::Active || workspace.project_id.is_empty() {
+            return Err(HostError::state(
+                "Original historical Workspace is not active",
+            ));
+        }
+        let tabs = self
+            .runtime_store
+            .list_workspace_tabs(&workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+        let tab = tabs
+            .iter()
+            .find(|tab| {
+                tab.id == tab_id
+                    && tab.workspace_id == workspace_id
+                    && tab.kind == "terminal"
+                    && tab.payload["automationOwned"] != true
+            })
+            .ok_or_else(|| HostError::state("Original resumed Agent Tab not found"))?;
+        let origin = tab.payload.get(RESUME_ORIGIN_KEY).ok_or_else(|| {
+            HostError::state("Only original resumed Agent Tabs have native history")
+        })?;
+        let provider = bounded_identifier(origin, "provider", 12)?;
+        let account = bounded_identifier(origin, "accountId", 256)?;
+        let (saved_provider, native_id) = provider_resume_id(tab).ok_or_else(|| {
+            HostError::state("Historical Tab has no provider-native Session UUID")
+        })?;
+        if provider != saved_provider || !matches!(provider.as_str(), "claude" | "codex") {
+            return Err(HostError::state(
+                "Historical Tab provider identity mismatch",
+            ));
+        }
+        let target = ExactResumeRequest {
+            provider: provider.clone(),
+            account,
+            project: workspace.project_id,
+            workspace: workspace_id,
+            profile: String::new(),
+            native_id: native_id.clone(),
+            client_mutation_id: String::new(),
+        };
+        let verified = verify_native_source(&self.runtime_store, &target).await?;
+        if !tab_is_verified_exact_history_owner(tab, &target, &verified) {
+            return Err(HostError::state(
+                "Historical Tab no longer matches its pinned account source",
+            ));
+        }
+        let path = verified.source_file;
+        let page = tokio::task::spawn_blocking(move || {
+            super::agent_history_transcript::read_page(&path, &provider, &native_id, before, limit)
+        })
+        .await
+        .map_err(|_| HostError::state("Historical transcript reader failed"))?
+        .map_err(|_| HostError::state("Historical transcript could not be read"))?;
+        serde_json::to_value(page)
+            .map_err(|_| HostError::state("Historical transcript response could not be encoded"))
     }
 
     pub(super) async fn resume_exact_agent_history(
@@ -470,6 +580,42 @@ mod tests {
             "confirmResume":true,
             "confirmProviderAccount":true,
         })
+    }
+
+    #[test]
+    fn history_message_pages_require_explicit_consent_and_original_tab() {
+        let base = json!({"workspaceId":"worktree","tabId":"original"});
+        assert!(parse_messages_request(&base).is_err());
+        let mut authorized = base;
+        authorized["consentToReadMessages"] = json!(true);
+        assert_eq!(
+            parse_messages_request(&authorized).unwrap(),
+            ("worktree".into(), "original".into(), None, 30)
+        );
+        authorized["maxMessages"] = json!(60);
+        authorized["before"] = json!(1000);
+        assert_eq!(parse_messages_request(&authorized).unwrap().2, Some(1000));
+        for invalid in [json!(0), json!(-1), json!("3"), json!(true)] {
+            authorized["before"] = invalid;
+            assert!(parse_messages_request(&authorized).is_err());
+        }
+        authorized["before"] = Value::Null;
+        authorized["maxMessages"] = json!(61);
+        assert!(parse_messages_request(&authorized).is_err());
+        authorized["maxMessages"] = json!(30);
+        authorized["tabId"] = json!("../other-provider");
+        // Path-like IDs have no special meaning, but can never become file paths:
+        // the Host resolves only a registered Tab ID and its pinned source.
+        let (workspace, tab, _, _) = parse_messages_request(&authorized).unwrap();
+        assert_eq!(workspace, "worktree");
+        assert_eq!(tab, "../other-provider");
+        let policy =
+            super::super::request_route_policy::request_route_policy("agentHistory.messages");
+        assert!(!policy.mobile_allowed);
+        assert_eq!(
+            policy.runtime_mutation,
+            super::super::request_route_policy::RuntimeMutationPolicy::Available
+        );
     }
 
     #[test]
@@ -752,6 +898,7 @@ mod tests {
             account_id: request.account.clone(),
             native_id: native.into(),
             codex_transcript_path: None,
+            source_file: PathBuf::from("fixture-only"),
             config_directory: "C:/account-home".into(),
         };
         let matching = source_directory_fingerprint(&verified.config_directory);
@@ -842,6 +989,7 @@ mod tests {
             account_id: target.account.clone(),
             native_id: target.native_id.clone(),
             codex_transcript_path: None,
+            source_file: PathBuf::from("fixture-only"),
             config_directory: "C:/same-source".into(),
         };
         let now = chrono::Utc::now();

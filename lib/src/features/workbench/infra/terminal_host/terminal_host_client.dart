@@ -63,6 +63,7 @@ final class SocketTerminalHostClient._(
         TerminalHostVerifiedAgentInputClient,
         TerminalHostVerifiedAgentLifecycleClient,
         TerminalHostAgentHistoryClient,
+        TerminalHostAgentHistoryMessagesClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -371,6 +372,39 @@ final class SocketTerminalHostClient._(
       timeout: const Duration(seconds: 45),
     );
     return asTerminalHostMap(response, 'existing historical Agent Tab lookup');
+  }
+
+  @override
+  Future<Map<String, Object?>> readRestoredAgentMessages({
+    required String workspaceId,
+    required String tabId,
+    int? before,
+  }) async {
+    if ([workspaceId, tabId].any(
+          (id) => id.isEmpty || id.length > 256 || id.runes.any((v) => v < 32),
+        ) ||
+        (before != null && before <= 0)) {
+      throw ArgumentError(
+        'History messages require the original Workspace/Tab.',
+      );
+    }
+    // Never start an old Host or replay text as a new Agent prompt.
+    // The user clicks the read-only History button; the Host proves the
+    // original native account/UUID/worktree again before returning a page.
+    final connection = await _connectRuntime(launchIfMissing: false);
+    final response = await _requestOnConnection(
+      connection,
+      'agentHistory.messages',
+      <String, Object?>{
+        'workspaceId': workspaceId,
+        'tabId': tabId,
+        if (before != null) 'before': before,
+        'maxMessages': 30,
+        'consentToReadMessages': true,
+      },
+      timeout: const Duration(seconds: 45),
+    );
+    return asTerminalHostMap(response, 'original resumed Agent messages');
   }
 
   @override

@@ -767,6 +767,94 @@ impl Workbench {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct OriginalConversationMessage {
+    role: String,
+    text: String,
+    timestamp: Option<String>,
+}
+
+fn parse_original_conversation_page(
+    reply: &serde_json::Value,
+    previous_before: Option<u64>,
+) -> Result<(Vec<OriginalConversationMessage>, Option<u64>), &'static str> {
+    if reply.get("source").and_then(serde_json::Value::as_str) != Some("nativeProvider")
+        || reply.get("readOnly").and_then(serde_json::Value::as_bool) != Some(true)
+    {
+        return Err("Historical transcript is not a read-only native source");
+    }
+    let rows = reply
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("Missing native conversation messages")?;
+    if rows.len() > 60 {
+        return Err("Too many native conversation messages");
+    }
+    let mut messages = Vec::with_capacity(rows.len());
+    for item in rows {
+        let role = item
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .filter(|role| matches!(*role, "user" | "assistant"))
+            .ok_or("Invalid historical message role")?;
+        let text = item
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| text.chars().count() <= 8000)
+            .ok_or("Invalid historical message content")?;
+        let timestamp = item
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .filter(|timestamp| timestamp.len() <= 64)
+            .map(str::to_owned);
+        messages.push(OriginalConversationMessage {
+            role: role.to_owned(),
+            text: text.to_owned(),
+            timestamp,
+        });
+    }
+    let before = if reply.get("hasMore").and_then(serde_json::Value::as_bool) == Some(true) {
+        Some(
+            reply
+                .get("nextBefore")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|next| *next > 0 && previous_before.is_none_or(|old| *next < old))
+                .ok_or("Native conversation pagination cursor is stale")?,
+        )
+    } else {
+        None
+    };
+    Ok((messages, before))
+}
+
+#[cfg(test)]
+mod original_conversation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn native_conversation_read_requires_read_only_source_and_text() {
+        let good = json!({"source":"nativeProvider","readOnly":true,"hasMore":true,
+        "nextBefore":250,"messages":[
+            {"role":"user","text":"question"},
+            {"role":"assistant","text":"answer","timestamp":"2026-11-22T01:00:00Z"}
+        ]});
+        let (messages, next) = parse_original_conversation_page(&good, Some(400)).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].text, "answer");
+        assert_eq!(next, Some(250));
+        let mut invalid = good;
+        invalid["nextBefore"] = json!(500);
+        assert!(parse_original_conversation_page(&invalid, Some(400)).is_err());
+        invalid["nextBefore"] = json!(250);
+        invalid["messages"][0]["role"] = json!("tool");
+        assert!(parse_original_conversation_page(&invalid, Some(400)).is_err());
+        invalid["messages"][0]["role"] = json!("user");
+        invalid["source"] = json!("untrusted");
+        assert!(parse_original_conversation_page(&invalid, Some(400)).is_err());
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct GlobalAgentPromptTarget {
     handle: String,
@@ -796,6 +884,169 @@ enum GlobalAgentCreateReply {
         Option<Vec<alera_gpui_desktop::terminal::TerminalSession>>,
     ),
     OutcomeUnknown,
+}
+
+impl Workbench {
+    /// Open the original conversation directly from the selected native Host
+    /// Terminal tab. The pane context includes its generation and exact Tab ID;
+    /// never infer a target from the global active TerminalDock index.
+    pub(super) fn open_original_conversation_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(WorkbenchTabIdentity::Host(context)) = self.mixed_panes.active_in(pane).cloned()
+        else {
+            return;
+        };
+        let Some(index) = self.terminals.index_for_context(&context) else {
+            self.terminals.status = "Terminal pane identity changed; no transcript read".into();
+            cx.notify();
+            return;
+        };
+        let Some(tab) = self.terminals.tabs.get(index) else {
+            return;
+        };
+        let target = self
+            .terminals
+            .sessions
+            .iter()
+            .find(|session| {
+                session.running
+                    && session.handle == tab.handle
+                    && session.workspace_id == tab.workspace_id
+                    && session.tab_id == tab.tab_id
+                    && matches!(session.agent_type.as_deref(), Some("claude" | "codex"))
+            })
+            .cloned();
+        let Some(session) = target else {
+            self.terminals.status =
+                "Original history requires a current Claude/Codex Host Tab".into();
+            cx.notify();
+            return;
+        };
+        let identity = GlobalAgentPromptTarget {
+            handle: session.handle,
+            workspace_id: session.workspace_id,
+            tab_id: session.tab_id,
+            agent_type: session.agent_type.unwrap_or_default(),
+        };
+        self.right_sidebar_view = RightSidebarView::AgentContext;
+        self.global_agent_history_open = false;
+        self.global_agent_maximized = true;
+        self.global_agent_collapsed_groups.clear();
+        self.global_agent_needs_review_only = false;
+        self.load_original_conversation(identity, false, cx);
+        cx.notify();
+    }
+
+    fn close_original_conversation(&mut self) {
+        self.global_agent_transcript_request = self.global_agent_transcript_request.wrapping_add(1);
+        self.global_agent_transcript_target = None;
+        self.global_agent_transcript_messages.clear();
+        self.global_agent_transcript_before = None;
+        self.global_agent_transcript_busy = false;
+        self.global_agent_transcript_status.clear();
+    }
+
+    /// Explicit-click, read-only provider transcript page. This never calls
+    /// terminal.read/write/attach and never starts or resumes a new Agent.
+    fn load_original_conversation(
+        &mut self,
+        target: GlobalAgentPromptTarget,
+        older: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.global_agent_transcript_busy {
+            return;
+        }
+        if self.terminals.session_list_is_stale()
+            || !target.is_live(&self.terminals.sessions)
+            || !matches!(target.agent_type.as_str(), "claude" | "codex")
+        {
+            self.global_agent_transcript_status =
+                "Live Agent identity changed; refresh Host before reading history".into();
+            cx.notify();
+            return;
+        }
+        if older
+            && (self.global_agent_transcript_target.as_ref() != Some(&target)
+                || self.global_agent_transcript_before.is_none())
+        {
+            return;
+        }
+        let before = if older {
+            self.global_agent_transcript_before
+        } else {
+            None
+        };
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.global_agent_transcript_status =
+                "Local Alera CLI unavailable; original conversation was not read".into();
+            cx.notify();
+            return;
+        };
+        if !older {
+            self.close_original_conversation();
+            self.global_agent_transcript_target = Some(target.clone());
+        }
+        self.global_agent_transcript_busy = true;
+        self.global_agent_transcript_status =
+            "Reading original native user/assistant messages (read only)…".into();
+        self.global_agent_transcript_request = self.global_agent_transcript_request.wrapping_add(1);
+        let ticket = self.global_agent_transcript_request;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let requested = target.clone();
+            let result = cx.background_spawn(async move {
+                bridge.read_resumed_agent_messages(
+                    &target.workspace_id, &target.tab_id, before
+                )
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.global_agent_transcript_request != ticket
+                    || view.global_agent_transcript_target.as_ref() != Some(&requested) {
+                    return;
+                }
+                view.global_agent_transcript_busy = false;
+                match result {
+                    Ok(reply) => match parse_original_conversation_page(&reply, before) {
+                        Ok((messages, next_before)) => {
+                            if older {
+                                // Show earlier messages above the current page;
+                                // bound retained plaintext to 360 visible entries.
+                                let mut combined = messages;
+                                combined.extend(view.global_agent_transcript_messages.drain(..));
+                                combined.truncate(360);
+                                view.global_agent_transcript_messages = combined;
+                            } else {
+                                view.global_agent_transcript_messages = messages;
+                            }
+                            view.global_agent_transcript_before = next_before;
+                            view.global_agent_transcript_status =
+                                "Original provider-native dialogue · read only · live Terminal unchanged".into();
+                        }
+                        Err(_) => {
+                            view.global_agent_transcript_messages.clear();
+                            view.global_agent_transcript_before = None;
+                            view.global_agent_transcript_status =
+                                "Native history response was invalid; nothing was sent to Agent".into();
+                        }
+                    },
+                    Err(_) => {
+                        view.global_agent_transcript_messages.clear();
+                        view.global_agent_transcript_before = None;
+                        view.global_agent_transcript_status =
+                            "Original history unavailable: only Host-verified resumed Claude/Codex Tabs can be read".into();
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
 }
 
 impl Workbench {
@@ -1833,6 +2084,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.global_agent_needs_review_only = !view.global_agent_needs_review_only;
                         view.global_agent_collapsed_groups.clear();
+                        view.close_original_conversation();
                         // A view change must not retain an invisible input target
                         // or a previously armed destructive action.
                         view.global_agent_control_armed = None;
@@ -1972,6 +2224,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         // a previously armed lifecycle confirmation.
                         view.global_agent_target = None;
                         view.global_agent_control_armed = None;
+                        view.close_original_conversation();
                         view.global_agent_submit_status =
                             "State section changed; select an Agent before sending".into();
                         cx.notify();
@@ -2096,6 +2349,135 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             }
         }
 
+        let original_target = GlobalAgentPromptTarget {
+            handle: session_id.clone(),
+            workspace_id: workspace_id.clone(),
+            tab_id: tab_id.clone(),
+            agent_type: agent.clone(),
+        };
+        let selected_original =
+            view.global_agent_transcript_target.as_ref() == Some(&original_target);
+        let original_button_target = original_target.clone();
+        let older_button_target = original_target.clone();
+        let latest_button_target = original_target.clone();
+        let mut original_panel = div().flex().flex_col().gap_2();
+        if selected_original {
+            original_panel = original_panel
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Original provider conversation · read only"),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .id(("global-agent-original-close", index))
+                                .text_xs()
+                                .cursor_pointer()
+                                .child("Close ×")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.close_original_conversation();
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(view.global_agent_transcript_status.clone()),
+                );
+            if view.global_agent_transcript_busy {
+                original_panel =
+                    original_panel.child(div().text_xs().text_color(rgb(MUTED)).child("Loading…"));
+            }
+            let mut messages = div()
+                .id(("global-agent-original-list", index))
+                .max_h(px(430.0))
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_2();
+            for (message_index, message) in view.global_agent_transcript_messages.iter().enumerate()
+            {
+                let role = if message.role == "user" {
+                    "You"
+                } else {
+                    "Agent"
+                };
+                messages =
+                    messages.child(
+                        div()
+                            .id(("global-agent-original-message", index * 64 + message_index))
+                            .w_full()
+                            .min_w_0()
+                            .px_2()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(PANEL))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                message.timestamp.as_deref().map_or_else(
+                                    || role.to_owned(),
+                                    |time| format!("{role} · {time}"),
+                                ),
+                            ))
+                            .child(div().min_w_0().text_sm().child(message.text.clone())),
+                    );
+            }
+            original_panel = original_panel.child(messages).child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id(("global-agent-original-older", index))
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(rgb(
+                                if view.global_agent_transcript_before.is_some()
+                                    && !view.global_agent_transcript_busy
+                                {
+                                    TEXT
+                                } else {
+                                    MUTED
+                                },
+                            ))
+                            .child("Load older native messages")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.load_original_conversation(
+                                    older_button_target.clone(),
+                                    true,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("global-agent-original-latest", index))
+                            .text_xs()
+                            .cursor_pointer()
+                            .child("Latest page")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.load_original_conversation(
+                                    latest_button_target.clone(),
+                                    false,
+                                    cx,
+                                );
+                            })),
+                    ),
+            );
+        }
+
         list = list.child(
             div()
                 .id(("global-agent-session-row", index))
@@ -2150,6 +2532,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         ),
                 )
                 .child(timeline_panel)
+                .child(original_panel)
                 // Keep controls on one compact action row, wrapping only when
                 // the application window is narrower than the Agent card.
                 .child(
@@ -2188,6 +2571,24 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                     cx.notify();
                                 })),
                         )
+                        .child(if matches!(agent.as_str(), "claude" | "codex") {
+                            div()
+                                .id(("global-agent-original-open", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Original conversation · read only")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.load_original_conversation(
+                                        original_button_target.clone(),
+                                        false,
+                                        cx,
+                                    );
+                                }))
+                                .into_any_element()
+                        } else {
+                            div().hidden().into_any_element()
+                        })
                         .child(
                             div()
                                 .id(("global-agent-interrupt", index))

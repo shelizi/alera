@@ -200,6 +200,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::HistorySearch(_)
             | TerminalAction::HistoryResume(_)
             | TerminalAction::HistoryLocate(_)
+            | TerminalAction::HistoryMessages(_)
             | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
@@ -542,6 +543,31 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             }), 42_000).await {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Existing historical Agent Tab");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::HistoryMessages(args) => {
+            let valid = args.confirm_read
+                && [args.workspace_id.as_str(), args.tab_id.as_str()]
+                    .iter().all(|id| !id.is_empty() && id.len() <= 256 &&
+                        !id.chars().any(char::is_control))
+                && (1..=60).contains(&args.max_messages)
+                && args.before.is_none_or(|before| before > 0);
+            if !valid {
+                eprintln!("Historical messages require an existing Workspace/Tab, bounded page and --confirm-read");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value_with_deadline("agentHistory.messages", &json!({
+                "workspaceId": args.workspace_id,
+                "tabId": args.tab_id,
+                "before": args.before,
+                "maxMessages": args.max_messages,
+                "consentToReadMessages": true,
+            }), 42_000).await {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Original resumed Agent conversation");
                     0
                 }
                 Err(error) => print_error(error),

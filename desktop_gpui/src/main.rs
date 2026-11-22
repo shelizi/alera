@@ -1099,6 +1099,13 @@ struct Workbench {
     global_agent_history_request: u64,
     global_agent_history_status: String,
     global_agent_history_results: Vec<native_global_agents_ui::GlobalHistoryPreview>,
+    /// Original provider-native dialogue remains separate from live PTY output.
+    global_agent_transcript_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
+    global_agent_transcript_messages: Vec<native_global_agents_ui::OriginalConversationMessage>,
+    global_agent_transcript_before: Option<u64>,
+    global_agent_transcript_busy: bool,
+    global_agent_transcript_request: u64,
+    global_agent_transcript_status: String,
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
     global_agent_submit_busy: bool,
     global_agent_submit_status: String,
@@ -15907,6 +15914,25 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(
+                                        icon_button(
+                                            "native-original-conversation-primary",
+                                            UiIcon::History,
+                                            "Original Claude/Codex conversation (read only)",
+                                            false,
+                                        )
+                                        .when(
+                                            !mixed_primary_active.as_ref().is_some_and(|id|
+                                                matches!(id, WorkbenchTabIdentity::Host(_))
+                                            ),
+                                            |button| button.hidden(),
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_original_conversation_for_pane(
+                                                PaneSlot::Primary, cx,
+                                            );
+                                        })),
+                                    )
+                                    .child(
                                         icon_button("native-terminal-history-up-primary", UiIcon::ChevronUp,
                                             tr(self.settings_menu_locale, "Scroll terminal history up one page (Shift+PageUp)"), false)
                                             .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
@@ -16061,6 +16087,14 @@ impl Render for Workbench {
                                                                 }
                                                             })
                                                     })
+                                                    .child(
+                                                        icon_button("native-original-conversation-secondary", UiIcon::History,
+                                                            "Original Claude/Codex conversation for second pane (read only)", false)
+                                                            .when(mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.open_original_conversation_for_pane(PaneSlot::Secondary, cx);
+                                                            })),
+                                                    )
                                                     .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
                                                             tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
@@ -16663,6 +16697,14 @@ impl Render for Workbench {
                                                                 }
                                                             })
                                                     })
+                                                    .child(
+                                                        icon_button("native-original-conversation-secondary", UiIcon::History,
+                                                            "Original Claude/Codex conversation for second pane (read only)", false)
+                                                            .when(mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.open_original_conversation_for_pane(PaneSlot::Secondary, cx);
+                                                            })),
+                                                    )
                                                     .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
                                                             tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
@@ -18766,6 +18808,12 @@ fn main() {
                             global_agent_history_request: 0,
                             global_agent_history_status: "Native history search is off until you explicitly opt in".into(),
                             global_agent_history_results: Vec::new(),
+                            global_agent_transcript_target: None,
+                            global_agent_transcript_messages: Vec::new(),
+                            global_agent_transcript_before: None,
+                            global_agent_transcript_busy: false,
+                            global_agent_transcript_request: 0,
+                            global_agent_transcript_status: String::new(),
                             global_agent_target: None,
                             global_agent_submit_busy: false,
                             global_agent_submit_status: String::new(),

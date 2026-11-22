@@ -575,6 +575,7 @@ mod tests {
                 account_id: "other".into(),
                 native_id: native.into(),
                 codex_transcript_path: Some("verified/native/transcript.jsonl".into()),
+                source_file: std::path::PathBuf::from("verified/native/transcript.jsonl"),
                 config_directory: "provider-config-dir".into(),
             },
         )
