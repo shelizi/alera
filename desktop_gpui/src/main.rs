@@ -15586,8 +15586,8 @@ impl Render for Workbench {
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(div().flex().items_center().gap_2()
-                                                    .child(native_git_graph_ui::graph_lane(
+                                                .child(div().flex().items_stretch().gap_2()
+                                                    .child(native_git_graph_ui::graph_lane_stretched(
                                                         topology, git_graph_lane_count, is_merge, is_head,
                                                     ))
                                                     .child(div().min_w_0().flex_1().flex().flex_col().gap_1()
