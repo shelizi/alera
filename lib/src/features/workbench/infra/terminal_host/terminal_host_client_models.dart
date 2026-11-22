@@ -146,7 +146,8 @@ abstract interface class TerminalHostAgentHistoryClient {
 }
 
 /// Optional local-only native history reader. Unlike PTY scrollback, these
-/// messages belong to a provider's original restored Session. Old Hosts and
+/// messages belong to a provider's saved source-verified native Session,
+/// including ordinary Agent Tabs with an unambiguous original UUID. Old Hosts and
 /// fake clients need not implement this capability.
 abstract interface class TerminalHostAgentHistoryMessagesClient {
   Future<Map<String, Object?>> readRestoredAgentMessages({

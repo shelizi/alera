@@ -774,6 +774,18 @@ pub(super) struct OriginalConversationMessage {
     timestamp: Option<String>,
 }
 
+/// Automatically displayed above a restored native Terminal's live PTY.
+/// Each triple refers to the exact authenticated original Host Tab, never a
+/// title, global active Agent or guessed provider account.
+#[derive(Clone, Debug, Default)]
+pub(super) struct InlineOriginalConversation {
+    pub(super) messages: Vec<OriginalConversationMessage>,
+    pub(super) before: Option<u64>,
+    pub(super) loading: bool,
+    pub(super) collapsed: bool,
+    pub(super) request: u64,
+}
+
 fn parse_original_conversation_page(
     reply: &serde_json::Value,
     previous_before: Option<u64>,
@@ -843,6 +855,16 @@ mod original_conversation_tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].text, "answer");
         assert_eq!(next, Some(250));
+        let empty_tool_page = json!({"source":"nativeProvider","readOnly":true,
+            "hasMore":true,"nextBefore":300,"messages":[]});
+        let (empty, cursor) =
+            parse_original_conversation_page(&empty_tool_page, Some(400)).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(
+            cursor,
+            Some(300),
+            "tool-only latest page must still permit older original dialogue"
+        );
         let mut invalid = good;
         invalid["nextBefore"] = json!(500);
         assert!(parse_original_conversation_page(&invalid, Some(400)).is_err());
@@ -887,6 +909,309 @@ enum GlobalAgentCreateReply {
 }
 
 impl Workbench {
+    /// Resolve the pane's exact live Host Tab. The terminal history overlay
+    /// never infers source ownership from a title, a handle alone, or the
+    /// globally active TerminalDock tab when two panes are open.
+    fn inline_original_target(&self, pane: PaneSlot) -> Option<GlobalAgentPromptTarget> {
+        if self.terminals.session_list_is_stale() {
+            return None;
+        }
+        let WorkbenchTabIdentity::Host(context) = self.mixed_panes.active_in(pane)? else {
+            return None;
+        };
+        let index = self.terminals.index_for_context(context)?;
+        let tab = self.terminals.tabs.get(index)?;
+        let session = self.terminals.sessions.iter().find(|session| {
+            session.running
+                && session.handle == tab.handle
+                && session.workspace_id == tab.workspace_id
+                && session.tab_id == tab.tab_id
+                && matches!(session.agent_type.as_deref(), Some("claude" | "codex"))
+        })?;
+        Some(GlobalAgentPromptTarget {
+            handle: session.handle.clone(),
+            workspace_id: session.workspace_id.clone(),
+            tab_id: session.tab_id.clone(),
+            agent_type: session.agent_type.clone().unwrap_or_default(),
+        })
+    }
+
+    /// An ordinary saved Claude Tab contains a native UUID, but the app-level
+    /// Terminal PTY only retains bounded stream output. Read the original
+    /// provider messages on first display *inside* this same Tab. This does
+    /// not start, interrupt, resize, attach or write to the live Agent.
+    pub(super) fn maybe_restore_inline_original(&mut self, pane: PaneSlot, cx: &mut Context<Self>) {
+        self.load_inline_original(pane, false, false, cx);
+    }
+
+    fn load_inline_original(
+        &mut self,
+        pane: PaneSlot,
+        older: bool,
+        refresh: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.inline_original_target(pane) else {
+            return;
+        };
+        let key = (
+            target.handle.clone(),
+            target.workspace_id.clone(),
+            target.tab_id.clone(),
+            target.agent_type.clone(),
+        );
+        if let Some(current) = self.native_inline_original.get(&key) {
+            if current.loading || (!older && !refresh) || (older && current.before.is_none()) {
+                return;
+            }
+        } else if older {
+            return;
+        }
+        if self.native_inline_original.len() >= 12
+            && !self.native_inline_original.contains_key(&key)
+        {
+            // Never retain unbounded private dialogue across many tabs.
+            self.native_inline_original.clear();
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            return;
+        };
+        let before = if older {
+            self.native_inline_original
+                .get(&key)
+                .and_then(|state| state.before)
+        } else {
+            None
+        };
+        self.native_inline_original_request = self.native_inline_original_request.wrapping_add(1);
+        let ticket = self.native_inline_original_request;
+        let state = self.native_inline_original.entry(key.clone()).or_default();
+        state.request = ticket;
+        state.loading = true;
+        if !older {
+            state.messages.clear();
+            state.before = None;
+        }
+        let workspace_generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.read_resumed_agent_messages(&target.workspace_id, &target.tab_id, before)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != workspace_generation {
+                    return;
+                }
+                let still_live = view.terminals.sessions.iter().any(|session| {
+                    session.running
+                        && session.handle == key.0
+                        && session.workspace_id == key.1
+                        && session.tab_id == key.2
+                        && session.agent_type.as_deref() == Some(key.3.as_str())
+                });
+                let Some(current) = view.native_inline_original.get_mut(&key) else {
+                    return;
+                };
+                if current.request != ticket {
+                    return;
+                }
+                current.loading = false;
+                if !still_live {
+                    current.messages.clear();
+                    current.before = None;
+                    cx.notify();
+                    return;
+                }
+                if let Ok(reply) = result {
+                    if let Ok((messages, next_before)) =
+                        parse_original_conversation_page(&reply, before)
+                    {
+                        if older {
+                            let mut accumulated = messages;
+                            accumulated.extend(current.messages.drain(..));
+                            accumulated.truncate(360);
+                            current.messages = accumulated;
+                        } else {
+                            current.messages = messages;
+                        }
+                        current.before = next_before;
+                    }
+                }
+                // Missing/older Host or a source ambiguity simply does not
+                // show an inline panel. Never guess or read another account.
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A compact, scrollable read-only slice of the real Claude/Codex native
+    /// conversation above the CURRENT interactive Terminal, not an alternate
+    /// full-screen Dashboard view or synthetic PTY transcript replay.
+    pub(super) fn render_inline_original(
+        &self,
+        pane: PaneSlot,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut panel = div()
+            .id(if pane == PaneSlot::Primary {
+                "native-inline-original-primary"
+            } else {
+                "native-inline-original-secondary"
+            })
+            .flex_shrink_0();
+        let Some(target) = self.inline_original_target(pane) else {
+            return panel;
+        };
+        let key = (
+            target.handle.clone(),
+            target.workspace_id.clone(),
+            target.tab_id.clone(),
+            target.agent_type.clone(),
+        );
+        let Some(state) = self.native_inline_original.get(&key) else {
+            return panel;
+        };
+        if state.messages.is_empty() && state.before.is_none() {
+            return panel;
+        }
+        let collapsed = state.collapsed;
+        let older_enabled = state.before.is_some() && !state.loading;
+        panel = panel
+            .w_full()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(PANEL))
+            .child(
+                div()
+                    .h(px(30.0))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(icon(UiIcon::History, 13.0, MUTED))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().child(format!(
+                        "{} · original dialogue · read only (live Terminal below)",
+                        if target.agent_type == "claude" {
+                            "Claude"
+                        } else {
+                            "Codex"
+                        }
+                    )))
+                    .child(
+                        div()
+                            .id(if pane == PaneSlot::Primary {
+                                "native-original-collapse-p"
+                            } else {
+                                "native-original-collapse-s"
+                            })
+                            .text_xs()
+                            .cursor_pointer()
+                            .child(if collapsed { "Expand" } else { "Collapse" })
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if let Some(state) = view.native_inline_original.get_mut(&key) {
+                                    state.collapsed = !state.collapsed;
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+            );
+        if !collapsed {
+            let mut list = div()
+                .id(if pane == PaneSlot::Primary {
+                    "native-inline-original-primary-scroll"
+                } else {
+                    "native-inline-original-secondary-scroll"
+                })
+                .h(px(if state.messages.is_empty() {
+                    0.0
+                } else {
+                    195.0
+                }))
+                .min_h_0()
+                .overflow_y_scroll()
+                .px_3()
+                .py_2()
+                .flex()
+                .flex_col()
+                .gap_2();
+            for (index, message) in state.messages.iter().enumerate() {
+                let role = if message.role == "user" {
+                    "You"
+                } else {
+                    "Agent"
+                };
+                let header = message
+                    .timestamp
+                    .as_deref()
+                    .map_or_else(|| role.to_owned(), |time| format!("{role} · {time}"));
+                list = list.child(
+                    div()
+                        .id((
+                            if pane == PaneSlot::Primary {
+                                "native-inline-original-p-msg"
+                            } else {
+                                "native-inline-original-s-msg"
+                            },
+                            index,
+                        ))
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(ELEVATED))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_xs().text_color(rgb(MUTED)).child(header))
+                        .child(div().min_w_0().text_sm().child(message.text.clone())),
+                );
+            }
+            panel = panel.child(list).child(
+                div()
+                    .h(px(28.0))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id(if pane == PaneSlot::Primary {
+                                "native-original-older-p"
+                            } else {
+                                "native-original-older-s"
+                            })
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(rgb(if older_enabled { TEXT } else { MUTED }))
+                            .child("Load older dialogue")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.load_inline_original(pane, true, false, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(if pane == PaneSlot::Primary {
+                                "native-original-latest-p"
+                            } else {
+                                "native-original-latest-s"
+                            })
+                            .text_xs()
+                            .cursor_pointer()
+                            .child("Latest page")
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.load_inline_original(pane, false, true, cx);
+                            })),
+                    ),
+            );
+        }
+        panel
+    }
+
     /// Open the original conversation directly from the selected native Host
     /// Terminal tab. The pane context includes its generation and exact Tab ID;
     /// never infer a target from the global active TerminalDock index.
@@ -1040,7 +1365,7 @@ impl Workbench {
                         view.global_agent_transcript_messages.clear();
                         view.global_agent_transcript_before = None;
                         view.global_agent_transcript_status =
-                            "Original history unavailable: only Host-verified resumed Claude/Codex Tabs can be read".into();
+                            "Original history unavailable: the saved Claude/Codex Tab lacks a unique Host-verified native Session source".into();
                     }
                 }
                 cx.notify();

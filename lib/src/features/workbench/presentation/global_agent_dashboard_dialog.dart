@@ -260,7 +260,7 @@ class _GlobalAgentDashboardDialogState
     } catch (_) {
       if (!mounted || ticket != _historicalRequest) return;
       setState(
-        () => _historicalStatus = 'History unavailable: only exact resumed Claude/Codex Tabs with a verified original account can be read.',
+        () => _historicalStatus = 'History unavailable: this saved Claude/Codex Tab has no unique Host-verified original Session source.',
       );
     } finally {
       if (mounted && ticket == _historicalRequest) {

@@ -232,6 +232,63 @@ async fn verify_native_source(
     })
 }
 
+/// Ordinary restored Agent Tabs also retain a provider-native UUID, even
+/// when they were not created by History Search. Resolve those only against
+/// the configured accounts and registered original Worktree. A UUID alone is
+/// never enough: reject absent/mirrored/ambiguous account provenance.
+fn verify_unpinned_native_history(
+    roots: &[crate::agent_session_history_scan::ProviderHistoryRoot],
+    workspace: &RegisteredHistoryWorkspace,
+    provider: &str,
+    native_id: &str,
+) -> HostResult<PathBuf> {
+    if !matches!(provider, "claude" | "codex")
+        || Uuid::parse_str(native_id)
+            .ok()
+            .is_none_or(|id| id.to_string() != native_id)
+        || workspace.runtime_instance_id.is_empty()
+        || workspace.project_id.is_empty()
+        || workspace.workspace_id.is_empty()
+    {
+        return Err(HostError::state(
+            "Original Agent history identity is incomplete",
+        ));
+    }
+    let scoped: Vec<_> = roots
+        .iter()
+        .filter(|root| root.provider == provider)
+        .cloned()
+        .collect();
+    let scan = discover_exact_native_history(
+        &scoped,
+        std::slice::from_ref(workspace),
+        HistoryScanPolicy {
+            index_user_text: false,
+            max_files: 256,
+        },
+        native_id,
+    );
+    let mut matching = scan.source_proofs.iter().filter(|proof| {
+        proof.provider == provider
+            && proof.native_session_id == native_id
+            && proof.project_id == workspace.project_id
+            && proof.workspace_id == workspace.workspace_id
+            && proof.runtime_instance_id == workspace.runtime_instance_id
+    });
+    let Some(source) = matching.next() else {
+        return Err(HostError::state(
+            "Original conversation source is not verified in this Workspace",
+        ));
+    };
+    if matching.next().is_some() {
+        // A mirrored or overlapping multi-account source must not be guessed.
+        return Err(HostError::state(
+            "Multiple provider accounts claim this native Session; select an exact account",
+        ));
+    }
+    Ok(source.canonical_file.clone())
+}
+
 /// Called for every fresh PTY, including application restart. Never trust a
 /// cached account path or a stale tab title: rebuild the native source proof
 /// from current Host configuration and the authoritative tab UUID.
@@ -497,37 +554,65 @@ impl ServerActor {
                     && tab.payload["automationOwned"] != true
             })
             .ok_or_else(|| HostError::state("Original resumed Agent Tab not found"))?;
-        let origin = tab.payload.get(RESUME_ORIGIN_KEY).ok_or_else(|| {
-            HostError::state("Only original resumed Agent Tabs have native history")
+        let (provider, native_id) = provider_resume_id(tab).ok_or_else(|| {
+            HostError::state("Saved Agent Tab has no original Claude/Codex Session UUID")
         })?;
-        let provider = bounded_identifier(origin, "provider", 12)?;
-        let account = bounded_identifier(origin, "accountId", 256)?;
-        let (saved_provider, native_id) = provider_resume_id(tab).ok_or_else(|| {
-            HostError::state("Historical Tab has no provider-native Session UUID")
-        })?;
-        if provider != saved_provider || !matches!(provider.as_str(), "claude" | "codex") {
-            return Err(HostError::state(
-                "Historical Tab provider identity mismatch",
-            ));
-        }
-        let target = ExactResumeRequest {
-            provider: provider.clone(),
-            account,
-            project: workspace.project_id,
-            workspace: workspace_id,
-            profile: String::new(),
-            native_id: native_id.clone(),
-            client_mutation_id: String::new(),
+        let provider = provider.to_string();
+        let path = if let Some(origin) = tab.payload.get(RESUME_ORIGIN_KEY) {
+            // History-search launches have an account fingerprint pinned by
+            // the Host. Preserve that stronger contract on every read.
+            let selected = bounded_identifier(origin, "provider", 12)?;
+            let account = bounded_identifier(origin, "accountId", 256)?;
+            if selected != provider {
+                return Err(HostError::state(
+                    "Historical Tab provider identity mismatch",
+                ));
+            }
+            let target = ExactResumeRequest {
+                provider: provider.clone(),
+                account,
+                project: workspace.project_id.clone(),
+                workspace: workspace_id.clone(),
+                profile: String::new(),
+                native_id: native_id.clone(),
+                client_mutation_id: String::new(),
+            };
+            let verified = verify_native_source(&self.runtime_store, &target).await?;
+            if !tab_is_verified_exact_history_owner(tab, &target, &verified) {
+                return Err(HostError::state(
+                    "Historical Tab no longer matches its pinned account source",
+                ));
+            }
+            verified.source_file
+        } else {
+            // A saved ordinary Claude Tab has a native UUID even though it
+            // never visited the History Search screen. Require a UNIQUE
+            // configured account source, exact native UUID, and original
+            // registered Worktree. Ambiguous/mirrored accounts fail closed.
+            let registered = RegisteredHistoryWorkspace {
+                runtime_instance_id: workspace.instance_id,
+                project_id: workspace.project_id,
+                workspace_id,
+                path: workspace.path.into(),
+            };
+            let settings = self
+                .runtime_store
+                .agent_quota_settings()
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            let roots = search_roots(&settings).await;
+            let selected = provider.clone();
+            let session_id = native_id.clone();
+            tokio::task::spawn_blocking(move || {
+                verify_unpinned_native_history(&roots, &registered, &selected, &session_id)
+            })
+            .await
+            .map_err(|_| HostError::state("Native Session source lookup failed"))??
         };
-        let verified = verify_native_source(&self.runtime_store, &target).await?;
-        if !tab_is_verified_exact_history_owner(tab, &target, &verified) {
-            return Err(HostError::state(
-                "Historical Tab no longer matches its pinned account source",
-            ));
-        }
-        let path = verified.source_file;
         let page = tokio::task::spawn_blocking(move || {
-            super::agent_history_transcript::read_page(&path, &provider, &native_id, before, limit)
+            super::agent_history_transcript::read_visible_page(
+                &path, &provider, &native_id, before, limit,
+            )
         })
         .await
         .map_err(|_| HostError::state("Historical transcript reader failed"))?
@@ -615,6 +700,84 @@ mod tests {
         assert_eq!(
             policy.runtime_mutation,
             super::super::request_route_policy::RuntimeMutationPolicy::Available
+        );
+    }
+
+    #[test]
+    fn ordinary_claude_tab_uuid_reads_only_unique_source_in_registered_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("registered-project");
+        let other = dir.path().join("other-project");
+        let default_root = dir.path().join(".claude/projects/-registered");
+        let duplicate_root = dir
+            .path()
+            .join(".ccs/instances/secondary/projects/-registered");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(&default_root).unwrap();
+        std::fs::create_dir_all(&duplicate_root).unwrap();
+        let native = "550e8400-e29b-41d4-a716-446655440044";
+        let file = default_root.join(format!("{native}.jsonl"));
+        let line = json!({"type":"user","sessionId":native,"cwd":project,
+            "message":{"role":"user","content":"Original Claude task"}})
+        .to_string();
+        std::fs::write(&file, format!("{line}\n")).unwrap();
+        let root = crate::agent_session_history_scan::ProviderHistoryRoot {
+            provider: "claude",
+            account_id: "default".into(),
+            path: dir.path().join(".claude/projects"),
+        };
+        let registered = RegisteredHistoryWorkspace {
+            runtime_instance_id: "local".into(),
+            project_id: "project".into(),
+            workspace_id: "workspace".into(),
+            path: project.clone(),
+        };
+        assert_eq!(
+            verify_unpinned_native_history(
+                std::slice::from_ref(&root),
+                &registered,
+                "claude",
+                native
+            )
+            .unwrap(),
+            file.canonicalize().unwrap()
+        );
+        assert!(verify_unpinned_native_history(
+            std::slice::from_ref(&root),
+            &registered,
+            "claude",
+            "550e8400-e29b-41d4-a716-446655440045"
+        )
+        .is_err());
+        assert!(verify_unpinned_native_history(
+            std::slice::from_ref(&root),
+            &RegisteredHistoryWorkspace {
+                path: other,
+                ..registered.clone()
+            },
+            "claude",
+            native
+        )
+        .is_err());
+        assert!(verify_unpinned_native_history(
+            std::slice::from_ref(&root),
+            &registered,
+            "codex",
+            native
+        )
+        .is_err());
+        let copied = duplicate_root.join(format!("{native}.jsonl"));
+        std::fs::write(&copied, format!("{line}\n")).unwrap();
+        let secondary = crate::agent_session_history_scan::ProviderHistoryRoot {
+            provider: "claude",
+            account_id: "secondary".into(),
+            path: dir.path().join(".ccs/instances/secondary/projects"),
+        };
+        assert!(
+            verify_unpinned_native_history(&[root, secondary], &registered, "claude", native)
+                .is_err(),
+            "mirrored UUID in multiple configured accounts cannot be attributed to the Tab"
         );
     }
 

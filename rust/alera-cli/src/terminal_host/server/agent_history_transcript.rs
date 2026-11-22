@@ -183,10 +183,61 @@ pub(super) fn read_page(
     })
 }
 
+/// A native Agent may append several MiB of tool results after its final
+/// human-visible turn. Skip at most four bounded empty slices on a single
+/// read, so opening a restored Tab shows real dialogue instead of an empty
+/// panel. This remains read-only, with a hard 4 MiB I/O budget.
+pub(super) fn read_visible_page(
+    path: &Path,
+    provider: &str,
+    native: &str,
+    before: Option<u64>,
+    limit: usize,
+) -> std::io::Result<Page> {
+    let mut page = read_page(path, provider, native, before, limit)?;
+    for _ in 1..4 {
+        if !page.messages.is_empty() || !page.has_more {
+            break;
+        }
+        let Some(cursor) = page.next_before else {
+            break;
+        };
+        page = read_page(path, provider, native, Some(cursor), limit)?;
+    }
+    Ok(page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn restored_tab_skips_bounded_empty_tool_slices_to_find_prior_dialogue() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.jsonl");
+        let id = "550e8400-e29b-41d4-a716-446655440065";
+        let user = json!({"type":"user","sessionId":id,
+            "message":{"role":"user","content":"原本的問題"}})
+        .to_string();
+        let assistant = json!({"type":"assistant","sessionId":id,
+            "message":{"role":"assistant","content":"原本的回答"}})
+        .to_string();
+        let tool = json!({"type":"user","sessionId":id,
+            "message":{"role":"user","content":[{"type":"tool_result","content":"ignored"}]}})
+        .to_string();
+        let mut output = format!("{user}\n{assistant}\n");
+        for _ in 0..12_000 {
+            output.push_str(&tool);
+            output.push('\n');
+        }
+        assert!(output.len() > 1024 * 1024);
+        std::fs::write(&path, output).unwrap();
+        let page = read_visible_page(&path, "claude", id, None, 30).unwrap();
+        assert_eq!(page.messages.len(), 2);
+        assert_eq!(page.messages[0].text, "原本的問題");
+        assert_eq!(page.messages[1].text, "原本的回答");
+    }
 
     #[test]
     fn claude_rejects_tool_sidechain_and_foreign_session() {

@@ -1106,6 +1106,13 @@ struct Workbench {
     global_agent_transcript_busy: bool,
     global_agent_transcript_request: u64,
     global_agent_transcript_status: String,
+    /// Source-verified original conversations stay in their own Terminal Tab,
+    /// separate from both the Dashboard panel and interactive PTY emulator.
+    native_inline_original: HashMap<
+        (String, String, String, String),
+        native_global_agents_ui::InlineOriginalConversation,
+    >,
+    native_inline_original_request: u64,
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
     global_agent_submit_busy: bool,
     global_agent_submit_status: String,
@@ -7068,6 +7075,8 @@ impl Workbench {
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
+        self.native_inline_original.clear();
+        self.native_inline_original_request = self.native_inline_original_request.wrapping_add(1);
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
         self.terminals
             .set_scrollback_lines(self.native_settings.terminal_scrollback_lines as usize);
@@ -8734,6 +8743,8 @@ impl Workbench {
                                 })
                             });
                             view.restore_terminal_layout_from_host(cx);
+                            view.maybe_restore_inline_original(PaneSlot::Primary, cx);
+                            view.maybe_restore_inline_original(PaneSlot::Secondary, cx);
                             view.refresh_host_tab_pins(cx);
                             // Direct Agent PTYs may start before Hooks report
                             // presence. Their typed Host create reply was
@@ -8947,6 +8958,7 @@ impl Workbench {
         self.mixed_tabs.select(&identity);
         self.save_mixed_pane_layout(cx);
         self.refresh_terminal_split_output(cx);
+        self.maybe_restore_inline_original(pane, cx);
         // Explicit Attach can happen just after the last Host pin read.
         // Query its authoritative state now rather than showing a default
         // unpinned chip until the next periodic session poll.
@@ -10139,6 +10151,8 @@ impl Workbench {
             self.git_graph_center_open = true;
         }
         self.save_mixed_pane_layout(cx);
+        self.maybe_restore_inline_original(PaneSlot::Primary, cx);
+        self.maybe_restore_inline_original(PaneSlot::Secondary, cx);
     }
 
     /// Both Classic workbench panes use this same chip behavior. Only
@@ -10665,6 +10679,7 @@ impl Workbench {
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
                     self.refresh_terminal_output(cx);
+                    self.maybe_restore_inline_original(self.mixed_panes.focused_pane(), cx);
                     if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
                         window.focus(&self.secondary_terminal_input.read(cx).focus_handle(cx), cx);
                     } else {
@@ -16308,6 +16323,9 @@ impl Render for Workbench {
                                     // Match the VT viewport, including the 12px text inset,
                                     // split gutters and any remaining resize slack.
                                     .bg(rgb(terminal_theme_bg))
+                                    // Provider-native history is visible within this exact
+                                    // saved Tab above the current, writable Terminal PTY.
+                                    .child(self.render_inline_original(PaneSlot::Primary, cx))
                                     .child(
                                         div()
                                             .flex_1()
@@ -16752,6 +16770,7 @@ impl Render for Workbench {
                                             )
                                                     .into_any_element()
                                             })
+                                            .child(self.render_inline_original(PaneSlot::Secondary, cx))
                                             .child(if graph_in_secondary {
                                                 self.render_center_git_graph(window, cx)
                                             } else if let Some(instance) = conflict_in_secondary {
@@ -18833,6 +18852,8 @@ fn main() {
                             global_agent_transcript_busy: false,
                             global_agent_transcript_request: 0,
                             global_agent_transcript_status: String::new(),
+                            native_inline_original: HashMap::new(),
+                            native_inline_original_request: 0,
                             global_agent_target: None,
                             global_agent_submit_busy: false,
                             global_agent_submit_status: String::new(),
