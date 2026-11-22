@@ -329,6 +329,120 @@ enum GitUiAction {
     MergeWithChoices(GitConflictPlan, Vec<(String, GitConflictChoice)>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitSourceControlMenuAction {
+    Commit,
+    DraftCommitMessage,
+    Amend,
+    AiCommitMessage,
+    StageAll,
+    UnstageAll,
+    DiscardAll,
+    Fetch,
+    Pull,
+    Push,
+    PublishBranch,
+    StashSave,
+    StashApply,
+}
+
+/// A bulk action must cover the complete unfiltered snapshot. In particular,
+/// a truncated status must never make "Discard All" discard only some files.
+fn git_bulk_menu_paths(
+    snapshot: &GitSnapshot,
+    action: GitSourceControlMenuAction,
+) -> Result<Vec<PathBuf>, String> {
+    if snapshot.truncated {
+        return Err("Git status is limited; act on individual files instead".into());
+    }
+    if !matches!(
+        action,
+        GitSourceControlMenuAction::StageAll
+            | GitSourceControlMenuAction::UnstageAll
+            | GitSourceControlMenuAction::DiscardAll
+    ) {
+        return Err("Not a bulk source control action".into());
+    }
+    let mut paths = snapshot
+        .visible_rows("")
+        .into_iter()
+        .filter(|row| match action {
+            GitSourceControlMenuAction::StageAll => row.area.can_stage(),
+            GitSourceControlMenuAction::UnstageAll => row.area.can_unstage(),
+            GitSourceControlMenuAction::DiscardAll => row.area == GitChangeArea::Changes,
+            _ => false,
+        })
+        .map(|row| row.relative)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+#[cfg(test)]
+mod gpui_git_toolbar_menu_tests {
+    use super::{git_bulk_menu_paths, GitSourceControlMenuAction};
+    use alera_gpui_desktop::git_inspect::{GitChange, GitSnapshot};
+    use git2::Status;
+    use std::path::PathBuf;
+
+    fn changes(truncated: bool) -> GitSnapshot {
+        GitSnapshot {
+            branch: "main".into(),
+            upstream: None,
+            upstream_configured: false,
+            repository_root: PathBuf::from("repo"),
+            changed_files: vec![
+                GitChange {
+                    relative: PathBuf::from("staged-and-edited.rs"),
+                    label: "M",
+                    status: Status::INDEX_MODIFIED | Status::WT_MODIFIED,
+                },
+                GitChange {
+                    relative: PathBuf::from("new-file.rs"),
+                    label: "U",
+                    status: Status::WT_NEW,
+                },
+                GitChange {
+                    relative: PathBuf::from("conflict.rs"),
+                    label: "C",
+                    status: Status::CONFLICTED,
+                },
+            ],
+            truncated,
+        }
+    }
+
+    #[test]
+    fn bulk_menu_uses_all_areas_without_touching_conflicts_or_untracked_on_discard() {
+        let snapshot = changes(false);
+        assert_eq!(
+            git_bulk_menu_paths(&snapshot, GitSourceControlMenuAction::StageAll).unwrap(),
+            vec![PathBuf::from("new-file.rs"), PathBuf::from("staged-and-edited.rs")]
+        );
+        assert_eq!(
+            git_bulk_menu_paths(&snapshot, GitSourceControlMenuAction::UnstageAll).unwrap(),
+            vec![PathBuf::from("staged-and-edited.rs")]
+        );
+        assert_eq!(
+            git_bulk_menu_paths(&snapshot, GitSourceControlMenuAction::DiscardAll).unwrap(),
+            vec![PathBuf::from("staged-and-edited.rs")]
+        );
+    }
+
+    #[test]
+    fn truncated_snapshot_refuses_every_bulk_menu_action() {
+        let snapshot = changes(true);
+        for action in [
+            GitSourceControlMenuAction::StageAll,
+            GitSourceControlMenuAction::UnstageAll,
+            GitSourceControlMenuAction::DiscardAll,
+        ] {
+            assert!(git_bulk_menu_paths(&snapshot, action).is_err());
+        }
+    }
+}
+
 #[cfg(test)]
 mod g01_source_control_action_tests {
     use super::GitUiAction;
@@ -4369,6 +4483,113 @@ impl Workbench {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Match Classic's Source Control action menu without bypassing the
+    /// Native Git writer, snapshot bounds, or existing two-click confirmation.
+    fn run_git_source_control_menu_action(
+        &mut self,
+        action: GitSourceControlMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        // Cancelling an in-flight AI request must work even during a Git refresh.
+        if action == GitSourceControlMenuAction::AiCommitMessage {
+            if self.git_ai_generate_loading {
+                self.generate_ai_commit_message(cx);
+                return;
+            }
+            if self.git_ai_prompt_loading {
+                self.prepare_staged_ai_prompt(cx);
+                return;
+            }
+        }
+        if self.git_loading || self.git_action_busy {
+            self.git_action_status = "Finish refreshing or running Git before another action".into();
+            cx.notify();
+            return;
+        }
+        match action {
+            GitSourceControlMenuAction::Commit => {
+                let message = self.git_commit_input.read(cx).query().trim().to_owned();
+                let rows = self
+                    .git_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.visible_rows(""))
+                    .unwrap_or_default();
+                if message.is_empty()
+                    || !rows.iter().any(|row| row.area == GitChangeArea::Staged)
+                    || rows.iter().any(|row| row.area == GitChangeArea::Conflicts)
+                {
+                    self.git_action_status =
+                        "Enter a commit message and stage conflict-free changes first".into();
+                    cx.notify();
+                } else {
+                    self.run_git_action(GitUiAction::Commit(message), cx);
+                }
+            }
+            GitSourceControlMenuAction::DraftCommitMessage => {
+                self.prepare_offline_commit_draft(cx);
+            }
+            GitSourceControlMenuAction::Amend => {
+                self.prepare_or_confirm_git_amend(cx);
+            }
+            GitSourceControlMenuAction::AiCommitMessage => {
+                if self.git_ai_generate_loading || self.git_ai_prompt_preview.is_some() {
+                    self.generate_ai_commit_message(cx);
+                } else {
+                    self.prepare_staged_ai_prompt(cx);
+                }
+            }
+            GitSourceControlMenuAction::StageAll
+            | GitSourceControlMenuAction::UnstageAll
+            | GitSourceControlMenuAction::DiscardAll => {
+                let paths = self
+                    .git_snapshot
+                    .as_ref()
+                    .map(|snapshot| git_bulk_menu_paths(snapshot, action))
+                    .unwrap_or_else(|| Err("Load Git status before running bulk actions".into()));
+                match paths {
+                    Ok(paths) if !paths.is_empty() => match action {
+                        GitSourceControlMenuAction::StageAll => {
+                            self.run_git_action(GitUiAction::StageMany(paths), cx);
+                        }
+                        GitSourceControlMenuAction::UnstageAll => {
+                            self.run_git_action(GitUiAction::UnstageMany(paths), cx);
+                        }
+                        GitSourceControlMenuAction::DiscardAll => {
+                            self.confirm_discard_git_paths(paths, cx);
+                        }
+                        _ => unreachable!(),
+                    },
+                    Ok(_) => {
+                        self.git_action_status = "No matching Git changes for this action".into();
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        self.git_action_status = error;
+                        cx.notify();
+                    }
+                }
+            }
+            GitSourceControlMenuAction::Fetch => {
+                self.run_git_action(GitUiAction::Fetch, cx);
+            }
+            GitSourceControlMenuAction::Pull => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
+            }
+            GitSourceControlMenuAction::Push => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
+            }
+            GitSourceControlMenuAction::PublishBranch => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::PublishBranch, cx);
+            }
+            GitSourceControlMenuAction::StashSave => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
+            }
+            GitSourceControlMenuAction::StashApply => {
+                self.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
+            }
+        }
     }
 
     /// Classic primary action: check the current Git snapshot again on click.
@@ -12817,6 +13038,22 @@ impl Render for Workbench {
         let git_ai_generate_loading = self.git_ai_generate_loading;
         let git_amend_ready = self.git_amend_preview.is_some();
         let git_amend_loading = self.git_amend_loading;
+        let git_menu_has_snapshot = self.git_snapshot.is_some();
+        let git_menu_has_staged = git_all_changes.iter().any(|row| row.area == GitChangeArea::Staged);
+        let git_menu_has_conflicts = git_all_changes.iter().any(|row| row.area == GitChangeArea::Conflicts);
+        let git_menu_can_stage = git_all_changes.iter().any(|row| row.area.can_stage());
+        let git_menu_can_discard = git_all_changes.iter().any(|row| row.area == GitChangeArea::Changes);
+        let git_menu_can_stash = git_all_changes.iter().any(|row| {
+            matches!(row.area, GitChangeArea::Changes | GitChangeArea::Staged)
+        });
+        let git_menu_has_upstream = self.git_snapshot.as_ref().is_some_and(|snapshot| snapshot.upstream_configured);
+        let git_menu_can_publish = self.git_snapshot.as_ref().is_some_and(|snapshot| {
+            !snapshot.upstream_configured
+                && !snapshot.branch.is_empty()
+                && snapshot.branch != "HEAD"
+                && !snapshot.branch.starts_with('(')
+        });
+
         let git_branch_input = self.git_branch_input.clone();
         let git_rename_source = self.git_rename_source.clone();
         let git_rename_input = self.git_rename_input.clone();
@@ -14152,112 +14389,86 @@ impl Render for Workbench {
                                     .border_color(rgb(BORDER))
                                     .child(
                                         div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
                                             .text_xs()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child(tr(self.settings_menu_locale, "Source Control")),
                                     )
                                     .child(
                                         div()
+                                            .id("git-source-control-actions-scroll")
                                             .flex()
+                                            .min_w_0()
                                             .items_center()
                                             .gap_1()
-                                            // The Classic toolbar exposes the same view options,
-                                            // but four icon-only controls obscure their meaning in a
-                                            // narrow sidebar. Keep refresh visible and group the
-                                            // presentation-only controls into a labeled menu.
-                                            .child({
-                                                let owner = cx.entity().downgrade();
-                                                let locale = self.settings_menu_locale;
-                                                let tree_mode = git_tree_mode;
-                                                let grouped = git_group_by_area;
-                                                let all_collapsed = self.git_sidebar_all_groups_collapsed();
-                                                Button::new("git-sidebar-display-options")
-                                                    .label(tr(locale, "Display options"))
-                                                    .ghost()
-                                                    .dropdown_menu(move |menu, _, _| {
-                                                        let tree_owner = owner.clone();
-                                                        let group_owner = owner.clone();
-                                                        let collapse_owner = owner.clone();
-                                                        menu
-                                                            .item(PopupMenuItem::new(tr(locale, if tree_mode {
-                                                                "Show flat file list"
-                                                            } else {
-                                                                "Show folder tree"
-                                                            }))
-                                                                .on_click(move |_, _, cx| {
-                                                                    let _ = tree_owner.update(cx, |view, cx| view.toggle_git_sidebar_view(cx));
-                                                                }))
-                                                            .item(PopupMenuItem::new(tr(locale, if grouped {
-                                                                "Show changes without grouping"
-                                                            } else {
-                                                                "Group changes by status"
-                                                            }))
-                                                                .on_click(move |_, _, cx| {
-                                                                    let _ = group_owner.update(cx, |view, cx| view.toggle_git_sidebar_group(cx));
-                                                                }))
-                                                            .separator()
-                                                            .item(PopupMenuItem::new(tr(locale, if all_collapsed {
-                                                                "Expand all change groups"
-                                                            } else {
-                                                                "Collapse all change groups"
-                                                            }))
-                                                                .on_click(move |_, _, cx| {
-                                                                    let _ = collapse_owner.update(cx, |view, cx| view.toggle_git_sidebar_collapse_all(cx));
-                                                                }))
-                                                    })
-                                            })
-                                            .child(icon_button("git-refresh", UiIcon::GitRefresh,
-                                                tr(self.settings_menu_locale, "Refresh Git status"), false)
+                                            .overflow_x_scroll()
+                                            // Keep Classic's frequently-used Source Control actions one click away.
+                                            .child(sidebar_icon_button("git-open-all-changes", UiIcon::GitCompare,
+                                                tr(self.settings_menu_locale, "All Changes"), false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_git_all_changes_diff(cx);
+                                                })))
+                                            .child(sidebar_icon_button("git-toggle-view",
+                                                if git_tree_mode { UiIcon::List } else { UiIcon::Graph },
+                                                tr(self.settings_menu_locale, if git_tree_mode { "Show Flat List" } else { "Show Tree" }),
+                                                false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if !this.git_loading && !this.git_action_busy {
+                                                        this.toggle_git_sidebar_view(cx);
+                                                    }
+                                                })))
+                                            .child(sidebar_icon_button("git-toggle-group",
+                                                if git_group_by_area { UiIcon::GridView } else { UiIcon::Outline },
+                                                tr(self.settings_menu_locale, if git_group_by_area { "Show All Changes" } else { "Group By Staged State" }),
+                                                false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if !this.git_loading && !this.git_action_busy {
+                                                        this.toggle_git_sidebar_group(cx);
+                                                    }
+                                                })))
+                                            .child(sidebar_icon_button("git-collapse-all",
+                                                if self.git_sidebar_all_groups_collapsed() { UiIcon::ExpandAll } else { UiIcon::CollapseAll },
+                                                tr(self.settings_menu_locale, if self.git_sidebar_all_groups_collapsed() { "Expand All" } else { "Collapse All" }),
+                                                false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    if !this.git_loading && !this.git_action_busy {
+                                                        this.toggle_git_sidebar_collapse_all(cx);
+                                                    }
+                                                })))
+                                            .child(sidebar_icon_button("git-refresh", UiIcon::GitRefresh,
+                                                tr(self.settings_menu_locale, "Refresh"), false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
                                                     if this.git_history_open { this.refresh_git_history(cx); }
-                                                }))),
+                                                })))
+                                            .when(git_menu_has_staged || git_ai_generate_loading
+                                                || git_ai_prompt_loading || git_ai_prompt_preview.is_some(),
+                                                |toolbar| toolbar.child(sidebar_icon_button(
+                                                    "git-ai-commit-shortcut",
+                                                    if git_ai_generate_loading { UiIcon::Close } else { UiIcon::Sparkles },
+                                                    if git_ai_generate_loading {
+                                                        "Cancel AI Commit generation"
+                                                    } else if git_ai_prompt_preview.is_some() {
+                                                        "Generate AI Commit using Classic Host settings"
+                                                    } else if git_ai_prompt_loading {
+                                                        "Cancel staged AI prompt preview"
+                                                    } else {
+                                                        "Prepare staged AI Commit prompt (review before generating)"
+                                                    },
+                                                    git_ai_generate_loading,
+                                                ).on_click(cx.listener(|this, _, _, cx| {
+                                                    this.run_git_source_control_menu_action(
+                                                        GitSourceControlMenuAction::AiCommitMessage, cx,
+                                                    );
+                                                }))))
+                                            .child(sidebar_icon_button("git-open-large-graph", UiIcon::Graph,
+                                                tr(self.settings_menu_locale, "Open Git Graph"), false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_center_git_graph(cx);
+                                                })))
                                     ),
-                            )
-                            // Classic's All Changes opens one bounded, read-only multi-file
-                            // patch in the central workbench, not an editor or Git writer.
-                            .child(
-                                div()
-                                    .id("git-open-all-changes")
-                                    .h(px(32.0))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                    .child(icon(UiIcon::Files, 15.0, TEXT))
-                                    .child(div().flex_1().min_w_0().text_sm()
-                                        .child(tr(self.settings_menu_locale, "All Changes")))
-                                    .child(icon(UiIcon::Open, 13.0, MUTED))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_git_all_changes_diff(cx);
-                                    })),
-                            )
-                            // Keep the large Git Graph entry near the Source Control header.
-                            // The footer History action sits below a potentially long file list.
-                            .child(
-                                div()
-                                    .id("git-open-large-graph")
-                                    .h(px(36.0))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                    .child(icon(UiIcon::Graph, 16.0, TEXT))
-                                    .child(div().flex_1().min_w_0().text_sm()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(tr(self.settings_menu_locale, "Open Git Graph")))
-                                    .child(icon(UiIcon::Open, 14.0, MUTED))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_center_git_graph(cx);
-                                    })),
                             )
                             .when_some(git_current_index_conflict, |panel, (relative, count)| {
                                 panel.child(
@@ -14313,39 +14524,73 @@ impl Render for Workbench {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.run_classic_primary_git_action(cx);
                                             }))))
-                                        // Classic keeps Commit as the only main action.
-                                        // Preserve draft and amend safely behind a labeled menu.
+                                        // Match Classic's primary action plus Source Control Actions split menu.
                                         .child({
                                             let owner = cx.entity().downgrade();
                                             let locale = self.settings_menu_locale;
                                             Button::new("git-commit-options")
-                                                .icon(IconName::Ellipsis)
-                                                .ghost()
-                                                .tooltip(tr(locale, "More commit options"))
+                                                .icon(IconName::ChevronDown)
+                                                .primary()
+                                                .tooltip(tr(locale, "Source Control Actions"))
                                                 .dropdown_menu(move |menu, _, _| {
-                                                    let draft_owner = owner.clone();
-                                                    let amend_owner = owner.clone();
+                                                    let draft_label = if git_commit_draft_loading {
+                                                        "Discard pending draft"
+                                                    } else {
+                                                        "Draft message from staged files (offline)"
+                                                    };
+                                                    let amend_label = if git_amend_loading {
+                                                        "Checking amend preview"
+                                                    } else if git_amend_ready {
+                                                        "Confirm amend of last commit"
+                                                    } else {
+                                                        "Commit Amend"
+                                                    };
+                                                    let groups: &[&[(&'static str, GitSourceControlMenuAction, bool)]] = &[
+                                                        &[
+                                                            ("Commit", GitSourceControlMenuAction::Commit, git_menu_has_staged && !git_menu_has_conflicts),
+                                                            (draft_label, GitSourceControlMenuAction::DraftCommitMessage, git_menu_has_staged || git_commit_draft_loading),
+                                                            (amend_label, GitSourceControlMenuAction::Amend, (git_menu_has_staged && !git_menu_has_conflicts) || git_amend_ready),
+                                                            ("Generate commit message with AI", GitSourceControlMenuAction::AiCommitMessage, git_menu_has_staged || git_ai_generate_loading || git_ai_prompt_loading),
+                                                        ],
+                                                        &[
+                                                            ("Stage All", GitSourceControlMenuAction::StageAll, git_menu_can_stage),
+                                                            ("Unstage All", GitSourceControlMenuAction::UnstageAll, git_menu_has_staged),
+                                                            ("Discard All (confirm)", GitSourceControlMenuAction::DiscardAll, git_menu_can_discard),
+                                                        ],
+                                                        &[
+                                                            ("Fetch", GitSourceControlMenuAction::Fetch, git_menu_has_snapshot),
+                                                            ("Pull (fast-forward, confirm)", GitSourceControlMenuAction::Pull, git_menu_has_upstream),
+                                                            ("Push (confirm)", GitSourceControlMenuAction::Push, git_menu_has_upstream && !git_menu_has_conflicts),
+                                                            ("Publish Branch (confirm)", GitSourceControlMenuAction::PublishBranch, git_menu_can_publish),
+                                                        ],
+                                                        &[
+                                                            ("Stash tracked changes (confirm)", GitSourceControlMenuAction::StashSave, git_menu_can_stash && !git_menu_has_conflicts),
+                                                            ("Apply latest stash (confirm)", GitSourceControlMenuAction::StashApply, git_menu_has_snapshot),
+                                                        ],
+                                                    ];
+                                                    let mut menu = menu;
+                                                    let mut has_previous_group = false;
+                                                    for group in groups {
+                                                        let mut group_started = false;
+                                                        for &(label, action, available) in *group {
+                                                            if !available {
+                                                                continue;
+                                                            }
+                                                            if !group_started && has_previous_group {
+                                                                menu = menu.separator();
+                                                            }
+                                                            group_started = true;
+                                                            let action_owner = owner.clone();
+                                                            menu = menu.item(PopupMenuItem::new(tr(locale, label))
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = action_owner.update(cx, |view, cx| {
+                                                                        view.run_git_source_control_menu_action(action, cx);
+                                                                    });
+                                                                }));
+                                                        }
+                                                        has_previous_group |= group_started;
+                                                    }
                                                     menu
-                                                        .item(PopupMenuItem::new(tr(locale, if git_commit_draft_loading {
-                                                            "Discard pending draft"
-                                                        } else {
-                                                            "Draft message from staged files (offline)"
-                                                        })).on_click(move |_, _, cx| {
-                                                            let _ = draft_owner.update(cx, |view, cx| {
-                                                                view.prepare_offline_commit_draft(cx);
-                                                            });
-                                                        }))
-                                                        .item(PopupMenuItem::new(tr(locale, if git_amend_loading {
-                                                            "Checking amend preview…"
-                                                        } else if git_amend_ready {
-                                                            "Confirm amend of last commit"
-                                                        } else {
-                                                            "Prepare amend (review and confirm)"
-                                                        })).on_click(move |_, _, cx| {
-                                                            let _ = amend_owner.update(cx, |view, cx| {
-                                                                view.prepare_or_confirm_git_amend(cx);
-                                                            });
-                                                        }))
                                                 })
                                         }))
                             )
