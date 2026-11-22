@@ -1523,7 +1523,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             )
         })
         .count();
-    let sessions = view
+    let mut sessions = view
         .terminals
         .sessions
         .iter()
@@ -1545,6 +1545,15 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         .take(128)
         .cloned()
         .collect::<Vec<_>>();
+    // One full-width Agent card per row, with stable state sections rather
+    // than mixed chronological tiles. Keep original order within each section.
+    sessions.sort_by_key(|session| {
+        alera_gpui_desktop::agent_status_visual::dashboard_status_group(
+            session.agent_state,
+            session.interrupted,
+        )
+        .0
+    });
 
     let mut create_form = div().h(px(0.0)).into_any_element();
     if view.global_agent_create_open {
@@ -1748,12 +1757,15 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
     let mut list =
         div()
             .id("global-live-agent-sessions")
-            .h(px(if view.global_agent_create_open {
-                580.0
-            } else {
-                340.0
-            }))
-            .flex_shrink_0()
+            .when(view.global_agent_maximized, |list| list.flex_1().min_h_0())
+            .when(!view.global_agent_maximized, |list| {
+                list.h(px(if view.global_agent_create_open {
+                    580.0
+                } else {
+                    340.0
+                }))
+                .flex_shrink_0()
+            })
             .overflow_y_scroll()
             .px_3()
             .py_2()
@@ -1904,7 +1916,45 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             .into_any_element();
     }
 
+    let mut last_group = None;
     for (index, session) in sessions.iter().enumerate() {
+        let (group_rank, group_label) =
+            alera_gpui_desktop::agent_status_visual::dashboard_status_group(
+                session.agent_state,
+                session.interrupted,
+            );
+        if last_group != Some(group_rank) {
+            let count = sessions
+                .iter()
+                .filter(|item| {
+                    alera_gpui_desktop::agent_status_visual::dashboard_status_group(
+                        item.agent_state,
+                        item.interrupted,
+                    )
+                    .0 == group_rank
+                })
+                .count();
+            list = list.child(
+                div()
+                    .id(("global-agent-state-section", group_rank as usize))
+                    .w_full()
+                    .mt_2()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().font_weight(gpui::FontWeight::BOLD).child(group_label))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(format!("{count} Agents")),
+                    ),
+            );
+            last_group = Some(group_rank);
+        }
         let agent = session.agent_type.clone().unwrap_or_default();
         let state = session.agent_state;
         let state_text = if let Some(state) = state {
@@ -2022,6 +2072,8 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         list = list.child(
             div()
                 .id(("global-agent-session-row", index))
+                .w_full()
+                .min_w_0()
                 .rounded_md()
                 .bg(rgb(ELEVATED))
                 .px_2()
@@ -2031,159 +2083,202 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 .gap_1()
                 .child(
                     div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(format!("{agent} - {state_text}")),
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(agent.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(format!("Workspace: {workspace_id}")),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(state_text.clone()),
+                        ),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(format!("Workspace: {workspace_id}")),
+                        .w_full()
+                        .flex()
+                        .gap_3()
+                        .child(div().min_w_0().flex_1().text_sm().truncate().child(goal))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .truncate()
+                                .child(progress),
+                        ),
                 )
-                .child(div().text_sm().child(goal))
-                .child(div().text_xs().text_color(rgb(MUTED)).child(progress))
                 .child(timeline_panel)
+                // Keep controls on one compact action row, wrapping only when
+                // the application window is narrower than the Agent card.
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(if state.is_some() {
-                            "Click to open this Agent"
-                        } else {
-                            "Waiting for verified Agent state"
-                        }),
-                )
-                .child(
-                    div()
-                        .id(("global-agent-select-steer", index))
-                        .cursor_pointer()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Steer · select target")
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            let target = GlobalAgentPromptTarget {
-                                handle: steer_id.clone(),
-                                workspace_id: steer_workspace.clone(),
-                                tab_id: steer_tab.clone(),
-                                agent_type: steer_agent.clone(),
-                            };
-                            if view.terminals.session_list_is_stale()
-                                || !target.is_live(&view.terminals.sessions)
-                            {
-                                view.global_agent_target = None;
-                                view.global_agent_submit_status =
-                                    "Agent identity is stale; refresh Host inventory".into();
-                            } else {
-                                view.global_agent_target = Some(target);
-                                view.global_agent_submit_status =
-                                    "Target selected; type an instruction above".into();
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .id(("global-agent-interrupt", index))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(rgb(if control_busy { MUTED } else { TEXT }))
-                        .child(if interrupt_armed {
-                            "Confirm Interrupt Turn (keeps PTY)"
-                        } else {
-                            "Interrupt Turn · confirmation required"
-                        })
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.confirm_global_agent_control(interrupt_target.clone(), false, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .id(("global-agent-terminate", index))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(rgb(if control_busy { MUTED } else { TEXT }))
-                        .child(if terminate_armed {
-                            "Confirm Terminate Session (ends PTY)"
-                        } else {
-                            "Terminate Session · confirmation required"
-                        })
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.confirm_global_agent_control(terminate_target.clone(), true, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .id(("global-agent-hide-card", index))
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(if is_hidden {
-                            "Show this dashboard card"
-                        } else {
-                            "Hide card · keep Host Agent running"
-                        })
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            let key = (card_id.clone(), card_workspace.clone(), card_tab.clone());
-                            if view.global_agent_hidden.contains(&key) {
-                                view.global_agent_hidden.remove(&key);
-                            } else {
-                                view.global_agent_hidden.insert(key.clone());
-                                view.global_agent_control_armed = None;
-                                // A card hidden from the dashboard cannot remain
-                                // an invisible destination for subsequent input.
-                                if view.global_agent_target.as_ref().is_some_and(|target| {
-                                    target.handle == key.0
-                                        && target.workspace_id == key.1
-                                        && target.tab_id == key.2
-                                }) {
-                                    view.global_agent_target = None;
-                                    view.global_agent_submit_status =
-                                        "Hidden card; direct input target cleared".into();
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .id(("global-agent-open", index))
-                        .cursor_pointer()
-                        .text_xs()
-                        .child("Open original Agent tab")
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            // Read fresh Host state again; never navigate from a stale
-                            // copied row or a recycled handle.
-                            if view.terminals.session_list_is_stale() {
-                                view.terminals.status =
-                                    "Host Agent inventory is stale; refresh before opening".into();
-                                cx.notify();
-                                return;
-                            }
-                            let current = view.terminals.sessions.iter().find(|candidate| {
-                                candidate.running
-                                    && candidate.handle == session_id
-                                    && candidate.workspace_id == workspace_id
-                                    && candidate.tab_id == tab_id
-                                    && candidate.agent_type.as_deref() == Some(agent_type.as_str())
-                            });
-                            if current.is_some() {
-                                view.agent_navigation.begin(
-                                    AgentNavigationTarget {
-                                        session_id: session_id.clone(),
-                                        workspace_id: workspace_id.clone(),
-                                        tab_id: tab_id.clone(),
-                                        agent_type: agent_type.clone(),
-                                    },
-                                    AgentNavigationSource::Dashboard,
-                                );
-                                cx.notify();
-                            } else {
-                                view.terminals.status =
-                                    "Global Agent selection no longer matches the Host".into();
-                                cx.notify();
-                            }
-                        })),
+                        .w_full()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .id(("global-agent-select-steer", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Steer · select target")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    let target = GlobalAgentPromptTarget {
+                                        handle: steer_id.clone(),
+                                        workspace_id: steer_workspace.clone(),
+                                        tab_id: steer_tab.clone(),
+                                        agent_type: steer_agent.clone(),
+                                    };
+                                    if view.terminals.session_list_is_stale()
+                                        || !target.is_live(&view.terminals.sessions)
+                                    {
+                                        view.global_agent_target = None;
+                                        view.global_agent_submit_status =
+                                            "Agent identity is stale; refresh Host inventory"
+                                                .into();
+                                    } else {
+                                        view.global_agent_target = Some(target);
+                                        view.global_agent_submit_status =
+                                            "Target selected; type an instruction above".into();
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("global-agent-interrupt", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                                .child(if interrupt_armed {
+                                    "Confirm Interrupt Turn (keeps PTY)"
+                                } else {
+                                    "Interrupt Turn · confirmation required"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.confirm_global_agent_control(
+                                        interrupt_target.clone(),
+                                        false,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("global-agent-terminate", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                                .child(if terminate_armed {
+                                    "Confirm Terminate Session (ends PTY)"
+                                } else {
+                                    "Terminate Session · confirmation required"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.confirm_global_agent_control(
+                                        terminate_target.clone(),
+                                        true,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("global-agent-hide-card", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if is_hidden {
+                                    "Show this dashboard card"
+                                } else {
+                                    "Hide card · keep Host Agent running"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    let key =
+                                        (card_id.clone(), card_workspace.clone(), card_tab.clone());
+                                    if view.global_agent_hidden.contains(&key) {
+                                        view.global_agent_hidden.remove(&key);
+                                    } else {
+                                        view.global_agent_hidden.insert(key.clone());
+                                        view.global_agent_control_armed = None;
+                                        // A card hidden from the dashboard cannot remain
+                                        // an invisible destination for subsequent input.
+                                        if view.global_agent_target.as_ref().is_some_and(|target| {
+                                            target.handle == key.0
+                                                && target.workspace_id == key.1
+                                                && target.tab_id == key.2
+                                        }) {
+                                            view.global_agent_target = None;
+                                            view.global_agent_submit_status =
+                                                "Hidden card; direct input target cleared".into();
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("global-agent-open", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .child("Open original Agent tab")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    // Read fresh Host state again; never navigate from a stale
+                                    // copied row or a recycled handle.
+                                    if view.terminals.session_list_is_stale() {
+                                        view.terminals.status =
+                                            "Host Agent inventory is stale; refresh before opening"
+                                                .into();
+                                        cx.notify();
+                                        return;
+                                    }
+                                    let current =
+                                        view.terminals.sessions.iter().find(|candidate| {
+                                            candidate.running
+                                                && candidate.handle == session_id
+                                                && candidate.workspace_id == workspace_id
+                                                && candidate.tab_id == tab_id
+                                                && candidate.agent_type.as_deref()
+                                                    == Some(agent_type.as_str())
+                                        });
+                                    if current.is_some() {
+                                        view.agent_navigation.begin(
+                                            AgentNavigationTarget {
+                                                session_id: session_id.clone(),
+                                                workspace_id: workspace_id.clone(),
+                                                tab_id: tab_id.clone(),
+                                                agent_type: agent_type.clone(),
+                                            },
+                                            AgentNavigationSource::Dashboard,
+                                        );
+                                        // The selected original Tab must not remain behind this view.
+                                        view.global_agent_maximized = false;
+                                        cx.notify();
+                                    } else {
+                                        view.terminals.status =
+                                            "Global Agent selection no longer matches the Host"
+                                                .into();
+                                        cx.notify();
+                                    }
+                                })),
+                        ),
                 ),
         );
     }

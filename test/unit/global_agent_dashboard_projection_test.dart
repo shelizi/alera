@@ -140,6 +140,25 @@ void main() {
         interrupted: true,
       ),
     });
+    final sections = groupGlobalAgentLiveRows(rows);
+    expect(
+      sections.map((section) => section.group),
+      <GlobalAgentDashboardGroup>[
+        GlobalAgentDashboardGroup.blocked,
+        GlobalAgentDashboardGroup.waiting,
+        GlobalAgentDashboardGroup.working,
+        GlobalAgentDashboardGroup.interrupted,
+        GlobalAgentDashboardGroup.done,
+      ],
+    );
+    expect(sections.every((section) => section.rows.length == 1), isTrue);
+    expect(
+      sections
+          .expand((section) => section.rows)
+          .map((row) => row.tab.id)
+          .toSet(),
+      <String>{'wait', 'blocked', 'working', 'done', 'interrupted'},
+    );
     final needsReview = rows.where((row) => row.needsReview).toList();
     expect(needsReview.map((row) => row.tab.id).toSet(), <String>{
       'wait',

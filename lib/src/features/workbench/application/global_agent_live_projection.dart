@@ -3,6 +3,60 @@ import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 
+/// Deterministic dashboard sections. Every Agent appears in exactly one
+/// section; a finished/interrupted turn does not appear as Waiting.
+enum GlobalAgentDashboardGroup {
+  blocked('Blocked'),
+  waiting('Waiting'),
+  working('Working'),
+  interrupted('Interrupted'),
+  done('Done');
+
+  GlobalAgentDashboardGroup(this.label);
+  final String label;
+
+  static GlobalAgentDashboardGroup forStatus(AgentStatusEntry status) {
+    if (status.interrupted == true) return interrupted;
+    return switch (status.state) {
+      AgentStatusState.blocked => blocked,
+      AgentStatusState.waiting => waiting,
+      AgentStatusState.working => working,
+      AgentStatusState.done => done,
+    };
+  }
+}
+
+class GlobalAgentDashboardSection {
+  const GlobalAgentDashboardSection(this.group, this.rows);
+  final GlobalAgentDashboardGroup group;
+  final List<GlobalAgentLiveRow> rows;
+}
+
+/// Group live Agent cards by current Hook state, newest first within each
+/// section. Empty sections are omitted, so the viewport stays compact.
+List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
+  Iterable<GlobalAgentLiveRow> rows,
+) {
+  final grouped = <GlobalAgentDashboardGroup, List<GlobalAgentLiveRow>>{};
+  for (final row in rows) {
+    grouped
+        .putIfAbsent(
+          GlobalAgentDashboardGroup.forStatus(row.status),
+          () => <GlobalAgentLiveRow>[],
+        )
+        .add(row);
+  }
+  return <GlobalAgentDashboardSection>[
+    for (final group in GlobalAgentDashboardGroup.values)
+      if (grouped[group] case final sectionRows?)
+        GlobalAgentDashboardSection(
+          group,
+          sectionRows
+            ..sort((a, b) => b.status.updatedAt.compareTo(a.status.updatedAt)),
+        ),
+  ];
+}
+
 /// Live, verified workspace-tab projection. Historical provider transcripts
 /// are intentionally excluded until the shared Host search API is available.
 class GlobalAgentLiveRow {

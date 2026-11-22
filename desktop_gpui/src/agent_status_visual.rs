@@ -18,6 +18,24 @@ pub enum AgentVisualState {
     Done,
 }
 
+/// Stable Dashboard section order. One verified Agent card belongs to exactly
+/// one state section; interrupted takes precedence over a stale Hook state.
+pub fn dashboard_status_group(
+    state: Option<AgentActivityState>,
+    interrupted: bool,
+) -> (u8, &'static str) {
+    if interrupted {
+        return (3, "Interrupted");
+    }
+    match state {
+        Some(AgentActivityState::Blocked) => (0, "Blocked"),
+        Some(AgentActivityState::Waiting) => (1, "Waiting"),
+        Some(AgentActivityState::Working) => (2, "Working"),
+        Some(AgentActivityState::Done) => (4, "Done"),
+        None => (5, "Unknown"),
+    }
+}
+
 impl AgentVisualState {
     pub const fn from_hook(state: AgentActivityState, interrupted: bool) -> Self {
         match state {
@@ -222,6 +240,31 @@ mod tests {
         );
         assert_eq!(AgentVisualState::Interrupted.color(), AGENT_BLOCKED);
         assert_eq!(AgentVisualState::Interrupted.label(), "Interrupted");
+    }
+
+    #[test]
+    fn dashboard_sections_group_each_state_and_prioritize_interrupted() {
+        assert_eq!(
+            dashboard_status_group(Some(AgentActivityState::Blocked), false),
+            (0, "Blocked")
+        );
+        assert_eq!(
+            dashboard_status_group(Some(AgentActivityState::Waiting), false),
+            (1, "Waiting")
+        );
+        assert_eq!(
+            dashboard_status_group(Some(AgentActivityState::Working), false),
+            (2, "Working")
+        );
+        assert_eq!(
+            dashboard_status_group(Some(AgentActivityState::Blocked), true),
+            (3, "Interrupted")
+        );
+        assert_eq!(
+            dashboard_status_group(Some(AgentActivityState::Done), false),
+            (4, "Done")
+        );
+        assert_eq!(dashboard_status_group(None, false), (5, "Unknown"));
     }
 
     #[test]

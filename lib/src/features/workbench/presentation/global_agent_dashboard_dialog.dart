@@ -274,13 +274,19 @@ class _GlobalAgentDashboardDialogState
         .where((row) => !_needsReviewOnly || row.needsReview)
         .where((row) => row.matches(_query))
         .toList();
+    final groups = groupGlobalAgentLiveRows(rows);
+    final items = <Object>[
+      for (final section in groups) ...<Object>[section, ...section.rows],
+    ];
+    final viewport = MediaQuery.sizeOf(context);
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     return Dialog(
+      insetPadding: const EdgeInsets.all(12),
       backgroundColor: AleraTokens.bg,
       child: SizedBox(
-        width: 880,
-        height: 660,
+        width: viewport.width * 0.97,
+        height: viewport.height * 0.94,
         child: Padding(
           padding: const EdgeInsets.all(AleraTokens.space24),
           child: Column(
@@ -442,11 +448,32 @@ class _GlobalAgentDashboardDialogState
                           ),
                         )
                       : ListView.separated(
-                          itemCount: rows.length,
+                          itemCount: items.length,
                           separatorBuilder: (_, _) =>
                               const SizedBox(height: AleraTokens.space8),
                           itemBuilder: (context, index) {
-                            final row = rows[index];
+                            final item = items[index];
+                            if (item is GlobalAgentDashboardSection) {
+                              return Padding(
+                                padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      item.group.label,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '${item.rows.length} Agents',
+                                      style: muted,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+                            final row = item as GlobalAgentLiveRow;
                             final identity = _identity(row);
                             final expanded = _expandedTimelines.contains(
                               identity,
@@ -552,41 +579,43 @@ class _GlobalAgentDashboardDialogState
                                             ),
                                           ),
                                     ],
-                                    Align(
-                                      alignment: Alignment.centerRight,
-                                      child: TextButton.icon(
-                                        onPressed: () => _toggleHidden(row),
-                                        icon: Icon(
-                                          _hiddenCards.contains(_identity(row))
-                                              ? Icons.visibility
-                                              : Icons.visibility_off,
-                                        ),
-                                        label: Text(
-                                          _hiddenCards.contains(_identity(row))
-                                              ? 'Show card'
-                                              : 'Hide card (Agent keeps running)',
-                                        ),
-                                      ),
-                                    ),
-                                    Align(
-                                      alignment: Alignment.centerRight,
-                                      child: TextButton.icon(
-                                        onPressed: () => setState(() {
-                                          _target = (
-                                            sessionId:
-                                                row.tab.terminalSessionId,
-                                            workspaceId: row.status.workspaceId,
-                                            tabId: row.tab.id,
-                                          );
-                                          _sendFeedback = null;
-                                        }),
-                                        icon: const Icon(Icons.edit_note),
-                                        label: const Text('Steer'),
-                                      ),
-                                    ),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
+                                    Wrap(
+                                      alignment: WrapAlignment.end,
+                                      spacing: 4,
+                                      runSpacing: 0,
                                       children: [
+                                        TextButton.icon(
+                                          onPressed: () => setState(() {
+                                            _target = (
+                                              sessionId:
+                                                  row.tab.terminalSessionId,
+                                              workspaceId:
+                                                  row.status.workspaceId,
+                                              tabId: row.tab.id,
+                                            );
+                                            _sendFeedback = null;
+                                          }),
+                                          icon: const Icon(Icons.edit_note),
+                                          label: const Text('Steer'),
+                                        ),
+                                        TextButton.icon(
+                                          onPressed: () => _focus(row),
+                                          icon: const Icon(Icons.open_in_new),
+                                          label: const Text('Open Agent'),
+                                        ),
+                                        TextButton.icon(
+                                          onPressed: () => _toggleHidden(row),
+                                          icon: Icon(
+                                            _hiddenCards.contains(identity)
+                                                ? Icons.visibility
+                                                : Icons.visibility_off,
+                                          ),
+                                          label: Text(
+                                            _hiddenCards.contains(identity)
+                                                ? 'Show card'
+                                                : 'Hide (keeps running)',
+                                          ),
+                                        ),
                                         TextButton.icon(
                                           onPressed: _controlling || _sending
                                               ? null
@@ -607,7 +636,7 @@ class _GlobalAgentDashboardDialogState
                                                       terminate: false,
                                                     )
                                                 ? 'Confirm interrupt'
-                                                : 'Interrupt turn',
+                                                : 'Interrupt',
                                           ),
                                         ),
                                         TextButton.icon(
@@ -630,18 +659,10 @@ class _GlobalAgentDashboardDialogState
                                                       terminate: true,
                                                     )
                                                 ? 'Confirm terminate'
-                                                : 'Terminate Session',
+                                                : 'Terminate',
                                           ),
                                         ),
                                       ],
-                                    ),
-                                    Align(
-                                      alignment: Alignment.centerRight,
-                                      child: TextButton.icon(
-                                        onPressed: () => _focus(row),
-                                        icon: const Icon(Icons.open_in_new),
-                                        label: const Text('Open Agent'),
-                                      ),
                                     ),
                                   ],
                                 ),

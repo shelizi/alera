@@ -1108,6 +1108,8 @@ struct Workbench {
     /// Hidden dashboard cards do not detach or terminate Host PTYs.
     global_agent_hidden: HashSet<(String, String, String)>,
     global_agent_show_hidden: bool,
+    /// Present Global Agents as a near-full-window workspace overlay.
+    global_agent_maximized: bool,
     /// Review-only view never writes to Host or hides waiting Agent PTYs.
     global_agent_needs_review_only: bool,
     /// At most one expanded live context timeline; avoids unbounded UI cache.
@@ -13231,6 +13233,7 @@ impl Render for Workbench {
                                         self.right_sidebar_view == RightSidebarView::AgentContext,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
+                                        view.global_agent_maximized = true;
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
                                     })))
@@ -13260,7 +13263,11 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
-                                            .child(native_global_agents_ui::panel(self, cx))
+                                            .child(if self.global_agent_maximized {
+                                                div().into_any_element()
+                                            } else {
+                                                native_global_agents_ui::panel(self, cx)
+                                            })
                                             .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
                                     ),
                             )
@@ -15614,7 +15621,14 @@ impl Render for Workbench {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_pull_requests_panel(cx);
                                 })))
-                            .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
+                            .child(icon_button("right-rail-agents", UiIcon::List, "Open full-size Global Agent Dashboard", false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.right_sidebar_view = RightSidebarView::AgentContext;
+                            this.right_sidebar_visible = true;
+                            this.global_agent_maximized = true;
+                            cx.notify();
+                        })))
+                    .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.open_global_agent_history(window, cx);
                                 })))
@@ -17886,6 +17900,48 @@ impl Render for Workbench {
                         cx,
                     )),
             )
+            .when(self.global_agent_maximized, |root| {
+                root.child(
+                    div()
+                        .id("global-agent-maximized-overlay")
+                        .absolute()
+                        .inset_0()
+                        .bg(rgb(PANEL))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .h(px(SECTION_HEADER_HEIGHT))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .border_b_1()
+                                .border_color(rgb(BORDER))
+                                .child(div().font_weight(gpui::FontWeight::BOLD).child("Global Agents"))
+                                .child(div().text_xs().text_color(rgb(MUTED)).child("One full-width card per Agent · grouped by state"))
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .id("global-agent-restore-sidebar")
+                                        .cursor_pointer()
+                                        .text_sm()
+                                        .child("Return to workspace ×")
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.global_agent_maximized = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .min_w_0()
+                                .child(native_global_agents_ui::panel(self, cx)),
+                        ),
+                )
+            })
     }
 }
 
@@ -18706,6 +18762,7 @@ fn main() {
                             global_agent_control_status: String::new(),
                             global_agent_hidden: HashSet::new(),
                             global_agent_show_hidden: false,
+                            global_agent_maximized: false,
                             global_agent_needs_review_only: false,
                             global_agent_expanded_timeline: None,
                             global_agent_create_open: false,

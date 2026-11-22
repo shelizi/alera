@@ -1,7 +1,7 @@
 # Alera Global Agent Control Center and Session Search
 
 Status: IN PROGRESS
-Updated: 2026-11-21
+Updated: 2026-11-22
 Worktree: `.worktrees/agent-context-overview-20261121`
 Branch: `feat/global-agent-control-session-search-20261121`
 Base: `main` at `c7c3b2faa66b54eda3b767a5ee84b478ced45930`
@@ -12,7 +12,7 @@ Owners: feature worktree only; do not mutate `main` or other active worktrees.
 Deliver one cross-project Agent control center for both Classic Flutter and Native GPUI. It must enumerate all current Runtime Host Agent sessions regardless of the selected project, show the authenticated Agent state and Hook-derived overall objective/progress/timeline, accept explicit user input targeted to a verified session, create agents in a selected registered workspace, and distinguish hiding a view from terminating a PTY. The same control center must find historical Claude/Codex sessions by exact terms or natural-language task description, preview a result, and safely resume only the exact provider conversation.
 
 User workflows:
-1. Open Global Agents from either UI and see all open agents grouped by project/workspace; active workspace is not a filter.
+1. Open Global Agents from either UI in a near-full-window view; show one full-width card for each live Agent, grouped by verified Agent Hook state (Blocked, Waiting, Working, Interrupted, Done), with Project/Worktree identified on each card. Active workspace is never a filter.
 2. Inspect goal, recent report, activity, and a drill-down timeline without opening a terminal.
 3. Target one session and send a command only after checking the immutable Host session/workspace/tab triple.
 4. Add an Agent with an explicit project, worktree, Provider, Profile and initial goal; close a view without killing a background task.
@@ -67,7 +67,7 @@ Non-goals for v1: automatic cross-provider native transcript import, silent mult
 
 ### P2 - Advanced usability
 
-- [ ] A01 Group/sort, [ ] A02 card/list density, [ ] A03 parent/subagent tree, [ ] A04 Kanban.
+- [ ] A01 Group/sort (status sections in Classic/GPUI implemented with per-section counts; user-controlled sort still pending), [ ] A02 card/list density (one full-width compact Agent card per row and near-full-window view implemented; user density settings pending), [ ] A03 parent/subagent tree, [ ] A04 Kanban.
 - [ ] A05 Targeted multiple-agent command dispatch with confirmation, [ ] A06 explicit cross-provider handoff.
 - [ ] A07 health/stall metrics, [ ] A08 cost/quota per scope, [ ] A09 favorites/tags, [ ] A10 detached dashboard window.
 
@@ -92,6 +92,9 @@ Non-goals for v1: automatic cross-provider native transcript import, silent mult
 | 6. Local semantic reranker and topic chunks | Natural-language retrieval plus code/error exact-match priority | TODO | |
 | 7. Cross-version UI and system acceptance | Classic and GPUI parity, long-running/lost-host/restart/privacy tests | TODO | |
 | 8. P0 Dashboard review queue and timeline | View-only Waiting/Blocked filter plus per-card 16-event Host timeline in Classic and GPUI; do not start or stop Agent | IN PROGRESS | Classic projection 4/4 PASS; Dart analyze zero issues; Windows GPUI cargo check PASS; GPUI Rust library 790 PASS, 0 FAIL, 2 IGNORED; physical click-through pending |
+| 9. Near-full-window card layout and state grouping | A single compact full-width Agent card per row, verified status headers/counts and responsive scrolling in Classic and GPUI | IN PROGRESS | Classic grouping projection 4/4 PASS; GPUI state-group Rust test 1/1 PASS; Windows GPUI cargo check PASS (2 preexisting warnings); physical UI layout/click-through pending |
+
+- 2026-11-22 layout clarification: Dashboard must favor nearly the full window. It is NOT a multi-column card grid or plain table. Every verified Agent gets exactly one horizontally compact, full-width card in one row; cards are grouped by the latest Hook state (Blocked, Waiting, Working, Interrupted, Done) with visible section counts. Show Project/Worktree in the card, task goal and latest progress at a glance. Keep actions on one responsive strip, with existing explicit Host identity checks, confirmations, and individually expandable Context timeline. Classic removes fixed 880×660 dialog sizing; Native GPUI presents an overlay covering the workspace instead of trapping the Dashboard in the ~340px-high sidebar list. Opening an Agent returns to its original workspace Tab. This is a layout implementation, not physical click-through acceptance. No main merge or release implied.
 
 ### Progress log
 
