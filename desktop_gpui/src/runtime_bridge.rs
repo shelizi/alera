@@ -462,7 +462,7 @@ impl RuntimeCliBridge {
                     && args[3..].chunks_exact(2).all(|pair| {
                         matches!(
                             pair[0].to_str(),
-                            Some("--provider" | "--account-id" | "--workspace-id")
+                            Some("--provider" | "--account-id" | "--project-id" | "--workspace-id")
                         ) && pair[1].to_str().is_some_and(|value| {
                             !value.is_empty()
                                 && value.len() <= 256

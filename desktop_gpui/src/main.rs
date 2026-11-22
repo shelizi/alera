@@ -1246,11 +1246,11 @@ struct Workbench {
     /// confirmation; never attach to whichever tab happens to be focused.
     agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
-    global_agent_prompt_input: Entity<QuickOpenInput>,
     global_agent_history_open: bool,
     global_agent_history_consent: bool,
     global_agent_history_input: Entity<QuickOpenInput>,
     global_agent_history_account_input: Entity<QuickOpenInput>,
+    global_agent_history_project_input: Entity<QuickOpenInput>,
     global_agent_history_workspace_input: Entity<QuickOpenInput>,
     global_agent_history_resume_profile_input: Entity<QuickOpenInput>,
     global_agent_history_resume_armed: Option<String>,
@@ -1258,6 +1258,9 @@ struct Workbench {
     global_agent_history_pending_mutations: std::collections::HashMap<String, String>,
     global_agent_history_located: std::collections::HashMap<String, (String, String)>,
     global_agent_history_provider: Option<String>,
+    global_agent_history_filters_expanded: bool,
+    global_agent_history_resume_expanded: Option<String>,
+    global_agent_history_clear_armed: bool,
     global_agent_history_busy: bool,
     global_agent_history_request: u64,
     global_agent_history_status: String,
@@ -1277,6 +1280,11 @@ struct Workbench {
     >,
     native_inline_original_request: u64,
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
+    /// Separate Host-verified VT inspector; never changes active Workspace.
+    global_agent_inspector: Option<native_global_agents_ui::GlobalAgentInspectorState>,
+    global_agent_inspector_epoch: u64,
+    global_agent_inspector_input: Entity<QuickOpenInput>,
+    global_agent_inspector_focus: gpui::FocusHandle,
     global_agent_submit_busy: bool,
     global_agent_submit_status: String,
     global_agent_control_armed: Option<(native_global_agents_ui::GlobalAgentPromptTarget, bool)>,
@@ -12012,6 +12020,14 @@ impl Workbench {
             }
         })
         .detach();
+        // A single dormant-when-closed timer streams the exact Inspector
+        // session into an independent VT grid without stealing Pane focus.
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(650)).await;
+            if view.update(cx, |view, cx| view.refresh_global_agent_inspector(cx)).is_err() {
+                break;
+            }
+        }).detach();
         // Native Host push is consumed on a 16ms visible-screen frame.
         // Legacy CLI reads retain their adaptive 100/350/1500ms rate and
         // hidden/stream-disconnected views retain the 50ms housekeeping wake.
@@ -13602,6 +13618,8 @@ impl Render for Workbench {
                                         view.right_sidebar_view = RightSidebarView::AgentContext;
                                         view.global_agent_history_open = false;
                                         view.global_agent_maximized = true;
+                                        view.refresh_terminals(cx);
+                                        view.refresh_host_tab_pins(cx);
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
                                     })))
@@ -15945,6 +15963,8 @@ impl Render for Workbench {
                             this.right_sidebar_visible = true;
                             this.global_agent_history_open = false;
                             this.global_agent_maximized = true;
+                            this.refresh_terminals(cx);
+                            this.refresh_host_tab_pins(cx);
                             cx.notify();
                         })))
                     .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
@@ -18277,7 +18297,7 @@ impl Render for Workbench {
                                 .border_b_1()
                                 .border_color(rgb(BORDER))
                                 .child(div().font_weight(gpui::FontWeight::BOLD).child("Global Agents"))
-                                .child(div().text_xs().text_color(rgb(MUTED)).child("One full-width card per Agent · grouped by state"))
+                                .child(div().text_xs().text_color(rgb(MUTED)).child("Pinned Kanban cards by Host status · inspect without leaving Dashboard"))
                                 .child(div().flex_1())
                                 .child(
                                     div()
@@ -18299,6 +18319,9 @@ impl Render for Workbench {
                                 .child(native_global_agents_ui::panel(self, cx)),
                         ),
                 )
+            })
+            .when(self.global_agent_inspector.is_some(), |root| {
+                root.child(native_global_agents_ui::inspector_overlay(self, cx))
             })
     }
 }
@@ -18513,6 +18536,24 @@ fn main() {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
                         let secondary_terminal_input = cx.new(QuickOpenInput::terminal);
+                        let global_agent_inspector_input = cx.new(QuickOpenInput::terminal);
+                        cx.observe_in(
+                            &global_agent_inspector_input,
+                            window,
+                            |view: &mut Workbench, input, window, cx| {
+                                let focused =
+                                    input.read(cx).focus_handle(cx).is_focused(window);
+                                let committed = input.update(cx, |input, _| {
+                                    input.take_terminal_committed()
+                                });
+                                if focused && view.global_agent_inspector.is_some() {
+                                    for text in committed {
+                                        view.enqueue_global_agent_inspector_key(text, cx);
+                                    }
+                                }
+                            },
+                        )
+                        .detach();
                         cx.observe_in(
                             &terminal_input,
                             window,
@@ -19088,9 +19129,6 @@ fn main() {
                             agent_pending_tab: None,
                             agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
-                            global_agent_prompt_input: cx.new(|cx| {
-                                QuickOpenInput::profile_command(cx)
-                            }),
                             global_agent_history_open: false,
                             global_agent_history_consent: false,
                             global_agent_history_input: cx.new(|cx| {
@@ -19098,6 +19136,9 @@ fn main() {
                             }),
                             global_agent_history_account_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Account ID (optional)", cx)
+                            }),
+                            global_agent_history_project_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Project ID (optional)", cx)
                             }),
                             global_agent_history_workspace_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Worktree ID (optional)", cx)
@@ -19109,6 +19150,9 @@ fn main() {
                             global_agent_history_pending_mutations: std::collections::HashMap::new(),
                             global_agent_history_located: std::collections::HashMap::new(),
                             global_agent_history_provider: None,
+                            global_agent_history_filters_expanded: false,
+                            global_agent_history_resume_expanded: None,
+                            global_agent_history_clear_armed: false,
                             global_agent_history_busy: false,
                             global_agent_history_request: 0,
                             global_agent_history_status: "Native history search is off until you explicitly opt in".into(),
@@ -19122,6 +19166,10 @@ fn main() {
                             native_inline_original: HashMap::new(),
                             native_inline_original_request: 0,
                             global_agent_target: None,
+                            global_agent_inspector: None,
+                            global_agent_inspector_epoch: 0,
+                            global_agent_inspector_input,
+                            global_agent_inspector_focus: cx.focus_handle(),
                             global_agent_submit_busy: false,
                             global_agent_submit_status: String::new(),
                             global_agent_control_armed: None,
