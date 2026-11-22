@@ -145,6 +145,22 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
       workbenchControllerProvider.select((state) => state.activeProject),
       (_, project) => _gitRepositoryMonitor.selectProject(project),
     );
+    // Selecting a different Workspace/Tab from any UI returns to its
+    // workbench; toggling Dashboard itself leaves its selection intact.
+    ref.listen(
+      workbenchControllerProvider.select(
+        (state) => (
+          workspaceId: state.activeWorkspaceId,
+          tabId: state.activeWorkspaceTab?.id,
+        ),
+      ),
+      (_, _) {
+        if (ref.read(globalAgentDashboardNavigationProvider)) {
+          ref.read(globalAgentDashboardNavigationProvider.notifier).close();
+        }
+      },
+    );
+    final dashboardOpen = ref.watch(globalAgentDashboardNavigationProvider);
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
     // Keep the native hook receiver and Host presence forwarding alive while
@@ -252,14 +268,32 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                       children: <Widget>[
                         const ProjectWorkbenchSidebar(),
                         Expanded(
-                          child: _buildContent(
-                            bootstrapped: shell.bootstrapped,
-                            hasProjects: shell.hasProjects,
-                            project: project,
-                            workspace: workspace,
-                            sourceControlScope: sourceControlScope,
-                            tabs: shell.tabs,
-                            layout: shell.layout,
+                          // Keep Editor/Terminal widgets mounted while the
+                          // center Dashboard is shown; PTYs are not recreated.
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              ExcludeFocus(
+                                excluding: dashboardOpen,
+                                child: Offstage(
+                                  offstage: dashboardOpen,
+                                  child: TickerMode(
+                                    enabled: !dashboardOpen,
+                                    child: _buildContent(
+                                      bootstrapped: shell.bootstrapped,
+                                      hasProjects: shell.hasProjects,
+                                      project: project,
+                                      workspace: workspace,
+                                      sourceControlScope: sourceControlScope,
+                                      tabs: shell.tabs,
+                                      layout: shell.layout,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (dashboardOpen)
+                                const GlobalAgentDashboardPage(),
+                            ],
                           ),
                         ),
                         if (workspace != null && showContextSidebar)

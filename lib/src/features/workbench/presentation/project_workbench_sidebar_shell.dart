@@ -84,7 +84,8 @@ class _ProjectWorkbenchSidebarState
         commands: commands,
         onAddProject: _addProject,
         onOpenSettings: () => unawaited(_openSettings()),
-        onOpenGlobalAgents: () => unawaited(showGlobalAgentDashboard(context)),
+        onOpenGlobalAgents: () =>
+            ref.read(globalAgentDashboardNavigationProvider.notifier).open(),
         onOpenAutomations: () => unawaited(_openAutomations()),
       );
     }
@@ -290,8 +291,9 @@ class _ProjectWorkbenchSidebarState
                 _SidebarFooter(
                   onAddProject: _addProject,
                   onOpenSettings: () => unawaited(_openSettings()),
-                  onOpenGlobalAgents: () =>
-                      unawaited(showGlobalAgentDashboard(context)),
+                  onOpenGlobalAgents: () => ref
+                      .read(globalAgentDashboardNavigationProvider.notifier)
+                      .open(),
                   onOpenAutomations: () => unawaited(_openAutomations()),
                 ),
               ],

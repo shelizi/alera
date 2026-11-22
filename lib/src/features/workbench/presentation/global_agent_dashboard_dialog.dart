@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/global_agent_dashboard_navigation.dart';
 import 'package:alera/src/features/workbench/application/global_agent_live_projection.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_launch_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_history_panel.dart';
@@ -11,24 +12,19 @@ import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_c
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-Future<void> showGlobalAgentDashboard(BuildContext context) {
-  return showDialog<void>(
-    context: context,
-    builder: (_) => const GlobalAgentDashboardDialog(),
-  );
-}
-
 /// Global scope is deliberate: this watches the full Workbench inventory and
-/// current Agent map, not the selected project's subset.
-class const GlobalAgentDashboardDialog({super.key})
-    extends ConsumerStatefulWidget {
+/// current Agent map, not the selected project's subset. This page lives in
+/// the center workbench; the sidebar and existing Tab state remain mounted.
+class GlobalAgentDashboardPage extends ConsumerStatefulWidget {
+  const GlobalAgentDashboardPage({super.key});
+
   @override
-  ConsumerState<GlobalAgentDashboardDialog> createState() =>
-      _GlobalAgentDashboardDialogState();
+  ConsumerState<GlobalAgentDashboardPage> createState() =>
+      _GlobalAgentDashboardPageState();
 }
 
-class _GlobalAgentDashboardDialogState
-    extends ConsumerState<GlobalAgentDashboardDialog> {
+class _GlobalAgentDashboardPageState
+    extends ConsumerState<GlobalAgentDashboardPage> {
   String _query = '';
   bool _historyMode = false;
   bool _needsReviewOnly = false;
@@ -387,7 +383,9 @@ class _GlobalAgentDashboardDialogState
           workspaceId: status.workspaceId,
           tabId: status.tabId,
         );
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) {
+      ref.read(globalAgentDashboardNavigationProvider.notifier).close();
+    }
   }
 
   @override
@@ -413,15 +411,11 @@ class _GlobalAgentDashboardDialogState
         .where((row) => row.matches(_query))
         .toList();
     final items = globalAgentDashboardVisibleItems(rows, _collapsedGroups);
-    final viewport = MediaQuery.sizeOf(context);
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
-    return Dialog(
-      insetPadding: const EdgeInsets.all(12),
-      backgroundColor: AleraTokens.bg,
-      child: SizedBox(
-        width: viewport.width * 0.97,
-        height: viewport.height * 0.94,
+    return Material(
+      color: AleraTokens.bg,
+      child: SizedBox.expand(
         child: Padding(
           padding: const EdgeInsets.all(AleraTokens.space24),
           child: Column(
@@ -442,7 +436,9 @@ class _GlobalAgentDashboardDialogState
                   ),
                   IconButton(
                     tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: () => ref
+                        .read(globalAgentDashboardNavigationProvider.notifier)
+                        .close(),
                     icon: const Icon(Icons.close),
                   ),
                 ],

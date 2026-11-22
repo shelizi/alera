@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/application/global_agent_history_retry.dart';
+import 'package:alera/src/features/workbench/application/global_agent_dashboard_navigation.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
@@ -276,11 +277,7 @@ class _GlobalAgentHistoryPanelState
           state.activeWorkspaceTab?.id != located.tabId) {
         throw StateError('Saved Tab could not be selected');
       }
-      setState(() {
-        _feedback =
-            'Opened verified Tab in the original Worktree. '
-            'No duplicate Agent Tab was created.';
-      });
+      ref.read(globalAgentDashboardNavigationProvider.notifier).close();
     } catch (_) {
       if (!mounted) return;
       setState(() {

@@ -75,7 +75,9 @@ class const _LeftColumn({required final WorkbenchState state})
                 icon: AleraIcons.ai,
                 title: 'Global Agent Dashboard',
                 description: 'Find and focus Agent sessions across projects',
-                onTap: () => unawaited(showGlobalAgentDashboard(context)),
+                onTap: () => ref
+                    .read(globalAgentDashboardNavigationProvider.notifier)
+                    .open(),
               ),
               const Divider(height: 1, color: AleraTokens.borderSubtle),
               _ActionRow(

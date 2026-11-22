@@ -58,6 +58,8 @@ import 'package:alera/src/features/workbench/presentation/workspace_context_side
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/welcome_dashboard.dart';
+import 'package:alera/src/features/workbench/presentation/global_agent_dashboard_dialog.dart';
+import 'package:alera/src/features/workbench/application/global_agent_dashboard_navigation.dart';
 import 'package:alera/src/features/workbench/application/terminal_driver_presence_controller.dart';
 import 'package:alera/src/features/workbench/presentation/mobile_driver_overlay.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
