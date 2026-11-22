@@ -17,6 +17,12 @@
 # Optional: -TestNativeContentProbe uses fresh EMPTY Claude/Codex account homes,
 # attempts to display fake native transcript markers with installed CLIs, and
 # explicitly reports NOT VERIFIED when authentication is required.
+# Optional: -TestVerifiedHistoryRpc -TestOfflineHistoryCommand injects
+# inert official-name CLI shims into the NEW isolated Host process only,
+# verifying exact UUID/selected account/JSONL through its real ConPTY.
+# Installed provider CLI negatives are skipped in this offline shim mode;
+# use -TestVerifiedHistoryRpc without it for those native negative checks.
+# The offline shim never proves that an installed model CLI restored a chat.
 # It does NOT prove successful resume of a real session or GUI rendering.
 
 [CmdletBinding()]
@@ -26,6 +32,7 @@ param(
     [string]$Root = '',
     [switch]$TestVerifiedHistoryRpc,
     [switch]$TestNativeContentProbe,
+    [switch]$TestOfflineHistoryCommand,
     [switch]$KeepArtifacts
 )
 
@@ -51,6 +58,28 @@ $projectId = 'native-resume-smoke-project'
 $missingUuid = '550e8400-e29b-41d4-a716-446655449999'
 $launcher = $null
 $hostStarted = $false
+$shimDir = $null
+if ($TestOfflineHistoryCommand -and -not $TestVerifiedHistoryRpc) {
+    throw 'Offline mock mode requires -TestVerifiedHistoryRpc'
+}
+if ($TestOfflineHistoryCommand -and $TestNativeContentProbe) {
+    throw 'Mock mode and installed native CLI probe cannot run together'
+}
+if ($TestOfflineHistoryCommand) {
+    . "$PSScriptRoot/mock-history-launch-commands.ps1"
+}
+function Start-IsolatedHistoryHost {
+    $options = @{
+        FilePath = $CliPath
+        ArgumentList = @('runtime', '--runtime-dir', ('"' + $runtime + '"'), '--json', 'start')
+        WindowStyle = 'Hidden'
+        PassThru = $true
+    }
+    if ($TestOfflineHistoryCommand) {
+        $options.Environment = @{ PATH = ($shimDir + [IO.Path]::PathSeparator + $env:PATH) }
+    }
+    Start-Process @options
+}
 
 function Invoke-AleraJson {
     param([string[]]$Arguments)
@@ -90,13 +119,26 @@ function Invoke-AleraJson {
                 throw "Alera CLI '$label' did not exit within 30 seconds"
             }
             $raw = $stdoutTask.GetAwaiter().GetResult().Trim()
-            $null = $stderrTask.GetAwaiter().GetResult()
+            $stderrOutput = $stderrTask.GetAwaiter().GetResult()
             $exitCode = $process.ExitCode
         } finally {
             $process.Dispose()
         }
         if ($exitCode -ne 0) {
-            throw "Alera CLI '$label' exited with code $exitCode"
+            # This fixture owns only its fresh Runtime. Redact its path and
+            # print a bounded error category instead of hiding an allocator
+            # race behind the generic process exit code.
+            $details = (([string]$stderrOutput) + ' ' + $raw)
+            $diagnostic = if ($details -match '(?i)PTY worker startup failed:[\s\S]*?os error (\d+)') {
+                "PTY Worker start: Windows OS error $($Matches[1])"
+            } elseif ($details -match '(?i)(?:Host unavailable|connection refused|connection reset)') {
+                'Host transport unavailable'
+            } elseif ($details -match '(?i)(?:workspace.*not found|workspace.*missing)') {
+                'Test workspace unavailable'
+            } else {
+                'Unclassified isolated Runtime failure (inspect Host logs)'
+            }
+            throw "Alera CLI '$label' exited with code $exitCode (fixture diagnostic: $diagnostic)"
         }
         try {
             return ($raw | ConvertFrom-Json -ErrorAction Stop)
@@ -351,6 +393,29 @@ function Invoke-VerifiedHistoryRpcFixture {
             }
         }
         Write-Output ("$($entry.provider) verified source -> Profile -> Tab: PASS")
+        if ($TestOfflineHistoryCommand) {
+            # Verify the exact Host-created Tab really owns a ConPTY with
+            # source-account-scoped command arguments. No real provider runs.
+            $live = Invoke-AleraJson -Arguments @(
+                'terminal', '--runtime-dir', $runtime, '--no-start', '--json',
+                'list', '--workspace', $workspaceId
+            )
+            $matches = @($live.items | Where-Object {
+                $_.tabId -eq $resumed.tab.id -and $_.workspaceId -eq $workspaceId
+            })
+            if ($matches.Count -ne 1) {
+                throw "$($entry.provider) Host did not create exactly one live historical terminal"
+            }
+            $sentinel = if ($entry.provider -eq 'codex') {
+                'ALERA_ISOLATED_CODEX_RESUME_COMMAND_VERIFIED'
+            } else {
+                'ALERA_ISOLATED_CLAUDE_RESUME_COMMAND_VERIFIED'
+            }
+            if (-not (Wait-TerminalMatch ([string]$matches[0].handle) ([regex]::Escape($sentinel)) 15)) {
+                throw "$($entry.provider) command did not pass exact UUID/account through ConPTY"
+            }
+            Write-Output ("$($entry.provider) Host -> ConPTY -> offline command/UUID/account: PASS")
+        }
 
         # A *separate* no-start CLI process and local RPC connection must find
         # the exact saved Tab without knowing the old mutation UUID. This is
@@ -440,9 +505,7 @@ function Invoke-VerifiedHistoryRpcFixture {
             # It may have exited as soon as the isolated Host shut down.
         }
     }
-    $script:launcher = Start-Process -FilePath $CliPath -ArgumentList @(
-        'runtime', '--runtime-dir', ('"' + $runtime + '"'), '--json', 'start'
-    ) -WindowStyle Hidden -PassThru
+    $script:launcher = Start-IsolatedHistoryHost
     $ready = $false
     for ($attempt = 0; $attempt -lt 90; $attempt++) {
         try {
@@ -495,11 +558,12 @@ try {
         '--name', 'Isolated ConPTY', '--path', $project, '--kind', 'main'
     )
 
+    if ($TestOfflineHistoryCommand) {
+        $shimDir = New-IsolatedHistoryCommandShims -FixtureRoot $Root
+    }
     # The starter may wait for its detached child on some Windows shells.
     # Launch it independently and poll the authenticated, isolated Runtime.
-    $launcher = Start-Process -FilePath $CliPath -ArgumentList @(
-        'runtime', '--runtime-dir', ('"' + $runtime + '"'), '--json', 'start'
-    ) -WindowStyle Hidden -PassThru
+    $launcher = Start-IsolatedHistoryHost
     $deadline = [DateTime]::UtcNow.AddSeconds(45)
     while ([DateTime]::UtcNow -lt $deadline) {
         try {
@@ -516,7 +580,22 @@ try {
     if (-not $hostStarted) {
         throw 'Isolated Alera Host did not become ready'
     }
+    # Status can turn green just before the ConPTY allocator is ready.
+    Start-Sleep -Milliseconds 750
     Write-Output 'Isolated Host: PASS'
+    if ($TestOfflineHistoryCommand) {
+        $probe = New-IsolatedTerminal
+        Start-Sleep -Milliseconds 650
+        Send-TerminalCommand $probe 'where.exe codex'
+        if (-not (Wait-TerminalMatch $probe 'isolated-cli-shims[\\/]codex\.cmd' 10)) {
+            $proofText = Read-TerminalText $probe
+            $inPath = $proofText -match 'isolated-cli-shims'
+            $hasCodex = $proofText -match 'codex(?:\.ps1|\.exe|\.cmd)'
+            Write-Output ("Isolated command diagnosis: shim path visible=$inPath; codex command visible=$hasCodex")
+            throw 'Test Host shell did not resolve isolated codex.cmd before the installed provider'
+        }
+        Write-Output 'Isolated Host official-name command routing: PASS'
+    }
 
     $shell = New-IsolatedTerminal
     Start-Sleep -Milliseconds 650
@@ -532,6 +611,7 @@ try {
     }
     Write-Output 'Windows ConPTY shell input/output: PASS'
 
+    if (-not $TestOfflineHistoryCommand) {
     $codex = New-IsolatedTerminal
     Start-Sleep -Milliseconds 650
     # The ephemeral override skips the version-upgrade TUI; no config is edited.
@@ -552,13 +632,20 @@ try {
         throw 'Claude did not reject an absent UUID in Windows ConPTY'
     }
     Write-Output 'Claude exact UUID negative Resume: PASS'
+    } else {
+        Write-Output 'Installed CLI negative probes: SKIPPED in offline shim mode'
+    }
     if ($TestNativeContentProbe) {
         . "$PSScriptRoot/native-session-content-probe.ps1"
         Invoke-IsolatedNativeContentProbe -FixtureRoot $Root -WorkspacePath $project
     }
     if ($TestVerifiedHistoryRpc) {
         Invoke-VerifiedHistoryRpcFixture
-        Write-Output 'Result: PASS (native negative + synthetic Host Resume; real-session restore unverified)'
+        if ($TestOfflineHistoryCommand) {
+            Write-Output 'Result: PASS (offline Host->ConPTY exact argv and persisted Tab; genuine native restore UNVERIFIED)'
+        } else {
+            Write-Output 'Result: PASS (native negative + synthetic Host Resume; real-session restore unverified)'
+        }
     } else {
         Write-Output 'Result: PASS (negative native Resume only; real-session restore unverified)'
     }
