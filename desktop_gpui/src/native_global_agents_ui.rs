@@ -636,14 +636,8 @@ impl Workbench {
                     cx.notify();
                     return;
                 };
-                let Some(state) = live.agent_state else {
-                    view.global_agent_history_status =
-                        "Agent state cannot be verified; refresh Host inventory first".into();
-                    view.refresh_terminals(cx);
-                    cx.notify();
-                    return;
-                };
-                if view.agent_toast_activation.is_some() {
+
+                if view.agent_navigation_pending.is_some() {
                     view.global_agent_history_status =
                         "Another Agent navigation is pending; try again".into();
                     cx.notify();
@@ -652,14 +646,13 @@ impl Workbench {
                 // Reuse the draft-safe Host session and pane navigation path.
                 // GPUI render owns Window, so schedule a verified navigation
                 // instead of manipulating a Window from a background task.
-                view.agent_toast_activation = Some(AgentNotice {
+                view.agent_navigation_pending = Some(AgentNavigationTarget {
                     session_id: live.handle,
                     workspace_id: expected_workspace,
                     tab_id: expected_tab,
                     agent_type: live_provider,
-                    state,
                 });
-                view.agent_toast_activation_retries = 0;
+                view.agent_navigation_retries = 0;
                 // Navigation waits for a post-click Host inventory refresh.
                 view.refresh_terminals(cx);
                 view.global_agent_history_open = false;
@@ -2062,24 +2055,17 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                     && candidate.tab_id == tab_id
                                     && candidate.agent_type.as_deref() == Some(agent_type.as_str())
                             });
-                            if let Some(current) = current {
-                                if let Some(current_state) = current.agent_state {
-                                    view.activate_agent_notice(
-                                        AgentNotice {
-                                            session_id: session_id.clone(),
-                                            workspace_id: workspace_id.clone(),
-                                            tab_id: tab_id.clone(),
-                                            agent_type: agent_type.clone(),
-                                            state: current_state,
-                                        },
-                                        window,
-                                        cx,
-                                    );
-                                } else {
-                                    view.terminals.status =
-                                        "Agent state is unverified; refresh Host status".into();
-                                    cx.notify();
-                                }
+                            if current.is_some() {
+                                view.activate_agent_target(
+                                    AgentNavigationTarget {
+                                        session_id: session_id.clone(),
+                                        workspace_id: workspace_id.clone(),
+                                        tab_id: tab_id.clone(),
+                                        agent_type: agent_type.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
                             } else {
                                 view.terminals.status =
                                     "Global Agent selection no longer matches the Host".into();

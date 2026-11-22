@@ -72,6 +72,26 @@ pub struct AgentNotice {
     pub state: AgentActivityState,
 }
 
+/// UI navigation identity only. Unlike a Hook notification, focusing a
+/// verified running Host Tab must not require an Agent state update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentNavigationTarget {
+    pub session_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub agent_type: String,
+}
+
+impl From<AgentNotice> for AgentNavigationTarget {
+    fn from(notice: AgentNotice) -> Self {
+        Self {
+            session_id: notice.session_id,
+            workspace_id: notice.workspace_id,
+            tab_id: notice.tab_id,
+            agent_type: notice.agent_type,
+        }
+    }
+}
 #[derive(Clone)]
 struct ObservedAgent {
     identity: AgentIdentity,
@@ -254,17 +274,79 @@ impl AgentNotificationPolicy {
 /// the handle alone is not enough because it may have been recycled.
 /// Deliberately allows a state change from Waiting to Done: clicking a
 /// historical notice may still focus the same live Agent, not a new one.
-pub fn validated_notice_target<'a>(
-    notice: &AgentNotice,
+fn validated_agent_identity<'a>(
+    session_id: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    agent_type: &str,
     sessions: &'a [TerminalSession],
 ) -> Option<&'a TerminalSession> {
     sessions.iter().find(|session| {
         session.running
-            && session.handle == notice.session_id
-            && session.workspace_id == notice.workspace_id
-            && session.tab_id == notice.tab_id
-            && session.agent_type.as_deref() == Some(notice.agent_type.as_str())
+            && session.handle == session_id
+            && session.workspace_id == workspace_id
+            && session.tab_id == tab_id
+            && session.agent_type.as_deref() == Some(agent_type)
     })
+}
+
+pub fn validated_notice_target<'a>(
+    notice: &AgentNotice,
+    sessions: &'a [TerminalSession],
+) -> Option<&'a TerminalSession> {
+    validated_agent_identity(
+        &notice.session_id,
+        &notice.workspace_id,
+        &notice.tab_id,
+        &notice.agent_type,
+        sessions,
+    )
+}
+
+/// A running Host Agent without Hook activity is still an authentic navigation
+/// target. This checks the same full identity as Toast navigation without
+/// manufacturing a fake Working/Done state.
+pub fn validated_agent_navigation_target<'a>(
+    target: &AgentNavigationTarget,
+    sessions: &'a [TerminalSession],
+) -> Option<&'a TerminalSession> {
+    validated_agent_identity(
+        &target.session_id,
+        &target.workspace_id,
+        &target.tab_id,
+        &target.agent_type,
+        sessions,
+    )
+}
+
+/// Resolve a verified Host identity to an existing Agent preview and pane.
+fn validated_agent_pane_identity(
+    session_id: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    agent_type: &str,
+    sessions: &[TerminalSession],
+    tabs: &WorkbenchTabs,
+    panes: &WorkbenchPaneLayout,
+) -> Option<(WorkbenchTabIdentity, PaneSlot)> {
+    validated_agent_identity(session_id, workspace_id, tab_id, agent_type, sessions)?;
+    for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
+        for identity in panes.tabs_in(pane) {
+            let WorkbenchTabIdentity::Host(target) = identity else {
+                continue;
+            };
+            if target.handle == session_id
+                && target.workspace_id() == workspace_id
+                && target.tab_id() == tab_id
+                && tabs.entries().iter().any(|tab| {
+                    &tab.identity == identity && tab.kind == WorkbenchTabKind::Agent && tab.running
+                })
+            {
+                return Some((identity.clone(), pane));
+            }
+        }
+    }
+    None
 }
 
 /// Resolve a clicked Toast to the exact already-open Agent preview and pane.
@@ -277,24 +359,32 @@ pub fn validated_notice_pane_target(
     tabs: &WorkbenchTabs,
     panes: &WorkbenchPaneLayout,
 ) -> Option<(WorkbenchTabIdentity, PaneSlot)> {
-    validated_notice_target(notice, sessions)?;
-    for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
-        for identity in panes.tabs_in(pane) {
-            let WorkbenchTabIdentity::Host(target) = identity else {
-                continue;
-            };
-            if target.handle == notice.session_id
-                && target.workspace_id() == notice.workspace_id
-                && target.tab_id() == notice.tab_id
-                && tabs.entries().iter().any(|tab| {
-                    &tab.identity == identity && tab.kind == WorkbenchTabKind::Agent && tab.running
-                })
-            {
-                return Some((identity.clone(), pane));
-            }
-        }
-    }
-    None
+    validated_agent_pane_identity(
+        &notice.session_id,
+        &notice.workspace_id,
+        &notice.tab_id,
+        &notice.agent_type,
+        sessions,
+        tabs,
+        panes,
+    )
+}
+
+pub fn validated_agent_navigation_pane_target(
+    target: &AgentNavigationTarget,
+    sessions: &[TerminalSession],
+    tabs: &WorkbenchTabs,
+    panes: &WorkbenchPaneLayout,
+) -> Option<(WorkbenchTabIdentity, PaneSlot)> {
+    validated_agent_pane_identity(
+        &target.session_id,
+        &target.workspace_id,
+        &target.tab_id,
+        &target.agent_type,
+        sessions,
+        tabs,
+        panes,
+    )
 }
 
 /// Pure H5 delivery boundary. Keeps Classic-like transition history even
@@ -425,6 +515,53 @@ mod tests {
         (tabs, panes)
     }
 
+    #[test]
+    fn history_navigation_without_hook_status_keeps_exact_host_identity() {
+        let live = session("live-session", "saved-history-tab", None);
+        let target = AgentNavigationTarget {
+            session_id: live.handle.clone(),
+            workspace_id: live.workspace_id.clone(),
+            tab_id: live.tab_id.clone(),
+            agent_type: "codex".into(),
+        };
+        assert!(live.agent_state.is_none(), "no Hook status was reported");
+        assert!(validated_agent_navigation_target(&target, &[live.clone()]).is_some());
+        let (tabs, panes) = notice_tabs(&[live.clone()]);
+        assert!(
+            validated_agent_navigation_pane_target(&target, &[live.clone()], &tabs, &panes)
+                .is_some(),
+            "opening an existing running tab must not depend on Hooks"
+        );
+
+        for wrong in [
+            TerminalSession {
+                handle: "recycled-handle".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                tab_id: "other-tab".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                workspace_id: "other-worktree".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                agent_type: Some("claude".into()),
+                ..live.clone()
+            },
+            TerminalSession {
+                running: false,
+                ..live.clone()
+            },
+        ] {
+            assert!(validated_agent_navigation_target(&target, &[wrong]).is_none());
+        }
+        assert!(
+            validated_agent_navigation_pane_target(&target, &[], &tabs, &panes).is_none(),
+            "stale Host inventories cannot authorize a pane activation"
+        );
+    }
     #[test]
     fn h03_toast_click_routes_to_exact_secondary_agent_without_changing_other_pane() {
         let primary = session("host-a", "tab-a", Some(AgentActivityState::Working));

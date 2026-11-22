@@ -44,8 +44,9 @@ use alera_gpui_desktop::agent_profiles::{
 };
 use alera_gpui_desktop::agent_quota::{AgentUsageSummary, QuotaSnapshot};
 use alera_gpui_desktop::agent_status_notifications::{
-    enabled_notice_sessions, validated_notice_pane_target, validated_notice_target, AgentNotice,
-    AgentNotificationDelivery, AgentNotificationPolicy,
+    enabled_notice_sessions, validated_agent_navigation_pane_target,
+    validated_agent_navigation_target, AgentNavigationTarget, AgentNotificationDelivery,
+    AgentNotificationPolicy,
 };
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
@@ -1131,8 +1132,8 @@ struct Workbench {
     agent_hook_switches_last_refresh: Instant,
     #[cfg(windows)]
     agent_windows_toast: WindowsAgentToastPresenter,
-    agent_toast_activation: Option<AgentNotice>,
-    agent_toast_activation_retries: u8,
+    agent_navigation_pending: Option<AgentNavigationTarget>,
+    agent_navigation_retries: u8,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -10922,15 +10923,15 @@ impl Workbench {
         }
         #[cfg(windows)]
         if let Some(clicked) = self.agent_windows_toast.take_activation() {
-            self.agent_toast_activation = Some(clicked);
-            self.agent_toast_activation_retries = 0;
+            self.agent_navigation_pending = Some(clicked.into());
+            self.agent_navigation_retries = 0;
             cx.notify();
         }
     }
 
-    fn activate_agent_notice(
+    fn activate_agent_target(
         &mut self,
-        notice: AgentNotice,
+        notice: AgentNavigationTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -10942,23 +10943,23 @@ impl Workbench {
         // Wait for the authenticated async read, counting actual attempts,
         // not GPUI render frames (which can complete before the CLI read).
         if self.terminal_list_loading {
-            self.agent_toast_activation = Some(notice);
+            self.agent_navigation_pending = Some(notice);
             return;
         }
         if self.terminals.session_list_is_stale() || self.terminals.sessions.is_empty() {
-            if self.agent_toast_activation_retries < 3 {
-                self.agent_toast_activation_retries += 1;
-                self.agent_toast_activation = Some(notice);
+            if self.agent_navigation_retries < 3 {
+                self.agent_navigation_retries += 1;
+                self.agent_navigation_pending = Some(notice);
                 self.refresh_terminals(cx);
             } else {
                 self.terminals.status =
-                    "Cannot verify Agent notice: Host session list is unavailable".into();
+                    "Cannot verify Agent navigation: Host session list is unavailable".into();
                 cx.notify();
             }
             return;
         }
-        if validated_notice_target(&notice, &self.terminals.sessions).is_none() {
-            self.terminals.status = "Agent notice is stale; Host session no longer exists".into();
+        if validated_agent_navigation_target(&notice, &self.terminals.sessions).is_none() {
+            self.terminals.status = "Agent navigation target is stale; Host session no longer exists".into();
             cx.notify();
             return;
         }
@@ -10970,7 +10971,7 @@ impl Workbench {
             // guess from the repo name or toast payload, and reuse the normal
             // draft-safe workspace switch.
             if self.mcp_host_workspaces_loading {
-                self.agent_toast_activation = Some(notice);
+                self.agent_navigation_pending = Some(notice);
                 return;
             }
             match resolve_registered_host_workspace_path(
@@ -10982,7 +10983,7 @@ impl Workbench {
                         self.switch_workspace(target_root.clone(), cx);
                         if self.model.root() != target_root.as_path() {
                             self.terminals.status =
-                                "Agent notice cannot switch workspace; save your draft first"
+                                "Cannot switch Agent workspace; save your draft first"
                                     .into();
                             cx.notify();
                             return;
@@ -10990,30 +10991,30 @@ impl Workbench {
                     }
                     // The new workspace reads Host sessions and restores pane
                     // layout asynchronously. Focus only after those are fresh.
-                    self.agent_toast_activation = Some(notice);
-                    self.agent_toast_activation_retries = 0;
+                    self.agent_navigation_pending = Some(notice);
+                    self.agent_navigation_retries = 0;
                     cx.notify();
                 }
                 Err(_)
                     if self.mcp_host_workspaces.is_empty()
-                        && self.agent_toast_activation_retries < 3 =>
+                        && self.agent_navigation_retries < 3 =>
                 {
                     if self.runtime_bridge.is_none() {
                         self.runtime_bridge = RuntimeCliBridge::discover().ok();
                     }
                     if self.runtime_bridge.is_some() {
-                        self.agent_toast_activation_retries += 1;
-                        self.agent_toast_activation = Some(notice);
+                        self.agent_navigation_retries += 1;
+                        self.agent_navigation_pending = Some(notice);
                         self.refresh_mcp_host_workspaces(cx);
                     } else {
                         self.terminals.status =
-                            "Cannot navigate Agent notice: Alera Host CLI unavailable".into();
+                            "Cannot navigate Agent: Alera Host CLI unavailable".into();
                         cx.notify();
                     }
                 }
                 Err(error) => {
                     self.terminals.status =
-                        format!("Cannot navigate Agent notice to registered workspace: {error}");
+                        format!("Cannot navigate to registered Agent workspace: {error}");
                     cx.notify();
                 }
             }
@@ -11029,14 +11030,14 @@ impl Workbench {
             self.select_terminal(notice.session_id.clone(), cx);
             self.sync_mixed_tabs(cx);
         }
-        let target = validated_notice_pane_target(
+        let target = validated_agent_navigation_pane_target(
             &notice,
             &self.terminals.sessions,
             &self.mixed_tabs,
             &self.mixed_panes,
         );
         if let Some((id, _pane)) = target {
-            self.agent_toast_activation_retries = 0;
+            self.agent_navigation_retries = 0;
             self.focus_mixed_tab(&id, window, cx);
         } else {
             self.terminals.status = "Agent Host tab is no longer available".into();
@@ -11417,15 +11418,15 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
-        if let Some(notice) = self.agent_toast_activation.take() {
-            // Toast clicks arrive on a WinRT callback thread. Resolve them
-            // on GPUI's actual Window context, after layout is available;
-            // verify Host session identity again before focusing anything.
+        if let Some(notice) = self.agent_navigation_pending.take() {
+            // Toast clicks and historical Host lookups share this queued
+            // identity-only navigation. Resolve it on GPUI's actual Window
+            // context and verify the Host again before focusing anything.
             let owner = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
                 if let Some(workbench) = owner.upgrade() {
                     workbench.update(cx, |view, cx| {
-                        view.activate_agent_notice(notice, window, cx);
+                        view.activate_agent_target(notice, window, cx);
                     });
                 }
             });
@@ -18196,8 +18197,8 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             #[cfg(windows)]
                             agent_windows_toast: WindowsAgentToastPresenter::new(),
-                            agent_toast_activation: None,
-                            agent_toast_activation_retries: 0,
+                            agent_navigation_pending: None,
+                            agent_navigation_retries: 0,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),
