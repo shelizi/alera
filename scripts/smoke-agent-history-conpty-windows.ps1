@@ -24,6 +24,15 @@
 # use -TestVerifiedHistoryRpc without it for those native negative checks.
 # The offline shim never proves that an installed model CLI restored a chat.
 # It does NOT prove successful resume of a real session or GUI rendering.
+#
+# Optional -GuiExecutable adds an isolated Native GPUI window while the
+# synthetic Host's verified Agent tabs are still running. GUI state, runtime,
+# and CLI overrides apply ONLY to that new process. The test root must not
+# be under any existing Git repository (GPUI discovers parent worktrees).
+# Create gui-continue.flag in the unique -Root after visual acceptance; the
+# harness owns and stops ONLY its own GUI/Host. The hold timeout also cleans up.
+# This validates GUI bootstrap, not automated click-through or a native
+# provider transcript restoration.
 
 [CmdletBinding()]
 param(
@@ -33,6 +42,8 @@ param(
     [switch]$TestVerifiedHistoryRpc,
     [switch]$TestNativeContentProbe,
     [switch]$TestOfflineHistoryCommand,
+    [string]$GuiExecutable = '',
+    [int]$GuiHoldSeconds = 150,
     [switch]$KeepArtifacts
 )
 
@@ -57,8 +68,20 @@ $workspaceId = 'native-resume-smoke-workspace'
 $projectId = 'native-resume-smoke-project'
 $missingUuid = '550e8400-e29b-41d4-a716-446655449999'
 $launcher = $null
+$guiLauncher = $null
 $hostStarted = $false
 $shimDir = $null
+$guiReady = Join-Path $Root 'gui-ready.txt'
+$guiContinue = Join-Path $Root 'gui-continue.flag'
+if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
+    if (-not $TestVerifiedHistoryRpc -or -not $TestOfflineHistoryCommand) {
+        throw 'GUI fixture requires verified history RPC and inert offline commands'
+    }
+    if ($GuiHoldSeconds -lt 10 -or $GuiHoldSeconds -gt 180) {
+        throw 'GUI fixture hold must be between 10 and 180 seconds'
+    }
+    $GuiExecutable = (Resolve-Path -LiteralPath $GuiExecutable -ErrorAction Stop).Path
+}
 if ($TestOfflineHistoryCommand -and -not $TestVerifiedHistoryRpc) {
     throw 'Offline mock mode requires -TestVerifiedHistoryRpc'
 }
@@ -471,6 +494,48 @@ function Invoke-VerifiedHistoryRpcFixture {
         }
         Write-Output ("$($entry.provider) duplicate Resume owner rejected: PASS")
     }
+    if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
+        # GUI obtains ONLY the fixture Runtime and isolated preview settings.
+        # Both provider CLI scripts remain synthetic and unauthenticated.
+        $guiState = Join-Path $Root 'gui-state'
+        $null = New-Item -ItemType Directory -Path $guiState -Force
+        $script:guiLauncher = Start-Process -FilePath $GuiExecutable -ArgumentList @('"' + $project + '"') -WorkingDirectory $project -Environment @{ ALERA_GPUI_STATE_DIR = $guiState; ALERA_RUNTIME_DIR = $runtime; ALERA_CLI_PATH = $CliPath } -RedirectStandardError (Join-Path $Root 'gui-stderr.log') -PassThru
+        if ($null -eq $script:guiLauncher) {
+            throw 'GUI preview did not return a process identity'
+        }
+        # No Host tokens or provider credentials are written in this marker.
+        [IO.File]::WriteAllText($guiReady, [string]$script:guiLauncher.Id, [Text.UTF8Encoding]::new($false))
+        Write-Output 'Isolated GPUI GUI: LAUNCHED; waiting for explicit test release'
+        $deadline = [DateTime]::UtcNow.AddSeconds($GuiHoldSeconds)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (Test-Path -LiteralPath $guiContinue) {
+                Write-Output 'Isolated GPUI GUI: explicit test release received'
+                break
+            }
+            $script:guiLauncher.Refresh()
+            if ($script:guiLauncher.HasExited) {
+                throw 'Isolated GPUI GUI terminated before acceptance finished'
+            }
+            Start-Sleep -Milliseconds 400
+        }
+        if (-not (Test-Path -LiteralPath $guiContinue)) {
+            throw 'Isolated GPUI GUI acceptance timed out'
+        }
+        try {
+            $script:guiLauncher.Refresh()
+            if (-not $script:guiLauncher.HasExited) {
+                Stop-Process -Id $script:guiLauncher.Id -Force -ErrorAction Stop
+            }
+        } finally {
+            $script:guiLauncher = $null
+        }
+        # Release fake CLI hold loops before the Host's orderly restart.
+        [IO.File]::WriteAllText(
+            (Join-Path $Root 'stop-gui-shims.flag'), 'done',
+            [Text.UTF8Encoding]::new($false)
+        )
+        Start-Sleep -Milliseconds 600
+    }
     # Stop and restart *only* the unique test Host. The new process has no
     # knowledge of any prior CLI mutation UUID, yet must locate the saved
     # same-source Tab after RuntimeStore is reopened from disk.
@@ -546,6 +611,16 @@ function Invoke-VerifiedHistoryRpcFixture {
 try {
     $null = New-Item -ItemType Directory -Path $runtime -Force
     $null = New-Item -ItemType Directory -Path $project -Force
+    if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
+        # A nested project silently inherits its parent's real Git Worktrees.
+        # Reject it before starting a GUI; tests must not display production
+        # project navigation even with a private Host and GUI state directory.
+        $gitCommand = Get-Command git -ErrorAction Stop
+        $null = & $gitCommand.Source -C $project rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            throw 'Isolated GUI fixture root must be outside every existing Git Worktree'
+        }
+    }
 
     $null = Invoke-AleraJson -Arguments @(
         'project', '--runtime-dir', $runtime, '--json', 'add',
@@ -559,7 +634,7 @@ try {
     )
 
     if ($TestOfflineHistoryCommand) {
-        $shimDir = New-IsolatedHistoryCommandShims -FixtureRoot $Root
+        $shimDir = New-IsolatedHistoryCommandShims -FixtureRoot $Root -KeepProcessAliveForGui:(-not [string]::IsNullOrWhiteSpace($GuiExecutable))
     }
     # The starter may wait for its detached child on some Windows shells.
     # Launch it independently and poll the authenticated, isolated Runtime.
@@ -651,6 +726,26 @@ try {
     }
 }
 finally {
+    if (-not [string]::IsNullOrWhiteSpace($GuiExecutable) -and
+        (Test-Path -LiteralPath $Root)) {
+        try {
+            # The fixture's own command shims cannot remain alive indefinitely
+            # if visual acceptance or Host startup exits with an exception.
+            [IO.File]::WriteAllText(
+                (Join-Path $Root 'stop-gui-shims.flag'), 'done',
+                [Text.UTF8Encoding]::new($false)
+            )
+        } catch { }
+    }
+    if ($null -ne $guiLauncher) {
+        try {
+            $guiLauncher.Refresh()
+            if (-not $guiLauncher.HasExited) {
+                # Cleanup only the exact preview process started here.
+                Stop-Process -Id $guiLauncher.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
+    }
     # A failed readiness poll is not proof that the detached Host never
     # started. Always probe only this newly allocated Runtime before cleanup.
     $ownedHostRunning = $hostStarted

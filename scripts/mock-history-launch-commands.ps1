@@ -3,7 +3,7 @@
 # isolated Runtime Host. They never contact Claude/Codex, read real accounts,
 # create a model prompt, or modify any existing provider directory.
 function New-IsolatedHistoryCommandShims {
-    param([Parameter(Mandatory=$true)][string]$FixtureRoot)
+    param([Parameter(Mandatory=$true)][string]$FixtureRoot, [switch]$KeepProcessAliveForGui)
 
     if ($FixtureRoot -match '[&|<>^%!"\r\n]') {
         throw 'Unsafe mock CLI fixture path'
@@ -45,6 +45,16 @@ if errorlevel 1 exit /b 66
 echo ALERA_ISOLATED_CLAUDE_RESUME_COMMAND_VERIFIED
 exit /b 0
 '@
+    if ($KeepProcessAliveForGui) {
+        # Keep fake Agents live only for a bounded GUI test. A private
+        # fixture-local stop flag releases them on normal or error cleanup;
+        # the deadline also prevents orphaned sleepers after harness crashes.
+        $stopFlag = (Join-Path $FixtureRoot 'stop-gui-shims.flag').Replace("'", "''")
+        $wait = '$deadline=(Get-Date).AddSeconds(210); while((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath ''' + $stopFlag + ''')) { Start-Sleep -Milliseconds 400 }'
+        $hold = 'powershell -NoProfile -Command "' + $wait + '"' + [char]13 + [char]10 + 'exit /b 0'
+        $codex = $codex.Replace('exit /b 0', $hold)
+        $claude = $claude.Replace('exit /b 0', $hold)
+    }
     $encoding = [Text.ASCIIEncoding]::new()
     [IO.File]::WriteAllText(
         (Join-Path $directory 'codex.cmd'), $codex.Replace('__ACCOUNT__', $codexHome), $encoding
