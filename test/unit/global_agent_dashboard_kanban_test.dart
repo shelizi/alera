@@ -1,5 +1,8 @@
 import 'package:alera/src/features/workbench/presentation/global_agent_dashboard_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_inspector_dialog.dart';
+
+import 'dart:ui' show Size;
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,6 +22,26 @@ void main() {
     });
   });
 
+  group('Agent inspector sizing', () {
+    test('uses nearly all of a standard desktop window', () {
+      expect(
+        globalAgentInspectorDefaultSize(const Size(1500, 900)),
+        const Size(1480, 880),
+      );
+    });
+    test('scales up past the previous 1490 by 950 dialog cap', () {
+      expect(
+        globalAgentInspectorDefaultSize(const Size(1920, 1200)),
+        const Size(1900, 1180),
+      );
+    });
+    test('caps the dialog on very large desktop windows', () {
+      expect(
+        globalAgentInspectorDefaultSize(const Size(3440, 2160)),
+        const Size(2400, 1400),
+      );
+    });
+  });
   group('Agent inspector Escape routing', () {
     test('Escape key down is reserved for the Agent', () {
       expect(

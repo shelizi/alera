@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -18,6 +17,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 @visibleForTesting
 bool isAgentInspectorEscape(KeyEvent event) =>
     event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape;
+
+/// Use nearly the whole Alera window for reading long Agent/TUI output.
+/// The dimensions remain bounded for large multi-monitor desktops.
+@visibleForTesting
+Size globalAgentInspectorDefaultSize(Size viewport) => Size(
+  math.max(0.0, math.min(2400.0, viewport.width - 20)),
+  math.max(0.0, math.min(1400.0, viewport.height - 20)),
+);
 
 /// Inspect the *existing* Terminal session without selecting another Tab.
 ///
@@ -40,8 +47,6 @@ class GlobalAgentInspectorDialog extends ConsumerStatefulWidget {
 
 class _GlobalAgentInspectorDialogState
     extends ConsumerState<GlobalAgentInspectorDialog> {
-  final TextEditingController _prompt = TextEditingController();
-  bool _sending = false;
   bool _terminating = false;
   bool _confirmTerminate = false;
   String? _feedback;
@@ -89,54 +94,8 @@ class _GlobalAgentInspectorDialogState
     return KeyEventResult.ignored;
   }
 
-  Future<void> _submitPrompt() async {
-    if (_sending || _terminating) return;
-    final prompt = _prompt.text;
-    if (prompt.trim().isEmpty ||
-        utf8.encode(prompt).length > 4096 ||
-        prompt.contains('\u0000')) {
-      setState(() => _feedback = 'Enter an instruction up to 4 KiB.');
-      return;
-    }
-    if (!_isVerified()) {
-      setState(() => _feedback = 'Session changed. No input was sent.');
-      return;
-    }
-    final host = ref.read(terminalHostClientProvider);
-    if (host is! TerminalHostVerifiedAgentInputClient) {
-      setState(() => _feedback = 'Host does not support verified Agent input.');
-      return;
-    }
-    setState(() {
-      _sending = true;
-      _feedback = null;
-    });
-    try {
-      await (host as TerminalHostVerifiedAgentInputClient)
-          .submitVerifiedAgentPrompt(
-            sessionId: _sessionId,
-            workspaceId: _workspaceId,
-            tabId: _tabId,
-            prompt: prompt,
-          );
-      if (!mounted) return;
-      if (_prompt.text == prompt) _prompt.clear();
-      setState(() => _feedback = 'Input acknowledged by the Host.');
-    } on Object {
-      // A lost ACK can happen after delivery; never retry automatically.
-      if (mounted) {
-        setState(
-          () =>
-              _feedback = 'Delivery unconfirmed. Check output before retrying.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
   Future<void> _terminateSession() async {
-    if (_terminating || _sending) return;
+    if (_terminating) return;
     if (!_confirmTerminate) {
       setState(() {
         _confirmTerminate = true;
@@ -182,9 +141,11 @@ class _GlobalAgentInspectorDialogState
   }
 
   @override
-  void dispose() {
-    _prompt.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.session.requestFocus();
+    });
   }
 
   Widget _contextPanel(BuildContext context, GlobalAgentLiveRow row) {
@@ -238,8 +199,7 @@ class _GlobalAgentInspectorDialogState
     final verified = current != null;
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
-    final width = math.min(1490.0, math.max(350.0, size.width - 48));
-    final height = math.min(950.0, math.max(330.0, size.height - 48));
+    final inspectorSize = globalAgentInspectorDefaultSize(size);
 
     return PopScope(
       canPop: false,
@@ -248,12 +208,12 @@ class _GlobalAgentInspectorDialogState
         canRequestFocus: false,
         child: Dialog(
           backgroundColor: AleraTokens.bg,
-          insetPadding: const EdgeInsets.all(24),
+          insetPadding: const EdgeInsets.all(10),
           child: SizedBox(
-            width: width,
-            height: height,
+            width: inspectorSize.width,
+            height: inspectorSize.height,
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
@@ -278,12 +238,6 @@ class _GlobalAgentInspectorDialogState
                           ],
                         ),
                       ),
-                      TextButton.icon(
-                        onPressed: verified ? _sendEscape : null,
-                        icon: const Icon(Icons.keyboard_outlined, size: 18),
-                        label: const Text('Send Esc'),
-                      ),
-                      const SizedBox(width: 8),
                       PopupMenuButton<String>(
                         tooltip: 'Session options',
                         onSelected: (value) {
@@ -293,7 +247,7 @@ class _GlobalAgentInspectorDialogState
                         itemBuilder: (context) => <PopupMenuEntry<String>>[
                           PopupMenuItem<String>(
                             value: 'terminate',
-                            enabled: verified && !_sending && !_terminating,
+                            enabled: verified && !_terminating,
                             child: Text(
                               _confirmTerminate
                                   ? 'Confirm terminate'
@@ -311,7 +265,7 @@ class _GlobalAgentInspectorDialogState
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Live Terminal · Esc goes to the Agent and never closes this window.',
+                    'Type directly in the Terminal. Esc reaches the Agent; close with ×.',
                     style: muted,
                   ),
                   if (!verified)
@@ -333,9 +287,15 @@ class _GlobalAgentInspectorDialogState
                           ),
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(7),
-                            child: TerminalSurface(
-                              session: widget.session,
-                              autofocus: true,
+                            child: ExcludeFocus(
+                              excluding: !verified,
+                              child: IgnorePointer(
+                                ignoring: !verified,
+                                child: TerminalSurface(
+                                  session: widget.session,
+                                  autofocus: true,
+                                ),
+                              ),
                             ),
                           ),
                         );
@@ -371,36 +331,6 @@ class _GlobalAgentInspectorDialogState
                         );
                       },
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: <Widget>[
-                      Expanded(
-                        child: TextField(
-                          controller: _prompt,
-                          enabled: verified && !_sending && !_terminating,
-                          minLines: 1,
-                          maxLines: 3,
-                          maxLength: 4000,
-                          decoration: const InputDecoration(
-                            hintText:
-                                'Send an instruction to the current Agent…',
-                            isDense: true,
-                            border: OutlineInputBorder(),
-                            counterText: '',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      FilledButton.icon(
-                        onPressed: verified && !_sending && !_terminating
-                            ? _submitPrompt
-                            : null,
-                        icon: const Icon(Icons.send_outlined),
-                        label: const Text('Send'),
-                      ),
-                    ],
                   ),
                   if (_feedback != null) ...[
                     const SizedBox(height: 6),
