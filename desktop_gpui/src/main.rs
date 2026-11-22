@@ -1,19 +1,19 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
 mod native_action_dialog_ui;
-mod native_agent_quota_ui;
 mod native_agent_context_ui;
-mod native_global_agents_ui;
+mod native_agent_quota_ui;
 mod native_center_git_diff_ui;
 mod native_components;
 mod native_file_icons;
-mod native_git_favorites_ui;
 mod native_git_conflict_ui;
+mod native_git_favorites_ui;
 mod native_git_file_compare_ui;
 mod native_git_graph_center_ui;
 mod native_git_graph_compare_ui;
 mod native_git_graph_rows_ui;
 mod native_git_graph_ui;
+mod native_global_agents_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
 mod native_popup_ui;
@@ -27,9 +27,9 @@ mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
 mod win_ime;
+use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 use native_history_sync_ui::AgyAccountEdit;
 use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
-use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -51,6 +51,7 @@ use alera_gpui_desktop::agent_status_notifications::{
     validated_agent_navigation_target, AgentNavigationTarget, AgentNotificationDelivery,
     AgentNotificationPolicy,
 };
+use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
 use alera_gpui_desktop::ai_commit_bridge::GeneratedAiCommit;
@@ -72,15 +73,18 @@ use alera_gpui_desktop::git_actions::{
     GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
-    compare_branch_files, compare_branch_trees, diff_compared_file, open_compared_original_snapshot,
-    original_compared_file, BranchFileComparison, CompareDirection,
+    compare_branch_files, compare_branch_trees, diff_compared_file,
+    open_compared_original_snapshot, original_compared_file, BranchFileComparison,
+    CompareDirection,
 };
+use alera_gpui_desktop::git_compare_tabs::GitFileCompareTabs;
 use alera_gpui_desktop::git_file_interop::selected_worktree_paths;
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_render::{PreparedGitGraph, PreparedGitGraphRow};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, filter_git_branch_picker, preview_commit, GitBranchRow, GitHistoryOptions, GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP, MAX_BRANCHES,
+    compare_git_refs, filter_git_branch_picker, preview_commit, GitBranchRow, GitHistoryOptions,
+    GitHistorySnapshot, GitMergedBranchVisibility, HISTORY_PAGE_STEP, MAX_BRANCHES,
     MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
@@ -90,10 +94,10 @@ use alera_gpui_desktop::git_inspect::{
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
-use alera_gpui_desktop::git_compare_tabs::GitFileCompareTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
-    layout_git_sidebar, section_actions, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
-    GitSidebarOptions, GitSidebarSelectionItem, GitSidebarViewMode, SectionKey,
+    layout_git_sidebar, section_actions, section_keys, FolderKey, GitSidebarEntry,
+    GitSidebarGroupMode, GitSidebarOptions, GitSidebarSelectionItem, GitSidebarViewMode,
+    SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
 use alera_gpui_desktop::history_sync_bridge::{
@@ -115,9 +119,10 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
-use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_modal::NativeModalSize;
-use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore, NativeSidebarLayout};
+use alera_gpui_desktop::native_settings::{
+    NativeSettings, NativeSettingsStore, NativeSidebarLayout,
+};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
     project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
@@ -127,34 +132,33 @@ use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
-use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
+use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
     resolve_registered_host_workspace_path, select_registered_host_workspace,
     terminal_clipboard_payload, terminal_ime_anchor_with_line_height, terminal_key_dispatch,
-    TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow,
-    TerminalCreateTick, TerminalDock, TerminalKeyDispatch, TerminalLineSelection,
-    TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
-    TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
+    TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
+    TerminalPollGate, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
+    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
     NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
 };
 use alera_gpui_desktop::visual_tokens::{
-    ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, BG, BORDER, BORDER_ACTIVE,
-    clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
-    PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
-    SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
-    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TAB_STRIP_LEADING_PADDING, TAB_ATTENTION_DOT_SIZE, TAB_CHIP_HORIZONTAL_PADDING, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
-    EDITOR_TOOLBAR_HEIGHT, usable_workbench_height, secondary_terminal_render_height,
-    primary_inner_terminal_render_size, inner_secondary_terminal_render_height,
-    TERMINAL_INNER_SPLIT_HEADER_HEIGHT,
+    clamp_context_sidebar_width, clamp_projects_sidebar_width,
+    inner_secondary_terminal_render_height, primary_inner_terminal_render_size,
+    secondary_terminal_render_height, usable_workbench_height, ACTIVE, AGENT_BLOCKED, AGENT_DONE,
+    AGENT_WAITING, BG, BORDER, BORDER_ACTIVE, EDITOR_TOOLBAR_HEIGHT, ELEVATED, MUTED, PANEL,
+    PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME, SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
+    STATUS_BAR_HEIGHT, TAB_ATTENTION_DOT_SIZE, TAB_CHIP_HORIZONTAL_PADDING, TAB_STRIP_HEIGHT,
+    TAB_STRIP_LEADING_PADDING, TERMINAL_INNER_SPLIT_HEADER_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
-use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
+use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
     scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchHostTab, SavedWorkbenchLayoutV1,
     SavedWorkbenchPane, SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
@@ -914,13 +918,17 @@ struct Workbench {
     git_diff_request: u64,
     git_file_diff_paging: Option<GitFileDiffPaging>,
     git_file_compare_ticket: u64,
-    git_file_compare_result: Option<(u64, Result<alera_gpui_desktop::git_file_revision_compare::GitFileRevisionComparison, String>)>,
+    git_file_compare_result: Option<(
+        u64,
+        Result<alera_gpui_desktop::git_file_revision_compare::GitFileRevisionComparison, String>,
+    )>,
     git_file_compare_split: bool,
     /// Independent of split/unified layout: full file or only changed hunks.
     git_file_compare_full: bool,
     git_file_compare_rows: Arc<Vec<alera_gpui_desktop::git_file_split_diff::GitSplitDiffRow>>,
     git_file_compare_full_rows: Arc<Vec<alera_gpui_desktop::git_file_split_diff::GitSplitDiffRow>>,
-    git_file_compare_full_unified_rows: Arc<Vec<alera_gpui_desktop::git_file_split_diff::GitDiffCell>>,
+    git_file_compare_full_unified_rows:
+        Arc<Vec<alera_gpui_desktop::git_file_split_diff::GitDiffCell>>,
     git_file_compare_full_error: Option<String>,
     git_file_compare_additions: usize,
     git_file_compare_deletions: usize,
@@ -1004,6 +1012,7 @@ struct Workbench {
     agy_account_name_input: Entity<QuickOpenInput>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
+    settings_catalog_scroll: ScrollHandle,
     settings_kit_dialog_open: bool,
     /// The preview language changes only visible text, never host settings.
     settings_menu_locale: UiLocale,
@@ -1016,8 +1025,19 @@ struct Workbench {
     settings_shared_last_refresh: Instant,
     settings_shared_error: Option<String>,
     settings_menu_search: Entity<QuickOpenInput>,
+    /// Prevent Host locale/placeholder refreshes from resetting the content scroll.
+    settings_menu_last_query: String,
     settings_shortcut_search: Entity<QuickOpenInput>,
+    /// Classic-style searchable theme pickers. Query is UI-only, not Host data.
+    settings_editor_theme_search: Entity<QuickOpenInput>,
+    settings_terminal_theme_search: Entity<QuickOpenInput>,
     settings_exclusion_input: Entity<QuickOpenInput>,
+    /// Editable Classic-compatible font draft. Only explicit Apply writes Host CAS.
+    settings_font_family_input: Entity<QuickOpenInput>,
+    /// Last authoritative Host font, used to preserve unsaved edits on refresh.
+    settings_font_family_last_synced: String,
+    /// Queried once from GPUI's platform text system on first Terminal Settings visit.
+    settings_terminal_fonts: Option<Vec<String>>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     /// Local CLI availability is separate from the Host Agent Profile catalog.
@@ -1256,8 +1276,11 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let (mut groups, runtime_result, order_result) = cx
                 .background_spawn(async move {
-                    let runtime_result = bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
-                    let order_result = bridge.as_ref().map(|bridge| bridge.sidebar_order_snapshot());
+                    let runtime_result =
+                        bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
+                    let order_result = bridge
+                        .as_ref()
+                        .map(|bridge| bridge.sidebar_order_snapshot());
                     let registered = runtime_result
                         .as_ref()
                         .and_then(|result| result.as_ref().ok())
@@ -1319,8 +1342,10 @@ impl Workbench {
         // Explorer preferences are shared with Classic. Never optimistically
         // mutate the tree or write Native JSON before Host CAS acknowledges.
         if previous.show_hidden != next.show_hidden && previous.show_ignored != next.show_ignored {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Change one Explorer visibility option at a time"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Change one Explorer visibility option at a time",
+            ));
             cx.notify();
             return;
         }
@@ -1334,8 +1359,10 @@ impl Workbench {
 
     fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
         let Some(selected) = self.explorer_selection.clone() else {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Select a file or folder to Copy or Cut"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Select a file or folder to Copy or Cut",
+            ));
             cx.notify();
             return;
         };
@@ -1358,9 +1385,13 @@ impl Workbench {
                     tr(self.settings_menu_locale, source).replace("{count}", &count.to_string()),
                 );
             }
-            Err(error) => self
-                .model
-                .set_status(tr(self.settings_menu_locale, "Explorer Copy/Cut refused: {error}").replace("{error}", &error.to_string())),
+            Err(error) => self.model.set_status(
+                tr(
+                    self.settings_menu_locale,
+                    "Explorer Copy/Cut refused: {error}",
+                )
+                .replace("{error}", &error.to_string()),
+            ),
         }
         cx.notify();
     }
@@ -1370,8 +1401,12 @@ impl Workbench {
         let folder = self
             .explorer_selection
             .as_ref()
-            .map(|path| if path.is_dir() { path.clone() } else {
-                path.parent().unwrap_or(&root).to_path_buf()
+            .map(|path| {
+                if path.is_dir() {
+                    path.clone()
+                } else {
+                    path.parent().unwrap_or(&root).to_path_buf()
+                }
             })
             .unwrap_or(root);
         self.paste_shared_file_clipboard(folder, cx);
@@ -1385,28 +1420,32 @@ impl Workbench {
         // copied external selection from Alera's own guarded clipboard and
         // import it as COPY. OS Cut markers are not trusted to delete outside
         // files on an inbound paste.
-        let mut outside_paths = cx.read_from_clipboard().into_iter()
+        let mut outside_paths = cx
+            .read_from_clipboard()
+            .into_iter()
             .flat_map(|item| item.into_entries())
             .filter_map(|entry| match entry {
                 gpui::ClipboardEntry::ExternalPaths(paths) => Some(paths.paths().to_vec()),
                 _ => None,
             })
-            .flatten().collect::<Vec<_>>();
+            .flatten()
+            .collect::<Vec<_>>();
         if !outside_paths.is_empty() {
             outside_paths.sort();
             outside_paths.dedup();
-            let is_ours = self.explorer_clipboard.as_ref()
+            let is_ours = self
+                .explorer_clipboard
+                .as_ref()
                 .is_some_and(|clip| clip.source_paths() == outside_paths);
             if !is_ours {
                 self.import_explorer_drop(outside_paths, hovered, cx);
                 return;
             }
         }
-        let result = ExplorerFiles::new(self.model.root())
-            .and_then(|files| {
-                let row = hovered.as_deref().filter(|row| *row != files.root());
-                files.external_drop_folder(row)
-            });
+        let result = ExplorerFiles::new(self.model.root()).and_then(|files| {
+            let row = hovered.as_deref().filter(|row| *row != files.root());
+            files.external_drop_folder(row)
+        });
         match result {
             Ok(folder) => self.paste_shared_file_clipboard(folder, cx),
             Err(error) => {
@@ -1427,8 +1466,10 @@ impl Workbench {
             .map(|(_, path)| path)
             .collect();
         let Some(clipboard) = self.explorer_clipboard.as_mut() else {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Explorer clipboard is empty; Copy or Cut a file first"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Explorer clipboard is empty; Copy or Cut a file first",
+            ));
             cx.notify();
             return;
         };
@@ -1450,8 +1491,13 @@ impl Workbench {
                 self.file_index = None;
                 self.content_matches.clear();
                 self.persist_session();
-                self.model
-                    .set_status(tr(self.settings_menu_locale, "Explorer Paste succeeded: {count} item(s)").replace("{count}", &paths.len().to_string()));
+                self.model.set_status(
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer Paste succeeded: {count} item(s)",
+                    )
+                    .replace("{count}", &paths.len().to_string()),
+                );
                 self.refresh_git(cx);
             }
             Err(error) => {
@@ -1465,8 +1511,13 @@ impl Workbench {
                 }
                 self.file_index = None;
                 self.content_matches.clear();
-                self.model
-                    .set_status(tr(self.settings_menu_locale, "Explorer Paste refused or stopped: {error}").replace("{error}", &error.to_string()));
+                self.model.set_status(
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer Paste refused or stopped: {error}",
+                    )
+                    .replace("{error}", &error.to_string()),
+                );
                 self.refresh_git(cx);
             }
         }
@@ -1620,32 +1671,41 @@ impl Workbench {
                 }
             }
             ExplorerMenuAction::OpenDefaultApplication => {
-                let Some(path) = self.explorer_selection.as_ref()
+                let Some(path) = self
+                    .explorer_selection
+                    .as_ref()
                     .filter(|path| path.is_file())
                     .and_then(|path| path.strip_prefix(self.model.root()).ok())
                     .map(Path::to_path_buf)
                 else {
-                    self.model.set_status("Select an existing file to open externally");
+                    self.model
+                        .set_status("Select an existing file to open externally");
                     cx.notify();
                     return;
                 };
                 let root = self.model.root().to_path_buf();
                 let generation = self.workspace_generation;
                 cx.spawn(async move |view, cx| {
-                    let result = cx.background_spawn(async move {
-                        alera_gpui_desktop::git_external_open::launch_default_application_file(
-                            &root, &path,
-                        )
-                    }).await;
+                    let result = cx
+                        .background_spawn(async move {
+                            alera_gpui_desktop::git_external_open::launch_default_application_file(
+                                &root, &path,
+                            )
+                        })
+                        .await;
                     view.update(cx, |view, cx| {
-                        if view.workspace_generation != generation { return; }
+                        if view.workspace_generation != generation {
+                            return;
+                        }
                         view.model.set_status(match result {
                             Ok(()) => "Opened file with system default application".into(),
                             Err(error) => format!("Default application refused: {error}"),
                         });
                         cx.notify();
-                    }).ok();
-                }).detach();
+                    })
+                    .ok();
+                })
+                .detach();
             }
             ExplorerMenuAction::RevealInFileManager => {
                 let result = self
@@ -1662,8 +1722,11 @@ impl Workbench {
                     });
                 self.model.set_status(match result {
                     Ok(()) => tr(self.settings_menu_locale, "Opened system file manager"),
-                    Err(error) => tr(self.settings_menu_locale, "Cannot reveal selected item: {error}")
-                        .replace("{error}", &error.to_string()),
+                    Err(error) => tr(
+                        self.settings_menu_locale,
+                        "Cannot reveal selected item: {error}",
+                    )
+                    .replace("{error}", &error.to_string()),
                 });
                 cx.notify();
             }
@@ -1687,8 +1750,10 @@ impl Workbench {
                     .as_ref()
                     .filter(|path| path.starts_with(self.model.root()) && path.exists())
                 else {
-                    self.model
-                        .set_status(tr(self.settings_menu_locale, "Choose an existing Explorer item first"));
+                    self.model.set_status(tr(
+                        self.settings_menu_locale,
+                        "Choose an existing Explorer item first",
+                    ));
                     cx.notify();
                     return;
                 };
@@ -1701,12 +1766,14 @@ impl Workbench {
                     path.to_string_lossy().into_owned()
                 };
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                self.model
-                    .set_status(tr(self.settings_menu_locale, if action == ExplorerMenuAction::CopyRelativePath {
+                self.model.set_status(tr(
+                    self.settings_menu_locale,
+                    if action == ExplorerMenuAction::CopyRelativePath {
                         "Copied path relative to the project root"
                     } else {
                         "Copied full file/folder path"
-                    }));
+                    },
+                ));
                 cx.notify();
             }
             ExplorerMenuAction::CollapseFolder => {
@@ -1718,8 +1785,13 @@ impl Workbench {
                     if let Some(tree) = &mut self.tree {
                         if let Ok(relative) = folder.strip_prefix(self.model.root()) {
                             if let Err(error) = tree.collapse(relative) {
-                                self.model
-                                    .set_status(tr(self.settings_menu_locale, "Collapse folder refused: {error}").replace("{error}", &error.to_string()));
+                                self.model.set_status(
+                                    tr(
+                                        self.settings_menu_locale,
+                                        "Collapse folder refused: {error}",
+                                    )
+                                    .replace("{error}", &error.to_string()),
+                                );
                             }
                         }
                     }
@@ -1730,8 +1802,13 @@ impl Workbench {
                 self.model.refresh_directory();
                 if let Some(tree) = &mut self.tree {
                     if let Err(error) = tree.refresh() {
-                        self.model
-                            .set_status(tr(self.settings_menu_locale, "Explorer refresh failed: {error}").replace("{error}", &error.to_string()));
+                        self.model.set_status(
+                            tr(
+                                self.settings_menu_locale,
+                                "Explorer refresh failed: {error}",
+                            )
+                            .replace("{error}", &error.to_string()),
+                        );
                     }
                 }
                 self.refresh_git(cx);
@@ -1749,7 +1826,9 @@ impl Workbench {
             }
             ExplorerMenuAction::GitHistory => self.open_explorer_selection_history(cx),
             ExplorerMenuAction::CompareLatestRevision | ExplorerMenuAction::CompareWithBranch => {
-                let relative = self.explorer_selection.as_ref()
+                let relative = self
+                    .explorer_selection
+                    .as_ref()
                     .filter(|path| path.is_file())
                     .and_then(|path| path.strip_prefix(self.model.root()).ok())
                     .map(Path::to_path_buf);
@@ -1779,8 +1858,10 @@ impl Workbench {
                 | ExplorerAction::Delete
         ) && self.explorer_selection.is_none()
         {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Select a file or folder in Explorer first"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Select a file or folder in Explorer first",
+            ));
             cx.notify();
             return;
         }
@@ -1827,8 +1908,10 @@ impl Workbench {
 
     fn apply_explorer_batch_delete(&mut self, cx: &mut Context<Self>) {
         if self.explorer_drop_busy || self.editor_dirty(cx) {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Save editor changes and finish imports before deleting files"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Save editor changes and finish imports before deleting files",
+            ));
             cx.notify();
             return;
         }
@@ -1841,8 +1924,13 @@ impl Workbench {
         let files = match ExplorerFiles::new(self.model.root()) {
             Ok(files) => files,
             Err(error) => {
-                self.model
-                    .set_status(tr(self.settings_menu_locale, "Explorer delete refused: {error}").replace("{error}", &error.to_string()));
+                self.model.set_status(
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer delete refused: {error}",
+                    )
+                    .replace("{error}", &error.to_string()),
+                );
                 cx.notify();
                 return;
             }
@@ -1863,12 +1951,17 @@ impl Workbench {
                     self.explorer_delete_confirmed = true;
                     self.explorer_delete_pending = Some(batch);
                 }
-                Ok(_) => self.model.set_status(tr(self.settings_menu_locale,
+                Ok(_) => self.model.set_status(tr(
+                    self.settings_menu_locale,
                     "Close any Native Editor files inside the selection before permanent deletion",
                 )),
-                Err(error) => self
-                    .model
-                    .set_status(tr(self.settings_menu_locale, "Explorer delete preflight refused: {error}").replace("{error}", &error.to_string())),
+                Err(error) => self.model.set_status(
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer delete preflight refused: {error}",
+                    )
+                    .replace("{error}", &error.to_string()),
+                ),
             }
             cx.notify();
             return;
@@ -1878,16 +1971,20 @@ impl Workbench {
         // originally armed selection, Editor paths and workspace generation.
         self.explorer_delete_confirmed = false;
         let Some(batch) = self.explorer_delete_pending.take() else {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Delete confirmation expired; choose the items again"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Delete confirmation expired; choose the items again",
+            ));
             cx.notify();
             return;
         };
         if !batch.matches_selection(&files, &selection, self.workspace_generation)
             || batch.affects_open_files(&open_files)
         {
-            self.model
-                .set_status(tr(self.settings_menu_locale, "Delete selection or workspace changed; no files were deleted"));
+            self.model.set_status(tr(
+                self.settings_menu_locale,
+                "Delete selection or workspace changed; no files were deleted",
+            ));
             cx.notify();
             return;
         }
@@ -1954,7 +2051,8 @@ impl Workbench {
                 .map(|(_, path)| path)
                 .collect();
             if affects_open_editor_path(&source, &open_paths) {
-                self.model.set_status(tr(self.settings_menu_locale,
+                self.model.set_status(tr(
+                    self.settings_menu_locale,
                     "Close Editor tabs for the selected file or folder before Rename/Move",
                 ));
                 cx.notify();
@@ -2010,11 +2108,18 @@ impl Workbench {
                 self.cancel_explorer_action(cx);
                 self.persist_session();
                 self.model.set_status(
-                    tr(self.settings_menu_locale, "Explorer operation succeeded: {action}{target}")
-                        .replace("{action}", &tr(self.settings_menu_locale, action.label()))
-                        .replace("{target}", &target.as_ref()
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer operation succeeded: {action}{target}",
+                    )
+                    .replace("{action}", &tr(self.settings_menu_locale, action.label()))
+                    .replace(
+                        "{target}",
+                        &target
+                            .as_ref()
                             .map(|target| format!(": {}", target.display()))
-                            .unwrap_or_default()),
+                            .unwrap_or_default(),
+                    ),
                 );
                 if action == ExplorerAction::NewFile {
                     if let Some(path) = target {
@@ -2026,10 +2131,14 @@ impl Workbench {
                 self.refresh_git(cx);
             }
             Err(error) => {
-                self.model
-                    .set_status(tr(self.settings_menu_locale, "Explorer operation refused: {action}: {error}")
-                        .replace("{action}", &tr(self.settings_menu_locale, action.label()))
-                        .replace("{error}", &error.to_string()));
+                self.model.set_status(
+                    tr(
+                        self.settings_menu_locale,
+                        "Explorer operation refused: {action}: {error}",
+                    )
+                    .replace("{action}", &tr(self.settings_menu_locale, action.label()))
+                    .replace("{error}", &error.to_string()),
+                );
                 // A failed attempt must never retain an armed delete.
                 self.explorer_delete_confirmed = false;
             }
@@ -2164,10 +2273,17 @@ impl Workbench {
         if self.editor.is_none() && self.secondary_editor.is_none() {
             self.editor_epoch = self.editor_epoch.wrapping_add(1);
         }
+        let syntax_theme = self
+            .settings_extra_values
+            .get("editor.themeName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Alera")
+            .to_owned();
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx);
             editor.set_tab_size(self.native_settings.editor_tab_size, cx);
+            editor.set_syntax_theme(&syntax_theme, cx);
         });
         self.editor = Some(editor.clone());
         (
@@ -2183,10 +2299,17 @@ impl Workbench {
         if self.editor.is_none() && self.secondary_editor.is_none() {
             self.editor_epoch = self.editor_epoch.wrapping_add(1);
         }
+        let syntax_theme = self
+            .settings_extra_values
+            .get("editor.themeName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Alera")
+            .to_owned();
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx);
             editor.set_tab_size(self.native_settings.editor_tab_size, cx);
+            editor.set_syntax_theme(&syntax_theme, cx);
         });
         self.secondary_editor = Some(editor.clone());
         (
@@ -2298,10 +2421,21 @@ impl Workbench {
             if let Some(anchor) = self.git_selection_anchor.as_ref().filter(|anchor| {
                 self.git_sidebar_options.grouping == GitSidebarGroupMode::Unified
                     || match (*anchor, &row) {
-                        (GitSidebarSelectionItem::File(a), GitSidebarSelectionItem::File(b)) => a.area == b.area,
-                        (GitSidebarSelectionItem::Folder((a, _)), GitSidebarSelectionItem::Folder((b, _))) => a == b,
-                        (GitSidebarSelectionItem::File(a), GitSidebarSelectionItem::Folder((b, _)))
-                        | (GitSidebarSelectionItem::Folder((b, _)), GitSidebarSelectionItem::File(a)) => *b == Some(a.area),
+                        (GitSidebarSelectionItem::File(a), GitSidebarSelectionItem::File(b)) => {
+                            a.area == b.area
+                        }
+                        (
+                            GitSidebarSelectionItem::Folder((a, _)),
+                            GitSidebarSelectionItem::Folder((b, _)),
+                        ) => a == b,
+                        (
+                            GitSidebarSelectionItem::File(a),
+                            GitSidebarSelectionItem::Folder((b, _)),
+                        )
+                        | (
+                            GitSidebarSelectionItem::Folder((b, _)),
+                            GitSidebarSelectionItem::File(a),
+                        ) => *b == Some(a.area),
                     }
             }) {
                 if let (Some(from), Some(to)) = (
@@ -2313,7 +2447,8 @@ impl Workbench {
                         self.git_selected_folders.clear();
                     }
                     for entry in &visible[from.min(to)..=from.max(to)] {
-                        if self.git_selected_changes.len() + self.git_selected_folders.len() >= 120 {
+                        if self.git_selected_changes.len() + self.git_selected_folders.len() >= 120
+                        {
                             break;
                         }
                         match entry {
@@ -2336,13 +2471,21 @@ impl Workbench {
         let was_selected = self.git_sidebar_item_selected(&row);
         if toggle && was_selected {
             match &row {
-                GitSidebarSelectionItem::File(file) => { self.git_selected_changes.remove(file); }
-                GitSidebarSelectionItem::Folder(folder) => { self.git_selected_folders.remove(folder); }
+                GitSidebarSelectionItem::File(file) => {
+                    self.git_selected_changes.remove(file);
+                }
+                GitSidebarSelectionItem::Folder(folder) => {
+                    self.git_selected_folders.remove(folder);
+                }
             }
         } else if self.git_selected_changes.len() + self.git_selected_folders.len() < 120 {
             match &row {
-                GitSidebarSelectionItem::File(file) => { self.git_selected_changes.insert(file.clone()); }
-                GitSidebarSelectionItem::Folder(folder) => { self.git_selected_folders.insert(folder.clone()); }
+                GitSidebarSelectionItem::File(file) => {
+                    self.git_selected_changes.insert(file.clone());
+                }
+                GitSidebarSelectionItem::Folder(folder) => {
+                    self.git_selected_folders.insert(folder.clone());
+                }
             }
         }
         self.git_selection_anchor = Some(row);
@@ -2359,26 +2502,55 @@ impl Workbench {
     ) {
         let mut options = self.git_sidebar_options.clone();
         options.filter = self.git_filter_input.read(cx).query().to_owned();
-        let visible = self.git_snapshot.as_ref()
-            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items())
+        let visible = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items()
+            })
             .unwrap_or_default();
-        let row = clicked.filter(|item| visible.contains(item))
-            .or_else(|| self.git_selection_anchor.clone().filter(|item| visible.contains(item) && self.git_sidebar_item_selected(item)))
-            .or_else(|| visible.iter().find(|item| self.git_sidebar_item_selected(item)).cloned());
+        let row = clicked
+            .filter(|item| visible.contains(item))
+            .or_else(|| {
+                self.git_selection_anchor
+                    .clone()
+                    .filter(|item| visible.contains(item) && self.git_sidebar_item_selected(item))
+            })
+            .or_else(|| {
+                visible
+                    .iter()
+                    .find(|item| self.git_sidebar_item_selected(item))
+                    .cloned()
+            });
         let Some(row) = row else {
-            self.model.set_status("Select a visible Git file or folder first");
+            self.model
+                .set_status("Select a visible Git file or folder first");
             cx.notify();
             return;
         };
-        let paths = selected_worktree_paths(self.model.root(), &row,
-            &self.git_selected_changes, &self.git_selected_folders, &visible);
+        let paths = selected_worktree_paths(
+            self.model.root(),
+            &row,
+            &self.git_selected_changes,
+            &self.git_selected_folders,
+            &visible,
+        );
         // An OS file-manager Cut can move the file without involving Alera.
         // Therefore refuse to expose a live Editor tab to native Cut at all.
         if mode == ExplorerClipboardMode::Cut {
-            let open_paths = self.all_editor_files_and_active(cx).0.into_iter()
-                .map(|(_, path)| path).collect::<Vec<_>>();
-            if paths.iter().any(|source| open_paths.iter().any(|open| open.starts_with(source))) {
-                self.model.set_status("Close Editor tabs for these files before cutting them outside Alera");
+            let open_paths = self
+                .all_editor_files_and_active(cx)
+                .0
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect::<Vec<_>>();
+            if paths
+                .iter()
+                .any(|source| open_paths.iter().any(|open| open.starts_with(source)))
+            {
+                self.model.set_status(
+                    "Close Editor tabs for these files before cutting them outside Alera",
+                );
                 cx.notify();
                 return;
             }
@@ -2398,20 +2570,30 @@ impl Workbench {
                 let native_paths = clipboard.source_paths();
                 self.explorer_clipboard = Some(clipboard);
                 #[cfg(windows)]
-                let native_message = match alera_gpui_desktop::native_file_clipboard::write_native_files(&native_paths, mode) {
-                    Ok(()) => "; Windows Explorer clipboard ready",
-                    Err(error) => {
-                        self.model.set_status(format!("{count} Git item(s) in Alera clipboard, but Windows clipboard failed: {error}"));
-                        cx.notify();
-                        return;
-                    }
-                };
+                let native_message =
+                    match alera_gpui_desktop::native_file_clipboard::write_native_files(
+                        &native_paths,
+                        mode,
+                    ) {
+                        Ok(()) => "; Windows Explorer clipboard ready",
+                        Err(error) => {
+                            self.model.set_status(format!("{count} Git item(s) in Alera clipboard, but Windows clipboard failed: {error}"));
+                            cx.notify();
+                            return;
+                        }
+                    };
                 #[cfg(not(windows))]
                 let _ = native_paths;
                 #[cfg(not(windows))]
                 let native_message = "; internal Alera clipboard ready";
-                self.model.set_status(format!("{} {count} worktree item(s){native_message}",
-                    if mode == ExplorerClipboardMode::Copy { "Copied" } else { "Cut" }));
+                self.model.set_status(format!(
+                    "{} {count} worktree item(s){native_message}",
+                    if mode == ExplorerClipboardMode::Copy {
+                        "Copied"
+                    } else {
+                        "Cut"
+                    }
+                ));
             }
             Err(error) => self.model.set_status(format!(
                 "Git file/folder Copy/Cut refused: {error} (missing items cannot be exported)"
@@ -2421,15 +2603,20 @@ impl Workbench {
     }
 
     fn paste_git_at_selection(&mut self, cx: &mut Context<Self>) {
-        let hovered = self.git_selection_anchor.as_ref()
+        let hovered = self
+            .git_selection_anchor
+            .as_ref()
             .filter(|row| self.git_sidebar_item_selected(row))
             .map(|row| match row {
                 GitSidebarSelectionItem::Folder((_, path)) => self.model.root().join(path),
-                GitSidebarSelectionItem::File(file) => {
-                    self.model.root().join(&file.relative).parent()
-                        .unwrap_or(self.model.root()).to_path_buf()
-                }
-        });
+                GitSidebarSelectionItem::File(file) => self
+                    .model
+                    .root()
+                    .join(&file.relative)
+                    .parent()
+                    .unwrap_or(self.model.root())
+                    .to_path_buf(),
+            });
         self.paste_git_file_clipboard(hovered, cx);
     }
 
@@ -2523,19 +2710,28 @@ impl Workbench {
         // on an invisible Git folder or infer a different target.
         let mut options = self.git_sidebar_options.clone();
         options.filter = self.git_filter_input.read(cx).query().to_owned();
-        let visible = self.git_snapshot.as_ref()
-            .map(|snapshot| layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items())
+        let visible = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| {
+                layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items()
+            })
             .unwrap_or_default();
         let item = GitSidebarSelectionItem::Folder(key.clone());
         if !visible.contains(&item) {
-            self.model.set_status("Git folder changed; refresh before continuing");
+            self.model
+                .set_status("Git folder changed; refresh before continuing");
             cx.notify();
             return;
         }
         let folder = self.model.root().join(&key.1);
         match action {
-            GitFolderMenuAction::Copy => self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Copy, cx),
-            GitFolderMenuAction::Cut => self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Cut, cx),
+            GitFolderMenuAction::Copy => {
+                self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Copy, cx)
+            }
+            GitFolderMenuAction::Cut => {
+                self.set_git_file_clipboard(Some(item), ExplorerClipboardMode::Cut, cx)
+            }
             GitFolderMenuAction::Paste => self.paste_git_file_clipboard(Some(folder), cx),
             GitFolderMenuAction::Reveal => {
                 let result = ExplorerFiles::new(self.model.root())
@@ -2617,13 +2813,17 @@ impl Workbench {
                 let relative = row.relative.clone();
                 let generation = self.workspace_generation;
                 cx.spawn(async move |view, cx| {
-                    let result = cx.background_spawn(async move {
-                        alera_gpui_desktop::git_ignore::add_untracked_file_to_gitignore(
-                            &root, &relative,
-                        )
-                    }).await;
+                    let result = cx
+                        .background_spawn(async move {
+                            alera_gpui_desktop::git_ignore::add_untracked_file_to_gitignore(
+                                &root, &relative,
+                            )
+                        })
+                        .await;
                     view.update(cx, |view, cx| {
-                        if view.workspace_generation != generation { return; }
+                        if view.workspace_generation != generation {
+                            return;
+                        }
                         view.git_action_status = match result {
                             Ok(true) => "Added file to .gitignore".into(),
                             Ok(false) => "Already in .gitignore".into(),
@@ -2631,8 +2831,10 @@ impl Workbench {
                         };
                         view.refresh_git(cx);
                         cx.notify();
-                    }).ok();
-                }).detach();
+                    })
+                    .ok();
+                })
+                .detach();
             }
             GitChangeMenuAction::Original
                 if matches!(row.area, GitChangeArea::Staged | GitChangeArea::Changes) =>
@@ -2655,12 +2857,25 @@ impl Workbench {
                 let root = self.model.root().to_path_buf();
                 let relative = row.relative;
                 let generation = self.workspace_generation;
+                // Classic's external-editor selection wins when the Host
+                // supports it. Older Hosts retain the existing environment
+                // override / OS-default path instead of inventing a choice.
+                let selected_editor = self
+                    .settings_extra_values
+                    .get("editor.externalEditor")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
                 cx.spawn(async move |view, cx| {
                     let result = cx
                         .background_spawn(async move {
-                            alera_gpui_desktop::git_external_open::launch_external_file(
-                                &root, &relative,
-                            )
+                            match selected_editor.as_deref() {
+                                Some(editor) => alera_gpui_desktop::git_external_open::launch_mcp_external_editor(
+                                    &root, &relative, editor, None, None,
+                                ),
+                                None => alera_gpui_desktop::git_external_open::launch_external_file(
+                                    &root, &relative,
+                                ),
+                            }
                         })
                         .await;
                     view.update(cx, |view, cx| {
@@ -2669,7 +2884,7 @@ impl Workbench {
                         }
                         view.model.set_status(match result {
                             Ok(()) => {
-                                "Opened worktree file with external editor or default application"
+                                "Opened worktree file with configured external editor or default application"
                                     .into()
                             }
                             Err(error) => format!("External application refused: {error}"),
@@ -2686,10 +2901,18 @@ impl Workbench {
                 ));
             }
             GitChangeMenuAction::CopyFiles => {
-                self.set_git_file_clipboard(Some(GitSidebarSelectionItem::File(row)), ExplorerClipboardMode::Copy, cx);
+                self.set_git_file_clipboard(
+                    Some(GitSidebarSelectionItem::File(row)),
+                    ExplorerClipboardMode::Copy,
+                    cx,
+                );
             }
             GitChangeMenuAction::CutFiles => {
-                self.set_git_file_clipboard(Some(GitSidebarSelectionItem::File(row)), ExplorerClipboardMode::Cut, cx);
+                self.set_git_file_clipboard(
+                    Some(GitSidebarSelectionItem::File(row)),
+                    ExplorerClipboardMode::Cut,
+                    cx,
+                );
             }
             GitChangeMenuAction::PasteFiles => {
                 let path = self.model.root().join(&row.relative);
@@ -2951,7 +3174,9 @@ impl Workbench {
         self.git_graph_ref_tab = tab;
         if tab.needs_remote_history() && !self.git_history_options.all_branches {
             self.git_history_options.all_branches = true;
-            if self.git_history_tab_open { self.save_mixed_pane_layout(cx); }
+            if self.git_history_tab_open {
+                self.save_mixed_pane_layout(cx);
+            }
             self.refresh_git_history(cx);
         }
         cx.notify();
@@ -2962,7 +3187,9 @@ impl Workbench {
         let was_open = self.git_history_open;
         self.git_history_open = self.git_history_sidebar_open || self.git_history_tab_open;
         if self.git_history_open {
-            if !was_open || self.git_history.is_none() { self.refresh_git_history(cx); }
+            if !was_open || self.git_history.is_none() {
+                self.refresh_git_history(cx);
+            }
         } else {
             self.git_history_cancel.store(true, Ordering::Release);
             self.git_history_request = self.git_history_request.wrapping_add(1);
@@ -3898,7 +4125,8 @@ impl Workbench {
         self.git_graph_compare_selected = None;
         self.git_graph_compare_rows = Arc::new(Vec::new());
         self.git_graph_compare_hunk = None;
-        self.git_graph_compare_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        self.git_graph_compare_scroll
+            .scroll_to_item(0, gpui::ScrollStrategy::Top);
         self.git_diff = None;
         self.git_diff_loading = true;
         self.git_history_open = true;
@@ -3907,7 +4135,11 @@ impl Workbench {
         }
         self.model.set_status(format!(
             "Comparing HEAD and {selected} (read-only); see {}",
-            if center { "Git Graph" } else { "Source Control" }
+            if center {
+                "Git Graph"
+            } else {
+                "Source Control"
+            }
         ));
         let report_branch = selected.clone();
         cx.spawn(async move |view, cx| {
@@ -3932,7 +4164,11 @@ impl Workbench {
                         view.model.set_status(format!(
                             "Compared HEAD with {report_branch}: {} file(s) - {}",
                             comparison.files.len(),
-                            if center { "Git Graph" } else { "Source Control" },
+                            if center {
+                                "Git Graph"
+                            } else {
+                                "Source Control"
+                            },
                         ));
                         view.git_diff = Some(comparison.summary());
                         view.git_branch_comparison = Some(comparison);
@@ -3941,7 +4177,8 @@ impl Workbench {
                         }
                     }
                     Err(error) => {
-                        view.model.set_status(format!("Branch comparison refused: {error}"));
+                        view.model
+                            .set_status(format!("Branch comparison refused: {error}"));
                         view.git_diff = Some(format!("Branch comparison refused: {error}"));
                         view.git_branch_comparison = None;
                     }
@@ -4024,17 +4261,19 @@ impl Workbench {
         self.git_graph_compare_rows = Arc::new(Vec::new());
         self.git_graph_compare_hunk = None;
         cx.spawn(async move |view, cx| {
-            let result = cx.background_spawn(async move {
-                let text = if original {
-                    original_compared_file(&root, &comparison, index)
-                } else {
-                    diff_compared_file(&root, &comparison, index)
-                }?;
-                // Parse old/new line positions and hunk targets only once in
-                // the background. Virtual UI renders cached bounded rows.
-                let rows = native_git_graph_compare_ui::parse_center_branch_patch_rows(&text);
-                Ok::<_, String>((text, rows))
-            }).await;
+            let result = cx
+                .background_spawn(async move {
+                    let text = if original {
+                        original_compared_file(&root, &comparison, index)
+                    } else {
+                        diff_compared_file(&root, &comparison, index)
+                    }?;
+                    // Parse old/new line positions and hunk targets only once in
+                    // the background. Virtual UI renders cached bounded rows.
+                    let rows = native_git_graph_compare_ui::parse_center_branch_patch_rows(&text);
+                    Ok::<_, String>((text, rows))
+                })
+                .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
                     return;
@@ -4055,7 +4294,9 @@ impl Workbench {
                         view.git_diff = Some(message.clone());
                         if view.git_graph_compare_center {
                             view.git_graph_compare_rows = Arc::new(
-                                native_git_graph_compare_ui::parse_center_branch_patch_rows(&message),
+                                native_git_graph_compare_ui::parse_center_branch_patch_rows(
+                                    &message,
+                                ),
                             );
                         }
                     }
@@ -4121,13 +4362,18 @@ impl Workbench {
                 self.run_git_action(GitUiAction::Commit(message), cx);
             }
             Some(GitPrimaryAction::StageAll) => {
-                let Some(snapshot) = self.git_snapshot.as_ref() else { return };
+                let Some(snapshot) = self.git_snapshot.as_ref() else {
+                    return;
+                };
                 if snapshot.truncated {
-                    self.git_action_status = "Git status is limited; stage files individually".into();
+                    self.git_action_status =
+                        "Git status is limited; stage files individually".into();
                     cx.notify();
                     return;
                 }
-                let mut paths = snapshot.visible_rows("").into_iter()
+                let mut paths = snapshot
+                    .visible_rows("")
+                    .into_iter()
                     .filter(|row| row.area.can_stage())
                     .map(|row| row.relative)
                     .collect::<Vec<_>>();
@@ -4188,11 +4434,14 @@ impl Workbench {
         self.git_original_active = false;
         self.center_git_diff_hunk = None;
         self.center_git_diff_rows = Arc::new(Vec::new());
-        self.center_git_diff_scroll.scroll_to_item(0, gpui::ScrollStrategy::Top);
+        self.center_git_diff_scroll
+            .scroll_to_item(0, gpui::ScrollStrategy::Top);
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
-            let result = cx.background_spawn(async move { read_all_changes_diff(&root) }).await;
+            let result = cx
+                .background_spawn(async move { read_all_changes_diff(&root) })
+                .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
                     return;
@@ -4200,9 +4449,8 @@ impl Workbench {
                 view.git_diff_loading = false;
                 match result {
                     Ok(page) => {
-                        view.center_git_diff_rows = Arc::new(
-                            native_center_git_diff_ui::center_git_diff_rows(&page.text),
-                        );
+                        view.center_git_diff_rows =
+                            Arc::new(native_center_git_diff_ui::center_git_diff_rows(&page.text));
                         view.git_diff = Some(page.text);
                     }
                     Err(error) => {
@@ -4211,8 +4459,10 @@ impl Workbench {
                     }
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -4893,7 +5143,8 @@ impl Workbench {
                     Ok(_) => {
                         // Read-only Git versions do not enter NativeEditor at
                         // all and cannot become Save/Save As, draft or PTY tabs.
-                        view.center_git_conflict_request = view.center_git_conflict_request.wrapping_add(1);
+                        view.center_git_conflict_request =
+                            view.center_git_conflict_request.wrapping_add(1);
                         view.center_git_conflict = None;
                         view.active_git_compare_tab = None;
                         view.git_original_active = true;
@@ -5189,20 +5440,41 @@ impl Workbench {
         }
     }
 
-    fn git_copy_files_action(&mut self, _: &GitCopyFiles, window: &mut Window, cx: &mut Context<Self>) {
-        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+    fn git_copy_files_action(
+        &mut self,
+        _: &GitCopyFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_sidebar_view == RightSidebarView::Git
+            && self.git_keyboard_focus.is_focused(window)
+        {
             self.set_git_file_clipboard(None, ExplorerClipboardMode::Copy, cx);
         }
     }
 
-    fn git_cut_files_action(&mut self, _: &GitCutFiles, window: &mut Window, cx: &mut Context<Self>) {
-        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+    fn git_cut_files_action(
+        &mut self,
+        _: &GitCutFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_sidebar_view == RightSidebarView::Git
+            && self.git_keyboard_focus.is_focused(window)
+        {
             self.set_git_file_clipboard(None, ExplorerClipboardMode::Cut, cx);
         }
     }
 
-    fn git_paste_files_action(&mut self, _: &GitPasteFiles, window: &mut Window, cx: &mut Context<Self>) {
-        if self.right_sidebar_view == RightSidebarView::Git && self.git_keyboard_focus.is_focused(window) {
+    fn git_paste_files_action(
+        &mut self,
+        _: &GitPasteFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_sidebar_view == RightSidebarView::Git
+            && self.git_keyboard_focus.is_focused(window)
+        {
             self.paste_git_at_selection(cx);
         }
     }
@@ -5656,9 +5928,8 @@ impl Workbench {
         self.right_sidebar_visible = true;
         self.explorer_context_menu = None;
         if self.content_query.is_none() {
-            self.content_query = Some(cx.new(|cx| {
-                QuickOpenInput::with_placeholder("Search in files…", cx)
-            }));
+            self.content_query =
+                Some(cx.new(|cx| QuickOpenInput::with_placeholder("Search in files…", cx)));
         }
         if let Some(input) = &self.content_query {
             window.focus(&input.read(cx).focus_handle(cx), cx);
@@ -5676,7 +5947,10 @@ impl Workbench {
         self.global_agent_history_open = true;
         self.explorer_context_menu = None;
         self.save_sidebar_layout(cx);
-        window.focus(&self.global_agent_history_input.read(cx).focus_handle(cx), cx);
+        window.focus(
+            &self.global_agent_history_input.read(cx).focus_handle(cx),
+            cx,
+        );
         cx.notify();
     }
 
@@ -5726,7 +6000,8 @@ impl Workbench {
         if let Some(url) = &self.review_browser_url {
             cx.open_url(url);
         } else if let Some(error) = &self.review_browser_error {
-            self.model.set_status(format!("Cannot open Pull Requests: {error}"));
+            self.model
+                .set_status(format!("Cannot open Pull Requests: {error}"));
         }
         cx.notify();
     }
@@ -5737,7 +6012,8 @@ impl Workbench {
     fn find_text_references(&mut self, cx: &mut Context<Self>) {
         self.open_references_panel(cx);
         let Some(owner) = self.focused_editor() else {
-            self.references_error = Some("Open an Editor file, select a symbol, then run Find Text References".into());
+            self.references_error =
+                Some("Open an Editor file, select a symbol, then run Find Text References".into());
             cx.notify();
             return;
         };
@@ -5750,13 +6026,15 @@ impl Workbench {
             )
         };
         let Some(path) = path.filter(|path| path.starts_with(self.model.root())) else {
-            self.references_error = Some("Find Text References requires a saved file inside this workspace".into());
+            self.references_error =
+                Some("Find Text References requires a saved file inside this workspace".into());
             cx.notify();
             return;
         };
         let _ = path; // The root and identifier, not a user's absolute path, define the scan.
         let Some(symbol) = symbol else {
-            self.references_error = Some("Select a single identifier or place the Editor caret on a symbol".into());
+            self.references_error =
+                Some("Select a single identifier or place the Editor caret on a symbol".into());
             cx.notify();
             return;
         };
@@ -5770,18 +6048,20 @@ impl Workbench {
         self.references_error = None;
         self.references_loading = true;
         cx.spawn(async move |view, cx| {
-            let result = cx.background_spawn(async move {
-                let mut result = search_worktree_contents(
-                    &root, &symbol, WorktreeContentScope::Current,
-                )?;
-                result.matches.retain(|hit| {
-                    is_whole_identifier_hit(&hit.hit.snippet, hit.hit.column, &symbol)
-                });
-                Ok::<_, std::io::Error>(result)
-            }).await;
+            let result = cx
+                .background_spawn(async move {
+                    let mut result =
+                        search_worktree_contents(&root, &symbol, WorktreeContentScope::Current)?;
+                    result.matches.retain(|hit| {
+                        is_whole_identifier_hit(&hit.hit.snippet, hit.hit.column, &symbol)
+                    });
+                    Ok::<_, std::io::Error>(result)
+                })
+                .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != workspace_generation
-                    || view.references_request != ticket {
+                    || view.references_request != ticket
+                {
                     return;
                 }
                 view.references_loading = false;
@@ -5794,12 +6074,15 @@ impl Workbench {
                     Err(error) => {
                         view.references_matches.clear();
                         view.references_truncated = false;
-                        view.references_error = Some(format!("Text reference scan failed: {error}"));
+                        view.references_error =
+                            Some(format!("Text reference scan failed: {error}"));
                     }
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -5896,7 +6179,8 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         if !self.references_matches.iter().any(|item| item == hit) {
-            self.model.set_status("Text references changed; run Find Text References again");
+            self.model
+                .set_status("Text references changed; run Find Text References again");
             cx.notify();
             return;
         }
@@ -6562,7 +6846,8 @@ impl Workbench {
         self.pinned_conflict_tabs.reset();
         self.active_pinned_conflict = None;
         self.git_branch_picker_mode = None;
-        self.git_branch_picker_input.update(cx, |input, cx| input.clear(cx));
+        self.git_branch_picker_input
+            .update(cx, |input, cx| input.clear(cx));
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
         self.mixed_panes.reset();
@@ -6594,9 +6879,8 @@ impl Workbench {
         self.file_index = None;
         self.file_index_loading = false;
         self.file_index_request = self.file_index_request.wrapping_add(1);
-        self.content_query = Some(cx.new(|cx| {
-            QuickOpenInput::with_placeholder("Search in files…", cx)
-        }));
+        self.content_query =
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("Search in files…", cx)));
         self.content_search_scope = WorktreeContentScope::Current;
         self.content_worktrees_searched = 0;
         self.content_worktrees_skipped = 0;
@@ -6930,12 +7214,17 @@ impl Workbench {
     /// While a write is in flight, the latest UI state is coalesced and
     /// saved after that write returns. All unrelated settings stay intact.
     fn save_sidebar_layout(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_save_busy { return; }
+        if self.sidebar_save_busy {
+            return;
+        }
         let next = self.sidebar_layout_snapshot();
         let expected = self.native_settings.sidebar_layout.clone();
-        if next == expected { return; }
+        if next == expected {
+            return;
+        }
         let Some(store) = self.native_settings_store.clone() else {
-            self.model.set_status("Native sidebar state cannot be persisted: no settings store");
+            self.model
+                .set_status("Native sidebar state cannot be persisted: no settings store");
             return;
         };
         self.sidebar_save_busy = true;
@@ -7659,7 +7948,10 @@ impl Workbench {
     /// user click may bring back the Host and its own persisted PTYs.
     fn restore_saved_host_tabs(&mut self, cx: &mut Context<Self>) {
         if self.terminal_restore_loading
-            || self.terminal_layout_restore.as_ref().is_none_or(|layout| layout.tabs.is_empty())
+            || self
+                .terminal_layout_restore
+                .as_ref()
+                .is_none_or(|layout| layout.tabs.is_empty())
         {
             return;
         }
@@ -7692,9 +7984,8 @@ impl Workbench {
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
-                        view.terminals.status = format!(
-                            "Unable to restore saved Host tabs: {error}"
-                        );
+                        view.terminals.status =
+                            format!("Unable to restore saved Host tabs: {error}");
                     }
                 }
                 cx.notify();
@@ -8364,8 +8655,8 @@ impl Workbench {
             .then(|| self.terminal_create_journal.clone())
             .flatten();
         // Ignore list reads begun before/in-flight with a remote Agent launch.
-        let global_create_ticket_at_listing = (!self.global_agent_create_busy)
-            .then_some(self.global_agent_create_request);
+        let global_create_ticket_at_listing =
+            (!self.global_agent_create_busy).then_some(self.global_agent_create_request);
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -9441,12 +9732,18 @@ impl Workbench {
                 self.git_history_tab_open = saved.git_history_tab_open;
                 self.git_graph_center_open = saved.git_history_tab_active;
                 if saved.git_history_tab_open {
-                    self.git_history_options.all_branches = saved.git_history_tab_all_branches.unwrap_or(true);
+                    self.git_history_options.all_branches =
+                        saved.git_history_tab_all_branches.unwrap_or(true);
                     self.git_history_options.favorites_only = saved.git_history_tab_favorites_only;
-                    self.git_history_options.selected_ref = saved.git_history_tab_selected_ref.clone();
-                    self.git_history_options.merged_visibility = saved.git_history_tab_merged_visibility
-                        .as_deref().and_then(GitMergedBranchVisibility::from_key).unwrap_or_default();
-                    self.git_history_options.merged_target_ref = saved.git_history_tab_merged_target_ref.clone();
+                    self.git_history_options.selected_ref =
+                        saved.git_history_tab_selected_ref.clone();
+                    self.git_history_options.merged_visibility = saved
+                        .git_history_tab_merged_visibility
+                        .as_deref()
+                        .and_then(GitMergedBranchVisibility::from_key)
+                        .unwrap_or_default();
+                    self.git_history_options.merged_target_ref =
+                        saved.git_history_tab_merged_target_ref.clone();
                 }
                 self.mixed_layout_restore = Some(saved);
             }
@@ -9545,11 +9842,15 @@ impl Workbench {
                 .active_in(PaneSlot::Secondary)
                 .and_then(&host_for),
             git_history_tab_open: self.git_history_tab_open,
-            git_history_tab_secondary: self.mixed_panes.tabs_in(PaneSlot::Secondary)
+            git_history_tab_secondary: self
+                .mixed_panes
+                .tabs_in(PaneSlot::Secondary)
                 .contains(&WorkbenchTabIdentity::GitHistory),
             git_history_tab_pinned: self.mixed_tabs.is_pinned(&WorkbenchTabIdentity::GitHistory),
             git_history_tab_active: self.git_graph_center_open,
-            git_history_tab_all_branches: self.git_history_tab_open.then_some(self.git_history_options.all_branches),
+            git_history_tab_all_branches: self
+                .git_history_tab_open
+                .then_some(self.git_history_options.all_branches),
             git_history_tab_favorites_only: self.git_history_options.favorites_only,
             git_history_tab_selected_ref: self.git_history_options.selected_ref.clone(),
             git_history_tab_merged_visibility: (self.git_history_options.merged_visibility
@@ -9854,8 +10155,7 @@ impl Workbench {
         let agent_tooltip = if tab.kind == WorkbenchTabKind::Agent && tab.running {
             tab.agent_state.and_then(|state| {
                 tab.verified_agent_brand(host_sessions).map(|agent_type| {
-                    AgentVisualState::from_hook(state, tab.interrupted)
-                        .tooltip(agent_type, locale)
+                    AgentVisualState::from_hook(state, tab.interrupted).tooltip(agent_type, locale)
                 })
             })
         } else {
@@ -9866,20 +10166,27 @@ impl Workbench {
         // 6px Hook status dot and stopped label never move or get concealed.
         let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::GitHistory {
             icon(UiIcon::Graph, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
-        } else if matches!(tab.kind, WorkbenchTabKind::GitFileCompare | WorkbenchTabKind::GitConflictCompare) {
+        } else if matches!(
+            tab.kind,
+            WorkbenchTabKind::GitFileCompare | WorkbenchTabKind::GitConflictCompare
+        ) {
             icon(UiIcon::FileCode, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
         } else if tab.kind == WorkbenchTabKind::Editor {
             explorer_file_icon_element(
-                &tab.title, false, false, 12.0,
+                &tab.title,
+                false,
+                false,
+                12.0,
                 if selected { TEXT } else { MUTED },
-            ).into_any_element()
+            )
+            .into_any_element()
         } else if let Some(agent_type) = tab.verified_agent_brand(host_sessions) {
             native_agent_quota_ui::quota_provider_icon(
-                &agent_type.trim().to_ascii_lowercase(), 12.0,
+                &agent_type.trim().to_ascii_lowercase(),
+                12.0,
             )
         } else {
-            icon(UiIcon::Terminal, 12.0, if selected { TEXT } else { MUTED })
-                .into_any_element()
+            icon(UiIcon::Terminal, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
         };
         let identity = tab.identity;
         let status_color = if tab.kind == WorkbenchTabKind::Agent && tab.running {
@@ -9929,10 +10236,14 @@ impl Workbench {
                     .child(tab_icon)
                     // Classic reserves the 6px status slot even while idle;
                     // changing Agent states cannot shift the title or X.
-                    .child(div().w(px(TAB_ATTENTION_DOT_SIZE)).h(px(TAB_ATTENTION_DOT_SIZE))
-                        .when(status_color.is_some(), |dot| {
-                            dot.rounded_full().bg(rgb(status_color.unwrap_or(MUTED)))
-                        }))
+                    .child(
+                        div()
+                            .w(px(TAB_ATTENTION_DOT_SIZE))
+                            .h(px(TAB_ATTENTION_DOT_SIZE))
+                            .when(status_color.is_some(), |dot| {
+                                dot.rounded_full().bg(rgb(status_color.unwrap_or(MUTED)))
+                            }),
+                    )
                     .child(
                         div()
                             .id(("mixed-tab-title", index))
@@ -9993,10 +10304,11 @@ impl Workbench {
                     )),
             )
             .child(
-                tab_close_button((close_id, index), tr(locale, "Close tab"))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                tab_close_button((close_id, index), tr(locale, "Close tab")).on_click(cx.listener(
+                    move |this, _, _, cx| {
                         this.close_mixed_tab(&for_close, cx);
-                    })),
+                    },
+                )),
             )
             .into_any_element()
     }
@@ -10492,7 +10804,10 @@ impl Workbench {
         {
             return;
         }
-        let already_here = self.mixed_panes.tabs_in(destination).contains(&drag.identity);
+        let already_here = self
+            .mixed_panes
+            .tabs_in(destination)
+            .contains(&drag.identity);
         if !already_here && !self.transfer_editor_to_pane(&drag.identity, destination, cx) {
             return;
         }
@@ -10537,12 +10852,19 @@ impl Workbench {
             .tabs_in(destination)
             .contains(&drag.identity);
         if !source_in_destination {
-            let moved = if matches!(drag.identity, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
+            let moved = if matches!(
+                drag.identity,
+                WorkbenchTabIdentity::GitHistory
+                    | WorkbenchTabIdentity::GitFileCompare(_)
+                    | WorkbenchTabIdentity::GitConflictCompare(_)
+            ) {
                 self.mixed_panes.move_to(&drag.identity, destination)
             } else {
                 self.transfer_editor_to_pane(&drag.identity, destination, cx)
             };
-            if !moved { return; }
+            if !moved {
+                return;
+            }
         }
         let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
         let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
@@ -10586,7 +10908,10 @@ impl Workbench {
                 WorkbenchTabIdentity::Host(target) => {
                     self.toggle_host_tab_pinned(target.clone(), cx);
                 }
-                WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => {
+                WorkbenchTabIdentity::Editor { .. }
+                | WorkbenchTabIdentity::GitHistory
+                | WorkbenchTabIdentity::GitFileCompare(_)
+                | WorkbenchTabIdentity::GitConflictCompare(_) => {
                     let next = !self.mixed_tabs.is_pinned(&id);
                     if self.mixed_tabs.set_pinned(&id, next) {
                         self.save_mixed_pane_layout(cx);
@@ -10617,7 +10942,12 @@ impl Workbench {
             MixedContextAction::SecondPane => {
                 // Host stays in its Host-owned runtime; Editor transfers its
                 // existing EditorSession into an independent native viewport.
-                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
+                let moved = if matches!(
+                    id,
+                    WorkbenchTabIdentity::GitHistory
+                        | WorkbenchTabIdentity::GitFileCompare(_)
+                        | WorkbenchTabIdentity::GitConflictCompare(_)
+                ) {
                     self.mixed_panes.move_to(&id, PaneSlot::Secondary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx)
@@ -10628,7 +10958,12 @@ impl Workbench {
                 }
             }
             MixedContextAction::FirstPane => {
-                let moved = if matches!(id, WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_)) {
+                let moved = if matches!(
+                    id,
+                    WorkbenchTabIdentity::GitHistory
+                        | WorkbenchTabIdentity::GitFileCompare(_)
+                        | WorkbenchTabIdentity::GitConflictCompare(_)
+                ) {
                     self.mixed_panes.move_to(&id, PaneSlot::Primary)
                 } else {
                     self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx)
@@ -11032,9 +11367,7 @@ impl Workbench {
                     self.agent_navigation.begin(notice, source);
                     cx.notify();
                 }
-                Err(_)
-                    if self.mcp_host_workspaces.is_empty() =>
-                {
+                Err(_) if self.mcp_host_workspaces.is_empty() => {
                     if self.runtime_bridge.is_none() {
                         self.runtime_bridge = RuntimeCliBridge::discover().ok();
                     }
@@ -11517,6 +11850,17 @@ impl Render for Workbench {
                 }
             });
         }
+        // Classic and GPUI read the same Host preference. Repaint the
+        // existing screen with its palette; never reset PTY/VT state here.
+        let terminal_theme = alera_gpui_desktop::terminal_theme::theme_for_name(
+            self.settings_extra_values
+                .get("terminal.themeName")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Alera Dark"),
+        );
+        let terminal_theme_bg = terminal_theme.background;
+        let terminal_theme_fg = terminal_theme.foreground;
+        let terminal_theme_selection = terminal_theme.selection;
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
         let terminal_font_family = self
             .settings_extra_values
@@ -11609,8 +11953,10 @@ impl Render for Workbench {
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
             WorkbenchTabIdentity::Host(target) => Some(target.clone()),
-            WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
-            | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => None,
+            WorkbenchTabIdentity::Editor { .. }
+            | WorkbenchTabIdentity::GitHistory
+            | WorkbenchTabIdentity::GitFileCompare(_)
+            | WorkbenchTabIdentity::GitConflictCompare(_) => None,
         });
         let mixed_secondary_key_target = mixed_secondary_host.clone();
         let mixed_secondary_vt_rows: Option<Vec<StyledRow>> =
@@ -11619,7 +11965,7 @@ impl Render for Workbench {
                     .as_ref()
                     .and_then(|target| self.terminals.index_for_context(target))
                     .and_then(|index| self.terminals.tabs.get(index))
-                    .map(|terminal| terminal.screen.styled_rows())
+                    .map(|terminal| terminal.screen.styled_rows_themed(terminal_theme))
             } else {
                 None
             };
@@ -11639,7 +11985,9 @@ impl Render for Workbench {
                         TerminalViewMode::Transcript => session.output.clone(),
                     }
                 }
-                WorkbenchTabIdentity::GitHistory | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => String::new(),
+                WorkbenchTabIdentity::GitHistory
+                | WorkbenchTabIdentity::GitFileCompare(_)
+                | WorkbenchTabIdentity::GitConflictCompare(_) => String::new(),
                 WorkbenchTabIdentity::Editor {
                     editor_epoch,
                     instance,
@@ -11819,13 +12167,24 @@ impl Render for Workbench {
         let runtime_catalog = self.runtime_catalog.clone();
         let sidebar_order_prefs = self.sidebar_order_prefs.clone();
         let sidebar_reorder_hold = self.sidebar_reorder_hold.clone();
-        let sidebar_reorder_hint = tr(self.settings_menu_locale, "Hold the handle for 0.5s to reorder");
+        let sidebar_reorder_hint = tr(
+            self.settings_menu_locale,
+            "Hold the handle for 0.5s to reorder",
+        );
         let sidebar_drag_generation = self.workspace_generation;
         let visible_project_ids: Vec<String> = project_tree_rows
             .iter()
-            .filter_map(|(_, group, _)| runtime_catalog.as_ref()
-                .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
-                .map(|project| project.id.clone()))
+            .filter_map(|(_, group, _)| {
+                runtime_catalog
+                    .as_ref()
+                    .and_then(|catalog| {
+                        catalog
+                            .projects
+                            .iter()
+                            .find(|project| project.root == group.root)
+                    })
+                    .map(|project| project.id.clone())
+            })
             .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
@@ -11871,15 +12230,19 @@ impl Render for Workbench {
         let agent_inventory_current = !self.terminals.session_list_is_stale();
         // Full identity checks prevent one pane or recycled Host handle from
         // showing another Agent's private task context.
-        let agent_context_overview = self.mixed_panes
+        let agent_context_overview = self
+            .mixed_panes
             .active_in(self.mixed_panes.focused_pane())
             .and_then(|identity| match identity {
-                WorkbenchTabIdentity::Host(target) => self.terminals.sessions.iter()
-                    .find(|session| session.running
-                        && session.agent_type.is_some()
-                        && session.handle == target.handle
-                        && session.workspace_id == target.workspace_id()
-                        && session.tab_id == target.tab_id()),
+                WorkbenchTabIdentity::Host(target) => {
+                    self.terminals.sessions.iter().find(|session| {
+                        session.running
+                            && session.agent_type.is_some()
+                            && session.handle == target.handle
+                            && session.workspace_id == target.workspace_id()
+                            && session.tab_id == target.tab_id()
+                    })
+                }
                 _ => None,
             })
             .and_then(|session| session.agent_context.clone());
@@ -11890,7 +12253,8 @@ impl Render for Workbench {
         // enable the left summary accidentally.
         let show_agent_task_summaries = native_agent_context_ui::task_summary_sidebar_enabled(
             self.settings_native_profile_migrated && self.settings_shared_error.is_none(),
-            self.settings_extra_values.get("agents.showTaskSummariesInSidebar"),
+            self.settings_extra_values
+                .get("agents.showTaskSummariesInSidebar"),
         );
         let terminal_sessions: Vec<_> = self
             .terminals
@@ -11911,15 +12275,28 @@ impl Render for Workbench {
                     session.workspace_id.clone(),
                     // Do not advertise a stale branded session when its
                     // Host PTY is no longer running.
-                    session.running.then(|| session.agent_type.clone()).flatten(),
+                    session
+                        .running
+                        .then(|| session.agent_type.clone())
+                        .flatten(),
                     AgentVisualState::for_session(session, agent_inventory_current),
                     // Avoid cloning task text on each paint while disabled.
                     if show_agent_task_summaries {
-                        session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.goal.clone())
-                    } else { String::new() },
+                        session
+                            .agent_context
+                            .as_ref()
+                            .map_or_else(String::new, |ctx| ctx.goal.clone())
+                    } else {
+                        String::new()
+                    },
                     if show_agent_task_summaries {
-                        session.agent_context.as_ref().map_or_else(String::new, |ctx| ctx.progress.clone())
-                    } else { String::new() },
+                        session
+                            .agent_context
+                            .as_ref()
+                            .map_or_else(String::new, |ctx| ctx.progress.clone())
+                    } else {
+                        String::new()
+                    },
                 )
             })
             .collect();
@@ -11935,8 +12312,10 @@ impl Render for Workbench {
                 .active_in(PaneSlot::Primary)
                 .and_then(|identity| match identity {
                     WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    WorkbenchTabIdentity::Editor { .. } | WorkbenchTabIdentity::GitHistory
-                    | WorkbenchTabIdentity::GitFileCompare(_) | WorkbenchTabIdentity::GitConflictCompare(_) => None,
+                    WorkbenchTabIdentity::Editor { .. }
+                    | WorkbenchTabIdentity::GitHistory
+                    | WorkbenchTabIdentity::GitFileCompare(_)
+                    | WorkbenchTabIdentity::GitConflictCompare(_) => None,
                 })
         } else {
             self.terminals.active_tab
@@ -11961,7 +12340,9 @@ impl Render for Workbench {
                         TerminalViewMode::Transcript => tab.output.clone(),
                     },
                     match self.terminals.view_mode {
-                        TerminalViewMode::Screen => Some(tab.screen.styled_rows()),
+                        TerminalViewMode::Screen => {
+                            Some(tab.screen.styled_rows_themed(terminal_theme))
+                        }
                         TerminalViewMode::Transcript => None,
                     },
                 )
@@ -11978,7 +12359,7 @@ impl Render for Workbench {
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
         let terminal_screen_rows = if terminal_is_vt {
             primary_terminal
-                .map(|tab| tab.screen.styled_rows())
+                .map(|tab| tab.screen.styled_rows_themed(terminal_theme))
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -12032,7 +12413,11 @@ impl Render for Workbench {
         let projects_width = if self.projects_sidebar_collapsed {
             PROJECTS_COLLAPSED_WIDTH
         } else {
-            clamp_projects_sidebar_width(self.projects_sidebar_width, window_width, initial_context_width)
+            clamp_projects_sidebar_width(
+                self.projects_sidebar_width,
+                window_width,
+                initial_context_width,
+            )
         };
         let context_width = if self.right_sidebar_visible {
             clamp_context_sidebar_width(self.right_sidebar_width, window_width, projects_width)
@@ -12059,13 +12444,13 @@ impl Render for Workbench {
         // Reuse these *visible* dimensions for both PTY rows and the Windows
         // IME cursor anchor; otherwise a candidate popup can cross the seam.
         let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size(
-            primary_width, primary_height, terminal_split_exists, terminal_split_horizontal,
-        );
-        let secondary_workbench_height = secondary_terminal_render_height(
+            primary_width,
             primary_height,
-            split_height,
-            secondary_two_rows,
+            terminal_split_exists,
+            terminal_split_horizontal,
         );
+        let secondary_workbench_height =
+            secondary_terminal_render_height(primary_height, split_height, secondary_two_rows);
         // Keep Windows Zhuyin candidate popups beside the visible VT cursor.
         // The 1px GPUI TextInput still captures composition; only its local
         // visual anchor moves, without altering Host PTY geometry.
@@ -12126,7 +12511,8 @@ impl Render for Workbench {
                         let width =
                             primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
                         let height = inner_secondary_terminal_render_height(
-                            primary_height, terminal_split_horizontal,
+                            primary_height,
+                            terminal_split_horizontal,
                         );
                         if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
                             width,
@@ -12241,13 +12627,25 @@ impl Render for Workbench {
         } else {
             format!(
                 "{reference_count} text match(es){}{}",
-                if reference_truncated { " · partial results" } else { "" },
-                if reference_count > 80 { " · showing first 80" } else { "" },
+                if reference_truncated {
+                    " · partial results"
+                } else {
+                    ""
+                },
+                if reference_count > 80 {
+                    " · showing first 80"
+                } else {
+                    ""
+                },
             )
         };
         let mut prior_reference_path: Option<PathBuf> = None;
-        let reference_rows: Vec<_> = self.references_matches.iter()
-            .take(80).cloned().enumerate()
+        let reference_rows: Vec<_> = self
+            .references_matches
+            .iter()
+            .take(80)
+            .cloned()
+            .enumerate()
             .map(|(i, hit)| {
                 let new_file = prior_reference_path.as_ref() != Some(&hit.hit.path);
                 prior_reference_path = Some(hit.hit.path.clone());
@@ -12269,9 +12667,13 @@ impl Render for Workbench {
             .map(|row| {
                 (
                     row.relative.clone(),
-                    git_all_changes.iter().filter(|candidate| {
-                        candidate.area == alera_gpui_desktop::git_inspect::GitChangeArea::Conflicts
-                    }).count(),
+                    git_all_changes
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.area
+                                == alera_gpui_desktop::git_inspect::GitChangeArea::Conflicts
+                        })
+                        .count(),
                 )
             });
         let mut git_sidebar_options = self.git_sidebar_options.clone();
@@ -12291,14 +12693,26 @@ impl Render for Workbench {
         let git_selected_folders = self.git_selected_folders.clone();
         let git_drag_root = workspace_root.clone();
         let git_drag_generation = self.workspace_generation;
-        let git_drag_selection = Arc::new(git_visible_items.iter()
-            .find(|item| match item {
-                GitSidebarSelectionItem::File(file) => git_selected.contains(file),
-                GitSidebarSelectionItem::Folder(folder) => git_selected_folders.contains(folder),
-            })
-            .map(|item| selected_worktree_paths(&git_drag_root, item,
-                &git_selected, &git_selected_folders, git_visible_items.as_ref()))
-            .unwrap_or_default());
+        let git_drag_selection = Arc::new(
+            git_visible_items
+                .iter()
+                .find(|item| match item {
+                    GitSidebarSelectionItem::File(file) => git_selected.contains(file),
+                    GitSidebarSelectionItem::Folder(folder) => {
+                        git_selected_folders.contains(folder)
+                    }
+                })
+                .map(|item| {
+                    selected_worktree_paths(
+                        &git_drag_root,
+                        item,
+                        &git_selected,
+                        &git_selected_folders,
+                        git_visible_items.as_ref(),
+                    )
+                })
+                .unwrap_or_default(),
+        );
         let mut git_stage_paths = Vec::new();
         let mut git_unstage_paths = Vec::new();
         let mut git_discard_paths = Vec::new();
@@ -12374,7 +12788,8 @@ impl Render for Workbench {
         let git_graph_hide_merged_lanes = git_graph_all_branches
             && !git_graph_favorites_only
             && git_graph_selected_ref.is_none()
-            && self.git_history_options.merged_visibility == GitMergedBranchVisibility::HideMergedGraph;
+            && self.git_history_options.merged_visibility
+                == GitMergedBranchVisibility::HideMergedGraph;
         let git_graph_file = self.git_history_options.file_path.clone();
         let git_graph_scope = self.git_history_options.git_diff_root.clone();
         let git_graph_full_search = self.git_history_options.search_query.clone();
@@ -12500,16 +12915,19 @@ impl Render for Workbench {
                     )
                 })
         };
-        let (git_graph_topology_rows, git_graph_lane_count) = match git_graph_topology
-            .and_then(Result::ok)
-        {
-            Some(layout) => (Some(layout.rows), layout.max_lanes),
-            None => (None, 1),
-        };
-        let git_graph_current_branch = self.git_history.as_ref()
+        let (git_graph_topology_rows, git_graph_lane_count) =
+            match git_graph_topology.and_then(Result::ok) {
+                Some(layout) => (Some(layout.rows), layout.max_lanes),
+                None => (None, 1),
+            };
+        let git_graph_current_branch = self
+            .git_history
+            .as_ref()
             .map(|history| history.current.clone())
             .unwrap_or_default();
-        let git_graph_head_tip = self.git_history.as_ref()
+        let git_graph_head_tip = self
+            .git_history
+            .as_ref()
             .and_then(|history| history.branches.iter().find(|branch| branch.current))
             .map(|branch| branch.tip.clone());
         let mut git_graph_tags_by_oid: HashMap<String, Vec<String>> = HashMap::new();
@@ -12517,8 +12935,10 @@ impl Render for Workbench {
             // Commit labels currently hold branch tips only. Project real
             // lightweight/annotated tags into the UI without changing Git.
             for tag in &history.tags {
-                git_graph_tags_by_oid.entry(tag.oid.clone())
-                    .or_default().push(format!("refs/tags/{}", tag.name));
+                git_graph_tags_by_oid
+                    .entry(tag.oid.clone())
+                    .or_default()
+                    .push(format!("refs/tags/{}", tag.name));
             }
         }
         // Build topology on the full bounded graph before filtering. Filtering
@@ -15731,7 +16151,7 @@ impl Render for Workbench {
                                             .flex()
                                             .flex_col()
                                             .when(!center_is_editor && !show_center_git_diff && !show_center_git_conflict && conflict_in_primary.is_none(), |pane| {
-                                                pane.bg(rgb(TERMINAL_DEFAULT_BG))
+                                                pane.bg(rgb(terminal_theme_bg))
                                             })
                             .child(
                                 if show_center_git_conflict {
@@ -15804,14 +16224,14 @@ impl Render for Workbench {
                                     .border_color(rgb(BORDER))
                                     // Match the VT viewport, including the 12px text inset,
                                     // split gutters and any remaining resize slack.
-                                    .bg(rgb(TERMINAL_DEFAULT_BG))
+                                    .bg(rgb(terminal_theme_bg))
                                     .child(
                                         div()
                                             .flex_1()
                                             .min_w_0()
                                             .min_h_0()
                                             .flex()
-                                            .bg(rgb(TERMINAL_DEFAULT_BG))
+                                            .bg(rgb(terminal_theme_bg))
                                             .when(terminal_split_horizontal, |layout| layout.flex_row())
                                             .when(!terminal_split_horizontal, |layout| layout.flex_col())
                                             .child(if terminal_is_vt {
@@ -15819,7 +16239,7 @@ impl Render for Workbench {
                                             .id("terminal-colored-grid")
                                             .relative()
                                             .min_w_0()
-                                            .bg(rgb(TERMINAL_DEFAULT_BG))
+                                            .bg(rgb(terminal_theme_bg))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -15869,7 +16289,7 @@ impl Render for Workbench {
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
                                                         .line_height(px(terminal_font_size * terminal_line_height))
-                                                        .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
+                                                        .bg(rgb(if selected { terminal_theme_selection } else { terminal_theme_bg }))
                                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                             // Text rows consume the pointer event; explicitly
                                                             // restore the Terminal IME sink, not the old Explorer.
@@ -15889,7 +16309,7 @@ impl Render for Workbench {
                                                                         span.range,
                                                                         gpui::HighlightStyle {
                                                                             color: Some(rgb(style.fg).into()),
-                                                                            background_color: Some(rgb(if selected { ACTIVE } else { style.bg }).into()),
+                                                                            background_color: Some(rgb(if selected { terminal_theme_selection } else { style.bg }).into()),
                                                                             font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
                                                                             font_style: style.italic.then_some(gpui::FontStyle::Italic),
                                                                             underline: style.underline.then_some(gpui::UnderlineStyle {
@@ -15909,7 +16329,8 @@ impl Render for Workbench {
                                             .id("terminal-output-scroll")
                                             .min_w_0()
                                             .min_h_0()
-                                            .bg(rgb(TERMINAL_DEFAULT_BG))
+                                            .bg(rgb(terminal_theme_bg))
+                                            .text_color(rgb(terminal_theme_fg))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -15947,7 +16368,7 @@ impl Render for Workbench {
                                                     .min_w_0()
                                                     .flex()
                                                     .flex_col()
-                                                    .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                    .bg(rgb(terminal_theme_bg))
                                                     .when(terminal_split_horizontal, |pane| pane.border_l_1())
                                                     .when(!terminal_split_horizontal, |pane| pane.border_t_1())
                                                     .border_color(rgb(BORDER))
@@ -15996,7 +16417,8 @@ impl Render for Workbench {
                                                         .flex_1()
                                                         .min_h_0()
                                                         .min_w_0()
-                                                        .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                        .bg(rgb(terminal_theme_bg))
+                                                        .text_color(rgb(terminal_theme_fg))
                                                         .overflow_x_scroll()
                                                         .overflow_y_scroll()
                                                         .px_3()
@@ -16015,7 +16437,7 @@ impl Render for Workbench {
                                                                         .id(("terminal-secondary-colored-row", row_index))
                                                                         .whitespace_nowrap()
                                                                         .line_height(px(terminal_font_size * terminal_line_height))
-                                                                        .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                                        .bg(rgb(terminal_theme_bg))
                                                                         .child(
                                                                             gpui::StyledText::new(row.text)
                                                                                 .with_highlights(row.spans.into_iter().map(|span| {
@@ -16267,7 +16689,8 @@ impl Render for Workbench {
                                                     .flex_1()
                                                     .min_h_0()
                                                     .min_w_0()
-                                                    .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                    .bg(rgb(terminal_theme_bg))
+                                                    .text_color(rgb(terminal_theme_fg))
                                                     .when(mixed_split_horizontal, |panel| panel.border_t_1())
                                                     .border_color(rgb(BORDER))
                                                     .key_context("AleraGpuiTerminalRaw")
@@ -16333,7 +16756,7 @@ impl Render for Workbench {
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
                                                                     .line_height(px(terminal_font_size * terminal_line_height))
-                                                                    .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
+                                                                    .bg(rgb(if selected { terminal_theme_selection } else { terminal_theme_bg }))
                                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                                         if let Some(WorkbenchTabIdentity::Host(target)) =
                                                                             this.mixed_panes.active_in(PaneSlot::Secondary).cloned()
@@ -16363,7 +16786,7 @@ impl Render for Workbench {
                                                                                     span.range,
                                                                                     gpui::HighlightStyle {
                                                                                         color: Some(rgb(style.fg).into()),
-                                                                                        background_color: Some(rgb(if selected { ACTIVE } else { style.bg }).into()),
+                                                                                        background_color: Some(rgb(if selected { terminal_theme_selection } else { style.bg }).into()),
                                                                                         font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
                                                                                         font_style: style.italic.then_some(gpui::FontStyle::Italic),
                                                                                         underline: style.underline.then_some(gpui::UnderlineStyle {
@@ -17582,9 +18005,11 @@ fn main() {
             Some("Native state directory unavailable".into()),
         ),
     };
-    let initial_review_url = alera_core::git::repository_remote_url(
-        &model.root().to_string_lossy(),
-    ).ok().flatten().and_then(|remote| repository_pull_requests_url(&remote));
+    let initial_review_url =
+        alera_core::git::repository_remote_url(&model.root().to_string_lossy())
+            .ok()
+            .flatten()
+            .and_then(|remote| repository_pull_requests_url(&remote));
     let initial_visibility = ExplorerVisibilityOptions {
         show_ignored: native_settings.explorer_show_ignored,
         show_hidden: native_settings.explorer_show_hidden,
@@ -17753,12 +18178,52 @@ fn main() {
                             .detach();
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
-                        cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
-                            .detach();
+                        cx.observe(&settings_menu_search, |view: &mut Workbench, _, cx| {
+                            let query = view.settings_menu_search.read(cx).query().to_owned();
+                            // Updating the localized placeholder notifies observers too.
+                            // Only an actual query edit may reposition the settings list.
+                            if view.settings_menu_last_query == query {
+                                cx.notify();
+                                return;
+                            }
+                            view.settings_menu_last_query = query.clone();
+                            let visible = alera_gpui_desktop::settings_menu_catalog::matching_sections_localized(
+                                &query,
+                                view.settings_menu_locale,
+                            );
+                            let selected = view
+                                .settings_section
+                                .as_deref()
+                                .and_then(alera_gpui_desktop::settings_menu_catalog::section)
+                                .filter(|entry| visible.iter().any(|item| item.id == entry.id))
+                                .or_else(|| visible.first().copied());
+                            let target = selected
+                                .and_then(|entry| {
+                                    alera_gpui_desktop::settings_menu_catalog::first_matching_group_index_localized(
+                                        entry,
+                                        &query,
+                                        view.settings_menu_locale,
+                                    )
+                                })
+                                .map_or(0, |index| index + 1);
+                            view.settings_catalog_scroll.scroll_to_item(target);
+                            cx.notify();
+                        })
+                        .detach();
                         let settings_shortcut_search = cx.new(|cx| {
                             QuickOpenInput::with_placeholder("Search shortcut or key…", cx)
                         });
                         cx.observe(&settings_shortcut_search, |_, _, cx| cx.notify())
+                            .detach();
+                        let settings_editor_theme_search = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search syntax themes...", cx)
+                        });
+                        cx.observe(&settings_editor_theme_search, |_, _, cx| cx.notify())
+                            .detach();
+                        let settings_terminal_theme_search = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search terminal themes...", cx)
+                        });
+                        cx.observe(&settings_terminal_theme_search, |_, _, cx| cx.notify())
                             .detach();
                         let settings_exclusion_input = cx.new(|cx| {
                             QuickOpenInput::with_placeholder(
@@ -17767,6 +18232,11 @@ fn main() {
                             )
                         });
                         cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify())
+                            .detach();
+                        let settings_font_family_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Font family name…", cx)
+                        });
+                        cx.observe(&settings_font_family_input, |_, _, cx| cx.notify())
                             .detach();
                         // GPUI only repaints an observed child by default. The
                         // Classic primary action label depends on message text:
@@ -18118,6 +18588,7 @@ fn main() {
                             }),
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
+                            settings_catalog_scroll: ScrollHandle::new(),
                             settings_kit_dialog_open: false,
                             settings_menu_locale: UiLocale::from_preference("system"),
                             settings_menu_language: "system".into(),
@@ -18130,8 +18601,14 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             settings_shared_error: None,
                             settings_menu_search,
+                            settings_menu_last_query: String::new(),
                             settings_shortcut_search,
+                            settings_editor_theme_search,
+                            settings_terminal_theme_search,
                             settings_exclusion_input,
+                            settings_font_family_input,
+                            settings_font_family_last_synced: String::new(),
+                            settings_terminal_fonts: None,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
                             installed_agent_clis: Vec::new(),

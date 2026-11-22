@@ -5,8 +5,10 @@
 use super::*;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::settings_menu_catalog::{
-    settings_operational_action, settings_support_counts, shared_setting_row_path, PreviewRow,
-    SettingsOperationalAction, SettingsSection, SettingsSupportCounts,
+    matching_font_suggestions, matching_theme_choices, settings_operational_action,
+    settings_support_counts, shared_setting_row_path, PreviewRow, SettingsOperationalAction,
+    SettingsSection, SettingsSupportCounts, APP_LANGUAGE_CHOICES, EDITOR_SYNTAX_THEME_CHOICES,
+    TERMINAL_THEME_CHOICES,
 };
 use gpui_kit::component::switch::Switch;
 
@@ -21,6 +23,24 @@ enum CatalogHostState {
     Unavailable,
     /// Snapshot installed; real controls may render.
     Ready,
+}
+
+/// The preview must use the same Classic colors and weight/italic flags as
+/// the actual NativeEditor styled-text renderer.
+fn editor_preview_highlight(
+    palette: &alera_gpui_desktop::editor_syntax_theme::EditorSyntaxPalette,
+    categories: &[&str],
+) -> gpui::HighlightStyle {
+    let color = palette
+        .first_color(categories)
+        .unwrap_or(palette.foreground);
+    let modifier = palette.first_modifier(categories).unwrap_or_default();
+    gpui::HighlightStyle {
+        color: Some(rgb(color).into()),
+        font_weight: (modifier & 1 != 0).then_some(gpui::FontWeight::BOLD),
+        font_style: (modifier & 2 != 0).then_some(gpui::FontStyle::Italic),
+        ..Default::default()
+    }
 }
 
 fn catalog_host_state(migrated: bool, has_error: bool, refreshing: bool) -> CatalogHostState {
@@ -1084,8 +1104,7 @@ impl Workbench {
                     "application",
                     "Confirm Project Removal"
                     | "Confirm Workspace Removal"
-                    | "Auto-Archive After Inactivity"
-                    | "App Language",
+                    | "Auto-Archive After Inactivity",
                 ) => Some(self.render_host_state_row(row)),
                 _ => None,
             };
@@ -1100,21 +1119,16 @@ impl Workbench {
             ("application", "Auto-Archive After Inactivity") => self
                 .native_settings
                 .get("general.autoArchiveWorkspacesAfterDays"),
-            ("application", "App Language") => Some(serde_json::json!(self.settings_menu_language)),
             _ => None,
         }?;
+        let locale = self.settings_menu_locale;
         let status = match source {
-            serde_json::Value::Bool(enabled) => tr(
-                self.settings_menu_locale,
-                if enabled { "Enabled" } else { "Disabled" },
-            ),
-            serde_json::Value::Number(days) if row.title == "Auto-Archive After Inactivity" => {
-                format!(
-                    "{days} {}",
-                    tr(self.settings_menu_locale, "days (0 disables)")
-                )
+            serde_json::Value::Bool(enabled) => {
+                tr(locale, if enabled { "Enabled" } else { "Disabled" })
             }
-            serde_json::Value::String(language) => language,
+            serde_json::Value::Number(days) if row.title == "Auto-Archive After Inactivity" => {
+                format!("{days} {}", tr(locale, "days (0 disables)"))
+            }
             value => value.to_string(),
         };
         Some(
@@ -1123,67 +1137,297 @@ impl Workbench {
                 .bg(rgb(PANEL))
                 .flex()
                 .items_center()
+                .gap_3()
                 .justify_between()
                 .child(
                     div()
-                        .text_sm()
-                        .child(tr(self.settings_menu_locale, row.title)),
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_sm().child(tr(locale, row.title)))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(tr(locale, row.detail)),
+                        ),
                 )
                 .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
                     "{}: {status} · {}",
-                    tr(self.settings_menu_locale, "Rust Host"),
-                    tr(
-                        self.settings_menu_locale,
-                        if row.title == "App Language" {
-                            "change via language selector"
-                        } else {
-                            "edit in Classic"
-                        }
-                    )
+                    tr(locale, "Rust Host"),
+                    tr(locale, "edit in Classic"),
                 )))
                 .into_any_element(),
         )
     }
+    /// Classic setting rows keep their help text visible beside the working
+    /// control, not only in the search catalog.
+    fn render_described_shared_control(
+        &self,
+        row: &PreviewRow,
+        control: gpui::AnyElement,
+    ) -> gpui::AnyElement {
+        div()
+            .rounded_lg()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .child(control)
+            .child(
+                div()
+                    .px_3()
+                    .pb_3()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(tr(self.settings_menu_locale, row.detail)),
+            )
+            .into_any_element()
+    }
 
     fn render_shared_selection_row(
         &self,
-        label: &'static str,
+        row: &PreviewRow,
         path: &'static str,
         selected: &str,
         row_index: usize,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let locale = self.settings_menu_locale;
+        // Both theme pickers now expose the complete Classic catalog, while
+        // preserving arbitrary Host values that older versions may have saved.
+        let theme_choices = match path {
+            "terminal.themeName" => Some(TERMINAL_THEME_CHOICES),
+            "editor.themeName" => Some(EDITOR_SYNTAX_THEME_CHOICES),
+            _ => None,
+        };
+        if let Some(choices) = theme_choices {
+            let theme_search_input = if path == "editor.themeName" {
+                self.settings_editor_theme_search.clone()
+            } else {
+                self.settings_terminal_theme_search.clone()
+            };
+            let theme_query = theme_search_input.read(cx).query().to_owned();
+            let matched_choices = matching_theme_choices(choices, &theme_query);
+            let matching_count = matched_choices.len();
+            let terminal_palette = (path == "terminal.themeName")
+                .then(|| alera_gpui_desktop::terminal_theme::theme_for_name(selected));
+            let editor_palette = (path == "editor.themeName")
+                .then(|| alera_gpui_desktop::editor_syntax_theme::palette_for_name(selected));
+            let owner = cx.entity().downgrade();
+            let selected_label = selected.to_owned();
+            return div()
+                .rounded_lg()
+                .bg(rgb(PANEL))
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().text_sm().child(tr(locale, row.title)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(tr(locale, row.detail)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(if path == "editor.themeName" {
+                            tr(locale, "Search syntax themes")
+                        } else {
+                            tr(locale, "Search terminal themes")
+                        }),
+                )
+                .child(
+                    div()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(TOOLBAR))
+                        .p_2()
+                        .child(theme_search_input),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(format!(
+                            "{matching_count}/{} · {}",
+                            choices.len(),
+                            tr(locale, "Theme Preset"),
+                        )),
+                )
+                .when(matching_count == 0, |panel| {
+                    panel.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(tr(locale, "No themes found.")),
+                    )
+                })
+                .child(
+                    native_components::select_trigger(
+                        ("native-shared-theme-select", row_index),
+                        selected_label,
+                        matching_count == 0,
+                    )
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for choice in matched_choices.iter().copied() {
+                            let owner = owner.clone();
+                            menu = menu.item(PopupMenuItem::new(choice).on_click(move |_, _, cx| {
+                                let _ = owner.update(cx, |view, cx| {
+                                    if view.shared_catalog_state() != CatalogHostState::Ready {
+                                        view.model.set_status(
+                                            "Rust Host settings are unavailable; refresh before editing",
+                                        );
+                                        cx.notify();
+                                    } else if view
+                                        .settings_extra_values
+                                        .get(path)
+                                        .and_then(serde_json::Value::as_str)
+                                        != Some(choice)
+                                    {
+                                        view.change_shared_desktop_setting(
+                                            path,
+                                            serde_json::json!(choice),
+                                            cx,
+                                        );
+                                    }
+                                });
+                            }));
+                        }
+                        menu.scrollable(true).max_h(px(320.0))
+                    }),
+                )
+                .children(terminal_palette.map(|palette| {
+                    div()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(palette.background))
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(palette.foreground))
+                                .child(format!("{} · {}", tr(locale, "Terminal"), palette.name)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(palette.ansi[2]))
+                                .child("✓ Alera"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .children(palette.ansi.iter().copied().enumerate().map(
+                                    |(index, color)| {
+                                        div()
+                                            .id(("native-terminal-theme-color", index))
+                                            .flex_1()
+                                            .h(px(11.0))
+                                            .rounded_sm()
+                                            .bg(rgb(color))
+                                    },
+                                )),
+                        )
+                }))
+                .children(editor_palette.map(|palette| {
+                    let keyword = palette.first_color(&["keyword"]).unwrap_or(palette.foreground);
+                    let function = palette
+                        .first_color(&["title.function_", "function", "title"])
+                        .unwrap_or(palette.foreground);
+                    let string = palette.first_color(&["string"]).unwrap_or(palette.foreground);
+                    let comment = palette.first_color(&["comment"]).unwrap_or(palette.foreground);
+                    div()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(palette.background))
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(palette.foreground))
+                                .child(format!("{} · {}", tr(locale, "Editor"), palette.name)),
+                        )
+                        // The same multi-line example as Classic's
+                        // Editor theme preview, using identical token names.
+                        .child(
+                            div()
+                                .font_family("JetBrains Mono")
+                                .text_sm()
+                                .text_color(rgb(palette.foreground))
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    gpui::StyledText::new("class ThemePreview {")
+                                        .with_highlights([
+                                            (0..5, editor_preview_highlight(palette, &["keyword"])),
+                                            (6..18, editor_preview_highlight(palette, &["title.class_", "class-title"])),
+                                        ]),
+                                )
+                                .child(
+                                    gpui::StyledText::new("  final name = 'Alera';")
+                                        .with_highlights([
+                                            (2..7, editor_preview_highlight(palette, &["keyword"])),
+                                            (8..12, editor_preview_highlight(palette, &["variable"])),
+                                            (15..22, editor_preview_highlight(palette, &["string"])),
+                                        ]),
+                                )
+                                .child(
+                                    gpui::StyledText::new("  // Syntax colors")
+                                        .with_highlights([
+                                            (2..18, editor_preview_highlight(palette, &["comment"])),
+                                        ]),
+                                )
+                                .child("}"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .children([keyword, function, string, comment].into_iter().enumerate().map(
+                                    |(index, color)| {
+                                        div()
+                                            .id(("native-editor-theme-color", index))
+                                            .flex_1()
+                                            .h(px(11.0))
+                                            .rounded_sm()
+                                            .bg(rgb(color))
+                                    },
+                                )),
+                        )
+                }))
+                .into_any_element();
+        }
+
+        // Classic cursor-shape control is segmented; common font presets are
+        // offered without inventing a fixed font catalog for this device.
         let options: &'static [(&'static str, &'static str)] = match path {
             "terminal.cursorShape" => &[
                 ("block", "Block"),
                 ("bar", "Bar"),
                 ("underline", "Underline"),
             ],
+            "editor.externalEditor" => &[("zed", "Zed"), ("vscode", "Visual Studio Code")],
             "terminal.fontFamily" => &[
                 ("JetBrains Mono", "JetBrains Mono"),
                 ("Cascadia Code", "Cascadia Code"),
                 ("Consolas", "Consolas"),
                 ("Menlo", "Menlo"),
-            ],
-            "terminal.themeName" => &[
-                ("Alera Dark", "Alera Dark"),
-                ("Ghostty Default Style Dark", "Ghostty Dark"),
-                ("Builtin Tango Light", "Tango Light"),
-                ("Dracula", "Dracula"),
-                ("Catppuccin Mocha", "Catppuccin"),
-                ("Ayu Dark", "Ayu Dark"),
-            ],
-            "editor.themeName" => &[
-                ("Alera", "Alera"),
-                ("GitHub Dark", "GitHub Dark"),
-                ("GitHub Dark Dimmed", "GitHub Dimmed"),
-                ("Tokyo Night Dark", "Tokyo Night"),
-                ("VS2015", "VS2015"),
-                ("Dracula", "Dracula"),
-                ("Monokai", "Monokai"),
-                ("Nord", "Nord"),
-                ("Night Owl", "Night Owl"),
-                ("Atom One Dark", "Atom One Dark"),
             ],
             _ => &[],
         };
@@ -1194,13 +1438,143 @@ impl Workbench {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_sm().child(tr(self.settings_menu_locale, label)))
+            .child(div().text_sm().child(tr(locale, row.title)))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(tr(locale, row.detail)))
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(MUTED))
                     .child(format!("Rust Host: {selected}")),
             )
+            .children((path == "terminal.fontFamily").then(|| {
+                let suggestions = self
+                    .settings_terminal_fonts
+                    .as_ref()
+                    .map(|installed| {
+                        matching_font_suggestions(
+                            installed,
+                            self.settings_font_family_input.read(cx).query(),
+                            8,
+                        )
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(tr(locale, "Enter a font family name or choose a suggestion.")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .bg(rgb(TOOLBAR))
+                                    .p_2()
+                                    .child(self.settings_font_family_input.clone()),
+                            )
+                            .child(
+                                native_components::action_button(
+                                    "native-terminal-font-family-apply",
+                                    tr(locale, "Save"),
+                                    false,
+                                    false,
+                                )
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    let font = view
+                                        .settings_font_family_input
+                                        .read(cx)
+                                        .query()
+                                        .trim()
+                                        .to_owned();
+                                    let candidate = serde_json::json!(font);
+                                    if !alera_core::desktop_settings_contract::valid_extended_portable(
+                                        "terminal.fontFamily",
+                                        &candidate,
+                                    ) {
+                                        view.model.set_status(
+                                            "Enter a font family name (maximum 128 bytes, no control characters)",
+                                        );
+                                        cx.notify();
+                                        return;
+                                    }
+                                    if view
+                                        .settings_extra_values
+                                        .get("terminal.fontFamily")
+                                        .and_then(serde_json::Value::as_str)
+                                        == Some(font.as_str())
+                                    {
+                                        return;
+                                    }
+                                    view.change_shared_desktop_setting(
+                                        "terminal.fontFamily",
+                                        candidate,
+                                        cx,
+                                    );
+                                })),
+                            )
+                            .child(
+                                native_components::action_button(
+                                    "native-terminal-font-family-revert",
+                                    tr(locale, "Reset"),
+                                    false,
+                                    false,
+                                )
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    if let Some(font) = view
+                                        .settings_extra_values
+                                        .get("terminal.fontFamily")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_owned)
+                                    {
+                                        view.settings_font_family_input
+                                            .update(cx, |input, cx| input.set_query(&font, cx));
+                                    }
+                                })),
+                            ),
+                    )
+                    .children((!suggestions.is_empty()).then(|| {
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_1()
+                            .children(suggestions.into_iter().enumerate().map(|(index, name)| {
+                                let label = name.clone();
+                                div()
+                                    .id(("installed-terminal-font-suggestion", index))
+                                    .cursor_pointer()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .bg(rgb(TOOLBAR))
+                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child(label)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.settings_font_family_input.update(cx, |input, cx| {
+                                            input.set_query(&name, cx);
+                                        });
+                                    }))
+                            }))
+                    }))
+            }))
             .child(
                 div()
                     .flex()
@@ -1220,20 +1594,26 @@ impl Workbench {
                                 .py_1()
                                 .text_xs()
                                 .text_color(rgb(if active { TEXT } else { MUTED }))
-                                .child(caption)
+                                .child(tr(locale, caption))
                                 .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.change_shared_desktop_setting(
-                                        path,
-                                        serde_json::json!(value),
-                                        cx,
-                                    );
+                                    if view
+                                        .settings_extra_values
+                                        .get(path)
+                                        .and_then(serde_json::Value::as_str)
+                                        != Some(value)
+                                    {
+                                        view.change_shared_desktop_setting(
+                                            path,
+                                            serde_json::json!(value),
+                                            cx,
+                                        );
+                                    }
                                 }))
                         },
                     )),
             )
             .into_any_element()
     }
-
     /// Operational Hook toggles are not portable DesktopSettings scalars:
     /// Classic stores them in Host runtimeSettings with a transaction
     /// revision. They stay inert until a versioned Host snapshot is present.
@@ -1293,6 +1673,9 @@ impl Workbench {
         row_index: usize,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        if section == "application" && row.title == "App Language" {
+            return Some(self.render_settings_language_row(row, cx));
+        }
         match settings_operational_action(section, row.title) {
             Some(SettingsOperationalAction::ManageProjects) => {
                 return Some(self.render_project_management_setting(cx));
@@ -1337,26 +1720,32 @@ impl Workbench {
                 .map(|items| self.render_settings_excluded_directories(items, cx));
         }
         if let Some(checked) = value.as_bool() {
-            return Some(self.native_settings_bool_row(row.title, path, checked, cx));
+            return Some(self.render_described_shared_control(
+                row,
+                self.native_settings_bool_row(row.title, path, checked, cx),
+            ));
         }
         let numeric = match path {
             "general.autoGitFetchIntervalMinutes" => Some((1.0, 1.0, 60.0)),
-            "terminal.fontSize" => Some((1.0, 8.0, 48.0)),
+            "terminal.fontSize" => Some((1.0, 8.0, 32.0)),
             "terminal.lineHeight" => Some((0.1, 0.8, 2.4)),
             "terminal.backgroundOpacity" => Some((0.05, 0.0, 1.0)),
             "terminal.tuiScrollSensitivity" => Some((1.0, 1.0, 10.0)),
-            "editor.tabSize" => Some((1.0, 1.0, 16.0)),
+            "editor.tabSize" => Some((1.0, 1.0, 8.0)),
             "editor.autosaveDelaySeconds" => Some((1.0, 1.0, 60.0)),
             _ => None,
         };
         if let Some((step, min, max)) = numeric {
             return value.as_f64().map(|number| {
-                self.native_settings_number_row(row.title, path, number, step, min, max, cx)
+                self.render_described_shared_control(
+                    row,
+                    self.native_settings_number_row(row.title, path, number, step, min, max, cx),
+                )
             });
         }
-        value.as_str().map(|selected| {
-            self.render_shared_selection_row(row.title, path, selected, row_index, cx)
-        })
+        value
+            .as_str()
+            .map(|selected| self.render_shared_selection_row(row, path, selected, row_index, cx))
     }
 
     /// All Classic Settings categories remain visible. Rows backed by the
@@ -1367,112 +1756,123 @@ impl Workbench {
         selected: &'static SettingsSection,
         locale: UiLocale,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> Vec<gpui::AnyElement> {
         let support = settings_support_counts(selected);
+        let mut children = vec![div()
+            .id("native-settings-catalog-summary")
+            .px_4()
+            .py_2()
+            .text_xs()
+            .text_color(rgb(MUTED))
+            .child(settings_support_summary(locale, support))
+            .into_any_element()];
+        // GPUI scroll_to_item targets painted direct children. Each group
+        // must be a sibling of the summary for Classic's jump chips to work.
+        children.extend(
+            selected
+                .groups
+                .iter()
+                .enumerate()
+                .map(|(group_idx, group)| {
+                    div()
+                        .id(("native-settings-catalog-group", group_idx))
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .bg(rgb(PANEL))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .px_4()
+                                .py_3()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(tr(locale, group.title)),
+                        )
+                        .children(group.rows.iter().enumerate().map(|(row_idx, row)| {
+                            self.render_connected_settings_row(
+                                selected.id,
+                                row,
+                                group_idx * 100 + row_idx,
+                                cx,
+                            )
+                            .or_else(|| self.render_settings_readonly_row(selected.id, row))
+                            .unwrap_or_else(|| {
+                                render_unavailable_row(row, group_idx * 100 + row_idx, locale)
+                            })
+                        }))
+                        .into_any_element()
+                }),
+        );
+        children
+    }
+    /// Classic keeps the App Language control inside Application > Language.
+    /// Keep the option labels in their own language and write via Host CAS.
+    fn render_settings_language_row(
+        &self,
+        row: &PreviewRow,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if self.shared_catalog_state() != CatalogHostState::Ready {
+            return self.render_host_state_row(row);
+        }
+        let locale = self.settings_menu_locale;
+        let selected = self.settings_menu_language.as_str();
+        let selected_label = APP_LANGUAGE_CHOICES
+            .iter()
+            .find(|(preference, _)| *preference == selected)
+            .map(|(_, label)| *label)
+            .unwrap_or("Follow System");
+        let owner = cx.entity().downgrade();
         div()
-            .id("native-settings-catalog-groups")
+            .id("native-settings-app-language")
             .flex()
             .flex_col()
             .gap_3()
+            .p_3()
+            .bg(rgb(PANEL))
             .child(
                 div()
-                    .px_4()
-                    .py_2()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(settings_support_summary(locale, support)),
-            )
-            .children(
-                selected
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .map(|(group_idx, group)| {
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().text_color(rgb(TEXT)).child(tr(locale, row.title)))
+                    .child(
                         div()
-                            .id(("native-settings-catalog-group", group_idx))
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(rgb(BORDER))
-                            .bg(rgb(PANEL))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .px_4()
-                                    .py_3()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(tr(locale, group.title)),
-                            )
-                            .children(group.rows.iter().enumerate().map(|(row_idx, row)| {
-                                self.render_connected_settings_row(
-                                    selected.id,
-                                    row,
-                                    group_idx * 100 + row_idx,
-                                    cx,
-                                )
-                                .or_else(|| self.render_settings_readonly_row(selected.id, row))
-                                .unwrap_or_else(|| {
-                                    render_unavailable_row(row, group_idx * 100 + row_idx, locale)
-                                })
-                            }))
-                    }),
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(tr(locale, row.detail)),
+                    ),
             )
-            .into_any_element()
-    }
-
-    /// Exactly the five Classic AppLanguage values. Selection is persisted
-    /// through Rust Host CAS and updates Classic on its next change event.
-    pub(super) fn render_settings_language_preview(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let selected = self.settings_menu_language.as_str();
-        let writable = self.shared_catalog_state() == CatalogHostState::Ready;
-        div()
-            .id("native-settings-language-preview")
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .children(
-                [
-                    ("system", "System"),
-                    ("english", "EN"),
-                    ("traditionalChinese", "繁中"),
-                    ("simplifiedChinese", "简中"),
-                    ("japanese", "日本語"),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (preference, label))| {
-                    div()
-                        .id(("native-settings-locale-option", index))
-                        .rounded_md()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
-                        .text_color(rgb(if selected == preference { TEXT } else { MUTED }))
-                        .bg(rgb(if selected == preference {
-                            ACTIVE
-                        } else {
-                            PANEL
-                        }))
-                        .child(label)
-                        .when(writable, |item| {
-                            item.cursor_pointer()
-                                .hover(|style| style.bg(rgb(ACTIVE)))
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.change_shared_desktop_setting(
-                                        "general.language",
-                                        serde_json::json!(preference),
-                                        cx,
-                                    );
-                                }))
-                        })
+            .child(
+                native_components::select_trigger(
+                    "native-settings-locale-select",
+                    selected_label,
+                    false,
+                )
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (preference, label) in APP_LANGUAGE_CHOICES {
+                        let owner = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                                let _ = owner.update(cx, |view, cx| {
+                                    if view.shared_catalog_state() != CatalogHostState::Ready {
+                                        view.model.set_status(
+                                            "Rust Host settings are unavailable; refresh before editing",
+                                        );
+                                    } else if view.settings_menu_language.as_str() != preference {
+                                        view.change_shared_desktop_setting(
+                                            "general.language",
+                                            serde_json::json!(preference),
+                                            cx,
+                                        );
+                                    }
+                                });
+                            }),
+                        );
+                    }
+                    menu.scrollable(true).max_h(px(280.0))
                 }),
             )
             .into_any_element()

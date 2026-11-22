@@ -101,6 +101,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn classic_theme_search_controls_translate_in_all_supported_locales() {
+        for source in [
+            "Search syntax themes",
+            "Search terminal themes",
+            "No themes found.",
+        ] {
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(
+                    tr(locale, source),
+                    source,
+                    "Missing theme search translation for {source} in {}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn classic_font_editor_controls_translate_in_all_supported_locales() {
+        for source in [
+            "Save",
+            "Reset",
+            "Enter a font family name or choose a suggestion.",
+        ] {
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(
+                    tr(locale, source),
+                    source,
+                    "Missing GPUI font editor translation for {source} in {}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn classic_external_editor_settings_translate_in_all_supported_locales() {
+        for source in [
+            "External Editor",
+            "Default Code Open Target",
+            "Custom Executable",
+            "Open Workspaces in New Window",
+            "Auto-open New Workspaces Externally",
+            "Check External Editor",
+        ] {
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(
+                    tr(locale, source),
+                    source,
+                    "Missing external-editor Settings translation for {source} in {}",
+                    locale.tag(),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn classic_settings_terms_translate_across_all_supported_locales() {
         assert_eq!(tr(UiLocale::English, "Settings"), "Settings");
         assert_eq!(tr(UiLocale::TraditionalChinese, "Settings"), "設定");
@@ -203,13 +272,24 @@ mod tests {
     #[test]
     fn inner_split_terminal_header_is_localized_in_every_ui_language() {
         let source = include_str!("main.rs");
-        let focus = source.split_once(r#".id("terminal-secondary-focus")"#).unwrap().1
-            .split_once(".on_click(").unwrap().0;
+        let focus = source
+            .split_once(r#".id("terminal-secondary-focus")"#)
+            .unwrap()
+            .1
+            .split_once(".on_click(")
+            .unwrap()
+            .0;
         for phrase in ["Second pane", "Click to focus"] {
-            assert!(focus.contains(&format!(r#"tr(self.settings_menu_locale, "{phrase}")"#)),
-                "{phrase} must use the active workbench language");
+            assert!(
+                focus.contains(&format!(r#"tr(self.settings_menu_locale, "{phrase}")"#)),
+                "{phrase} must use the active workbench language"
+            );
             assert_eq!(tr(UiLocale::English, phrase), phrase);
-            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
                 let translated = tr(locale, phrase);
                 assert_ne!(translated, phrase, "{phrase} missing for {}", locale.tag());
                 assert!(!translated.is_empty());
@@ -223,8 +303,12 @@ mod tests {
         // same active language for every button and its status caption.
         let source = include_str!("main.rs");
         let editor_toolbar = source
-            .split_once(".h(px(EDITOR_TOOLBAR_HEIGHT))").unwrap().1
-            .split_once(r#".id("mixed-pane-layout")"#).unwrap().0;
+            .split_once(".h(px(EDITOR_TOOLBAR_HEIGHT))")
+            .unwrap()
+            .1
+            .split_once(r#".id("mixed-pane-layout")"#)
+            .unwrap()
+            .0;
         assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "Editing")"#));
         assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "read-only preview")"#));
         for label in [
@@ -235,8 +319,10 @@ mod tests {
             "Close current editor tab",
             "Discard unsaved changes (confirmation required)",
         ] {
-            assert!(editor_toolbar.contains(&format!(r#"tr(self.settings_menu_locale, "{label}")"#)),
-                "Native Editor tooltip must use current UI language: {label}");
+            assert!(
+                editor_toolbar.contains(&format!(r#"tr(self.settings_menu_locale, "{label}")"#)),
+                "Native Editor tooltip must use current UI language: {label}"
+            );
         }
         for label in [
             "Editing",
@@ -249,7 +335,11 @@ mod tests {
             "Discard unsaved changes (confirmation required)",
         ] {
             assert_eq!(tr(UiLocale::English, label), label);
-            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
                 let translated = tr(locale, label);
                 assert_ne!(translated, label, "{label}: missing {}", locale.tag());
                 assert!(!translated.trim().is_empty());
@@ -415,8 +505,17 @@ mod tests {
         ];
         for source in labels {
             assert_eq!(tr(UiLocale::English, source), source);
-            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
-                assert_ne!(tr(locale, source), source, "Missing {source} / {}", locale.tag());
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(
+                    tr(locale, source),
+                    source,
+                    "Missing {source} / {}",
+                    locale.tag()
+                );
             }
         }
         for locale in UiLocale::ALL {
@@ -428,8 +527,11 @@ mod tests {
             ] {
                 for placeholder in ["{count}", "{action}", "{target}", "{error}"] {
                     if source.contains(placeholder) {
-                        assert!(tr(locale, source).contains(placeholder),
-                            "{source}: missing {placeholder} in {}", locale.tag());
+                        assert!(
+                            tr(locale, source).contains(placeholder),
+                            "{source}: missing {placeholder} in {}",
+                            locale.tag()
+                        );
                     }
                 }
             }
@@ -678,7 +780,12 @@ mod tests {
                 UiLocale::SimplifiedChinese,
                 UiLocale::Japanese,
             ] {
-                assert_ne!(tr(locale, label), label, "{label} missing in {}", locale.tag());
+                assert_ne!(
+                    tr(locale, label),
+                    label,
+                    "{label} missing in {}",
+                    locale.tag()
+                );
             }
         }
     }
@@ -698,7 +805,12 @@ mod tests {
                 UiLocale::SimplifiedChinese,
                 UiLocale::Japanese,
             ] {
-                assert_ne!(tr(locale, label), label, "{label} missing in {}", locale.tag());
+                assert_ne!(
+                    tr(locale, label),
+                    label,
+                    "{label} missing in {}",
+                    locale.tag()
+                );
             }
         }
     }

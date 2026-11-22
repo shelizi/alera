@@ -4,10 +4,84 @@
 use super::*;
 use alera_gpui_desktop::native_i18n::tr;
 use alera_gpui_desktop::settings_menu_catalog::{
-    has_connected_native_controls, matching_sections_localized, section as catalog_section,
+    first_matching_group_index_localized, has_connected_native_controls,
+    matching_row_count_localized, matching_sections_localized, section as catalog_section,
     SettingsNavGroup, SettingsSection,
 };
+use alera_gpui_desktop::visual_tokens::ACCENT;
 use gpui_kit::component::switch::Switch;
+
+/// Match Classic Settings section icons rather than the catalog's
+/// typography-only search placeholders.
+fn classic_settings_category_icon(id: &str) -> UiIcon {
+    match id {
+        "configurationSync" => UiIcon::Refresh,
+        "account" => UiIcon::User,
+        "application" => UiIcon::Sliders,
+        "agents" | "agentProfiles" => UiIcon::Bot,
+        "quotas" => UiIcon::Gauge,
+        "aiAssist" => UiIcon::Sparkles,
+        "aiDictation" => UiIcon::Mic,
+        "textActions" => UiIcon::Text,
+        "editor" => UiIcon::Code,
+        "terminal" => UiIcon::Terminal,
+        "keyboard" => UiIcon::Keyboard,
+        "projects" => UiIcon::Folder,
+        "mobileDevices" => UiIcon::Smartphone,
+        "remoteHosts" => UiIcon::Server,
+        "historySync" => UiIcon::History,
+        _ => UiIcon::Settings,
+    }
+}
+
+/// Keep Classic's visible min/max without rewriting older Host values
+/// that may lie outside the current UI range.
+fn classic_numeric_neighbors(value: f64, step: f64, min: f64, max: f64) -> (f64, f64) {
+    let previous = if value > max {
+        (value - step).max(max)
+    } else if value <= min {
+        value
+    } else {
+        (value - step).max(min)
+    };
+    let next = if value < min {
+        min
+    } else if value >= max {
+        value
+    } else {
+        (value + step).min(max)
+    };
+    (
+        (previous * 100.0).round() / 100.0,
+        (next * 100.0).round() / 100.0,
+    )
+}
+
+#[cfg(test)]
+mod settings_number_tests {
+    use super::classic_numeric_neighbors;
+
+    #[test]
+    fn numeric_controls_respect_classic_bounds_and_never_invert_legacy_values() {
+        assert_eq!(
+            classic_numeric_neighbors(13.0, 1.0, 8.0, 32.0),
+            (12.0, 14.0)
+        );
+        assert_eq!(
+            classic_numeric_neighbors(32.0, 1.0, 8.0, 32.0),
+            (31.0, 32.0)
+        );
+        assert_eq!(
+            classic_numeric_neighbors(40.0, 1.0, 8.0, 32.0),
+            (39.0, 40.0)
+        );
+        assert_eq!(classic_numeric_neighbors(0.0, 1.0, 8.0, 32.0), (0.0, 8.0));
+        assert_eq!(classic_numeric_neighbors(8.0, 1.0, 1.0, 8.0), (7.0, 8.0));
+        let (previous, next) = classic_numeric_neighbors(0.7, 0.05, 0.0, 1.0);
+        assert!((previous - 0.65).abs() < 0.0001);
+        assert!((next - 0.75).abs() < 0.0001);
+    }
+}
 
 impl Workbench {
     /// Native's Alacritty history ring is separate from the Host's byte
@@ -85,18 +159,10 @@ impl Workbench {
                 .unwrap_or_default();
             let metrics = NativeModalSize::Settings
                 .resolve(f32::from(viewport.width), f32::from(viewport.height));
-            let content = owner
-                .upgrade()
-                .and_then(|entity| {
-                    entity.update(cx, |view, cx| {
-                        view.render_native_settings_panel(
-                            f32::from(viewport.width),
-                            f32::from(viewport.height),
-                            cx,
-                        )
-                    })
-                })
-                .unwrap_or_else(|| div().into_any_element());
+            // Dialog.child() wraps all children in a Kit-owned scrollbar.
+            // Use Dialog.content() instead: Settings owns two independently
+            // scrolling regions, so the shell must not intercept wheel input.
+            let for_content = owner.clone();
             let for_cancel = owner.clone();
             dialog
                 .title(tr(locale, "Settings"))
@@ -113,7 +179,22 @@ impl Workbench {
                     true
                 })
                 .on_ok(|_, _, _| false)
-                .child(content)
+                .content(move |container, window, cx| {
+                    let viewport = window.viewport_size();
+                    let body = for_content
+                        .upgrade()
+                        .and_then(|entity| {
+                            entity.update(cx, |view, cx| {
+                                view.render_native_settings_panel(
+                                    f32::from(viewport.width),
+                                    f32::from(viewport.height),
+                                    cx,
+                                )
+                            })
+                        })
+                        .unwrap_or_else(|| div().into_any_element());
+                    container.child(body)
+                })
         });
     }
 
@@ -865,14 +946,37 @@ impl Workbench {
         if section != "historySync" && catalog_section(section).is_none() {
             return Err("ui_not_ready");
         }
+        if section == "terminal" && self.settings_terminal_fonts.is_none() {
+            // GPUI's platform text system is the same source used by the
+            // actual terminal renderer, so suggestions reflect installed
+            // fonts on Windows, macOS and Linux without a fixed allowlist.
+            let mut names = cx.text_system().all_font_names();
+            names.retain(|name| {
+                !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
+            });
+            names.sort_by_key(|name| name.to_lowercase());
+            names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+            self.settings_terminal_fonts = Some(names);
+        }
         // Existing connected Native controls now read the same Rust Runtime
         // Store as Classic. Never overlay them with stale native-settings.json.
         if has_connected_native_controls(section) {
             self.refresh_shared_desktop_settings(cx);
         }
         if self.settings_section.is_none() {
-            self.settings_menu_search
-                .update(cx, |input, cx| input.clear(cx));
+            let locale = self.settings_menu_locale;
+            self.settings_menu_search.update(cx, |input, cx| {
+                input.clear(cx);
+                input.set_placeholder(tr(locale, "Search settings"), cx);
+            });
+            self.settings_editor_theme_search.update(cx, |input, cx| {
+                input.clear(cx);
+                input.set_placeholder(tr(locale, "Search syntax themes"), cx);
+            });
+            self.settings_terminal_theme_search.update(cx, |input, cx| {
+                input.clear(cx);
+                input.set_placeholder(tr(locale, "Search terminal themes"), cx);
+            });
         }
         self.explorer_context_menu = None;
         self.mixed_tab_context = None;
@@ -881,6 +985,13 @@ impl Workbench {
             self.cancel_explorer_action(cx);
         }
         self.settings_section = Some(section.to_owned());
+        let query = self.settings_menu_search.read(cx).query().to_owned();
+        let scroll_target = catalog_section(section)
+            .and_then(|entry| {
+                first_matching_group_index_localized(entry, &query, self.settings_menu_locale)
+            })
+            .map_or(0, |index| index + 1);
+        self.settings_catalog_scroll.scroll_to_item(scroll_target);
         match section {
             "agents" => self.refresh_terminals(cx),
             "historySync" => self.refresh_shared_history_sync(cx),
@@ -912,6 +1023,7 @@ impl Workbench {
         &self,
         id: &'static str,
         label: &'static str,
+        match_count: usize,
         active: bool,
         compact: bool,
         cx: &mut Context<Self>,
@@ -922,13 +1034,44 @@ impl Workbench {
             .rounded_md()
             .flex()
             .items_center()
-            .px_3()
+            .gap_2()
+            .px_2()
             .py_2()
-            .bg(rgb(if active { ACTIVE } else { PANEL }))
-            .text_color(rgb(if active { TEXT } else { MUTED }))
-            .text_sm()
+            .bg(rgb(if active {
+                alera_gpui_desktop::visual_tokens::ELEVATED
+            } else {
+                PANEL
+            }))
             .when(!compact, |row| row.w_full())
-            .child(tr(self.settings_menu_locale, label))
+            .hover(|style| style.bg(rgb(ACTIVE)))
+            .child(div().w(px(2.0)).h(px(16.0)).rounded_md().bg(rgb(if active {
+                ACCENT
+            } else {
+                PANEL
+            })))
+            .child(icon(
+                classic_settings_category_icon(id),
+                18.0,
+                if active { TEXT } else { MUTED },
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(rgb(if active { TEXT } else { MUTED }))
+                    .child(tr(self.settings_menu_locale, label)),
+            )
+            .children((match_count > 0).then(|| {
+                div()
+                    .rounded_md()
+                    .bg(rgb(TOOLBAR))
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(rgb(TEXT))
+                    .child(match_count.to_string())
+            }))
             .on_click(cx.listener(move |view, _, _window, cx| {
                 if let Err(code) = view.show_native_settings_section(id, cx) {
                     view.model
@@ -938,7 +1081,6 @@ impl Workbench {
             }))
             .into_any_element()
     }
-
     /// Store only a Host-listed Agent Profile ID in the shared Rust owner.
     /// Never copy commands, credentials or Managed config into Native JSON.
     fn change_native_default_agent_profile(
@@ -2190,8 +2332,7 @@ impl Workbench {
     ) -> gpui::AnyElement {
         // Decimal controls should not accumulate IEEE-754 display artifacts
         // (e.g. 0.7000000000000001 after two opacity clicks).
-        let previous = ((value - step).max(min) * 100.0).round() / 100.0;
-        let next = ((value + step).min(max) * 100.0).round() / 100.0;
+        let (previous, next) = classic_numeric_neighbors(value, step, min, max);
         let integer = !matches!(
             path,
             "terminal.fontSize" | "terminal.lineHeight" | "terminal.backgroundOpacity"
@@ -2226,6 +2367,9 @@ impl Workbench {
                             false,
                         )
                         .on_click(cx.listener(move |view, _, _, cx| {
+                            if previous == value {
+                                return;
+                            }
                             let candidate = if integer {
                                 serde_json::json!(previous as u64)
                             } else {
@@ -2243,6 +2387,9 @@ impl Workbench {
                             false,
                         )
                         .on_click(cx.listener(move |view, _, _, cx| {
+                            if next == value {
+                                return;
+                            }
                             let candidate = if integer {
                                 serde_json::json!(next as u64)
                             } else {
@@ -2316,7 +2463,7 @@ impl Workbench {
                     s.terminal_font_size,
                     1.0,
                     8.0,
-                    48.0,
+                    32.0,
                     cx,
                 ))
                 .into_any_element(),
@@ -2349,7 +2496,7 @@ impl Workbench {
                     s.editor_tab_size as f64,
                     1.0,
                     1.0,
-                    16.0,
+                    8.0,
                     cx,
                 ))
                 .into_any_element(),
@@ -2985,7 +3132,7 @@ impl Workbench {
             .when(compact, |sidebar| {
                 sidebar
                     .w_full()
-                    .h(px(215.0))
+                    .h(px(175.0))
                     .border_b_1()
                     .border_color(rgb(BORDER))
             })
@@ -2998,7 +3145,7 @@ impl Workbench {
             })
             .child(
                 div()
-                    .h(px(48.0))
+                    .h(px(44.0))
                     .px_4()
                     .flex()
                     .items_center()
@@ -3008,7 +3155,6 @@ impl Workbench {
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(tr(locale, "Settings")),
             )
-            .child(self.render_settings_language_preview(cx))
             .child(
                 div()
                     .px_3()
@@ -3039,34 +3185,41 @@ impl Workbench {
                         [SettingsNavGroup::Preferences, SettingsNavGroup::Resources]
                             .into_iter()
                             .enumerate()
-                            .map(|(group_index, group)| {
+                            .filter_map(|(group_index, group)| {
                                 let items = visible
                                     .iter()
                                     .copied()
                                     .filter(|item| item.nav_group == group)
                                     .collect::<Vec<_>>();
-                                div()
-                                    .id(("native-settings-nav-group", group_index))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .px_3()
-                                            .py_1()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(tr(locale, group.title())),
-                                    )
-                                    .children(items.into_iter().map(|item| {
-                                        self.native_settings_nav_item(
-                                            item.id,
-                                            item.title,
-                                            section == item.id,
-                                            compact,
-                                            cx,
+                                if items.is_empty() {
+                                    return None;
+                                }
+                                Some(
+                                    div()
+                                        .id(("native-settings-nav-group", group_index))
+                                        .flex()
+                                        .gap_1()
+                                        .when(compact, |panel| panel.flex_row().items_center())
+                                        .when(!compact, |panel| panel.flex_col())
+                                        .child(
+                                            div()
+                                                .px_3()
+                                                .py_1()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child(tr(locale, group.title())),
                                         )
-                                    }))
+                                        .children(items.into_iter().map(|item| {
+                                            self.native_settings_nav_item(
+                                                item.id,
+                                                item.title,
+                                                matching_row_count_localized(item, &query, locale),
+                                                section == item.id,
+                                                compact,
+                                                cx,
+                                            )
+                                        })),
+                                )
                             }),
                     ),
             );
@@ -3076,17 +3229,27 @@ impl Workbench {
         let preview = selected
             .map(|selected| self.render_settings_catalog_preview(selected, locale, cx))
             .unwrap_or_else(|| {
-                div()
+                vec![div()
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(tr(locale, "No matching settings."))
-                    .into_any_element()
+                    .into_any_element()]
             });
+        // Give the catalog its own bounded viewport. Otherwise GPUI Kit's
+        // outer dialog scrolls the entire sidebar/header and the group's
+        // ScrollHandle never receives a scrollable viewport.
+        // The Kit title and margins use the remaining 72 px. Its content
+        // builder does not add the extra scrollbar used by Dialog.child().
+        let modal_body_height = (metrics.height - 72.0).max(0.0);
+        let rows_height = (modal_body_height - if compact { 315.0 } else { 225.0 })
+            .max(64.0)
+            .min(modal_body_height);
         let content = div()
             .id("native-settings-content")
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .child(
@@ -3105,22 +3268,48 @@ impl Workbench {
                             .justify_between()
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_lg()
-                                    .child(heading),
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .children(selected.map(|entry| {
+                                        icon(classic_settings_category_icon(entry.id), 18.0, ACCENT)
+                                    }))
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_lg()
+                                            .child(heading),
+                                    ),
                             )
                             .child(
-                                icon_button(
-                                    "native-settings-close",
-                                    UiIcon::Close,
-                                    "Close settings",
-                                    false,
-                                )
-                                .on_click(cx.listener(
-                                    |view, _, window, cx| {
-                                        view.dismiss_native_settings(window, cx);
-                                    },
-                                )),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .when(self.settings_shared_error.is_some(), |actions| {
+                                        actions.child(
+                                            native_components::action_button(
+                                                "native-settings-host-retry-header",
+                                                tr(locale, "Refresh"),
+                                                false,
+                                                false,
+                                            )
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.refresh_shared_desktop_settings(cx);
+                                            })),
+                                        )
+                                    })
+                                    .child(
+                                        icon_button(
+                                            "native-settings-close",
+                                            UiIcon::Close,
+                                            "Close settings",
+                                            false,
+                                        )
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.dismiss_native_settings(window, cx);
+                                        })),
+                                    ),
                             ),
                     )
                     .children(selected.map(|selected| {
@@ -3135,6 +3324,7 @@ impl Workbench {
                                 selected.groups.iter().enumerate().map(|(index, group)| {
                                     div()
                                         .id(("native-settings-group-chip", index))
+                                        .cursor_pointer()
                                         .rounded_md()
                                         .border_1()
                                         .border_color(rgb(BORDER))
@@ -3143,7 +3333,12 @@ impl Workbench {
                                         .py_1()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
+                                        .hover(|style| style.bg(rgb(ACTIVE)))
                                         .child(tr(locale, group.title))
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.settings_catalog_scroll.scroll_to_item(index + 1);
+                                            cx.notify();
+                                        }))
                                 }),
                             )
                         },
@@ -3152,14 +3347,15 @@ impl Workbench {
             .child(
                 div()
                     .id("native-settings-rows")
-                    .flex_1()
-                    .min_h_0()
+                    .h(px(rows_height))
+                    .max_h(px(rows_height))
                     .overflow_y_scroll()
+                    .track_scroll(&self.settings_catalog_scroll)
                     .p_4()
                     .flex()
                     .flex_col()
                     .gap_4()
-                    .child(preview)
+                    .children(preview)
                     .children(has_native_controls.then(|| {
                         div()
                             .id("native-settings-connected-controls")
@@ -3200,7 +3396,7 @@ impl Workbench {
                     .child(
                         native_components::action_button(
                             "native-settings-host-retry",
-                            "Retry",
+                            tr(locale, "Refresh"),
                             false,
                             false,
                         )
@@ -3229,10 +3425,11 @@ impl Workbench {
             .id("native-settings-panel")
             .flex()
             .flex_1()
-            // Reserve the Kit dialog title/chrome height while keeping the
-            // classic 92%-of-viewport Settings body scrollable.
-            .h(px((metrics.height - 72.0).max(0.0)))
+            // The Kit shell owns the remaining height (header and margins).
+            // Only the bounded rows viewport may scroll within these bounds.
+            .h(px(modal_body_height))
             .min_h_0()
+            .overflow_hidden()
             .key_context("AleraNativeModal")
             .track_focus(&self.settings_modal_focus)
             .when(compact, |body| body.flex_col())

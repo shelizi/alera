@@ -1,4 +1,34 @@
 {
+  "Search syntax themes": {
+    "zh-TW": "搜尋語法主題",
+    "zh-CN": "搜索语法主题",
+    "ja": "構文テーマを検索"
+  },
+  "Search terminal themes": {
+    "zh-TW": "搜尋終端機主題",
+    "zh-CN": "搜索终端主题",
+    "ja": "ターミナルテーマを検索"
+  },
+  "No themes found.": {
+    "zh-TW": "找不到符合的主題。",
+    "zh-CN": "未找到匹配的主题。",
+    "ja": "一致するテーマがありません。"
+  },
+  "Save": {
+    "zh-TW": "儲存",
+    "zh-CN": "保存",
+    "ja": "保存"
+  },
+  "Reset": {
+    "zh-TW": "重設",
+    "zh-CN": "重置",
+    "ja": "リセット"
+  },
+  "Enter a font family name or choose a suggestion.": {
+    "zh-TW": "輸入字型名稱，或選擇下方建議。",
+    "zh-CN": "输入字体名称，或选择下方建议。",
+    "ja": "フォント名を入力するか、下の候補から選択してください。"
+  },
   "Also notify when an agent reports completion.": {
     "zh-TW": "Agent 完成工作時也發送通知。",
     "zh-CN": "Agent 完成任务时也发送通知。",
@@ -264,10 +294,30 @@
     "zh-CN": "排除的目录",
     "ja": "除外するディレクトリ"
   },
-  "External Editors": {
-    "zh-TW": "外部編輯器",
-    "zh-CN": "外部编辑器",
-    "ja": "外部エディター"
+  "Custom Executable": {
+    "zh-TW": "自訂執行檔",
+    "zh-CN": "自定义可执行文件",
+    "ja": "カスタム実行ファイル"
+  },
+  "Optional per-device executable override.": {
+    "zh-TW": "選用的裝置專屬執行檔設定。",
+    "zh-CN": "可选的设备专属可执行文件设置。",
+    "ja": "デバイスごとに実行ファイルを指定できます。"
+  },
+  "Choose how external workspaces open.": {
+    "zh-TW": "選擇外部工作區的開啟方式。",
+    "zh-CN": "选择外部工作区的打开方式。",
+    "ja": "外部ワークスペースの開き方を選択します。"
+  },
+  "Launch newly created workspaces in the external editor.": {
+    "zh-TW": "在外部編輯器中開啟新建立的工作區。",
+    "zh-CN": "在外部编辑器中打开新建工作区。",
+    "ja": "新しく作成したワークスペースを外部エディターで開きます。"
+  },
+  "Check External Editor": {
+    "zh-TW": "檢查外部編輯器",
+    "zh-CN": "检查外部编辑器",
+    "ja": "外部エディターを確認"
   },
   "Find command bindings.": {
     "zh-TW": "尋找命令的快捷鍵綁定。",
@@ -368,11 +418,6 @@
     "zh-TW": "終端機背景的不透明度。",
     "zh-CN": "终端背景的不透明度。",
     "ja": "ターミナル背景の不透明度。"
-  },
-  "Open files in an external editor.": {
-    "zh-TW": "使用外部編輯器開啟檔案。",
-    "zh-CN": "使用外部编辑器打开文件。",
-    "ja": "外部エディターでファイルを開きます。"
   },
   "Per-project configuration.": {
     "zh-TW": "各專案的獨立設定。",

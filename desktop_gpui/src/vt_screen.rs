@@ -7,6 +7,7 @@
 
 use std::ops::Range;
 
+use crate::terminal_theme::TerminalTheme;
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
@@ -89,12 +90,19 @@ fn rgb_value(rgb: Rgb) -> u32 {
     (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
 }
 
-fn color_rgb(color: Color, colors: &Colors, default: u32) -> u32 {
+fn color_rgb(color: Color, colors: &Colors, default: u32, theme: Option<&TerminalTheme>) -> u32 {
     match color {
+        // Keep explicit true color and OSC overrides unchanged.
         Color::Spec(rgb) => rgb_value(rgb),
         Color::Indexed(index) => colors[usize::from(index)]
             .map(rgb_value)
-            .unwrap_or_else(|| indexed_rgb(index)),
+            .unwrap_or_else(|| {
+                if index < 16 {
+                    theme.map_or_else(|| indexed_rgb(index), |theme| theme.ansi[index as usize])
+                } else {
+                    indexed_rgb(index)
+                }
+            }),
         Color::Named(named) => {
             if let Some(value) = colors[named] {
                 return rgb_value(value);
@@ -102,15 +110,20 @@ fn color_rgb(color: Color, colors: &Colors, default: u32) -> u32 {
             match named {
                 NamedColor::Foreground
                 | NamedColor::BrightForeground
-                | NamedColor::DimForeground => TERMINAL_DEFAULT_FG,
-                NamedColor::Background => TERMINAL_DEFAULT_BG,
-                NamedColor::Cursor => CURSOR_BACKGROUND,
+                | NamedColor::DimForeground => {
+                    theme.map_or(TERMINAL_DEFAULT_FG, |theme| theme.foreground)
+                }
+                NamedColor::Background => {
+                    theme.map_or(TERMINAL_DEFAULT_BG, |theme| theme.background)
+                }
+                NamedColor::Cursor => theme.map_or(CURSOR_BACKGROUND, |theme| theme.cursor),
                 _ => {
                     let index = named as usize;
                     if index < 16 {
-                        indexed_rgb(index as u8)
+                        theme.map_or_else(|| indexed_rgb(index as u8), |theme| theme.ansi[index])
                     } else if (259..=266).contains(&index) {
-                        indexed_rgb((index - 259) as u8)
+                        let bright = index - 259;
+                        theme.map_or_else(|| indexed_rgb(bright as u8), |theme| theme.ansi[bright])
                     } else {
                         default
                     }
@@ -120,15 +133,30 @@ fn color_rgb(color: Color, colors: &Colors, default: u32) -> u32 {
     }
 }
 
-fn cell_style(cell: &Cell, colors: &Colors, cursor: bool) -> CellStyle {
-    let mut fg = color_rgb(cell.fg, colors, TERMINAL_DEFAULT_FG);
-    let mut bg = color_rgb(cell.bg, colors, TERMINAL_DEFAULT_BG);
+fn cell_style(
+    cell: &Cell,
+    colors: &Colors,
+    cursor: bool,
+    theme: Option<&TerminalTheme>,
+) -> CellStyle {
+    let mut fg = color_rgb(
+        cell.fg,
+        colors,
+        theme.map_or(TERMINAL_DEFAULT_FG, |theme| theme.foreground),
+        theme,
+    );
+    let mut bg = color_rgb(
+        cell.bg,
+        colors,
+        theme.map_or(TERMINAL_DEFAULT_BG, |theme| theme.background),
+        theme,
+    );
     if cell.flags.contains(Flags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
     }
     if cursor {
-        fg = CURSOR_FOREGROUND;
-        bg = CURSOR_BACKGROUND;
+        fg = theme.map_or(CURSOR_FOREGROUND, |theme| theme.background);
+        bg = theme.map_or(CURSOR_BACKGROUND, |theme| theme.cursor);
     }
     CellStyle {
         fg,
@@ -369,6 +397,16 @@ impl VtScreen {
     /// Skip wide continuation cells, retaining any combining marks in the
     /// leading cell. Row/span work is bounded by the local 200 x 512 preview.
     pub fn styled_rows(&self) -> Vec<StyledRow> {
+        self.styled_rows_inner(None)
+    }
+
+    /// Reproject the same VT grid with a Classic theme. The PTY output and
+    /// scrollback stay untouched, so selecting a theme is immediate and safe.
+    pub fn styled_rows_themed(&self, theme: &TerminalTheme) -> Vec<StyledRow> {
+        self.styled_rows_inner(Some(theme))
+    }
+
+    fn styled_rows_inner(&self, theme: Option<&TerminalTheme>) -> Vec<StyledRow> {
         let grid = self.terminal.grid();
         let colors = self.terminal.colors();
         let cursor = grid.cursor.point;
@@ -388,7 +426,7 @@ impl VtScreen {
                         && (cursor.column.0 == usize::from(col)
                             || (cursor.column.0 == usize::from(col) + 1
                                 && cell.flags.contains(Flags::WIDE_CHAR)));
-                    let style = cell_style(cell, colors, is_cursor);
+                    let style = cell_style(cell, colors, is_cursor, theme);
                     let start = text.len();
                     if cell.flags.contains(Flags::HIDDEN) {
                         text.push(' ');
@@ -515,6 +553,32 @@ mod tests {
         screen.feed("\x1b[?2004l\x1b[?1l");
         assert!(!screen.bracketed_paste());
         assert!(!screen.application_cursor_keys());
+    }
+
+    #[test]
+    fn changing_classic_theme_recolors_live_vt_without_erasing_output_or_truecolor() {
+        use crate::terminal_theme::theme_for_name;
+
+        let mut screen = VtScreen::new(5, 20);
+        screen.feed("a\x1b[31mR\x1b[91mB\x1b[38;2;17;34;51mT");
+        let dark = theme_for_name("Dracula");
+        let light = theme_for_name("GitHub Light");
+        let first = &screen.styled_rows_themed(dark)[0];
+        assert!(first.text.starts_with("aRBT"));
+        assert_eq!(style_at(first, 0).fg, dark.foreground);
+        assert_eq!(style_at(first, 0).bg, dark.background);
+        assert_eq!(style_at(first, 1).fg, dark.ansi[1]);
+        assert_eq!(style_at(first, 2).fg, dark.ansi[9]);
+        assert_eq!(style_at(first, 3).fg, 0x112233);
+
+        let second = &screen.styled_rows_themed(light)[0];
+        assert!(second.text.starts_with("aRBT"));
+        assert_eq!(style_at(second, 0).fg, light.foreground);
+        assert_eq!(style_at(second, 0).bg, light.background);
+        assert_eq!(style_at(second, 1).fg, light.ansi[1]);
+        assert_eq!(style_at(second, 2).fg, light.ansi[9]);
+        assert_eq!(style_at(second, 3).fg, 0x112233);
+        assert!(screen.contents().starts_with("aRBT"));
     }
 
     #[test]

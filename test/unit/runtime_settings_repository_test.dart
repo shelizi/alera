@@ -1,6 +1,7 @@
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/settings/infra/runtime_settings_repository.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
@@ -745,6 +746,94 @@ void main() {
       'agy',
     ]);
   });
+
+  test('older Host preserves Classic external editor as local-only', () async {
+    final legacy = _MemorySettingsRepository()
+      ..settings = AleraSettings.defaults.copyWith(
+        editor: AleraSettings.defaults.editor.copyWith(
+          externalEditor: ExternalEditorKind.vscode,
+        ),
+      );
+    final host = _RecordingRuntimeHostClient();
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {'editor.twoRowTabs': false},
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/older-external-editor-host',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.editor.externalEditor, ExternalEditorKind.vscode);
+    expect(host.payloads['desktopSettings.seedLocal'], hasLength(1));
+
+    final changed = loaded.copyWith(
+      editor: loaded.editor.copyWith(externalEditor: ExternalEditorKind.zed),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], isNull);
+    await repo.save(changed);
+    expect(legacy.settings.editor.externalEditor, ExternalEditorKind.zed);
+  });
+
+  test(
+    'Classic and GPUI share selected external editor, not executable paths',
+    () async {
+      final legacy = _MemorySettingsRepository()
+        ..settings = AleraSettings.defaults.copyWith(
+          editor: AleraSettings.defaults.editor.copyWith(
+            externalEditor: ExternalEditorKind.vscode,
+          ),
+        );
+      final host = _RecordingRuntimeHostClient();
+      host.responses['desktopSettings.seedLocal'] = {
+        'values': {'editor.externalEditor': 'zed'},
+      };
+      host.responses['runtimeSettings.get'] = {
+        'workspaceDirectory': '/shared-editor-test',
+      };
+      final repo = RuntimeSettingsRepository(
+        client: host,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      expect(
+        loaded.editor.externalEditor,
+        ExternalEditorKind.zed,
+        reason: 'Host choice wins over stale Classic local preferences',
+      );
+      final seeds = host.payloads['desktopSettings.seedLocal']!;
+      expect(seeds, hasLength(2));
+      expect(seeds.last['values'], {'editor.externalEditor': 'vscode'});
+
+      final changed = loaded.copyWith(
+        editor: loaded.editor.copyWith(
+          externalEditor: ExternalEditorKind.vscode,
+        ),
+      );
+      await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+      expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+        {
+          'changes': [
+            {
+              'path': 'editor.externalEditor',
+              'expectedValue': 'zed',
+              'value': 'vscode',
+            },
+          ],
+        },
+      ]);
+      await repo.save(changed);
+      expect(legacy.settings.editor.externalEditor, ExternalEditorKind.vscode);
+      expect(
+        host.payloads['configuration.settings.update'],
+        isNull,
+        reason: 'Local executable/editor prefs must not enter cloud config',
+      );
+    },
+  );
 
   test(
     'Two-row Tab preference migrates locally and uses the shared Host CAS',

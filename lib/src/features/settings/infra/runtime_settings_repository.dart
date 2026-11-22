@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:alera/src/features/settings/application/settings_repository.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/settings/domain/settings_ownership.dart';
 import 'package:alera_configuration/alera_configuration.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -18,12 +19,14 @@ class RuntimeSettingsRepository({
   Map<String, Object?>? _lastLoadedRuntime;
   bool _sharedDesktopAvailable = false;
   bool _sharedQuotaPinsAvailable = false;
+  bool _sharedExternalEditorAvailable = false;
 
   @override
   Future<AleraSettings> load() async {
     var legacy = await legacyRepository.load();
     _sharedDesktopAvailable = false;
     _sharedQuotaPinsAvailable = false;
+    _sharedExternalEditorAvailable = false;
     try {
       await beforeAccess?.call();
       if (await _supportsConfiguration()) {
@@ -65,6 +68,25 @@ class RuntimeSettingsRepository({
         );
         sharedDesktop = _asMap(imported['values']);
         _sharedDesktopAvailable = true;
+        // The external editor choice is local-only and never contains an
+        // executable path. Seed it separately so older Hosts that lack this
+        // reviewed enum continue to synchronize existing shared fields.
+        if (sharedDesktop.containsKey('editor.externalEditor')) {
+          try {
+            final editorSeed = _asMap(
+              await client.runtimeRequest('desktopSettings.seedLocal', {
+                'values': {
+                  'editor.externalEditor': legacy.editor.externalEditor.name,
+                },
+              }),
+            );
+            sharedDesktop = _asMap(editorSeed['values']);
+            _sharedExternalEditorAvailable =
+                sharedDesktop['editor.externalEditor'] is String;
+          } catch (_) {
+            sharedDesktop.remove('editor.externalEditor');
+          }
+        }
         // Migrate the Classic per-account quota pins into the same Rust owner
         // as GPUI. The Host seeds only absent values, so a GPUI edit wins over
         // a late Classic start. Older Hosts still keep Classic's Drift pins.
@@ -169,6 +191,9 @@ class RuntimeSettingsRepository({
     if (!_sharedDesktopAvailable) return;
     final changes = <Map<String, Object?>>[];
     for (final path in _sharedDesktopPaths) {
+      if (path == 'editor.externalEditor' && !_sharedExternalEditorAvailable) {
+        continue;
+      }
       if (path == 'agents.quotaUnpinnedKeys' && !_sharedQuotaPinsAvailable) {
         continue;
       }
@@ -317,6 +342,7 @@ const _sharedDesktopPaths = <String>[
   'editor.autosaveEnabled',
   'editor.tabSize',
   'editor.twoRowTabs',
+  'editor.externalEditor',
   'general.confirmProjectRemoval',
   'general.confirmWorkspaceRemoval',
   'general.autoArchiveWorkspacesAfterDays',
@@ -354,6 +380,7 @@ Object? _sharedDesktopValue(
   'editor.autosaveEnabled' => settings.editor.autosaveEnabled,
   'editor.tabSize' => settings.editor.tabSize,
   'editor.twoRowTabs' => settings.editor.twoRowTabs,
+  'editor.externalEditor' => settings.editor.externalEditor.name,
   'general.confirmProjectRemoval' => settings.general.confirmProjectRemoval,
   'general.confirmWorkspaceRemoval' => settings.general.confirmWorkspaceRemoval,
   'general.autoArchiveWorkspacesAfterDays' =>
@@ -486,6 +513,7 @@ AleraSettings _applySharedDesktopValues(
   final scrollSensitivity = values['terminal.tuiScrollSensitivity'];
   final autosaveDelay = values['editor.autosaveDelaySeconds'];
   final excludedDirs = values['editor.quickOpenExcludedDirectories'];
+  final externalEditor = values['editor.externalEditor'];
   final cursorShape = values['terminal.cursorShape'];
   final quotaPins = values['agents.quotaUnpinnedKeys'];
   return current.copyWith(
@@ -557,6 +585,12 @@ AleraSettings _applySharedDesktopValues(
           : current.terminal.clipboardOnSelect,
     ),
     editor: current.editor.copyWith(
+      externalEditor: externalEditor is String
+          ? ExternalEditorKind.values.firstWhere(
+              (item) => item.name == externalEditor,
+              orElse: () => current.editor.externalEditor,
+            )
+          : current.editor.externalEditor,
       twoRowTabs: values['editor.twoRowTabs'] is bool
           ? values['editor.twoRowTabs'] as bool
           : current.editor.twoRowTabs,

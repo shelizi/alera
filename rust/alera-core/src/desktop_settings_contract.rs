@@ -2,7 +2,7 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 32] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 33] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -10,6 +10,7 @@ pub const SHARED_DESKTOP_PATHS: [&str; 32] = [
     "editor.autosaveEnabled",
     "editor.tabSize",
     "editor.twoRowTabs",
+    "editor.externalEditor",
     "general.confirmProjectRemoval",
     "general.confirmWorkspaceRemoval",
     "general.autoArchiveWorkspacesAfterDays",
@@ -39,7 +40,7 @@ pub const SHARED_DESKTOP_PATHS: [&str; 32] = [
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 29] = [
+pub const CLI_WRITABLE_PATHS: [&str; 30] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -47,6 +48,7 @@ pub const CLI_WRITABLE_PATHS: [&str; 29] = [
     "editor.autosaveEnabled",
     "editor.tabSize",
     "editor.twoRowTabs",
+    "editor.externalEditor",
     "agents.defaultAgentProfileId",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
@@ -220,7 +222,11 @@ pub fn cli_set_value_allowed(path: &str, value: &serde_json::Value) -> bool {
     if !cli_writable(path) {
         return false;
     }
-    if path == "agents.quotaUnpinnedKeys" {
+    if path == "editor.externalEditor" {
+        value
+            .as_str()
+            .is_some_and(|editor| matches!(editor, "zed" | "vscode"))
+    } else if path == "agents.quotaUnpinnedKeys" {
         valid_quota_unpinned_keys(value)
     } else {
         !value.is_array() && !value.is_object()
@@ -277,6 +283,24 @@ mod tests {
         assert_eq!(unique.len(), SHARED_DESKTOP_PATHS.len());
         assert!(CLI_WRITABLE_PATHS.iter().all(|path| unique.contains(path)));
         assert!(cli_writable("editor.twoRowTabs"));
+        assert!(cli_writable("editor.externalEditor"));
+        assert!(!extended_portable("editor.externalEditor"));
+        assert!(cli_set_value_allowed(
+            "editor.externalEditor",
+            &serde_json::json!("zed")
+        ));
+        assert!(cli_set_value_allowed(
+            "editor.externalEditor",
+            &serde_json::json!("vscode")
+        ));
+        assert!(!cli_set_value_allowed(
+            "editor.externalEditor",
+            &serde_json::json!("cmd.exe")
+        ));
+        assert!(!cli_set_value_allowed(
+            "editor.externalEditor",
+            &serde_json::json!({"path":"C:/unsafe.exe"})
+        ));
         assert!(cli_writable("agents.quotaUnpinnedKeys"));
         assert!(cli_writable("agents.showTaskSummariesInSidebar"));
         assert!(valid_extended_portable(

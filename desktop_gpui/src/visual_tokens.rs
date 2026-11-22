@@ -9,6 +9,8 @@ pub const ELEVATED: u32 = 0x242424;
 pub const BORDER: u32 = 0x272727; // Flutter borderSubtle.
 pub const BORDER_ACTIVE: u32 = 0x323232; // Flutter border (active tab outline).
 pub const TEXT: u32 = 0xf5f5f5;
+/// Classic Settings navigation active stripe and section-header pictogram.
+pub const ACCENT: u32 = 0xe0e0e0;
 pub const MUTED: u32 = 0xa1a1a1;
 pub const FAINT: u32 = 0x606060;
 pub const ACTIVE: u32 = 0x303030;
@@ -110,8 +112,18 @@ pub fn primary_inner_terminal_render_size(
     if !pane_width.is_finite() || !pane_height.is_finite() {
         return (0.0, 0.0);
     }
-    let width = pane_width / if split_exists && side_by_side { 2.0 } else { 1.0 };
-    let height = pane_height / if split_exists && !side_by_side { 2.0 } else { 1.0 };
+    let width = pane_width
+        / if split_exists && side_by_side {
+            2.0
+        } else {
+            1.0
+        };
+    let height = pane_height
+        / if split_exists && !side_by_side {
+            2.0
+        } else {
+            1.0
+        };
     (width.max(0.0), height.max(0.0))
 }
 
@@ -125,8 +137,7 @@ pub fn inner_secondary_terminal_render_height(primary_height: f32, side_by_side:
     if !primary_height.is_finite() {
         return 0.0;
     }
-    (primary_height / if side_by_side { 1.0 } else { 2.0 }
-        - TERMINAL_INNER_SPLIT_HEADER_HEIGHT)
+    (primary_height / if side_by_side { 1.0 } else { 2.0 } - TERMINAL_INNER_SPLIT_HEADER_HEIGHT)
         .max(0.0)
 }
 
@@ -212,7 +223,7 @@ mod tests {
             dot < title,
             "Agent status dot must stay before the tab title"
         );
-        assert!(chip.contains("div().w(px(TAB_ATTENTION_DOT_SIZE))"));
+        assert!(chip.contains(".h(px(TAB_ATTENTION_DOT_SIZE))"));
     }
 
     #[test]
@@ -288,8 +299,11 @@ mod tests {
         // Keep the rendered calls, but do not couple this test to rustfmt
         // indentation or whether the helper is namespace-qualified.
         let compact = source.split_whitespace().collect::<String>();
-        assert!(compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,false,"));
-        assert!(compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,true,"));
+        assert!(compact
+            .contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,false,"));
+        assert!(
+            compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,true,")
+        );
         assert!(source.contains("let inventory_current = !self.terminals.session_list_is_stale();"));
         assert!(source.contains("if is_agent && inventory_current && tab.running"));
         assert!(source.contains("AgentVisualState::from_hook(state, tab.interrupted).color()"));
@@ -344,21 +358,40 @@ mod tests {
         // Secondary Tab types must not retain the old nested 4px + 4px
         // padding while mixed Host/Editor chips use Classic's 6px inset.
         for (outer_id, inner_id) in [
-            (r#".id(("git-original-tab", index))"#, r#".id(("git-original-tab-select", index))"#),
-            (r#".id(("file-preview-tab", index))"#, r#".id(("file-tab", index))"#),
+            (
+                r#".id(("git-original-tab", index))"#,
+                r#".id(("git-original-tab-select", index))"#,
+            ),
+            (
+                r#".id(("file-preview-tab", index))"#,
+                r#".id(("file-tab", index))"#,
+            ),
         ] {
             let tab = source.split_once(outer_id).unwrap().1;
             let outer = tab.split_once(".child(").unwrap().0;
-            assert!(outer.contains(".px(px(TAB_CHIP_HORIZONTAL_PADDING))"), "{outer_id}: chip has wrong horizontal inset");
-            let selection = tab.split_once(inner_id).unwrap().1
-                .split_once(".cursor_pointer()").unwrap().0;
-            assert!(!selection.contains(".px_1()"), "{inner_id}: old nested padding drifts from Classic");
+            assert!(
+                outer.contains(".px(px(TAB_CHIP_HORIZONTAL_PADDING))"),
+                "{outer_id}: chip has wrong horizontal inset"
+            );
+            let selection = tab
+                .split_once(inner_id)
+                .unwrap()
+                .1
+                .split_once(".cursor_pointer()")
+                .unwrap()
+                .0;
+            assert!(
+                !selection.contains(".px_1()"),
+                "{inner_id}: old nested padding drifts from Classic"
+            );
         }
     }
 
     #[test]
     fn mixed_tab_chip_matches_classic_six_pixel_inset_and_compact_close_target() {
-        let classic = include_str!("../../lib/src/features/workbench/presentation/workspace_workbench_tab_chips.dart");
+        let classic = include_str!(
+            "../../lib/src/features/workbench/presentation/workspace_workbench_tab_chips.dart"
+        );
         assert!(classic.contains("horizontal: AleraTokens.space6,"));
         assert!(classic.contains("padding: EdgeInsets.all(2),"));
         assert!(classic.contains("size: 12,"));
@@ -366,14 +399,32 @@ mod tests {
         assert_eq!(TAB_CLOSE_ICON_SIZE, 12.0);
         assert_eq!(TAB_CLOSE_TARGET_SIZE, 16.0);
         let source = include_str!("main.rs");
-        let chip = source.split_once("fn render_mixed_tab_chip(").unwrap().1
-            .split_once("fn sync_mixed_tabs(").unwrap().0;
-        let outer = chip.split_once(".id((chip_id, index))").unwrap().1
-            .split_once(".child(").unwrap().0;
+        let chip = source
+            .split_once("fn render_mixed_tab_chip(")
+            .unwrap()
+            .1
+            .split_once("fn sync_mixed_tabs(")
+            .unwrap()
+            .0;
+        let outer = chip
+            .split_once(".id((chip_id, index))")
+            .unwrap()
+            .1
+            .split_once(".child(")
+            .unwrap()
+            .0;
         assert!(outer.contains(".px(px(TAB_CHIP_HORIZONTAL_PADDING))"));
-        let focus = chip.split_once(".id((focus_id, index))").unwrap().1
-            .split_once(".cursor_pointer()").unwrap().0;
-        assert!(!focus.contains(".px_1()"), "Nested chip padding makes the icon 8px from the edge instead of Classic 6px");
+        let focus = chip
+            .split_once(".id((focus_id, index))")
+            .unwrap()
+            .1
+            .split_once(".cursor_pointer()")
+            .unwrap()
+            .0;
+        assert!(
+            !focus.contains(".px_1()"),
+            "Nested chip padding makes the icon 8px from the edge instead of Classic 6px"
+        );
         assert!(chip.contains(".h(px(32.0))"));
         assert!(chip.contains(".mr_2()"));
     }
@@ -518,10 +569,33 @@ mod tests {
     }
 
     #[test]
-    fn terminal_full_width_uses_one_background_for_viewport_and_gutters() {
-        // The shell color (#101010) differs from VT (#15171B). Unused
-        // strips, splits and padding must inherit VT, not the shell.
+    fn settings_placeholder_refresh_cannot_reset_active_category_scroll() {
         let source = include_str!("main.rs");
+        let observer = source
+            .split_once("cx.observe(&settings_menu_search")
+            .expect("Settings search observer")
+            .1
+            .split_once("let settings_shortcut_search =")
+            .expect("Settings shortcut field")
+            .0;
+        let unchanged = observer
+            .find("if view.settings_menu_last_query == query")
+            .expect("unchanged search query must short-circuit the observer");
+        let scroll = observer
+            .find("settings_catalog_scroll.scroll_to_item")
+            .expect("typing a new query still jumps to the matching group");
+        assert!(unchanged < scroll, "guard must run before scroll");
+        assert!(observer.contains("view.settings_menu_last_query = query.clone();"));
+    }
+
+    #[test]
+    fn terminal_full_width_uses_one_background_for_viewport_and_gutters() {
+        // A Classic Terminal theme may be light or dark. The shell and
+        // every split gutter must inherit the active Terminal palette, not
+        // accidentally fall back to the fixed dark Workbench canvas.
+        let source = include_str!("main.rs");
+        assert!(source.contains("terminal_theme::theme_for_name("));
+        assert!(source.contains("terminal_theme_bg = terminal_theme.background"));
         let pane = source
             .split_once(r#".id("mixed-primary-pane")"#)
             .unwrap()
@@ -530,7 +604,7 @@ mod tests {
             .unwrap()
             .0;
         assert!(pane.contains(".min_w_0()"));
-        assert!(pane.contains("pane.bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(pane.contains("pane.bg(rgb(terminal_theme_bg))"));
         let outer = source
             .split_once(".child(if has_terminal_preview {")
             .unwrap()
@@ -538,7 +612,7 @@ mod tests {
             .split_once(".child(if terminal_is_vt {")
             .unwrap()
             .0;
-        assert!(outer.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(outer.contains(".bg(rgb(terminal_theme_bg))"));
         assert!(!outer.contains(".bg(rgb(BG))"));
         let viewport = source
             .split_once(r#".id("terminal-colored-grid")"#)
@@ -549,7 +623,7 @@ mod tests {
             .0;
         assert!(viewport.contains(".flex_1()"));
         assert!(viewport.contains(".min_w_0()"));
-        assert!(viewport.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(viewport.contains(".bg(rgb(terminal_theme_bg))"));
         let secondary = source
             .split_once(r#".id("mixed-secondary-content")"#)
             .unwrap()
@@ -557,42 +631,90 @@ mod tests {
             .split_once(".child(if let Some(rows)")
             .unwrap()
             .0;
-        assert!(secondary.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(secondary.contains(".bg(rgb(terminal_theme_bg))"));
     }
 
     #[test]
     fn inner_terminal_header_keeps_its_reserved_height_and_truncates_long_titles() {
         let source = include_str!("main.rs");
-        let focus = source.split_once(r#".id("terminal-secondary-focus")"#).unwrap().1
-            .split_once(".on_click(").unwrap().0;
+        let focus = source
+            .split_once(r#".id("terminal-secondary-focus")"#)
+            .unwrap()
+            .1
+            .split_once(".on_click(")
+            .unwrap()
+            .0;
         assert!(focus.contains(".h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))"));
-        assert!(focus.contains(".flex_shrink_0()"), "focus header must not shrink below PTY-reserved 28px");
-        assert!(focus.contains(".flex()") && focus.contains(".items_center()"), "focus text must be vertically centered");
-        assert!(focus.contains(".min_w_0()"), "focus header must fit narrow split widths");
-        assert!(focus.contains(".child(div().min_w_0().truncate().child(format!("), "long Terminal titles must truncate inside the split");
-        let transcript = source.split_once(r#".id("terminal-output-scroll")"#).unwrap().1
-            .split_once(".child(if terminal_output.is_empty()").unwrap().0;
-        assert!(transcript.contains(".min_h_0()"), "scrollable transcript must shrink with split height");
-        assert!(transcript.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(
+            focus.contains(".flex_shrink_0()"),
+            "focus header must not shrink below PTY-reserved 28px"
+        );
+        assert!(
+            focus.contains(".flex()") && focus.contains(".items_center()"),
+            "focus text must be vertically centered"
+        );
+        assert!(
+            focus.contains(".min_w_0()"),
+            "focus header must fit narrow split widths"
+        );
+        assert!(
+            focus.contains(".child(div().min_w_0().truncate().child(format!("),
+            "long Terminal titles must truncate inside the split"
+        );
+        let transcript = source
+            .split_once(r#".id("terminal-output-scroll")"#)
+            .unwrap()
+            .1
+            .split_once(".child(if terminal_output.is_empty()")
+            .unwrap()
+            .0;
+        assert!(
+            transcript.contains(".min_h_0()"),
+            "scrollable transcript must shrink with split height"
+        );
+        assert!(transcript.contains(".bg(rgb(terminal_theme_bg))"));
     }
 
     #[test]
     fn inner_terminal_split_preserves_vt_ansi_styling_in_secondary_pane() {
         let source = include_str!("main.rs");
-        let secondary_source = source.split_once("let terminal_secondary_output =").unwrap().1
-            .split_once("let terminal_split_exists =").unwrap().0;
-        assert!(secondary_source.contains("TerminalViewMode::Screen => Some(tab.screen.styled_rows())"),
-            "legacy second Terminal must read styled VT rows, not only plain screen contents");
-        let view = source.split_once(r#".id("terminal-secondary-scroll")"#).unwrap().1
-            .split_once(r#".id("mixed-secondary-content")"#).unwrap().0;
-        assert!(view.contains(".child(if let Some(rows) = styled_rows"),
-            "legacy inner Terminal must render colored rows in Screen mode");
+        let secondary_source = source
+            .split_once("let terminal_secondary_output =")
+            .unwrap()
+            .1
+            .split_once("let terminal_split_exists =")
+            .unwrap()
+            .0;
+        // Inspect the logical expression, not rustfmt's line wrapping.
+        let normalized: String = secondary_source
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        assert!(
+            normalized.contains(
+                "TerminalViewMode::Screen=>{Some(tab.screen.styled_rows_themed(terminal_theme))}"
+            ),
+            "legacy second Terminal must read styled VT rows, not only plain screen contents"
+        );
+        let view = source
+            .split_once(r#".id("terminal-secondary-scroll")"#)
+            .unwrap()
+            .1
+            .split_once(r#".id("mixed-secondary-content")"#)
+            .unwrap()
+            .0;
+        assert!(
+            view.contains(".child(if let Some(rows) = styled_rows"),
+            "legacy inner Terminal must render colored rows in Screen mode"
+        );
         assert!(view.contains("gpui::StyledText::new(row.text)"));
         assert!(view.contains(".with_highlights(row.spans.into_iter()"));
         assert!(view.contains("background_color: Some(rgb(style.bg).into())"));
         assert!(view.contains("font_weight: style.bold.then_some(gpui::FontWeight::BOLD)"));
-        assert!(view.contains(".child(output)"),
-            "legacy inner Terminal must retain plain Transcript mode");
+        assert!(
+            view.contains(".child(output)"),
+            "legacy inner Terminal must retain plain Transcript mode"
+        );
     }
 
     #[test]
@@ -608,7 +730,7 @@ mod tests {
             .unwrap()
             .0;
         assert!(preview.contains(".min_w_0()"));
-        assert!(preview.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(preview.contains(".bg(rgb(terminal_theme_bg))"));
         assert!(preview.contains(".when(terminal_split_horizontal, |pane| pane.border_l_1())"));
         assert!(preview.contains(".when(!terminal_split_horizontal, |pane| pane.border_t_1())"));
         let secondary_scroll = source
@@ -619,7 +741,7 @@ mod tests {
             .unwrap()
             .0;
         assert!(secondary_scroll.contains(".min_w_0()"));
-        assert!(secondary_scroll.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(secondary_scroll.contains(".bg(rgb(terminal_theme_bg))"));
         assert!(secondary_scroll.contains(".px_3()"));
         assert!(secondary_scroll.contains(".py_3()"));
     }
@@ -632,20 +754,36 @@ mod tests {
             let mut found = 0;
             for row in source.split(&needle).skip(1) {
                 let style = row.split(".child(").next().unwrap_or(row);
-                assert!(style.contains(".h(px(TAB_STRIP_HEIGHT))"), "{id}: row height drift");
-                assert!(style.contains(".items_center()"), "{id}: row alignment drift");
+                assert!(
+                    style.contains(".h(px(TAB_STRIP_HEIGHT))"),
+                    "{id}: row height drift"
+                );
+                assert!(
+                    style.contains(".items_center()"),
+                    "{id}: row alignment drift"
+                );
                 found += 1;
             }
             assert!(found > 0);
         }
-        let secondary = source.split_once(r#".id("mixed-secondary-pane")"#).unwrap().1
-            .split_once(".child(if mixed_split_horizontal {").unwrap().0;
+        let secondary = source
+            .split_once(r#".id("mixed-secondary-pane")"#)
+            .unwrap()
+            .1
+            .split_once(".child(if mixed_split_horizontal {")
+            .unwrap()
+            .0;
         assert!(secondary.contains(".when(mixed_split_horizontal, |pane| pane.border_l_1())"));
         assert!(secondary.contains(".when(!mixed_split_horizontal, |pane| pane.border_t_1())"));
-        let vt = source.split_once(r#".id("mixed-secondary-content")"#).unwrap().1
-            .split_once(".key_context(").unwrap().0;
+        let vt = source
+            .split_once(r#".id("mixed-secondary-content")"#)
+            .unwrap()
+            .1
+            .split_once(".key_context(")
+            .unwrap()
+            .0;
         assert!(vt.contains(".when(mixed_split_horizontal, |panel| panel.border_t_1())"));
-        assert!(vt.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(vt.contains(".bg(rgb(terminal_theme_bg))"));
     }
 
     #[test]
@@ -673,25 +811,51 @@ mod tests {
 
     #[test]
     fn inner_terminal_pty_and_ime_share_visible_split_bounds() {
-        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, false, true), (1000.0, 600.0));
-        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, false, false), (1000.0, 600.0));
-        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, true, true), (500.0, 600.0));
-        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, true, false), (1000.0, 300.0));
-        assert_eq!(primary_inner_terminal_render_size(-20.0, 600.0, true, true), (0.0, 600.0));
-        assert_eq!(primary_inner_terminal_render_size(f32::NAN, 600.0, true, true), (0.0, 0.0));
-        assert_eq!(primary_inner_terminal_render_size(1000.0, f32::INFINITY, true, false), (0.0, 0.0));
+        assert_eq!(
+            primary_inner_terminal_render_size(1000.0, 600.0, false, true),
+            (1000.0, 600.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(1000.0, 600.0, false, false),
+            (1000.0, 600.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(1000.0, 600.0, true, true),
+            (500.0, 600.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(1000.0, 600.0, true, false),
+            (1000.0, 300.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(-20.0, 600.0, true, true),
+            (0.0, 600.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(f32::NAN, 600.0, true, true),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            primary_inner_terminal_render_size(1000.0, f32::INFINITY, true, false),
+            (0.0, 0.0)
+        );
         // The same dimensions must bound the actual PTY cell count and IME
         // popup position, not just the floating-point layout calculation.
         for side_by_side in [true, false] {
-            let (width, height) = primary_inner_terminal_render_size(
-                1000.0, 600.0, true, side_by_side,
-            );
+            let (width, height) =
+                primary_inner_terminal_render_size(1000.0, 600.0, true, side_by_side);
             let (cols, rows) = crate::terminal::estimate_terminal_viewport_with_line_height(
                 width, height, 14.0, 1.3,
-            ).expect("inner split should fit Terminal cells");
+            )
+            .expect("inner split should fit Terminal cells");
             let (ime_x, ime_y) = crate::terminal::terminal_ime_anchor_with_line_height(
-                (100, 120), width, height, 14.0, 1.3,
-            ).expect("inner split must fit IME cursor");
+                (100, 120),
+                width,
+                height,
+                14.0,
+                1.3,
+            )
+            .expect("inner split must fit IME cursor");
             assert!(ime_x <= width - 2.0 && ime_y <= height - 2.0);
             if side_by_side {
                 assert!(cols < 70, "half-width Terminal must have fewer columns");
@@ -701,12 +865,28 @@ mod tests {
         }
         let source = include_str!("main.rs");
         assert!(source.contains("let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size("));
-        let anchor = source.split_once("let primary_ime_anchor =").unwrap().1
-            .split_once("let secondary_ime_anchor =").unwrap().0;
-        assert!(anchor.contains("primary_terminal_width,"), "primary IME must not use unsplit width");
-        assert!(anchor.contains("primary_terminal_height,"), "primary IME must not use unsplit height");
-        let resize = source.split_once("let mut proposed_viewports =").unwrap().1
-            .split_once("if terminal_split_exists {").unwrap().0;
+        let anchor = source
+            .split_once("let primary_ime_anchor =")
+            .unwrap()
+            .1
+            .split_once("let secondary_ime_anchor =")
+            .unwrap()
+            .0;
+        assert!(
+            anchor.contains("primary_terminal_width,"),
+            "primary IME must not use unsplit width"
+        );
+        assert!(
+            anchor.contains("primary_terminal_height,"),
+            "primary IME must not use unsplit height"
+        );
+        let resize = source
+            .split_once("let mut proposed_viewports =")
+            .unwrap()
+            .1
+            .split_once("if terminal_split_exists {")
+            .unwrap()
+            .0;
         assert!(resize.contains("let width = primary_terminal_width;"));
         assert!(resize.contains("let height = primary_terminal_height;"));
     }
@@ -719,7 +899,10 @@ mod tests {
         assert_eq!(inner_secondary_terminal_render_height(12.0, true), 0.0);
         assert_eq!(inner_secondary_terminal_render_height(12.0, false), 0.0);
         assert_eq!(inner_secondary_terminal_render_height(f32::NAN, true), 0.0);
-        assert_eq!(inner_secondary_terminal_render_height(f32::INFINITY, false), 0.0);
+        assert_eq!(
+            inner_secondary_terminal_render_height(f32::INFINITY, false),
+            0.0
+        );
         let source = include_str!("main.rs");
         assert!(source.contains(".h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))"));
         assert!(source.contains("let height = inner_secondary_terminal_render_height("));

@@ -28,6 +28,7 @@ fn local_path(path: &str) -> bool {
             | "general.autoGitFetchEnabled"
             | "general.autoGitFetchIntervalMinutes"
             | "editor.twoRowTabs"
+            | "editor.externalEditor"
             | "explorer.showHiddenFiles"
             | "explorer.showIgnoredFiles"
             | "agents.quotaUnpinnedKeys"
@@ -55,6 +56,7 @@ fn default_value(path: &str) -> Result<Value> {
         "editor.autosaveEnabled" => json!(false),
         "editor.tabSize" => json!(4),
         "editor.twoRowTabs" => json!(false),
+        "editor.externalEditor" => json!("zed"),
         "general.confirmProjectRemoval" => json!(true),
         "general.confirmWorkspaceRemoval" => json!(true),
         "general.autoArchiveWorkspacesAfterDays" => json!(30),
@@ -127,6 +129,9 @@ fn validate(path: &str, value: &Value) -> Result<()> {
         "general.autoGitFetchIntervalMinutes" => {
             value.as_u64().is_some_and(|n| (1..=60).contains(&n))
         }
+        "editor.externalEditor" => value
+            .as_str()
+            .is_some_and(|s| matches!(s, "zed" | "vscode")),
         "terminal.fontSize" => value
             .as_f64()
             .is_some_and(|n| n.is_finite() && (8.0..=48.0).contains(&n)),
@@ -289,7 +294,7 @@ impl RuntimeStore {
     /// If GPUI already saved a value, late Classic migration never replaces it.
     pub async fn desktop_shared_seed_local(&self, fields: &Value) -> Result<Value> {
         let fields = fields.as_object().context("Local seed must be an object")?;
-        if fields.len() > 7 {
+        if fields.len() > 8 {
             bail!("Too many local desktop settings");
         }
         for (path, value) in fields {
@@ -479,6 +484,75 @@ mod tests {
             expected_value: expected,
             value,
         }
+    }
+
+    #[tokio::test]
+    async fn classic_and_native_share_local_external_editor_without_executable_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let classic = RuntimeStore::open(temp.path()).await.unwrap();
+        let native = RuntimeStore::open(temp.path()).await.unwrap();
+        let initial = classic.desktop_shared_settings_snapshot().await.unwrap();
+        assert_eq!(
+            initial["values"].as_object().unwrap().len(),
+            SHARED_DESKTOP_PATHS.len()
+        );
+        assert_eq!(initial["values"]["editor.externalEditor"], "zed");
+        assert_eq!(initial["present"]["editor.externalEditor"], false);
+
+        classic
+            .desktop_shared_seed_local(&json!({"editor.externalEditor":"vscode"}))
+            .await
+            .unwrap();
+        // A later first-run seed must never replace an existing Classic choice.
+        native
+            .desktop_shared_seed_local(&json!({"editor.externalEditor":"zed"}))
+            .await
+            .unwrap();
+        let updated = native
+            .desktop_shared_compare_and_set(
+                "editor.externalEditor",
+                &json!("vscode"),
+                &json!("zed"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated["values"]["editor.externalEditor"], "zed");
+        assert!(classic
+            .desktop_shared_compare_and_set(
+                "editor.externalEditor",
+                &json!("vscode"),
+                &json!("zed"),
+            )
+            .await
+            .is_err());
+        for unsafe_value in [
+            json!("cmd.exe"),
+            json!({"path":"C:/unsafe.exe"}),
+            json!(true),
+        ] {
+            assert!(classic
+                .desktop_shared_compare_and_set(
+                    "editor.externalEditor",
+                    &json!("zed"),
+                    &unsafe_value,
+                )
+                .await
+                .is_err());
+        }
+        let persisted = RuntimeStore::open(temp.path()).await.unwrap();
+        assert_eq!(
+            persisted
+                .desktop_shared_setting("editor.externalEditor")
+                .await
+                .unwrap(),
+            json!("zed")
+        );
+        assert!(
+            persisted.configuration_settings().await.unwrap()["editor"]
+                .get("externalEditor")
+                .is_none(),
+            "Local editor choice must never enter portable/cloud settings"
+        );
     }
 
     #[tokio::test]
@@ -858,7 +932,11 @@ mod tests {
         let classic = RuntimeStore::open(temp.path()).await.unwrap();
         let native = RuntimeStore::open(temp.path()).await.unwrap();
         let defaults = native.desktop_shared_settings_snapshot().await.unwrap();
-        assert_eq!(defaults["values"].as_object().unwrap().len(), SHARED_DESKTOP_PATHS.len());
+        // Keep the snapshot coverage aligned with the shared settings registry.
+        assert_eq!(
+            defaults["values"].as_object().unwrap().len(),
+            SHARED_DESKTOP_PATHS.len()
+        );
         assert_eq!(
             defaults["values"]["agents.showTaskSummariesInSidebar"],
             false

@@ -332,6 +332,57 @@ fn s03_classic_cli_and_gpui_bridge_share_cas_and_persist_after_host_restart() {
         "bar"
     );
 
+    // GPUI's Classic-style font field may save arbitrary validated names,
+    // not only the common preset chips. Both frontends share the one Host.
+    assert_eq!(
+        native_before["values"]["terminal.fontFamily"],
+        "JetBrains Mono"
+    );
+    native
+        .desktop_settings_compare_and_set(
+            "terminal.fontFamily",
+            &json!("JetBrains Mono"),
+            &json!("Iosevka Term"),
+        )
+        .unwrap();
+    assert_eq!(
+        classic_get(&cli, &runtime)["values"]["terminal.fontFamily"],
+        "Iosevka Term"
+    );
+    classic_set(
+        &cli,
+        &runtime,
+        "terminal.fontFamily",
+        json!("Iosevka Term"),
+        json!("Cascadia Code"),
+    );
+    assert_eq!(
+        native.desktop_settings_snapshot().unwrap()["values"]["terminal.fontFamily"],
+        "Cascadia Code"
+    );
+    native
+        .desktop_settings_compare_and_set(
+            "terminal.themeName",
+            &json!("Alera Dark"),
+            &json!("Kanagawa"),
+        )
+        .unwrap();
+    assert_eq!(
+        classic_get(&cli, &runtime)["values"]["terminal.themeName"],
+        "Kanagawa"
+    );
+    classic_set(
+        &cli,
+        &runtime,
+        "editor.themeName",
+        json!("Alera"),
+        json!("Tokyo Night Dark"),
+    );
+    assert_eq!(
+        native.desktop_settings_snapshot().unwrap()["values"]["editor.themeName"],
+        "Tokyo Night Dark"
+    );
+
     // Agent-executable CLI cannot switch off destructive confirmation flags.
     assert!(classic_cli(
         &cli,
@@ -429,6 +480,9 @@ fn s03_classic_cli_and_gpui_bridge_share_cas_and_persist_after_host_restart() {
     assert_eq!(after["values"]["editor.twoRowTabs"], false);
     assert_eq!(after["values"]["general.language"], "english");
     assert_eq!(after["values"]["terminal.cursorShape"], "bar");
+    assert_eq!(after["values"]["terminal.fontFamily"], "Cascadia Code");
+    assert_eq!(after["values"]["terminal.themeName"], "Kanagawa");
+    assert_eq!(after["values"]["editor.themeName"], "Tokyo Night Dark");
     assert_eq!(classic_get(&cli, &runtime)["values"], after["values"]);
     restarted.stop();
     assert!(!runtime.join("runtime-host.json").exists());

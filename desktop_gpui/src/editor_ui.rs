@@ -9,10 +9,12 @@ use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
+use alera_gpui_desktop::editor_syntax_theme::palette_for_name;
 use alera_gpui_desktop::editor_tabs::{
     DetachedEditorTab, EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
     SaveAllReport,
 };
+use alera_gpui_desktop::editor_text_runs::editor_shaped_segments;
 use alera_gpui_desktop::syntax_highlighting::{compose_line_styles, SyntaxHighlightCache};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
@@ -41,7 +43,7 @@ const EDITOR_LINE_HEIGHT: f32 = 19.0;
 // GPUI prototype. Keep selection distinct from the editor surface.
 const SELECTED_BG: u32 = 0x3b3b3b;
 const COMPOSITION_COLOR: u32 = 0xe0e0e0;
-const CURSOR_COLOR: u32 = EDITOR_TEXT;
+// The native caret uses the active Classic syntax theme foreground.
 
 actions!(
     alera_gpui_native_editor,
@@ -262,6 +264,14 @@ impl NativeEditor {
     pub fn set_tab_size(&mut self, tab_size: u64, cx: &mut Context<Self>) {
         if (1..=16).contains(&tab_size) {
             self.tab_size = tab_size as usize;
+            cx.notify();
+        }
+    }
+
+    /// Classic's Host-owned syntax theme applies to live and transferred
+    /// editors without modifying the document, dirty state, or Undo history.
+    pub fn set_syntax_theme(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.syntax.set_theme_name(name) {
             cx.notify();
         }
     }
@@ -1236,8 +1246,8 @@ impl IntoElement for NativeInputCapture {
 }
 
 /// Transparent overlay occupying exactly the painted row. Unlike heuristic
-/// character-width hit testing, its native ShapedLine uses the inherited
-/// font and font size from the same GPUI text context as the visible text.
+/// character-width hit testing, its native ShapedLine uses the same GPUI
+/// styled font runs as the visible syntax-highlighted Editor text.
 struct EditorLineMetrics {
     editor: Entity<NativeEditor>,
     index: usize,
@@ -1245,6 +1255,9 @@ struct EditorLineMetrics {
     end: usize,
     text: String,
     caret: usize,
+    /// The same StyledText runs must shape pointer/IME geometry, even when
+    /// Classic themes use bold or italic glyphs with different advances.
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
 }
 
 impl IntoElement for EditorLineMetrics {
@@ -1290,19 +1303,22 @@ impl Element for EditorLineMetrics {
         _: &mut App,
     ) -> Option<ShapedLine> {
         let style = window.text_style();
-        let run = TextRun {
-            len: self.text.len(),
-            font: style.font(),
-            color: style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
+        let runs: Vec<TextRun> = editor_shaped_segments(&self.text, &self.highlights)
+            .into_iter()
+            .map(|(range, highlight)| {
+                let len = range.end - range.start;
+                if let Some(highlight) = highlight {
+                    style.clone().highlight(highlight).to_run(len)
+                } else {
+                    style.to_run(len)
+                }
+            })
+            .collect();
         let font_size = style.font_size.to_pixels(window.rem_size());
         Some(
             window
                 .text_system()
-                .shape_line(self.text.clone().into(), font_size, &[run], None),
+                .shape_line(self.text.clone().into(), font_size, &runs, None),
         )
     }
 
@@ -1328,12 +1344,14 @@ impl Element for EditorLineMetrics {
             let local = self.caret - self.start;
             let cursor_x = bounds.left() + line.x_for_index(local);
             if bounds.bottom() > clip.top() && bounds.top() < clip.bottom() {
+                let caret_color =
+                    palette_for_name(self.editor.read(cx).syntax.theme_name()).foreground;
                 window.paint_quad(fill(
                     Bounds::new(
                         point(cursor_x, bounds.top()),
                         size(px(1.5), bounds.size.height),
                     ),
-                    rgb(CURSOR_COLOR),
+                    rgb(caret_color),
                 ));
             }
         }
@@ -1400,7 +1418,14 @@ impl NativeEditor {
                 span.range,
                 gpui::HighlightStyle {
                     color: span.rgb.map(|color| rgb(color).into()),
-                    background_color: span.selected.then(|| rgb(SELECTED_BG).into()),
+                    font_weight: span.bold.then_some(gpui::FontWeight::BOLD),
+                    font_style: span.italic.then_some(gpui::FontStyle::Italic),
+                    // Classic token backgrounds (diff additions/deletions) are
+                    // visible unless the user selection takes precedence.
+                    background_color: span
+                        .selected
+                        .then(|| rgb(SELECTED_BG).into())
+                        .or_else(|| span.bg.map(|background| rgb(background).into())),
                     underline: span.composing.then(|| gpui::UnderlineStyle {
                         thickness: px(1.0),
                         color: Some(rgb(COMPOSITION_COLOR).into()),
@@ -1424,6 +1449,7 @@ impl NativeEditor {
                 ));
             }
         }
+        let metrics_highlights = highlights.clone();
         let styled = gpui::StyledText::new(display).with_highlights(highlights);
         div()
             .id(("editable-line", index))
@@ -1447,16 +1473,18 @@ impl NativeEditor {
                 end,
                 text: raw,
                 caret,
+                highlights: metrics_highlights,
             }))
     }
 }
 
 impl Render for NativeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let syntax_palette = palette_for_name(self.syntax.theme_name());
         if self.tabs.is_empty() {
             return div()
                 .size_full()
-                .bg(rgb(PANEL_BG))
+                .bg(rgb(syntax_palette.background))
                 .p_4()
                 .text_sm()
                 .text_color(rgb(MUTED_TEXT))
@@ -1545,8 +1573,8 @@ impl Render for NativeEditor {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(PANEL_BG))
-            .text_color(rgb(EDITOR_TEXT))
+            .bg(rgb(syntax_palette.background))
+            .text_color(rgb(syntax_palette.foreground))
             .key_context("AleraGpuiEditorSurface")
             .on_action(cx.listener(Self::show_find))
             .on_action(cx.listener(Self::find_next))

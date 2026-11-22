@@ -135,6 +135,11 @@ _version: 2
   zh-TW: "閒置後自動封存"
   zh-CN: "空闲后自动归档"
   ja: "未使用期間の経過後に自動アーカイブ"
+"Auto-open New Workspaces Externally":
+  en: "Auto-open New Workspaces Externally"
+  zh-TW: "自動在外部編輯器開啟新工作區"
+  zh-CN: "自动在外部编辑器打开新工作区"
+  ja: "新しいワークスペースを自動的に外部エディターで開く"
 "Automatically Fetch Git Remotes":
   en: "Automatically Fetch Git Remotes"
   zh-TW: "自動 Fetch Git 遠端"
@@ -195,11 +200,26 @@ _version: 2
   zh-TW: "請透過語言選擇器修改"
   zh-CN: "请通过语言选择器修改"
   ja: "言語選択で変更"
+"Check External Editor":
+  en: "Check External Editor"
+  zh-TW: "檢查外部編輯器"
+  zh-CN: "检查外部编辑器"
+  ja: "外部エディターを確認"
 "Check releases for this platform.":
   en: "Check releases for this platform."
   zh-TW: "檢查此平台的發布版本。"
   zh-CN: "检查此平台的发布版本。"
   ja: "このプラットフォーム向けリリースを確認します。"
+"Choose how external workspaces open.":
+  en: "Choose how external workspaces open."
+  zh-TW: "選擇外部工作區的開啟方式。"
+  zh-CN: "选择外部工作区的打开方式。"
+  ja: "外部ワークスペースの開き方を選択します。"
+"Choose where normal editable source and text files open. Dedicated Alera previews stay internal.":
+  en: "Choose where normal editable source and text files open. Dedicated Alera previews stay internal."
+  zh-TW: "選擇一般可編輯原始碼與文字檔的開啟位置；Alera 專用預覽仍保留在內部。"
+  zh-CN: "选择一般可编辑源代码与文本文件的打开位置；Alera 专用预览仍保留在内部。"
+  ja: "通常の編集可能なソースやテキストファイルを開く場所を選択します。Alera 専用のプレビューは内部のままです。"
 "Claude":
   en: "Claude"
   zh-TW: "Claude"
@@ -340,11 +360,21 @@ _version: 2
   zh-TW: "游標形狀"
   zh-CN: "光标形状"
   ja: "カーソルの形状"
+"Custom Executable":
+  en: "Custom Executable"
+  zh-TW: "自訂執行檔"
+  zh-CN: "自定义可执行文件"
+  ja: "カスタム実行ファイル"
 "days (0 disables)":
   en: "days (0 disables)"
   zh-TW: "天（0 表示停用）"
   zh-CN: "天（0 表示停用）"
   ja: "日（0 で無効）"
+"Default Code Open Target":
+  en: "Default Code Open Target"
+  zh-TW: "預設程式碼開啟目標"
+  zh-CN: "默认代码打开目标"
+  ja: "コードを開く既定の場所"
 "Desktop":
   en: "Desktop"
   zh-TW: "桌面"
@@ -380,11 +410,21 @@ _version: 2
   zh-TW: "編輯器"
   zh-CN: "编辑器"
   ja: "エディター"
+"Editor used by Open In menu entries, keyboard shortcuts, and external file targets.":
+  en: "Editor used by Open In menu entries, keyboard shortcuts, and external file targets."
+  zh-TW: "Open In 選單項目、鍵盤快捷鍵與外部檔案目標所使用的編輯器。"
+  zh-CN: "Open In 菜单项目、键盘快捷键与外部文件目标所使用的编辑器。"
+  ja: "「Open In」メニュー、キーボードショートカット、外部ファイルターゲットで使用するエディターです。"
 "Enabled":
   en: "Enabled"
   zh-TW: "已啟用"
   zh-CN: "已启用"
   ja: "有効"
+"Enter a font family name or choose a suggestion.":
+  en: "Enter a font family name or choose a suggestion."
+  zh-TW: "輸入字型名稱，或選擇下方建議。"
+  zh-CN: "输入字体名称，或选择下方建议。"
+  ja: "フォント名を入力するか、下の候補から選択してください。"
 "Excluded Directories":
   en: "Excluded Directories"
   zh-TW: "排除的目錄"
@@ -395,8 +435,8 @@ _version: 2
   zh-TW: "匯出診斷資料"
   zh-CN: "导出诊断数据"
   ja: "診断情報をエクスポート"
-"External Editors":
-  en: "External Editors"
+"External Editor":
+  en: "External Editor"
   zh-TW: "外部編輯器"
   zh-CN: "外部编辑器"
   ja: "外部エディター"
@@ -515,6 +555,11 @@ _version: 2
   zh-TW: "可由協調流程派送的啟動設定。"
   zh-CN: "可由协调流程派送的启动设置。"
   ja: "オーケストレーションがディスパッチできる起動設定。"
+"Launch newly created workspaces in the external editor.":
+  en: "Launch newly created workspaces in the external editor."
+  zh-TW: "在外部編輯器中開啟新建立的工作區。"
+  zh-CN: "在外部编辑器中打开新建工作区。"
+  ja: "新しく作成したワークスペースを外部エディターで開きます。"
 "Leave the runtime sidecar running.":
   en: "Leave the runtime sidecar running."
   zh-TW: "讓 Runtime Sidecar 持續執行。"
@@ -645,6 +690,11 @@ _version: 2
   zh-TW: "沒有符合的設定。"
   zh-CN: "没有匹配的设置。"
   ja: "一致する設定がありません。"
+"No themes found.":
+  en: "No themes found."
+  zh-TW: "找不到符合的主題。"
+  zh-CN: "未找到匹配的主题。"
+  ja: "一致するテーマがありません。"
 "Not available":
   en: "Not available"
   zh-TW: "尚未提供"
@@ -680,11 +730,6 @@ _version: 2
   zh-TW: "開啟"
   zh-CN: "打开"
   ja: "開く"
-"Open files in an external editor.":
-  en: "Open files in an external editor."
-  zh-TW: "使用外部編輯器開啟檔案。"
-  zh-CN: "使用外部编辑器打开文件。"
-  ja: "外部エディターでファイルを開きます。"
 "Open Quota Overview":
   en: "Open Quota Overview"
   zh-TW: "開啟額度總覽"
@@ -700,6 +745,16 @@ _version: 2
   zh-TW: "開啟現有供應商／帳號額度總覽，並從 Runtime Host 重新整理。"
   zh-CN: "打开现有服务商／账号额度总览，并从 Runtime Host 刷新。"
   ja: "既存のプロバイダー／アカウント利用枠を開き、Runtime Host から更新します。"
+"Open Workspaces in New Window":
+  en: "Open Workspaces in New Window"
+  zh-TW: "在新視窗開啟工作區"
+  zh-CN: "在新窗口打开工作区"
+  ja: "ワークスペースを新しいウィンドウで開く"
+"Optional per-device executable override.":
+  en: "Optional per-device executable override."
+  zh-TW: "選用的裝置專屬執行檔設定。"
+  zh-CN: "可选的设备专属可执行文件设置。"
+  ja: "デバイスごとに実行ファイルを指定できます。"
 "Ownership":
   en: "Ownership"
   zh-TW: "擁有權"
@@ -835,6 +890,11 @@ _version: 2
   zh-TW: "遠端語音轉錄選項。"
   zh-CN: "远程语音转录选项。"
   ja: "リモート文字起こしのオプション。"
+"Reset":
+  en: "Reset"
+  zh-TW: "重設"
+  zh-CN: "重置"
+  ja: "リセット"
 "Reset Keyboard Shortcuts":
   en: "Reset Keyboard Shortcuts"
   zh-TW: "重設鍵盤快捷鍵"
@@ -875,6 +935,11 @@ _version: 2
   zh-TW: "檢視、下載與上傳不同裝置間的設定。"
   zh-CN: "查看、下载与上传不同设备间的设置。"
   ja: "デバイス間の設定を確認、ダウンロード、アップロードします。"
+"Run a non-destructive version check with the current executable setting.":
+  en: "Run a non-destructive version check with the current executable setting."
+  zh-TW: "使用目前的執行檔設定執行不會修改資料的版本檢查。"
+  zh-CN: "使用当前的可执行文件设置执行不会修改数据的版本检查。"
+  ja: "現在の実行ファイル設定で、変更を伴わないバージョン確認を実行します。"
 "Running Agent sessions (Runtime Host)":
   en: "Running Agent sessions (Runtime Host)"
   zh-TW: "執行中的 Agent 工作階段（Runtime Host）"
@@ -905,6 +970,11 @@ _version: 2
   zh-TW: "安全性"
   zh-CN: "安全"
   ja: "安全確認"
+"Save":
+  en: "Save"
+  zh-TW: "儲存"
+  zh-CN: "保存"
+  ja: "保存"
 "Save diagnostics as a zip.":
   en: "Save diagnostics as a zip."
   zh-TW: "將診斷資料儲存為 ZIP 壓縮檔。"
@@ -930,6 +1000,16 @@ _version: 2
   zh-TW: "搜尋快捷鍵"
   zh-CN: "搜索快捷键"
   ja: "ショートカットを検索"
+"Search syntax themes":
+  en: "Search syntax themes"
+  zh-TW: "搜尋語法主題"
+  zh-CN: "搜索语法主题"
+  ja: "構文テーマを検索"
+"Search terminal themes":
+  en: "Search terminal themes"
+  zh-TW: "搜尋終端機主題"
+  zh-CN: "搜索终端主题"
+  ja: "ターミナルテーマを検索"
 "Select a project to view workspace options.":
   en: "Select a project to view workspace options."
   zh-TW: "選擇專案以檢視工作區選項。"

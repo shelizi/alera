@@ -1,0 +1,1168 @@
+{
+  "source": "Classic Flutter re_highlight 0.0.3; source filenames retained",
+  "themes": [
+    {
+      "name": "Alera",
+      "source": "_aleraEditorSyntaxTheme",
+      "styles": {
+        "root": {
+          "bg": 1052688,
+          "fg": 16119285
+        },
+        "keyword": {
+          "fg": 13079274
+        },
+        "meta-keyword": {
+          "fg": 13079274
+        },
+        "template-tag": {
+          "fg": 13079274
+        },
+        "operator": {
+          "fg": 9035263
+        },
+        "function": {
+          "fg": 8563455
+        },
+        "title": {
+          "fg": 8563455
+        },
+        "title.function_": {
+          "fg": 8563455
+        },
+        "string": {
+          "fg": 2278750
+        },
+        "meta-string": {
+          "fg": 2278750
+        },
+        "comment": {
+          "fg": 6316128
+        },
+        "quote": {
+          "fg": 6316128
+        },
+        "number": {
+          "fg": 16096779
+        },
+        "literal": {
+          "fg": 16763755
+        },
+        "built_in": {
+          "fg": 16763755
+        },
+        "variable": {
+          "fg": 16764032
+        },
+        "type": {
+          "fg": 9035263
+        },
+        "title.class_": {
+          "fg": 16763755
+        },
+        "class-title": {
+          "fg": 16763755
+        },
+        "attr": {
+          "fg": 16763755
+        },
+        "attribute": {
+          "fg": 16763755
+        },
+        "meta": {
+          "fg": 10592673
+        },
+        "selector-tag": {
+          "fg": 13079274
+        },
+        "selector-class": {
+          "fg": 16763755
+        },
+        "selector-attr": {
+          "fg": 16763755
+        },
+        "selector-pseudo": {
+          "fg": 9035263
+        },
+        "name": {
+          "fg": 8563455
+        },
+        "subst": {
+          "fg": 16119285
+        },
+        "addition": {
+          "fg": 2278750
+        },
+        "deletion": {
+          "fg": 16281969
+        }
+      }
+    },
+    {
+      "name": "GitHub Dark",
+      "source": "github-dark",
+      "styles": {
+        "root": {
+          "bg": 856343,
+          "fg": 13226457
+        },
+        "doctag": {
+          "fg": 16743282
+        },
+        "keyword": {
+          "fg": 16743282
+        },
+        "meta-keyword": {
+          "fg": 16743282
+        },
+        "template-tag": {
+          "fg": 16743282
+        },
+        "type": {
+          "fg": 16743282
+        },
+        "title": {
+          "fg": 13805823
+        },
+        "title.class_": {
+          "fg": 13805823
+        },
+        "title.function_": {
+          "fg": 13805823
+        },
+        "attr": {
+          "fg": 7979263
+        },
+        "attribute": {
+          "fg": 7979263
+        },
+        "literal": {
+          "fg": 7979263
+        },
+        "meta": {
+          "fg": 7979263
+        },
+        "number": {
+          "fg": 7979263
+        },
+        "operator": {
+          "fg": 7979263
+        },
+        "variable": {
+          "fg": 7979263
+        },
+        "selector-attr": {
+          "fg": 7979263
+        },
+        "selector-class": {
+          "fg": 7979263
+        },
+        "selector-id": {
+          "fg": 7979263
+        },
+        "regexp": {
+          "fg": 10868479
+        },
+        "string": {
+          "fg": 10868479
+        },
+        "meta-string": {
+          "fg": 10868479
+        },
+        "built_in": {
+          "fg": 16754263
+        },
+        "symbol": {
+          "fg": 16754263
+        },
+        "comment": {
+          "fg": 9147550
+        },
+        "code": {
+          "fg": 9147550
+        },
+        "name": {
+          "fg": 8316807
+        },
+        "quote": {
+          "fg": 8316807
+        },
+        "selector-tag": {
+          "fg": 8316807
+        },
+        "selector-pseudo": {
+          "fg": 8316807
+        },
+        "subst": {
+          "fg": 13226457
+        },
+        "section": {
+          "fg": 2060267,
+          "bold": true
+        },
+        "bullet": {
+          "fg": 15912032
+        },
+        "emphasis": {
+          "fg": 13226457,
+          "italic": true
+        },
+        "strong": {
+          "fg": 13226457,
+          "bold": true
+        },
+        "addition": {
+          "bg": 211478,
+          "fg": 11531700
+        },
+        "deletion": {
+          "bg": 6751756,
+          "fg": 16768215
+        }
+      }
+    },
+    {
+      "name": "GitHub Dark Dimmed",
+      "source": "github-dark-dimmed",
+      "styles": {
+        "root": {
+          "bg": 2238254,
+          "fg": 11385543
+        },
+        "doctag": {
+          "fg": 16019559
+        },
+        "keyword": {
+          "fg": 16019559
+        },
+        "meta-keyword": {
+          "fg": 16019559
+        },
+        "template-tag": {
+          "fg": 16019559
+        },
+        "type": {
+          "fg": 16019559
+        },
+        "title": {
+          "fg": 14466555
+        },
+        "title.class_": {
+          "fg": 14466555
+        },
+        "title.function_": {
+          "fg": 14466555
+        },
+        "attr": {
+          "fg": 7124735
+        },
+        "attribute": {
+          "fg": 7124735
+        },
+        "literal": {
+          "fg": 7124735
+        },
+        "meta": {
+          "fg": 7124735
+        },
+        "number": {
+          "fg": 7124735
+        },
+        "operator": {
+          "fg": 7124735
+        },
+        "variable": {
+          "fg": 7124735
+        },
+        "selector-attr": {
+          "fg": 7124735
+        },
+        "selector-class": {
+          "fg": 7124735
+        },
+        "selector-id": {
+          "fg": 7124735
+        },
+        "regexp": {
+          "fg": 9883903
+        },
+        "string": {
+          "fg": 9883903
+        },
+        "meta-string": {
+          "fg": 9883903
+        },
+        "built_in": {
+          "fg": 16162128
+        },
+        "symbol": {
+          "fg": 16162128
+        },
+        "comment": {
+          "fg": 7766928
+        },
+        "code": {
+          "fg": 7766928
+        },
+        "name": {
+          "fg": 9296780
+        },
+        "quote": {
+          "fg": 9296780
+        },
+        "selector-tag": {
+          "fg": 9296780
+        },
+        "selector-pseudo": {
+          "fg": 9296780
+        },
+        "subst": {
+          "fg": 11385543
+        },
+        "section": {
+          "fg": 3239370,
+          "bold": true
+        },
+        "bullet": {
+          "fg": 15385951
+        },
+        "emphasis": {
+          "fg": 11385543,
+          "italic": true
+        },
+        "strong": {
+          "fg": 11385543,
+          "bold": true
+        },
+        "addition": {
+          "bg": 1787681,
+          "fg": 11858356
+        },
+        "deletion": {
+          "bg": 7870747,
+          "fg": 16767187
+        }
+      }
+    },
+    {
+      "name": "VS2015",
+      "source": "vs2015",
+      "styles": {
+        "root": {
+          "bg": 1973790,
+          "fg": 14474460
+        },
+        "keyword": {
+          "fg": 5676246
+        },
+        "literal": {
+          "fg": 5676246
+        },
+        "symbol": {
+          "fg": 5676246
+        },
+        "name": {
+          "fg": 5676246
+        },
+        "built_in": {
+          "fg": 5163440
+        },
+        "type": {
+          "fg": 5163440
+        },
+        "number": {
+          "fg": 12113827
+        },
+        "string": {
+          "fg": 14065029
+        },
+        "meta-string": {
+          "fg": 14065029
+        },
+        "regexp": {
+          "fg": 10113844
+        },
+        "template-tag": {
+          "fg": 10113844
+        },
+        "subst": {
+          "fg": 14474460
+        },
+        "function": {
+          "fg": 14474460
+        },
+        "title": {
+          "fg": 14474460
+        },
+        "params": {
+          "fg": 14474460
+        },
+        "comment": {
+          "fg": 5744202,
+          "italic": true
+        },
+        "quote": {
+          "fg": 5744202,
+          "italic": true
+        },
+        "doctag": {
+          "fg": 6327118
+        },
+        "meta": {
+          "fg": 10197915
+        },
+        "meta-keyword": {
+          "fg": 10197915
+        },
+        "tag": {
+          "fg": 10197915
+        },
+        "variable": {
+          "fg": 12411845
+        },
+        "attr": {
+          "fg": 10280190
+        },
+        "attribute": {
+          "fg": 10280190
+        },
+        "section": {
+          "fg": 16766720
+        },
+        "emphasis": {
+          "italic": true
+        },
+        "strong": {
+          "bold": true
+        },
+        "bullet": {
+          "fg": 14137981
+        },
+        "selector-tag": {
+          "fg": 14137981
+        },
+        "selector-id": {
+          "fg": 14137981
+        },
+        "selector-class": {
+          "fg": 14137981
+        },
+        "selector-attr": {
+          "fg": 14137981
+        },
+        "selector-pseudo": {
+          "fg": 14137981
+        },
+        "addition": {
+          "bg": 1327634
+        },
+        "deletion": {
+          "bg": 6684672
+        }
+      }
+    },
+    {
+      "name": "Atom One Dark",
+      "source": "atom-one-dark",
+      "styles": {
+        "root": {
+          "bg": 2632756,
+          "fg": 11252415
+        },
+        "comment": {
+          "fg": 6054768,
+          "italic": true
+        },
+        "quote": {
+          "fg": 6054768,
+          "italic": true
+        },
+        "doctag": {
+          "fg": 13007069
+        },
+        "keyword": {
+          "fg": 13007069
+        },
+        "section": {
+          "fg": 14707829
+        },
+        "name": {
+          "fg": 14707829
+        },
+        "selector-tag": {
+          "fg": 14707829
+        },
+        "deletion": {
+          "fg": 14707829
+        },
+        "subst": {
+          "fg": 14707829
+        },
+        "literal": {
+          "fg": 5682882
+        },
+        "string": {
+          "fg": 10011513
+        },
+        "regexp": {
+          "fg": 10011513
+        },
+        "addition": {
+          "fg": 10011513
+        },
+        "attribute": {
+          "fg": 10011513
+        },
+        "meta-string": {
+          "fg": 10011513
+        },
+        "attr": {
+          "fg": 13736550
+        },
+        "variable": {
+          "fg": 13736550
+        },
+        "type": {
+          "fg": 13736550
+        },
+        "selector-class": {
+          "fg": 13736550
+        },
+        "selector-attr": {
+          "fg": 13736550
+        },
+        "selector-pseudo": {
+          "fg": 13736550
+        },
+        "number": {
+          "fg": 13736550
+        },
+        "symbol": {
+          "fg": 6401774
+        },
+        "bullet": {
+          "fg": 6401774
+        },
+        "meta": {
+          "fg": 6401774
+        },
+        "selector-id": {
+          "fg": 6401774
+        },
+        "title": {
+          "fg": 6401774
+        },
+        "built_in": {
+          "fg": 15122555
+        },
+        "title.class_": {
+          "fg": 15122555
+        },
+        "class-title": {
+          "fg": 15122555
+        },
+        "emphasis": {
+          "italic": true
+        },
+        "strong": {
+          "bold": true
+        }
+      }
+    },
+    {
+      "name": "Night Owl",
+      "source": "night-owl",
+      "styles": {
+        "root": {
+          "bg": 71207,
+          "fg": 14081771
+        },
+        "keyword": {
+          "fg": 13079274,
+          "italic": true
+        },
+        "built_in": {
+          "fg": 11393895,
+          "italic": true
+        },
+        "type": {
+          "fg": 8563455
+        },
+        "literal": {
+          "fg": 16734324
+        },
+        "number": {
+          "fg": 16223340
+        },
+        "regexp": {
+          "fg": 6072292
+        },
+        "string": {
+          "fg": 15516813
+        },
+        "subst": {
+          "fg": 13845054
+        },
+        "symbol": {
+          "fg": 8563455
+        },
+        "function": {
+          "fg": 8563455
+        },
+        "title": {
+          "fg": 14474410,
+          "italic": true
+        },
+        "params": {
+          "fg": 8379338
+        },
+        "comment": {
+          "fg": 6518647,
+          "italic": true
+        },
+        "doctag": {
+          "fg": 8379338
+        },
+        "meta": {
+          "fg": 8563455
+        },
+        "meta-keyword": {
+          "fg": 8563455
+        },
+        "meta-string": {
+          "fg": 15516813
+        },
+        "section": {
+          "fg": 8565247
+        },
+        "tag": {
+          "fg": 8379338
+        },
+        "name": {
+          "fg": 8379338
+        },
+        "attr": {
+          "fg": 8379338
+        },
+        "attribute": {
+          "fg": 8440772
+        },
+        "variable": {
+          "fg": 11393895
+        },
+        "bullet": {
+          "fg": 14284253
+        },
+        "code": {
+          "fg": 8440772
+        },
+        "emphasis": {
+          "fg": 13079274,
+          "italic": true
+        },
+        "strong": {
+          "fg": 11393895,
+          "bold": true
+        },
+        "quote": {
+          "fg": 6910104,
+          "italic": true
+        },
+        "selector-tag": {
+          "fg": 16737123
+        },
+        "selector-id": {
+          "fg": 16438320
+        },
+        "selector-class": {
+          "fg": 11393895,
+          "italic": true
+        },
+        "selector-attr": {
+          "fg": 13079274,
+          "italic": true
+        },
+        "selector-pseudo": {
+          "fg": 13079274,
+          "italic": true
+        },
+        "template-tag": {
+          "fg": 13079274
+        },
+        "addition": {
+          "italic": true
+        },
+        "deletion": {
+          "italic": true
+        }
+      }
+    },
+    {
+      "name": "Nord",
+      "source": "nord",
+      "styles": {
+        "root": {
+          "bg": 3028032,
+          "fg": 14212841
+        },
+        "subst": {
+          "fg": 14212841
+        },
+        "selector-tag": {
+          "fg": 8495553
+        },
+        "selector-id": {
+          "fg": 9419963,
+          "bold": true
+        },
+        "selector-class": {
+          "fg": 9419963
+        },
+        "selector-attr": {
+          "fg": 9419963
+        },
+        "property": {
+          "fg": 8962256
+        },
+        "selector-pseudo": {
+          "fg": 8962256
+        },
+        "built_in": {
+          "fg": 9419963
+        },
+        "type": {
+          "fg": 9419963
+        },
+        "function": {
+          "fg": 8962256
+        },
+        "keyword": {
+          "fg": 8495553
+        },
+        "literal": {
+          "fg": 8495553
+        },
+        "symbol": {
+          "fg": 8495553
+        },
+        "number": {
+          "fg": 11833005
+        },
+        "regexp": {
+          "fg": 15453067
+        },
+        "string": {
+          "fg": 10731148
+        },
+        "title": {
+          "fg": 9419963
+        },
+        "params": {
+          "fg": 14212841
+        },
+        "bullet": {
+          "fg": 8495553
+        },
+        "code": {
+          "fg": 9419963
+        },
+        "emphasis": {
+          "italic": true
+        },
+        "strong": {
+          "bold": true
+        },
+        "quote": {
+          "fg": 5002858
+        },
+        "comment": {
+          "fg": 5002858
+        },
+        "doctag": {
+          "fg": 9419963
+        },
+        "meta": {
+          "fg": 6193580
+        },
+        "meta-keyword": {
+          "fg": 6193580
+        },
+        "meta-string": {
+          "fg": 10731148
+        },
+        "attr": {
+          "fg": 9419963
+        },
+        "attribute": {
+          "fg": 14212841
+        },
+        "name": {
+          "fg": 8495553
+        },
+        "section": {
+          "fg": 8962256
+        },
+        "tag": {
+          "fg": 8495553
+        },
+        "variable": {
+          "fg": 14212841
+        },
+        "template-tag": {
+          "fg": 6193580
+        }
+      }
+    },
+    {
+      "name": "Monokai",
+      "source": "monokai",
+      "styles": {
+        "root": {
+          "bg": 2566178,
+          "fg": 14540253
+        },
+        "tag": {
+          "fg": 16328306
+        },
+        "keyword": {
+          "fg": 16328306,
+          "bold": true
+        },
+        "selector-tag": {
+          "fg": 16328306,
+          "bold": true
+        },
+        "literal": {
+          "fg": 16328306,
+          "bold": true
+        },
+        "strong": {
+          "fg": 16328306
+        },
+        "name": {
+          "fg": 16328306
+        },
+        "code": {
+          "fg": 6740463
+        },
+        "attribute": {
+          "fg": 12548571
+        },
+        "symbol": {
+          "fg": 12548571
+        },
+        "regexp": {
+          "fg": 12548571
+        },
+        "string": {
+          "fg": 10936878
+        },
+        "bullet": {
+          "fg": 10936878
+        },
+        "subst": {
+          "fg": 10936878
+        },
+        "title": {
+          "fg": 10936878,
+          "bold": true
+        },
+        "section": {
+          "fg": 10936878,
+          "bold": true
+        },
+        "emphasis": {
+          "fg": 10936878
+        },
+        "type": {
+          "fg": 10936878,
+          "bold": true
+        },
+        "built_in": {
+          "fg": 10936878
+        },
+        "selector-attr": {
+          "fg": 10936878
+        },
+        "selector-pseudo": {
+          "fg": 10936878
+        },
+        "addition": {
+          "fg": 10936878
+        },
+        "variable": {
+          "fg": 10936878
+        },
+        "template-tag": {
+          "fg": 10936878
+        },
+        "title.class_": {
+          "fg": 16777215
+        },
+        "class-title": {
+          "fg": 16777215
+        },
+        "comment": {
+          "fg": 7696734
+        },
+        "quote": {
+          "fg": 7696734
+        },
+        "deletion": {
+          "fg": 7696734
+        },
+        "meta": {
+          "fg": 7696734
+        },
+        "doctag": {
+          "bold": true
+        },
+        "selector-id": {
+          "bold": true
+        }
+      }
+    },
+    {
+      "name": "Tokyo Night Dark",
+      "source": "tokyo-night-dark",
+      "styles": {
+        "meta": {
+          "fg": 5660553
+        },
+        "comment": {
+          "fg": 5660553
+        },
+        "tag": {
+          "fg": 16217742
+        },
+        "doctag": {
+          "fg": 16217742
+        },
+        "selector-id": {
+          "fg": 16217742
+        },
+        "selector-class": {
+          "fg": 16217742
+        },
+        "regexp": {
+          "fg": 16217742
+        },
+        "template-tag": {
+          "fg": 16217742
+        },
+        "selector-pseudo": {
+          "fg": 16217742
+        },
+        "selector-attr": {
+          "fg": 16217742
+        },
+        "deletion": {
+          "fg": 16217742
+        },
+        "variable": {
+          "fg": 16752228
+        },
+        "number": {
+          "fg": 16752228
+        },
+        "literal": {
+          "fg": 16752228
+        },
+        "type": {
+          "fg": 16752228
+        },
+        "params": {
+          "fg": 16752228
+        },
+        "built_in": {
+          "fg": 14724968
+        },
+        "attribute": {
+          "fg": 14724968
+        },
+        "selector-tag": {
+          "fg": 7592650
+        },
+        "keyword": {
+          "fg": 12294903
+        },
+        "title.function_": {
+          "fg": 8245247
+        },
+        "title": {
+          "fg": 8245247
+        },
+        "title.class_": {
+          "fg": 8245247
+        },
+        "subst": {
+          "fg": 8245247
+        },
+        "property": {
+          "fg": 8245247
+        },
+        "quote": {
+          "fg": 10407530
+        },
+        "string": {
+          "fg": 10407530
+        },
+        "symbol": {
+          "fg": 10407530
+        },
+        "bullet": {
+          "fg": 10407530
+        },
+        "addition": {
+          "fg": 10407530
+        },
+        "code": {
+          "fg": 8037111
+        },
+        "section": {
+          "fg": 8037111
+        },
+        "name": {
+          "fg": 12294903
+        },
+        "operator": {
+          "fg": 12294903
+        },
+        "attr": {
+          "fg": 12294903
+        },
+        "punctuation": {
+          "fg": 12634869
+        },
+        "root": {
+          "bg": 1710886,
+          "fg": 10134990
+        },
+        "emphasis": {
+          "italic": true
+        },
+        "strong": {
+          "bold": true
+        }
+      }
+    },
+    {
+      "name": "Dracula",
+      "source": "base16/dracula",
+      "styles": {
+        "root": {
+          "bg": 2631990,
+          "fg": 15329780
+        },
+        "comment": {
+          "fg": 6448259
+        },
+        "tag": {
+          "fg": 6477544
+        },
+        "subst": {
+          "fg": 15329780
+        },
+        "punctuation": {
+          "fg": 15329780
+        },
+        "operator": {
+          "fg": 15329780
+        },
+        "bullet": {
+          "fg": 15356338
+        },
+        "variable": {
+          "fg": 15356338
+        },
+        "selector-tag": {
+          "fg": 15356338
+        },
+        "name": {
+          "fg": 15356338
+        },
+        "deletion": {
+          "fg": 15356338
+        },
+        "symbol": {
+          "fg": 11819983
+        },
+        "number": {
+          "fg": 11819983
+        },
+        "attr": {
+          "fg": 11819983
+        },
+        "literal": {
+          "fg": 11819983
+        },
+        "title": {
+          "fg": 63337
+        },
+        "class-title": {
+          "fg": 63337
+        },
+        "title.class_": {
+          "fg": 63337
+        },
+        "strong": {
+          "fg": 63337,
+          "bold": true
+        },
+        "code": {
+          "fg": 15466375
+        },
+        "addition": {
+          "fg": 15466375
+        },
+        "string": {
+          "fg": 15466375
+        },
+        "built_in": {
+          "fg": 10612708
+        },
+        "doctag": {
+          "fg": 10612708
+        },
+        "quote": {
+          "fg": 10612708
+        },
+        "regexp": {
+          "fg": 10612708
+        },
+        "attribute": {
+          "fg": 6477544
+        },
+        "title.function_": {
+          "fg": 6477544
+        },
+        "section": {
+          "fg": 6477544
+        },
+        "type": {
+          "fg": 11819983
+        },
+        "template-tag": {
+          "fg": 11819983
+        },
+        "keyword": {
+          "fg": 11819983
+        },
+        "emphasis": {
+          "fg": 11819983,
+          "italic": true
+        },
+        "meta": {
+          "fg": 63337
+        },
+        "meta-keyword": {
+          "fg": 63337,
+          "bold": true
+        },
+        "meta-string": {
+          "fg": 63337
+        }
+      }
+    }
+  ]
+}

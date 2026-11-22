@@ -5,6 +5,112 @@
 //! persistence, runtime, or provider callbacks.
 use crate::native_i18n::{tr, UiLocale};
 
+/// Same values and native-language labels as Classic's App Language dropdown.
+/// These are display choices only; every write still goes through Rust Host CAS.
+pub const APP_LANGUAGE_CHOICES: [(&str, &str); 5] = [
+    ("system", "Follow System"),
+    ("english", "English"),
+    ("traditionalChinese", "繁體中文"),
+    ("simplifiedChinese", "简体中文"),
+    ("japanese", "日本語"),
+];
+
+/// Exact theme names and order from Classic's terminal theme catalog.
+pub const TERMINAL_THEME_CHOICES: &[&str] = &[
+    "Alera Dark",
+    "Ghostty Default Style Dark",
+    "Builtin Tango Light",
+    "Dracula",
+    "One Dark",
+    "Nord",
+    "Monokai",
+    "Tokyo Night",
+    "Gruvbox Dark",
+    "Catppuccin Mocha",
+    "Solarized Dark",
+    "Material Dark",
+    "Ayu Dark",
+    "Nightfox",
+    "Kanagawa",
+    "Rose Pine",
+    "Everforest Dark",
+    "Palenight",
+    "Horizon Dark",
+    "Night Owl",
+    "Solarized Light",
+    "One Light",
+    "Catppuccin Latte",
+    "GitHub Light",
+    "Rose Pine Dawn",
+    "Gruvbox Light",
+    "Tokyo Night Light",
+    "Everforest Light",
+    "Tango Dark",
+    "Homebrew",
+    "Snazzy",
+];
+
+/// Exact theme names and order from Classic's syntax theme catalog.
+pub const EDITOR_SYNTAX_THEME_CHOICES: &[&str] = &[
+    "Alera",
+    "GitHub Dark",
+    "GitHub Dark Dimmed",
+    "VS2015",
+    "Atom One Dark",
+    "Night Owl",
+    "Nord",
+    "Monokai",
+    "Tokyo Night Dark",
+    "Dracula",
+];
+
+/// Filter the Classic theme catalog without changing its authored order.
+/// Case-insensitive words can match anywhere in the name; missing results
+/// never rewrite or replace the authoritative Rust Host preference.
+pub fn matching_theme_choices<'a>(choices: &'a [&'a str], query: &str) -> Vec<&'a str> {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    choices
+        .iter()
+        .copied()
+        .filter(|name| {
+            let lower = name.to_lowercase();
+            words.iter().all(|word| lower.contains(word))
+        })
+        .collect()
+}
+
+/// Classic-style installed font suggestions: prefix matches first, then
+/// substring matches. Never restrict a typed name to this suggestion list.
+pub fn matching_font_suggestions<'a>(
+    installed: &'a [String],
+    query: &str,
+    max_results: usize,
+) -> Vec<&'a str> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() || max_results == 0 {
+        return Vec::new();
+    }
+    let mut starts = Vec::new();
+    let mut contains = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for name in installed {
+        let lower = name.to_lowercase();
+        if !seen.insert(lower.clone()) {
+            continue;
+        }
+        if lower.starts_with(&query) {
+            starts.push(name.as_str());
+        } else if lower.contains(&query) {
+            contains.push(name.as_str());
+        }
+    }
+    starts
+        .into_iter()
+        .chain(contains)
+        .take(max_results)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsNavGroup {
     Preferences,
@@ -185,7 +291,7 @@ pub const SECTIONS: &[SettingsSection] = &[
     SettingsSection {
         id: "editor", title: "Editor", icon: "<>",
         description: "Code editor defaults.",
-        nav_group: SettingsNavGroup::Preferences, show_group_chips: false,
+        nav_group: SettingsNavGroup::Preferences, show_group_chips: true,
         groups: &[
             group!("Tabs" => [row!("Two-row tabs", "Pinned tabs on first row, regular tabs below.", Toggle)]),
             group!("Appearance" => [row!("Syntax Theme", "Syntax highlighting defaults.", Select)]),
@@ -193,7 +299,14 @@ pub const SECTIONS: &[SettingsSection] = &[
             group!("Autosave" => [row!("Autosave", "Save dirty editor tabs after they are idle.", Toggle), row!("Autosave Delay", "Time before saving an idle buffer.", Select)]),
             group!("Quick Open" => [row!("Excluded Directories", "Ignore generated and dependency folders.", Input)]),
             group!("Language Intelligence" => [row!("Language Intelligence", "Code intelligence provider settings.", Select)]),
-            group!("External Editors" => [row!("External Editors", "Open files in an external editor.", Select)]),
+            group!("External Editor" => [
+                row!("External Editor", "Editor used by Open In menu entries, keyboard shortcuts, and external file targets.", Select),
+                row!("Default Code Open Target", "Choose where normal editable source and text files open. Dedicated Alera previews stay internal.", Select),
+                row!("Custom Executable", "Optional per-device executable override.", Input),
+                row!("Open Workspaces in New Window", "Choose how external workspaces open.", Toggle),
+                row!("Auto-open New Workspaces Externally", "Launch newly created workspaces in the external editor.", Toggle),
+                row!("Check External Editor", "Run a non-destructive version check with the current executable setting.", Action),
+            ]),
         ],
     },
     SettingsSection {
@@ -265,6 +378,7 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
         ("application", "Show Dock Badge") => "general.showDockBadge",
         ("application", "Show Tray Badge") => "general.showTrayBadge",
         ("editor", "Two-row tabs") => "editor.twoRowTabs",
+        ("editor", "External Editor") => "editor.externalEditor",
         ("terminal", "Font Family") => "terminal.fontFamily",
         ("terminal", "Font Size") => "terminal.fontSize",
         ("terminal", "Line Height") => "terminal.lineHeight",
@@ -328,8 +442,8 @@ mod shared_row_tests {
         assert!(totals.unavailable > 0, "Classic-only rows must be honest");
         assert_eq!(
             settings_support_counts(section("editor").unwrap()).editable,
-            6,
-            "Two-row tabs and five existing editor controls must be wired"
+            7,
+            "Two-row tabs, editor choice, and five existing editor controls must be wired"
         );
         assert_eq!(
             settings_support_counts(section("quotas").unwrap()).actions,
@@ -408,6 +522,10 @@ mod shared_row_tests {
         assert_eq!(
             shared_setting_row_path("terminal", "Cursor Shape"),
             Some("terminal.cursorShape")
+        );
+        assert_eq!(
+            shared_setting_row_path("editor", "External Editor"),
+            Some("editor.externalEditor")
         );
         for section in SECTIONS {
             let counts = settings_support_counts(section);
@@ -594,6 +712,51 @@ pub fn matching_sections_localized(query: &str, locale: UiLocale) -> Vec<&'stati
         .collect()
 }
 
+/// Classic's sidebar badge counts matching setting entries, not a matching
+/// section title. Keep this independent of the connected Host capabilities.
+pub fn matching_row_count_localized(
+    section: &SettingsSection,
+    query: &str,
+    locale: UiLocale,
+) -> usize {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return 0;
+    }
+    let matches = |value: &str| {
+        value.to_lowercase().contains(&query) || tr(locale, value).to_lowercase().contains(&query)
+    };
+    section
+        .groups
+        .iter()
+        .flat_map(|group| group.rows)
+        .filter(|row| matches(row.title) || matches(row.detail))
+        .count()
+}
+
+/// The settings body paints its capability summary first, then one direct
+/// scroll child per group. Callers add one to this index when scrolling.
+pub fn first_matching_group_index_localized(
+    section: &SettingsSection,
+    query: &str,
+    locale: UiLocale,
+) -> Option<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    let matches = |value: &str| {
+        value.to_lowercase().contains(&query) || tr(locale, value).to_lowercase().contains(&query)
+    };
+    section.groups.iter().position(|group| {
+        matches(group.title)
+            || group
+                .rows
+                .iter()
+                .any(|row| matches(row.title) || matches(row.detail))
+    })
+}
+
 pub fn modal_size(viewport_width: f32, viewport_height: f32) -> (f32, f32, bool) {
     let width = (viewport_width.max(0.0) * 0.92)
         .min(1800.0)
@@ -607,6 +770,31 @@ pub fn modal_size(viewport_width: f32, viewport_height: f32) -> (f32, f32, bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classic_theme_picker_search_keeps_order_and_filters_case_insensitively() {
+        assert_eq!(
+            matching_theme_choices(EDITOR_SYNTAX_THEME_CHOICES, "gitHUB"),
+            vec!["GitHub Dark", "GitHub Dark Dimmed"]
+        );
+        assert_eq!(
+            matching_theme_choices(EDITOR_SYNTAX_THEME_CHOICES, "dark dimmed"),
+            vec!["GitHub Dark Dimmed"]
+        );
+        assert_eq!(
+            matching_theme_choices(TERMINAL_THEME_CHOICES, "light"),
+            TERMINAL_THEME_CHOICES
+                .iter()
+                .copied()
+                .filter(|name| name.contains("Light"))
+                .collect::<Vec<_>>()
+        );
+        assert!(matching_theme_choices(EDITOR_SYNTAX_THEME_CHOICES, "no-such-theme").is_empty());
+        assert_eq!(
+            matching_theme_choices(EDITOR_SYNTAX_THEME_CHOICES, "  "),
+            EDITOR_SYNTAX_THEME_CHOICES.to_vec()
+        );
+    }
 
     #[test]
     fn classic_sections_and_sidebar_order_are_preserved() {
@@ -641,6 +829,20 @@ mod tests {
         );
         assert_eq!(section("application").unwrap().groups.len(), 10);
         assert_eq!(section("terminal").unwrap().groups.len(), 5);
+    }
+
+    #[test]
+    fn group_chips_follow_classic_three_group_threshold() {
+        for section in SECTIONS {
+            assert_eq!(
+                section.show_group_chips,
+                section.groups.len() >= 3,
+                "Classic renders group chips for every section with at least three groups: {}",
+                section.id
+            );
+        }
+        assert!(section("editor").unwrap().show_group_chips);
+        assert!(section("terminal").unwrap().show_group_chips);
     }
 
     #[test]
@@ -692,6 +894,152 @@ mod tests {
                 .any(|section| section.id == "terminal")
         );
         assert!(matching_sections_localized("missing-query-827", UiLocale::Japanese).is_empty());
+    }
+
+    #[test]
+    fn classic_search_badge_counts_rows_and_jumps_to_the_matching_group() {
+        let editor = section("editor").unwrap();
+        assert_eq!(
+            matching_row_count_localized(editor, "", UiLocale::English),
+            0
+        );
+        assert_eq!(
+            matching_row_count_localized(editor, "Autosave", UiLocale::English),
+            2
+        );
+        assert_eq!(
+            first_matching_group_index_localized(editor, "Autosave Delay", UiLocale::English),
+            Some(3)
+        );
+        assert_eq!(
+            first_matching_group_index_localized(
+                editor,
+                "Code editor defaults.",
+                UiLocale::English,
+            ),
+            None
+        );
+        assert_eq!(
+            first_matching_group_index_localized(editor, "no-such-setting", UiLocale::English),
+            None
+        );
+        let translated = tr(UiLocale::TraditionalChinese, "Autosave Delay");
+        assert_eq!(
+            first_matching_group_index_localized(editor, &translated, UiLocale::TraditionalChinese),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn app_language_uses_classic_order_and_host_editable_route() {
+        let application = section("application").unwrap();
+        assert_eq!(application.groups[0].title, "Language");
+        assert_eq!(application.groups[0].rows[0].title, "App Language");
+        assert_eq!(
+            settings_row_support("application", "App Language"),
+            SettingsRowSupport::Editable
+        );
+        assert_eq!(
+            APP_LANGUAGE_CHOICES,
+            [
+                ("system", "Follow System"),
+                ("english", "English"),
+                ("traditionalChinese", "繁體中文"),
+                ("simplifiedChinese", "简体中文"),
+                ("japanese", "日本語"),
+            ]
+        );
+    }
+
+    #[test]
+    fn offline_settings_search_and_refresh_have_classic_translations() {
+        for locale in [
+            UiLocale::TraditionalChinese,
+            UiLocale::SimplifiedChinese,
+            UiLocale::Japanese,
+        ] {
+            assert_ne!(tr(locale, "Search settings"), "Search settings");
+            assert_ne!(tr(locale, "Refresh"), "Refresh");
+        }
+    }
+
+    #[test]
+    fn installed_font_autocomplete_prioritizes_prefix_and_preserves_custom_input() {
+        let installed = vec![
+            "Cascadia Code".to_owned(),
+            "Code New Roman".to_owned(),
+            "Consolas".to_owned(),
+            "JetBrains Mono".to_owned(),
+            "cONsolas".to_owned(),
+            "Other Code".to_owned(),
+        ];
+        assert_eq!(
+            matching_font_suggestions(&installed, "co", 4),
+            vec!["Code New Roman", "Consolas", "Cascadia Code", "Other Code"]
+        );
+        assert_eq!(
+            matching_font_suggestions(&installed, "CON", 2),
+            vec!["Consolas"]
+        );
+        assert!(matching_font_suggestions(&installed, "unknown custom font", 10).is_empty());
+        assert!(matching_font_suggestions(&installed, "", 10).is_empty());
+        assert!(matching_font_suggestions(&installed, "code", 0).is_empty());
+    }
+
+    #[test]
+    fn theme_picker_choices_match_classic_catalogs_without_duplicates() {
+        use std::collections::HashSet;
+
+        let classic_terminal_catalog =
+            include_str!("../../lib/src/features/settings/domain/terminal_theme_catalog.dart");
+        let classic_terminal_base =
+            include_str!("../../lib/src/features/settings/domain/terminal_theme_base_palette.dart");
+        let classic_terminal_extended = include_str!(
+            "../../lib/src/features/settings/domain/terminal_theme_extended_palette.dart"
+        );
+        let classic_editor_catalog =
+            include_str!("../../lib/src/features/settings/domain/editor_syntax_theme_catalog.dart");
+
+        let expected_terminal_count = 1
+            + classic_terminal_base.matches("_hexTheme(").count()
+            + classic_terminal_extended.matches("_hexTheme(").count();
+        assert_eq!(
+            TERMINAL_THEME_CHOICES.len(),
+            expected_terminal_count,
+            "Classic terminal theme catalog changed; update GPUI theme choices"
+        );
+        assert_eq!(
+            EDITOR_SYNTAX_THEME_CHOICES.len(),
+            classic_editor_catalog
+                .matches("name: EditorSyntaxThemeNames.")
+                .count(),
+            "Classic editor theme catalog changed; update GPUI theme choices"
+        );
+
+        let terminal_sources =
+            format!("{classic_terminal_catalog}{classic_terminal_base}{classic_terminal_extended}");
+        let unique_terminal = TERMINAL_THEME_CHOICES
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(unique_terminal.len(), TERMINAL_THEME_CHOICES.len());
+        for name in TERMINAL_THEME_CHOICES {
+            assert!(
+                terminal_sources.contains(&format!("'{name}'")),
+                "GPUI terminal theme missing from Classic catalog: {name}"
+            );
+        }
+        let unique_editor = EDITOR_SYNTAX_THEME_CHOICES
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        assert_eq!(unique_editor.len(), EDITOR_SYNTAX_THEME_CHOICES.len());
+        for name in EDITOR_SYNTAX_THEME_CHOICES {
+            assert!(
+                classic_editor_catalog.contains(&format!("'{name}'")),
+                "GPUI editor theme missing from Classic catalog: {name}"
+            );
+        }
     }
 
     #[test]

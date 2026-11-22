@@ -13,6 +13,18 @@ use gpui_kit::component::{Icon, Sizable as _};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIcon {
     Add,
+    /// Classic Settings categories use semantic Lucide pictograms.
+    User,
+    Sliders,
+    Bot,
+    Gauge,
+    Sparkles,
+    Mic,
+    Text,
+    Code,
+    Keyboard,
+    Smartphone,
+    Server,
     NewFile,
     NewFolder,
     Folder,
@@ -67,6 +79,17 @@ pub enum UiIcon {
 impl UiIcon {
     pub const fn glyph(self) -> char {
         match self {
+            Self::User
+            | Self::Sliders
+            | Self::Bot
+            | Self::Gauge
+            | Self::Sparkles
+            | Self::Mic
+            | Self::Text
+            | Self::Code
+            | Self::Keyboard
+            | Self::Smartphone
+            | Self::Server => '\u{eb52}',
             Self::Add | Self::GitStage => '\u{ea60}',
             Self::NewFile => '\u{ea7f}',
             Self::NewFolder => '\u{ea80}',
@@ -146,6 +169,17 @@ pub fn explorer_file_icon(name: &str, is_directory: bool, expanded: bool) -> UiI
 /// Classic's ordinary buttons use Lucide while Git actions use Codicons.
 fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
     Some(match kind {
+        UiIcon::User => LucideIcon::User,
+        UiIcon::Sliders => LucideIcon::SlidersHorizontal,
+        UiIcon::Bot => LucideIcon::Bot,
+        UiIcon::Gauge => LucideIcon::Gauge,
+        UiIcon::Sparkles => LucideIcon::Sparkles,
+        UiIcon::Mic => LucideIcon::Mic,
+        UiIcon::Text => LucideIcon::FileText,
+        UiIcon::Code => LucideIcon::Code,
+        UiIcon::Keyboard => LucideIcon::Keyboard,
+        UiIcon::Smartphone => LucideIcon::Smartphone,
+        UiIcon::Server => LucideIcon::Server,
         UiIcon::Add => LucideIcon::Plus,
         UiIcon::NewFile => LucideIcon::FilePlus,
         UiIcon::NewFolder => LucideIcon::FolderPlus,

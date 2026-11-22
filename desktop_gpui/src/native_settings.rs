@@ -169,7 +169,7 @@ impl Default for NativeSettings {
 }
 
 impl NativeSettings {
-    /// Apply all ten reviewed Classic/GPUI shared fields to the current UI
+    /// Apply the reviewed Classic/GPUI shared fields to the current UI
     /// snapshot. Explorer visibility and Native-only metadata remain intact.
     /// No local JSON is written; Runtime Host stays the authoritative owner.
     pub fn apply_shared_snapshot(&mut self, snapshot: &Value) -> io::Result<String> {
@@ -185,7 +185,7 @@ impl NativeSettings {
         let mut required = Vec::new();
         for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
             let Some(value) = values.get(path) else {
-                if path == "agents.quotaUnpinnedKeys" {
+                if matches!(path, "agents.quotaUnpinnedKeys" | "editor.externalEditor") {
                     // Existing Host binaries without the new optional quota
                     // preference must not break all other shared settings.
                     continue;
@@ -336,6 +336,9 @@ impl NativeSettings {
                 value.as_u64().is_some_and(|v| (1..=60).contains(&v))
             }
             "editor.tabSize" => value.as_u64().is_some_and(|v| (1..=16).contains(&v)),
+            "editor.externalEditor" => value
+                .as_str()
+                .is_some_and(|editor| matches!(editor, "zed" | "vscode")),
             "general.autoArchiveWorkspacesAfterDays" => value.as_u64().is_some_and(|v| v <= 36_500),
             "terminal.nativeScrollbackLines" => {
                 value.as_u64().is_some_and(valid_terminal_scrollback_lines)
@@ -877,6 +880,7 @@ mod tests {
             "editor.autosaveEnabled":true,
             "editor.tabSize":8,
             "editor.twoRowTabs":true,
+            "editor.externalEditor":"vscode",
             "general.confirmProjectRemoval":false,
             "general.confirmWorkspaceRemoval":true,
             "general.autoArchiveWorkspacesAfterDays":60,
@@ -950,6 +954,20 @@ mod tests {
         let mut invalid_two_row = snapshot.clone();
         invalid_two_row["values"]["editor.twoRowTabs"] = json!("true");
         assert!(state.apply_shared_snapshot(&invalid_two_row).is_err());
+        let mut invalid_external_editor = snapshot.clone();
+        invalid_external_editor["values"]["editor.externalEditor"] = json!("arbitrary-executable");
+        assert!(state
+            .apply_shared_snapshot(&invalid_external_editor)
+            .is_err());
+        let mut selected_external_editor = snapshot.clone();
+        selected_external_editor["values"]["editor.externalEditor"] = json!("vscode");
+        assert_eq!(
+            state
+                .apply_shared_snapshot(&selected_external_editor)
+                .unwrap(),
+            "traditionalChinese",
+            "A valid Host-selected external editor must not alter unrelated Native settings",
+        );
         assert_eq!(
             state, previous,
             "Invalid extended settings must not partially install"

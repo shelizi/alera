@@ -3,6 +3,25 @@
 //! still owns Explorer visibility and Native-only state, never shared scalars.
 use super::*;
 
+/// Only rebase a font text field when it still matches the last Host readback.
+/// A periodic snapshot must not silently discard an unsaved Classic-style edit.
+fn font_draft_follows_host(draft: &str, last_host_value: &str) -> bool {
+    draft == last_host_value
+}
+
+#[cfg(test)]
+mod settings_font_draft_tests {
+    use super::font_draft_follows_host;
+
+    #[test]
+    fn refresh_updates_clean_font_draft_but_keeps_user_edited_text() {
+        assert!(font_draft_follows_host("", ""));
+        assert!(font_draft_follows_host("Consolas", "Consolas"));
+        assert!(!font_draft_follows_host("Cascadia Code", "Consolas"));
+        assert!(!font_draft_follows_host("", "Consolas"));
+    }
+}
+
 impl Workbench {
     fn reject_shared_mcp_setting(
         &mut self,
@@ -130,7 +149,10 @@ impl Workbench {
             .iter()
             .filter(|(path, _)| {
                 alera_core::desktop_settings_contract::extended_portable(path)
-                    || path.as_str() == "agents.quotaUnpinnedKeys"
+                    || matches!(
+                        path.as_str(),
+                        "agents.quotaUnpinnedKeys" | "editor.externalEditor"
+                    )
             })
             .map(|(path, value)| (path.clone(), value.clone()))
             .collect();
@@ -139,15 +161,59 @@ impl Workbench {
         }
         self.settings_menu_language = language;
         self.settings_extra_values = extended;
+        if let Some(font_family) = values
+            .get("terminal.fontFamily")
+            .and_then(serde_json::Value::as_str)
+        {
+            let draft = self.settings_font_family_input.read(cx).query().to_owned();
+            if font_draft_follows_host(&draft, &self.settings_font_family_last_synced) {
+                self.settings_font_family_input
+                    .update(cx, |input, cx| input.set_query(font_family, cx));
+            }
+            self.settings_font_family_last_synced = font_family.to_owned();
+        }
         self.settings_menu_locale = UiLocale::from_preference(&self.settings_menu_language);
         let locale = self.settings_menu_locale;
+        self.settings_font_family_input.update(cx, |input, cx| {
+            input.set_placeholder(
+                alera_gpui_desktop::native_i18n::tr(locale, "Font Family"),
+                cx,
+            );
+        });
         self.settings_menu_search.update(cx, |search, cx| {
             search.set_placeholder(
                 alera_gpui_desktop::native_i18n::tr(locale, "Search settings"),
                 cx,
             );
         });
+        self.settings_editor_theme_search.update(cx, |search, cx| {
+            search.set_placeholder(
+                alera_gpui_desktop::native_i18n::tr(locale, "Search syntax themes"),
+                cx,
+            );
+        });
+        self.settings_terminal_theme_search
+            .update(cx, |search, cx| {
+                search.set_placeholder(
+                    alera_gpui_desktop::native_i18n::tr(locale, "Search terminal themes"),
+                    cx,
+                );
+            });
         self.install_native_settings(settings, cx);
+        // The Host owns the selected syntax theme. Refresh already-open and
+        // transferred Editors in both panes without changing file contents.
+        let syntax_theme = self
+            .settings_extra_values
+            .get("editor.themeName")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Alera")
+            .to_owned();
+        for editor in [self.editor.clone(), self.secondary_editor.clone()]
+            .into_iter()
+            .flatten()
+        {
+            editor.update(cx, |editor, cx| editor.set_syntax_theme(&syntax_theme, cx));
+        }
         Ok(())
     }
 
