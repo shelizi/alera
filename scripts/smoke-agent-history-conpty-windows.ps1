@@ -28,7 +28,11 @@
 # Optional -GuiExecutable adds an isolated Native GPUI window while the
 # synthetic Host's verified Agent tabs are still running. GUI state, runtime,
 # and CLI overrides apply ONLY to that new process. The test root must not
-# be under any existing Git repository (GPUI discovers parent worktrees).
+# inherit any existing Git worktree (GPUI discovers parent worktrees).
+# -IsolatedNestedGitFixture creates a NEW standalone inner Git root and
+# verifies it has exactly one worktree so restricted workspace roots are safe.
+# -ValidateGuiGitIsolationOnly verifies this boundary and cleans up without
+# launching a Host, provider shim, or GUI; only disposable fixture paths change.
 # Create gui-continue.flag in the unique -Root after visual acceptance; the
 # harness owns and stops ONLY its own GUI/Host. The hold timeout also cleans up.
 # This validates GUI bootstrap, not automated click-through or a native
@@ -44,6 +48,8 @@ param(
     [switch]$TestOfflineHistoryCommand,
     [string]$GuiExecutable = '',
     [int]$GuiHoldSeconds = 150,
+    [switch]$IsolatedNestedGitFixture,
+    [switch]$ValidateGuiGitIsolationOnly,
     [switch]$KeepArtifacts
 )
 
@@ -81,6 +87,12 @@ if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
         throw 'GUI fixture hold must be between 10 and 180 seconds'
     }
     $GuiExecutable = (Resolve-Path -LiteralPath $GuiExecutable -ErrorAction Stop).Path
+}
+if ($IsolatedNestedGitFixture -and [string]::IsNullOrWhiteSpace($GuiExecutable)) {
+    throw 'A nested Git fixture is supported only with an isolated GUI smoke test'
+}
+if ($ValidateGuiGitIsolationOnly -and -not $IsolatedNestedGitFixture) {
+    throw 'The Git isolation-only preflight requires -IsolatedNestedGitFixture'
 }
 if ($TestOfflineHistoryCommand -and -not $TestVerifiedHistoryRpc) {
     throw 'Offline mock mode requires -TestVerifiedHistoryRpc'
@@ -612,14 +624,50 @@ try {
     $null = New-Item -ItemType Directory -Path $runtime -Force
     $null = New-Item -ItemType Directory -Path $project -Force
     if (-not [string]::IsNullOrWhiteSpace($GuiExecutable)) {
-        # A nested project silently inherits its parent's real Git Worktrees.
-        # Reject it before starting a GUI; tests must not display production
-        # project navigation even with a private Host and GUI state directory.
+        # Reject inherited parent repositories. The opt-in path initializes a
+        # new independent repository in the NEW empty test project directory.
+        # Do not launch a GUI unless its sole Git root is the disposable one.
         $gitCommand = Get-Command git -ErrorAction Stop
-        $null = & $gitCommand.Source -C $project rev-parse --show-toplevel 2>$null
-        if ($LASTEXITCODE -eq 0) {
+        if ($IsolatedNestedGitFixture) {
+            if (@(Get-ChildItem -LiteralPath $project -Force).Count -ne 0) {
+                throw 'Nested Git isolation requires a newly created empty test project'
+            }
+            $null = & $gitCommand.Source -C $project init --quiet --initial-branch=main
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not create an isolated, single-worktree Git project'
+            }
+        }
+        $gitTop = & $gitCommand.Source -C $project rev-parse --show-toplevel 2>$null
+        $hasGitRoot = $LASTEXITCODE -eq 0
+        if ($IsolatedNestedGitFixture) {
+            if (-not $hasGitRoot) {
+                throw 'Isolated nested Git project has no verified repository root'
+            }
+            $expected = [IO.Path]::GetFullPath($project).TrimEnd('\', '/')
+            $actual = [IO.Path]::GetFullPath([string]$gitTop).TrimEnd('\', '/')
+            if (-not [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Nested Git discovery escaped the disposable test project'
+            }
+            $worktreeListing = @(& $gitCommand.Source -C $project worktree list --porcelain)
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Cannot verify isolated nested Git worktree inventory'
+            }
+            $roots = @($worktreeListing | Where-Object { $_ -like 'worktree *' })
+            if ($roots.Count -ne 1) {
+                throw 'Isolated GUI fixture has unexpected additional Git worktrees'
+            }
+            $rootFromList = [IO.Path]::GetFullPath($roots[0].Substring(9)).TrimEnd('\', '/')
+            if (-not [string]::Equals($rootFromList, $expected, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Isolated GUI fixture worktree does not match disposable project'
+            }
+            Write-Output 'Isolated nested Git root and single-worktree boundary: PASS'
+        } elseif ($hasGitRoot) {
             throw 'Isolated GUI fixture root must be outside every existing Git Worktree'
         }
+    }
+    if ($ValidateGuiGitIsolationOnly) {
+        Write-Output 'GUI Git fixture isolation-only preflight: PASS (no Host or GUI started)'
+        return
     }
 
     $null = Invoke-AleraJson -Arguments @(
