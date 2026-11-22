@@ -493,17 +493,32 @@ impl Workbench {
         target: GlobalAgentPromptTarget,
         cx: &mut Context<Self>,
     ) {
-        if self.terminals.session_list_is_stale()
-            || !target.is_live(&self.terminals.sessions)
-            || self.host_pins_busy
-            || self.host_pins_loading
-        {
-            self.terminals.status = "Agent pin needs a fresh Host inventory; retry".into();
+        let pin_identity = (
+            target.handle.clone(),
+            target.workspace_id.clone(),
+            target.tab_id.clone(),
+        );
+        if self.global_agent_pin_pending.as_ref() == Some(&pin_identity) {
+            return;
+        }
+        if self.host_pins_busy || self.host_pins_loading {
+            self.global_agent_pin_feedback =
+                Some("Host pin synchronization is in progress; retry shortly".into());
+            cx.notify();
+            return;
+        }
+        if self.terminals.session_list_is_stale() || !target.is_live(&self.terminals.sessions) {
+            self.global_agent_pin_feedback = Some(
+                "Agent identity may have changed; refreshing Host inventory before pinning".into(),
+            );
+            self.refresh_terminals(cx);
+            self.refresh_host_tab_pins(cx);
             cx.notify();
             return;
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
-            self.terminals.status = "Existing Host CLI unavailable; pin unchanged".into();
+            self.global_agent_pin_feedback =
+                Some("Host CLI unavailable; Agent pin has not changed".into());
             cx.notify();
             return;
         };
@@ -517,6 +532,8 @@ impl Workbench {
                     && pin.terminal_session_id.as_deref() == Some(&target.handle)
             });
         let generation = self.workspace_generation;
+        self.global_agent_pin_pending = Some(pin_identity);
+        self.global_agent_pin_feedback = Some("Saving Agent pin with the verified Host…".into());
         self.host_pins_busy = true;
         self.host_pins_request = self.host_pins_request.wrapping_add(1);
         let ticket = self.host_pins_request;
@@ -562,10 +579,19 @@ impl Workbench {
                 })
                 .await;
             view.update(cx, |view, cx| {
-                if view.workspace_generation != generation || view.host_pins_request != ticket {
+                if view.host_pins_request != ticket {
                     return;
                 }
                 view.host_pins_busy = false;
+                view.global_agent_pin_pending = None;
+                if view.workspace_generation != generation {
+                    view.global_agent_pin_feedback = Some(
+                        "Workspace changed during Host pin update; reloading verified state".into(),
+                    );
+                    view.refresh_host_tab_pins(cx);
+                    cx.notify();
+                    return;
+                }
                 match response {
                     Ok((pin, pinned))
                         if target.is_live(&view.terminals.sessions)
@@ -599,14 +625,23 @@ impl Workbench {
                         } else {
                             "Agent unpinned in Dashboard and Host Tab".into()
                         };
+                        view.global_agent_pin_feedback = Some(view.terminals.status.clone());
                     }
                     Ok(_) => {
                         view.terminals.status =
                             "Host saved the pin; Agent identity changed. Refresh".into();
+                        view.global_agent_pin_feedback = Some(view.terminals.status.clone());
                         view.refresh_host_tab_pins(cx);
                     }
                     Err(error) => {
-                        view.terminals.status = format!("Agent pin rejected: {error}");
+                        let detail: String = error
+                            .to_string()
+                            .chars()
+                            .filter(|ch| !ch.is_control())
+                            .take(160)
+                            .collect();
+                        view.terminals.status = format!("Agent pin rejected: {detail}");
+                        view.global_agent_pin_feedback = Some(view.terminals.status.clone());
                         view.refresh_host_tab_pins(cx);
                     }
                 }
@@ -3235,6 +3270,19 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                     .text_color(rgb(MUTED))
                     .child("Global Host inventory, all registered workspaces"),
             )
+            .when(view.global_agent_pin_feedback.is_some(), |panel| {
+                panel.child(
+                    div()
+                        .id("global-agent-pin-feedback")
+                        .text_xs()
+                        .text_color(rgb(if view.global_agent_pin_pending.is_some() {
+                            MUTED
+                        } else {
+                            TEXT
+                        }))
+                        .child(view.global_agent_pin_feedback.clone().unwrap_or_default()),
+                )
+            })
             .child(
                 div()
                     .id("global-agent-open-history")
@@ -3365,16 +3413,6 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             continue;
         }
         let agent = session.agent_type.clone().unwrap_or_default();
-        let state = session.agent_state;
-        let state_text = if let Some(state) = state {
-            if session.interrupted {
-                "interrupted".to_owned()
-            } else {
-                state.label().to_owned()
-            }
-        } else {
-            "state unavailable".to_owned()
-        };
         let goal = session
             .agent_context
             .as_ref()
@@ -3392,6 +3430,34 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         let session_id = session.handle.clone();
         let workspace_id = session.workspace_id.clone();
         let tab_id = session.tab_id.clone();
+        // Use the shared RuntimeStore catalog, never raw Host UUIDs as the
+        // primary card title. This matches Flutter's Project / Worktree labels.
+        let (project_label, workspace_label) = view
+            .runtime_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == workspace_id)
+                    .map(|workspace| {
+                        let project = catalog
+                            .projects
+                            .iter()
+                            .find(|project| project.id == workspace.project_id)
+                            .map(|project| project.name.clone())
+                            .unwrap_or_else(|| workspace.name.clone());
+                        (project, workspace.name.clone())
+                    })
+            })
+            .unwrap_or_else(|| {
+                let short_id: String = workspace_id.chars().take(8).collect();
+                (agent.clone(), format!("Worktree {short_id}"))
+            });
+        let action_identity = (session_id.clone(), workspace_id.clone(), tab_id.clone());
+        let more_actions_visible =
+            view.global_agent_actions_expanded.as_ref() == Some(&action_identity);
+        let more_actions_key = action_identity.clone();
         let agent_type = agent.clone();
         let inspect_target = GlobalAgentPromptTarget {
             handle: session_id.clone(),
@@ -3408,6 +3474,12 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             card_tab.clone(),
         ));
         let is_pinned = dashboard_session_is_pinned(session, &view.host_pin_snapshots);
+        let pin_pending =
+            view.global_agent_pin_pending
+                .as_ref()
+                .is_some_and(|(handle, owner, tab)| {
+                    handle == &session_id && owner == &workspace_id && tab == &tab_id
+                });
         let pin_target = GlobalAgentPromptTarget {
             handle: session_id.clone(),
             workspace_id: workspace_id.clone(),
@@ -3622,67 +3694,67 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 .w_full()
                 .min_w_0()
                 .rounded_md()
+                .border_1()
+                .border_color(rgb(BORDER))
                 .bg(rgb(ELEVATED))
-                .px_2()
-                .py_2()
+                .px_3()
+                .py_3()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap_2()
                 .child(
                     div()
                         .w_full()
                         .flex()
                         .items_center()
-                        .gap_3()
+                        .gap_2()
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(agent.clone()),
+                                .text_sm()
+                                .truncate()
+                                .child(project_label),
                         )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(format!("Workspace: {workspace_id}")),
-                        )
-                        .child(div().flex_1())
                         .child(
                             div()
                                 .id(("global-agent-pin-card", index))
                                 .text_xs()
                                 .cursor_pointer()
+                                .text_color(rgb(if pin_pending { MUTED } else { TEXT }))
                                 .font_weight(if is_pinned {
                                     gpui::FontWeight::BOLD
                                 } else {
                                     gpui::FontWeight::NORMAL
                                 })
-                                .child(if is_pinned { "📌 Pinned" } else { "♧ Pin" })
+                                .child(if pin_pending {
+                                    "Saving…"
+                                } else if is_pinned {
+                                    "📌 Unpin"
+                                } else {
+                                    "📌 Pin"
+                                })
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.toggle_dashboard_agent_pin(pin_target.clone(), cx);
                                 })),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(state_text.clone()),
                         ),
                 )
                 .child(
                     div()
-                        .w_full()
-                        .flex()
-                        .gap_3()
-                        .child(div().min_w_0().flex_1().text_sm().truncate().child(goal))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .truncate()
-                                .child(progress),
-                        ),
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .truncate()
+                        .child(format!("{} · {}", workspace_label, agent)),
+                )
+                .child(div().min_w_0().text_sm().truncate().child(goal))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .truncate()
+                        .child(progress),
                 )
                 .child(timeline_panel)
                 .child(original_panel)
@@ -3710,27 +3782,31 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                     );
                                 })),
                         )
-                        .child(if matches!(agent.as_str(), "claude" | "codex") {
-                            div()
-                                .id(("global-agent-original-open", index))
-                                .cursor_pointer()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Original conversation · read only")
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.load_original_conversation(
-                                        original_button_target.clone(),
-                                        false,
-                                        cx,
-                                    );
-                                }))
-                                .into_any_element()
-                        } else {
-                            div().hidden().into_any_element()
-                        })
+                        .child(
+                            if more_actions_visible && matches!(agent.as_str(), "claude" | "codex")
+                            {
+                                div()
+                                    .id(("global-agent-original-open", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Original conversation · read only")
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.load_original_conversation(
+                                            original_button_target.clone(),
+                                            false,
+                                            cx,
+                                        );
+                                    }))
+                                    .into_any_element()
+                            } else {
+                                div().hidden().into_any_element()
+                            },
+                        )
                         .child(
                             div()
                                 .id(("global-agent-interrupt", index))
+                                .when(!more_actions_visible, |action| action.hidden())
                                 .cursor_pointer()
                                 .text_xs()
                                 .text_color(rgb(if control_busy { MUTED } else { TEXT }))
@@ -3750,6 +3826,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         .child(
                             div()
                                 .id(("global-agent-terminate", index))
+                                .when(!more_actions_visible, |action| action.hidden())
                                 .cursor_pointer()
                                 .text_xs()
                                 .text_color(rgb(if control_busy { MUTED } else { TEXT }))
@@ -3772,11 +3849,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 .cursor_pointer()
                                 .text_xs()
                                 .text_color(rgb(MUTED))
-                                .child(if is_hidden {
-                                    "Show this dashboard card"
-                                } else {
-                                    "Hide card · keep Host Agent running"
-                                })
+                                .child(if is_hidden { "Show" } else { "Hide" })
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     let key =
                                         (card_id.clone(), card_workspace.clone(), card_tab.clone());
@@ -3802,7 +3875,32 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         )
                         .child(
                             div()
+                                .id(("global-agent-more", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if more_actions_visible {
+                                    "▴ Less"
+                                } else {
+                                    "⋯ More"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    if view.global_agent_actions_expanded.as_ref()
+                                        == Some(&more_actions_key)
+                                    {
+                                        view.global_agent_actions_expanded = None;
+                                        view.global_agent_control_armed = None;
+                                    } else {
+                                        view.global_agent_actions_expanded =
+                                            Some(more_actions_key.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
                                 .id(("global-agent-open", index))
+                                .when(!more_actions_visible, |action| action.hidden())
                                 .cursor_pointer()
                                 .text_xs()
                                 .child("Open original Agent tab")

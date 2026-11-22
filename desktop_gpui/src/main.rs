@@ -1290,6 +1290,9 @@ struct Workbench {
     global_agent_control_armed: Option<(native_global_agents_ui::GlobalAgentPromptTarget, bool)>,
     global_agent_control_busy: bool,
     global_agent_control_status: String,
+    /// Host-confirmed pin feedback; a pending action is never shown as saved.
+    global_agent_pin_feedback: Option<String>,
+    global_agent_pin_pending: Option<(String, String, String)>,
     /// Hidden dashboard cards do not detach or terminate Host PTYs.
     global_agent_hidden: HashSet<(String, String, String)>,
     global_agent_show_hidden: bool,
@@ -1301,6 +1304,8 @@ struct Workbench {
     global_agent_needs_review_only: bool,
     /// At most one expanded live context timeline; avoids unbounded UI cache.
     global_agent_expanded_timeline: Option<(String, String, String)>,
+    /// Secondary actions remain discoverable without making each Kanban card enormous.
+    global_agent_actions_expanded: Option<(String, String, String)>,
     /// Dashboard-only explicit cross-project Profile launch; no pane reattachment.
     global_agent_create_open: bool,
     global_agent_create_workspace: Option<String>,
@@ -19175,12 +19180,15 @@ fn main() {
                             global_agent_control_armed: None,
                             global_agent_control_busy: false,
                             global_agent_control_status: String::new(),
+                            global_agent_pin_feedback: None,
+                            global_agent_pin_pending: None,
                             global_agent_hidden: HashSet::new(),
                             global_agent_show_hidden: false,
                             global_agent_maximized: false,
                             global_agent_collapsed_groups: HashSet::new(),
                             global_agent_needs_review_only: false,
                             global_agent_expanded_timeline: None,
+                            global_agent_actions_expanded: None,
                             global_agent_create_open: false,
                             global_agent_create_workspace: None,
                             global_agent_create_profile: None,
