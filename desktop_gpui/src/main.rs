@@ -139,9 +139,9 @@ use alera_gpui_desktop::session::{
 };
 use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
 use alera_gpui_desktop::terminal::{
-    encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
+    encode_terminal_key, estimate_terminal_viewport_with_cell_metrics, raw_key_reply_may_drain,
     resolve_registered_host_workspace_path, select_registered_host_workspace,
-    terminal_clipboard_payload, terminal_ime_anchor_with_line_height, terminal_key_dispatch,
+    terminal_clipboard_payload, terminal_ime_anchor_with_cell_metrics, terminal_key_dispatch,
     TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
     TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
     TerminalPollGate, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
@@ -12449,6 +12449,26 @@ impl Render for Workbench {
             .get("terminal.lineHeight")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(1.3) as f32;
+        // StyledText uses GPUI's font shaper, not an assumed 0.62em cell.
+        // Read one zero glyph in the configured Terminal font to calculate
+        // exactly the same cell advance used for PTY column count and IME.
+        let terminal_cell_width_px = {
+            let mut text_style = window.text_style();
+            text_style.font_family = terminal_font_family.clone().into();
+            let zero = window.text_system().shape_line(
+                "0".into(),
+                px(terminal_font_size),
+                &[text_style.to_run(1)],
+                None,
+            );
+            let measured = f32::from(zero.x_for_index(1));
+            if (3.0..=64.0).contains(&measured) {
+                measured
+            } else {
+                terminal_font_size * 0.62
+            }
+        };
+        let terminal_row_height_px = terminal_font_size * terminal_line_height;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let git_original_tabs = self.git_original_tabs.entries().to_vec();
         let active_git_original = if self.git_original_active {
@@ -13082,28 +13102,32 @@ impl Render for Workbench {
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
         let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
         let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
+        // Reserve the inline Claude/Codex history panel before computing PTY rows.
+        let primary_terminal_area_height =
+            (primary_height - self.inline_original_panel_height_px(PaneSlot::Primary)).max(0.0);
         // The inner Terminal split further reduces the primary VT viewport.
         // Reuse these *visible* dimensions for both PTY rows and the Windows
         // IME cursor anchor; otherwise a candidate popup can cross the seam.
         let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size(
             primary_width,
-            primary_height,
+            primary_terminal_area_height,
             terminal_split_exists,
             terminal_split_horizontal,
         );
         let secondary_workbench_height =
-            secondary_terminal_render_height(primary_height, split_height, secondary_two_rows);
+            (secondary_terminal_render_height(primary_height, split_height, secondary_two_rows)
+                - self.inline_original_panel_height_px(PaneSlot::Secondary)).max(0.0);
         // Keep Windows Zhuyin candidate popups beside the visible VT cursor.
         // The 1px GPUI TextInput still captures composition; only its local
         // visual anchor moves, without altering Host PTY geometry.
         let primary_ime_anchor = primary_terminal
             .and_then(|tab| {
-                terminal_ime_anchor_with_line_height(
+                terminal_ime_anchor_with_cell_metrics(
                     tab.screen.cursor(),
                     primary_terminal_width,
                     primary_terminal_height,
-                    terminal_font_size,
-                    terminal_line_height,
+                    terminal_cell_width_px,
+                    terminal_row_height_px,
                 )
             })
             .unwrap_or((12.0, 12.0));
@@ -13112,12 +13136,12 @@ impl Render for Workbench {
             .and_then(|target| self.terminals.index_for_context(target))
             .and_then(|index| self.terminals.tabs.get(index))
             .and_then(|tab| {
-                terminal_ime_anchor_with_line_height(
+                terminal_ime_anchor_with_cell_metrics(
                     tab.screen.cursor(),
                     primary_width,
                     secondary_workbench_height,
-                    terminal_font_size,
-                    terminal_line_height,
+                    terminal_cell_width_px,
+                    terminal_row_height_px,
                 )
             })
             .unwrap_or((12.0, 12.0));
@@ -13127,11 +13151,11 @@ impl Render for Workbench {
                 if tab.running && self.terminals.context_target_is_live(target) {
                     let width = primary_terminal_width;
                     let height = primary_terminal_height;
-                    if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                    if let Some((cols, rows)) = estimate_terminal_viewport_with_cell_metrics(
                         width,
                         height,
-                        terminal_font_size,
-                        terminal_line_height,
+                        terminal_cell_width_px,
+                        terminal_row_height_px,
                     ) {
                         proposed_viewports.push(TerminalViewportProposal {
                             target: target.clone(),
@@ -13153,14 +13177,14 @@ impl Render for Workbench {
                         let width =
                             primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
                         let height = inner_secondary_terminal_render_height(
-                            primary_height,
+                            primary_terminal_area_height,
                             terminal_split_horizontal,
                         );
-                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_cell_metrics(
                             width,
                             height,
-                            terminal_font_size,
-                            terminal_line_height,
+                            terminal_cell_width_px,
+                            terminal_row_height_px,
                         ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target,
@@ -13185,11 +13209,11 @@ impl Render for Workbench {
                     if tab.running {
                         let width = content_width / if split_width { 2.0 } else { 1.0 };
                         let height = secondary_workbench_height;
-                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_cell_metrics(
                             width,
                             height,
-                            terminal_font_size,
-                            terminal_line_height,
+                            terminal_cell_width_px,
+                            terminal_row_height_px,
                         ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target: target.clone(),
@@ -16805,6 +16829,8 @@ impl Render for Workbench {
                                                     div()
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
+                                                        .flex_shrink_0()
+                                                        .h(px(terminal_font_size * terminal_line_height))
                                                         .line_height(px(terminal_font_size * terminal_line_height))
                                                         .bg(rgb(if selected { terminal_theme_selection } else { terminal_theme_bg }))
                                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
@@ -16953,6 +16979,8 @@ impl Render for Workbench {
                                                                     div()
                                                                         .id(("terminal-secondary-colored-row", row_index))
                                                                         .whitespace_nowrap()
+                                                                        .flex_shrink_0()
+                                                                        .h(px(terminal_font_size * terminal_line_height))
                                                                         .line_height(px(terminal_font_size * terminal_line_height))
                                                                         .bg(rgb(terminal_theme_bg))
                                                                         .child(
@@ -17264,6 +17292,8 @@ impl Render for Workbench {
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
+                                                                    .flex_shrink_0()
+                                                                    .h(px(terminal_font_size * terminal_line_height))
                                                                     .line_height(px(terminal_font_size * terminal_line_height))
                                                                     .bg(rgb(if selected { terminal_theme_selection } else { terminal_theme_bg }))
                                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {

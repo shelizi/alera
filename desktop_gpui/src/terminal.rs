@@ -1850,23 +1850,46 @@ pub fn estimate_terminal_viewport_with_line_height(
     font_px: f32,
     line_height_factor: f32,
 ) -> Option<(u16, u16)> {
-    if !region_width_px.is_finite()
-        || !region_height_px.is_finite()
-        || !font_px.is_finite()
+    if !font_px.is_finite()
         || !line_height_factor.is_finite()
         || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
     {
         return None;
     }
-    let columns = ((region_width_px - 2.0 * TERMINAL_PADDING_X) / (font_px * 0.62)).floor();
-    let lines =
-        ((region_height_px - 2.0 * TERMINAL_PADDING_Y) / (font_px * line_height_factor)).floor();
+    // Retain the historical API for non-GPUI callers; the native frontend
+    // uses the actual shaped font advance through the metrics API below.
+    estimate_terminal_viewport_with_cell_metrics(
+        region_width_px,
+        region_height_px,
+        font_px * 0.62,
+        font_px * line_height_factor,
+    )
+}
+
+/// Translate a drawable GPUI Terminal pane into PTY cells using the measured
+/// monospace glyph advance. The same metrics must be used for the IME cursor.
+/// Avoid assuming all user-selectable monospace families are 0.62em wide.
+pub fn estimate_terminal_viewport_with_cell_metrics(
+    region_width_px: f32,
+    region_height_px: f32,
+    cell_width_px: f32,
+    row_height_px: f32,
+) -> Option<(u16, u16)> {
+    if !region_width_px.is_finite()
+        || !region_height_px.is_finite()
+        || !cell_width_px.is_finite()
+        || !row_height_px.is_finite()
+        || !(3.0..=64.0).contains(&cell_width_px)
+        || !(6.0..=128.0).contains(&row_height_px)
+    {
+        return None;
+    }
+    let columns = ((region_width_px - 2.0 * TERMINAL_PADDING_X) / cell_width_px).floor();
+    let lines = ((region_height_px - 2.0 * TERMINAL_PADDING_Y) / row_height_px).floor();
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
-    // Match the Host resize verb's supported 512x200 geometry. A 240-col
-    // emulator cap otherwise letterboxes wide displays even after PTY resize.
     Some((columns.min(512.0) as u16, lines.min(200.0) as u16))
 }
 
@@ -1891,30 +1914,53 @@ pub fn terminal_ime_anchor_with_line_height(
     font_px: f32,
     line_height_factor: f32,
 ) -> Option<(f32, f32)> {
-    if !panel_width_px.is_finite()
-        || !panel_height_px.is_finite()
-        || !font_px.is_finite()
+    if !font_px.is_finite()
         || !line_height_factor.is_finite()
         || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
+    {
+        return None;
+    }
+    terminal_ime_anchor_with_cell_metrics(
+        cursor,
+        panel_width_px,
+        panel_height_px,
+        font_px * 0.62,
+        font_px * line_height_factor,
+    )
+}
+
+/// Match the IME capture position to the actual GPUI-shaped VT cell advance
+/// (rather than the default-family estimate), including resized split panes.
+pub fn terminal_ime_anchor_with_cell_metrics(
+    cursor: (u16, u16),
+    panel_width_px: f32,
+    panel_height_px: f32,
+    cell_width_px: f32,
+    row_height_px: f32,
+) -> Option<(f32, f32)> {
+    if !panel_width_px.is_finite()
+        || !panel_height_px.is_finite()
+        || !cell_width_px.is_finite()
+        || !row_height_px.is_finite()
+        || !(3.0..=64.0).contains(&cell_width_px)
+        || !(6.0..=128.0).contains(&row_height_px)
         || panel_width_px < 32.0
         || panel_height_px < 24.0
     {
         return None;
     }
-    let cell_width = font_px * 0.62;
-    let line_height = font_px * line_height_factor;
-    let visible_cols = ((panel_width_px - 2.0 * TERMINAL_PADDING_X) / cell_width)
+    let visible_cols = ((panel_width_px - 2.0 * TERMINAL_PADDING_X) / cell_width_px)
         .floor()
         .max(1.0);
-    let visible_rows = ((panel_height_px - 2.0 * TERMINAL_PADDING_Y) / line_height)
+    let visible_rows = ((panel_height_px - 2.0 * TERMINAL_PADDING_Y) / row_height_px)
         .floor()
         .max(1.0);
     let col = (cursor.1 as f32).min(visible_cols - 1.0);
     let row = (cursor.0 as f32).min(visible_rows - 1.0);
     Some((
-        (TERMINAL_PADDING_X + col * cell_width).min(panel_width_px - 2.0),
-        (TERMINAL_PADDING_Y + row * line_height).min(panel_height_px - 2.0),
+        (TERMINAL_PADDING_X + col * cell_width_px).min(panel_width_px - 2.0),
+        (TERMINAL_PADDING_Y + row * row_height_px).min(panel_height_px - 2.0),
     ))
 }
 
@@ -1951,11 +1997,28 @@ impl TerminalAutoResizeGate {
     }
 
     pub fn observe(&mut self, visible: Vec<TerminalViewportProposal>, now: std::time::Instant) {
+        // A Host tab can be mirrored in multiple visible panes while owning
+        // only one PTY geometry. Avoid constantly resetting debounce when
+        // those panes propose different sizes for the same session.
+        let mut unique: Vec<TerminalViewportProposal> = Vec::new();
+        for proposal in visible {
+            if let Some(previous) = unique
+                .iter_mut()
+                .find(|previous| previous.target == proposal.target)
+            {
+                previous.cols = previous.cols.min(proposal.cols);
+                previous.rows = previous.rows.min(proposal.rows);
+            } else {
+                unique.push(proposal);
+            }
+        }
         self.pending
-            .retain(|(pending, _)| visible.iter().any(|new| new.target == pending.target));
+            .retain(|(pending, _)| unique.iter().any(|new| new.target == pending.target));
         self.attempted
-            .retain(|attempted| visible.iter().any(|new| new.target == attempted.target));
-        for new in visible.into_iter().take(2) {
+            .retain(|attempted| unique.iter().any(|new| new.target == attempted.target));
+        // The mixed Workbench split and the inner Terminal split can expose
+        // three sessions; never starve the third behind the old take(2) limit.
+        for new in unique.into_iter().take(8) {
             if self.attempted.iter().any(|attempted| attempted == &new) {
                 self.pending
                     .retain(|(pending, _)| pending.target != new.target);
@@ -3286,6 +3349,23 @@ mod tests {
     }
 
     #[test]
+    fn gpui_measured_cell_metrics_keep_pty_and_ime_aligned() {
+        let (narrow_cols, _) =
+            estimate_terminal_viewport_with_cell_metrics(820.0, 470.0, 9.0, 18.0).unwrap();
+        let (wide_cols, _) =
+            estimate_terminal_viewport_with_cell_metrics(820.0, 470.0, 11.0, 18.0).unwrap();
+        assert!(narrow_cols > wide_cols, "Wider actual font must request fewer PTY columns");
+        let cursor = (3, 9);
+        let anchor =
+            terminal_ime_anchor_with_cell_metrics(cursor, 820.0, 470.0, 11.0, 18.0).unwrap();
+        assert_eq!(anchor, (12.0 + 9.0 * 11.0, 12.0 + 3.0 * 18.0));
+        assert!(estimate_terminal_viewport_with_cell_metrics(820.0, 470.0, 0.0, 18.0).is_none());
+        assert!(terminal_ime_anchor_with_cell_metrics(
+            cursor, 820.0, 470.0, f32::NAN, 18.0
+        ).is_none());
+    }
+
+    #[test]
     fn shared_terminal_line_height_keeps_pty_rows_and_ime_anchor_in_sync() {
         let tight = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 0.8).unwrap();
         let loose = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 2.4).unwrap();
@@ -3443,6 +3523,66 @@ mod tests {
             gate.take_ready(start + std::time::Duration::from_millis(5300)),
             vec![second]
         );
+    }
+
+
+    #[test]
+    fn three_visible_terminal_previews_each_receive_an_auto_resize() {
+        let now = std::time::Instant::now();
+        let proposals = (0..3)
+            .map(|index| TerminalViewportProposal {
+                target: TerminalTabContextTarget {
+                    handle: format!("pty-{index}"),
+                    workspace_id: "workspace".into(),
+                    tab_id: format!("tab-{index}"),
+                    generation: 1,
+                    workspace_generation: 1,
+                },
+                cols: 100 - index * 10,
+                rows: 30 - index * 5,
+            })
+            .collect::<Vec<_>>();
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(proposals.clone(), now);
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(301)),
+            proposals,
+        );
+    }
+
+    #[test]
+    fn duplicated_host_viewport_stabilizes_on_smallest_visible_size() {
+        let now = std::time::Instant::now();
+        let target = TerminalTabContextTarget {
+            handle: "same-host".into(),
+            workspace_id: "workspace".into(),
+            tab_id: "tab".into(),
+            generation: 1,
+            workspace_generation: 1,
+        };
+        let large = TerminalViewportProposal {
+            target: target.clone(),
+            cols: 145,
+            rows: 35,
+        };
+        let small = TerminalViewportProposal {
+            target,
+            cols: 90,
+            rows: 20,
+        };
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(vec![large.clone(), small.clone()], now);
+        // The Host appears in both panes and their enumeration order flips.
+        gate.observe(
+            vec![small.clone(), large],
+            now + std::time::Duration::from_millis(180),
+        );
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(310)),
+            vec![small.clone()],
+        );
+        gate.observe(vec![small], now + std::time::Duration::from_secs(1));
+        assert!(gate.take_ready(now + std::time::Duration::from_secs(2)).is_empty());
     }
 
     #[test]

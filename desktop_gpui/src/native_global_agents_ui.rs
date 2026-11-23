@@ -1570,6 +1570,28 @@ impl Workbench {
         })
     }
 
+    /// Read the same panel visibility as render_inline_original, so both
+    /// main-pane and mixed secondary PTY geometry exclude expanded history.
+    pub(super) fn inline_original_panel_height_px(&self, pane: PaneSlot) -> f32 {
+        let Some(target) = self.inline_original_target(pane) else {
+            return 0.0;
+        };
+        let key = (
+            target.handle,
+            target.workspace_id,
+            target.tab_id,
+            target.agent_type,
+        );
+        let Some(state) = self.native_inline_original.get(&key) else {
+            return 0.0;
+        };
+        alera_gpui_desktop::visual_tokens::inline_original_terminal_reserved_height(
+            !state.messages.is_empty(),
+            state.before.is_some(),
+            state.collapsed,
+        )
+    }
+
     /// An ordinary saved Claude Tab contains a native UUID, but the app-level
     /// Terminal PTY only retains bounded stream output. Read the original
     /// provider messages on first display *inside* this same Tab. This does
