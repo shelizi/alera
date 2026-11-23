@@ -197,7 +197,7 @@ impl Workbench {
         .detach();
     }
 
-    fn begin_sidebar_workspace_action(
+    pub(super) fn begin_sidebar_workspace_action(
         &mut self,
         action: SidebarWorkspaceAction,
         cx: &mut Context<Self>,
@@ -298,7 +298,7 @@ impl Workbench {
         .detach();
     }
 
-    fn begin_sidebar_create(&mut self, kind: &str, workspace_id: String, cx: &mut Context<Self>) {
+    pub(super) fn begin_sidebar_create(&mut self, kind: &str, workspace_id: String, cx: &mut Context<Self>) {
         if !matches!(kind, "tag" | "section") {
             return;
         }
@@ -368,17 +368,30 @@ impl Workbench {
         .detach();
     }
 
-    fn begin_sidebar_rename(&mut self, kind: &str, id: String, cx: &mut Context<Self>) {
+    pub(super) fn begin_sidebar_rename(&mut self, kind: &str, id: String, cx: &mut Context<Self>) {
         if !matches!(kind, "project" | "workspace") {
             return;
         }
+        let current_name = self.runtime_catalog.as_ref().and_then(|catalog| {
+            match kind {
+                "project" => catalog.projects.iter()
+                    .find(|project| project.id == id)
+                    .map(|project| project.name.as_str()),
+                "workspace" => catalog.workspaces.iter()
+                    .find(|workspace| workspace.id == id)
+                    .map(|workspace| workspace.name.as_str()),
+                _ => None,
+            }
+        }).unwrap_or_default().to_owned();
         self.sidebar_rename_target = Some((kind.to_owned(), id));
-        self.sidebar_rename_input =
-            Some(cx.new(|cx| QuickOpenInput::with_placeholder("New display name…", cx)));
+        let input = cx.new(|cx| QuickOpenInput::with_placeholder("New display name", cx));
+        if !current_name.is_empty() {
+            input.update(cx, |input, cx| { input.set_query(&current_name, cx); });
+        }
+        self.sidebar_rename_input = Some(input);
         self.show_project_management = true;
         cx.notify();
     }
-
     pub(super) fn submit_sidebar_rename(&mut self, cx: &mut Context<Self>) {
         let (Some((kind, id)), Some(input)) = (
             self.sidebar_rename_target.clone(),
@@ -427,7 +440,7 @@ impl Workbench {
         .detach();
     }
 
-    fn select_sidebar_parent(
+    pub(super) fn select_sidebar_parent(
         &mut self,
         workspace_id: String,
         project_id: String,
@@ -440,7 +453,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn change_sidebar_parent(
+    pub(super) fn change_sidebar_parent(
         &mut self,
         parent_id: String,
         child_id: String,
@@ -487,7 +500,7 @@ impl Workbench {
         .detach();
     }
 
-    fn pin_sidebar_workspace_tree(
+    pub(super) fn pin_sidebar_workspace_tree(
         &mut self,
         root_id: String,
         pinned: bool,
@@ -560,7 +573,7 @@ impl Workbench {
         .detach();
     }
 
-    fn forget_sidebar_project(
+    pub(super) fn forget_sidebar_project(
         &mut self,
         project_id: String,
         root: PathBuf,
@@ -634,7 +647,7 @@ impl Workbench {
         }).detach();
     }
 
-    fn pin_sidebar_project(&mut self, root: &Path, cx: &mut Context<Self>) {
+    pub(super) fn pin_sidebar_project(&mut self, root: &Path, cx: &mut Context<Self>) {
         let Some(store) = &self.session_store else {
             self.model.set_status("Preview favorites unavailable");
             cx.notify();
@@ -655,7 +668,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn sidebar_open_folder(&mut self, root: &Path, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_open_folder(&mut self, root: &Path, cx: &mut Context<Self>) {
         let program = if cfg!(windows) {
             "explorer.exe"
         } else if cfg!(target_os = "macos") {
@@ -672,7 +685,7 @@ impl Workbench {
         cx.notify();
     }
 
-    fn sidebar_copy_path(&mut self, root: &Path, cx: &mut Context<Self>) {
+    pub(super) fn sidebar_copy_path(&mut self, root: &Path, cx: &mut Context<Self>) {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
             root.to_string_lossy().into_owned(),
         ));

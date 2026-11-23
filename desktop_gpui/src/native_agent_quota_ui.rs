@@ -13,6 +13,28 @@ use gpui_kit::component::Sizable as _;
 use std::io;
 use std::sync::OnceLock;
 
+/// Display provider names as Classic does, instead of Host abbreviations.
+/// Unknown providers keep their original identity and artwork lookup.
+pub(super) fn classic_agent_display_name(provider: &str) -> &str {
+    match provider {
+        "agy" => "Antigravity",
+        "claude" => "Claude",
+        "codex" => "Codex",
+        "cursor" => "Cursor",
+        "devin" => "Devin",
+        "copilot" => "GitHub Copilot",
+        "opencode" | "opencode2" => "OpenCode",
+        "grok" => "Grok",
+        "gemini" => "Gemini",
+        "minimax" => "MiniMax",
+        "kimi" => "Kimi",
+        "zai" => "Z.ai",
+        "pi" => "Pi",
+        "amp" => "Amp",
+        _ => provider,
+    }
+}
+
 /// Classic uses one animated glyph for a working Agent and colored static
 /// status dots for other states. GPUI Kit's spinner animates its own element
 /// (not the entire Workbench) and follows OS reduced-motion preferences.
@@ -242,6 +264,17 @@ mod quota_ui_tests {
     use std::sync::OnceLock;
 
     #[test]
+    fn nested_sidebar_agent_names_match_classic_without_losing_unknown_provider() {
+        assert_eq!(super::classic_agent_display_name("agy"), "Antigravity");
+        assert_eq!(super::classic_agent_display_name("claude"), "Claude");
+        assert_eq!(super::classic_agent_display_name("opencode2"), "OpenCode");
+        assert_eq!(
+            super::classic_agent_display_name("custom-agent"),
+            "custom-agent"
+        );
+    }
+
+    #[test]
     fn status_bar_remaining_colors_follow_classic_thresholds_without_stale_green() {
         let mut reading = QuotaReading {
             label: "W".into(),
@@ -266,10 +299,15 @@ mod quota_ui_tests {
     }
 
     #[test]
-    fn classic_agent_artwork_is_shared_by_installed_and_profile_menu_entries() {
+    fn classic_agent_artwork_is_shared_by_installed_menu_and_runtime_profiles() {
         let popup = include_str!("native_popup_ui.rs");
         assert!(popup.contains("branded_agent_popup_item(agent_id.clone(), label)"));
-        assert!(popup.contains("branded_agent_popup_item(brand_id, label)"));
+        // The Classic-compatible + menu only lists installed Agents.
+        // Managed Profiles retain the same provider artwork in Runtime / Agents.
+        assert!(!popup.contains("Host Agent Profiles"));
+        let workbench = include_str!("main.rs");
+        assert!(workbench.contains("agent-profile-row"));
+        assert!(workbench.contains("native_agent_quota_ui::quota_provider_icon(&brand, 16.0)"));
         assert!(popup.contains("PopupMenuItem::new(label).icon(Icon::default().data(svg))"));
         assert!(popup.contains("PopupMenuItem::element"));
         // GPUI Kit inserts a blank xsmall icon in ElementItem rows:

@@ -461,9 +461,132 @@ mod tests {
         assert!(menu.contains("new_tab_menu_max_height("));
         // Formatting must not affect this structural UX guard.
         let compact = menu.split_whitespace().collect::<String>();
-        assert!(compact.contains(".separator().label(tr(locale,\"AttachrunningHostsession\"))"));
+        let file = compact
+            .find("PopupMenuItem::new(tr(locale,\"NewFile\"))")
+            .unwrap();
+        let terminal = compact
+            .find("PopupMenuItem::new(tr(locale,\"NewTerminal\"))")
+            .unwrap();
+        let agent = compact
+            .find("branded_agent_popup_item(agent_id.clone(),label)")
+            .unwrap();
+        assert!(
+            file < terminal && terminal < agent,
+            "Classic menu item order"
+        );
+        assert!(compact.contains("view.create_host_terminal_in_pane("));
+        assert!(compact.contains("view.prepare_detected_agent_in_pane("));
+        // No extra Host-session or Profile-selection step belongs to +.
+        for advanced in [
+            "Attach running Host session",
+            "Restore saved Agent / Terminal tabs",
+            "Host Agent Profiles",
+            "Pending Host requests",
+            "Rescan installed agents",
+        ] {
+            assert!(
+                !menu.contains(advanced),
+                "{advanced} must live outside New Tab"
+            );
+        }
+        let workbench = include_str!("main.rs");
+        assert_eq!(
+            workbench
+                .matches(".dropdown_menu(Self::kit_new_tab_menu(")
+                .count(),
+            3
+        );
+        assert!(workbench.contains("runtime-host-recovery-actions"));
+        assert!(workbench.contains("this.attach_live_terminal_to_pane(&original, &target, cx)"));
     }
 
+    #[test]
+    fn git_filter_refreshes_visible_rows_and_project_worktree_options_use_modals() {
+        let source = include_str!("main.rs");
+        // Typing into the real Source Control input must re-render the parent,
+        // not merely update the field's own placeholder/text entity.
+        assert!(source.contains("cx.observe(&git_filter_input"));
+        assert!(source.contains("view.git_selected_changes.clear();"));
+        assert!(source.contains("view.git_selected_folders.clear();"));
+        assert!(source.contains("view.git_selection_anchor = None;"));
+        assert!(source.contains(
+            "let git_sidebar_layout = layout_git_sidebar(&git_all_changes, &git_sidebar_options);"
+        ));
+        assert!(source.contains("git_filter_input,"));
+        assert!(source.contains("cx.observe(&explorer_filter_input"));
+        assert!(source.contains("let explorer_filter_active = !explorer_filter_query.is_empty()"));
+
+        for expected in [
+            "project-options",
+            "workspace-options",
+            "projects-view-options",
+            "projects-new-workspace",
+            "SidebarOptionsTarget::Project(",
+            "SidebarOptionsTarget::Workspace {",
+            "SidebarOptionsTarget::Management(",
+            "sidebar_options_modal_open",
+        ] {
+            assert!(source.contains(expected), "Missing modal route: {expected}");
+        }
+        let modal = include_str!("native_project_sidebar_modal_ui.rs");
+        for expected in [
+            "window.open_dialog(cx",
+            ".overlay_closable(true)",
+            ".on_ok(|_, _, _| false)",
+            "fn render_sidebar_options_dialog",
+            "fn add_sidebar_workspace_modal_rows",
+            "fn run_sidebar_modal_action",
+            "view.submit_sidebar_create(cx)",
+            "view.submit_sidebar_rename(cx)",
+            "view.create_worktree(cx)",
+            "SidebarWorkspaceAction::Remove",
+            "SidebarWorkspaceAction::Sleep",
+            "SidebarWorkspaceAction::DeleteTag",
+            "SidebarWorkspaceAction::DeleteSection",
+        ] {
+            assert!(
+                modal.contains(expected),
+                "Missing safe modal UX: {expected}"
+            );
+        }
+    }
+    #[test]
+    fn source_control_parity_keeps_commit_editor_without_redundant_git_and_agent_buttons() {
+        let source = include_str!("main.rs");
+        for removed in [
+            "right-sidebar-history",
+            "right-rail-history",
+            "git-open-commit-graph-toolbar",
+            "git-patch-preview-toggle",
+            "git-diff-scroll",
+            "git-diff-expand",
+        ] {
+            assert!(
+                !source.contains(removed),
+                "redundant right panel item: {removed}"
+            );
+        }
+        // Keep the intended full-height Graph action in the Commits section,
+        // and retain the central diff that opens from a changed-file click.
+        assert!(source.contains("git-graph-expand-center"));
+        assert!(source.contains("this.open_git_sidebar_file_diff("));
+        assert!(source.contains("git-commit-message-field"));
+        assert!(source.contains("git-commit-message-editor"));
+        assert!(source.contains("QuickOpenInput::git_commit_message(cx)"));
+        assert!(source.contains(".child(git_commit_input)"));
+
+        let inputs = include_str!("quick_open_ui.rs");
+        let commit_input = inputs
+            .split_once("pub fn git_commit_message(")
+            .expect("commit message input constructor")
+            .1
+            .split_once("pub fn profile_multiline(")
+            .expect("dedicated multiline input section")
+            .0;
+        assert!(commit_input.contains("input.multiline_mode = true;"));
+        assert!(commit_input.contains("input.max_input_bytes = 4096;"));
+        assert!(source.contains("self.git_commit_input.read(cx).query()"));
+    }
     #[test]
     fn editor_find_bar_does_not_consume_a_row_while_closed() {
         let find_ui = include_str!("editor_find_ui.rs");

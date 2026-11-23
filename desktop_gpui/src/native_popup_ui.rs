@@ -49,18 +49,12 @@ impl Workbench {
                 == Some(target)
     }
 
-    /// Classic's single + button creates a File/Terminal, while the optional
-    /// Host session list remains an action rather than pretending to be a tab.
+    /// Match Classic's New Tab popup: New File, New Terminal, then installed
+    /// Agent CLIs. Host session recovery and Profile management live outside +.
     pub(super) fn kit_new_tab_menu(
         owner: gpui::WeakEntity<Self>,
         target: Option<PaneAttachGuard>,
-        running: Vec<(TerminalSession, String)>,
-        profiles: Vec<AgentProfileRow>,
         installed: Vec<InstalledAgentCli>,
-        installed_loading: bool,
-        terminal_create_busy: bool,
-        terminal_create_timed_out: bool,
-        terminal_create_unknown: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -68,8 +62,6 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, window, cx| {
-            // Pick up changes to the shared App Language at popup-open time,
-            // just like Tab right-click and pane action menus.
             let locale = owner
                 .upgrade()
                 .map(|entity| entity.read(cx).settings_menu_locale)
@@ -110,41 +102,10 @@ impl Workbench {
                         });
                     }),
             );
-            // Saved previews are passive on launch: restoring an offline
-            // Host must be an explicit click, never an automatic PTY spawn.
-            let has_saved_tabs = owner
-                .upgrade()
-                .is_some_and(|entity| {
-                    entity
-                        .read(cx)
-                        .terminal_layout_restore
-                        .as_ref()
-                        .is_some_and(|layout| !layout.tabs.is_empty())
-                });
-            if has_saved_tabs {
-                let restore_owner = owner.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(tr(locale, "Restore saved Agent / Terminal tabs"))
-                        .icon(IconName::RefreshCw)
-                        .on_click(move |_, _, cx| {
-                            let _ = restore_owner.update(cx, |view, cx| {
-                                view.restore_saved_host_tabs(cx);
-                            });
-                        }),
-                );
-            }
-            // Classic lists installed local Agent CLIs, not just Host Agent
-            // Profiles. Inventory is read-only and works without any Host.
-            menu = menu.separator().label(tr(locale, "Installed Agent CLIs"));
-            if installed.is_empty() {
-                menu = menu.label(tr(
-                    locale,
-                    if installed_loading {
-                        "Detecting installed Agent CLIs…"
-                    } else {
-                        "No installed Agent CLIs detected"
-                    },
-                ));
+            // Classic shows one separator before installed agents, without
+            // an extra Host-attachment or Profile-selection step.
+            if !installed.is_empty() {
+                menu = menu.separator();
             }
             for agent in installed.iter().cloned() {
                 let agent_owner = owner.clone();
@@ -164,115 +125,10 @@ impl Workbench {
                     },
                 ));
             }
-            let refresh_owner = owner.clone();
-            menu = menu.item(
-                PopupMenuItem::new(tr(locale, "Rescan installed agents"))
-                    .icon(IconName::RefreshCw)
-                    .on_click(move |_, _, cx| {
-                        let _ = refresh_owner.update(cx, |view, cx| {
-                            view.refresh_installed_agent_clis(cx);
-                        });
-                    }),
-            );
-            if !profiles.is_empty() {
-                menu = menu.separator().label(tr(locale, "Host Agent Profiles"));
-            }
-            for profile in profiles.iter().cloned() {
-                let owner = owner.clone();
-                let agent_target = target.clone();
-                let id = profile.id;
-                let label = format!(
-                    "{} · {} ({})",
-                    tr(locale, "New Agent"),
-                    profile.name,
-                    profile.agent_type
-                );
-                let brand_id = profile.agent_type.clone();
-                menu = menu.item(branded_agent_popup_item(brand_id, label).on_click(
-                    move |_, window, cx| {
-                        let _ = owner.update(cx, |view, cx| {
-                            view.prepare_agent_in_pane(&id, &agent_target, window, cx);
-                        });
-                    },
-                ));
-            }
-            if terminal_create_timed_out || terminal_create_unknown || terminal_create_busy {
-                // Only add recovery chrome when an operation is actually
-                // pending; keep normal New Tab usage close to Classic.
-                menu = menu.separator().label(tr(locale, "Pending Host requests"));
-            }
-            if terminal_create_timed_out {
-                let retry_owner = owner.clone();
-                let retry_target = target.clone();
-                // Retrying is global, but the saved creation intent still
-                // determines which pane may receive the Host session.
-                menu = menu.item(
-                    PopupMenuItem::new(tr(locale, "Recheck pending Host session (no new PTY)"))
-                        .on_click(move |_, _, cx| {
-                            let _ = retry_owner.update(cx, |view, cx| {
-                                if retry_target
-                                    .still_valid(view.workspace_generation, &view.mixed_panes)
-                                    && view.terminal_create_pane.is_some()
-                                {
-                                    view.retry_host_terminal_confirmation(cx);
-                                }
-                            });
-                        }),
-                );
-            }
-            if terminal_create_unknown {
-                menu = menu.label(tr(
-                    locale,
-                    "Host create result unknown · inspect running sessions before dismissing",
-                ));
-            }
-            if terminal_create_busy {
-                let cancel_owner = owner.clone();
-                let cancel_target = target.clone();
-                // Local cancellation never terminates a Host PTY. Allow it
-                // from either current pane if the original pane was closed.
-                menu = menu.item(
-                    PopupMenuItem::new(tr(locale, "Cancel pending request (keep Host PTY)"))
-                        .on_click(move |_, _, cx| {
-                            let _ = cancel_owner.update(cx, |view, cx| {
-                                if cancel_target
-                                    .still_valid(view.workspace_generation, &view.mixed_panes)
-                                    && view.terminal_create_pane.is_some()
-                                {
-                                    view.cancel_host_terminal_confirmation(cx);
-                                }
-                            });
-                        }),
-                );
-            }
-            menu = menu
-                .separator()
-                .label(tr(locale, "Attach running Host session"));
-            if running.is_empty() {
-                menu = menu.label(tr(locale, "No running Host sessions"));
-            }
-            for (expected, title) in running.iter().cloned() {
-                let owner = owner.clone();
-                let attach_target = target.clone();
-                menu = menu.item(PopupMenuItem::new(title).icon(IconName::Terminal).on_click(
-                    move |_, window, cx| {
-                        let _ = owner.update(cx, |view, cx| {
-                            // Recheck handle + Host workspace + tab ID and pane
-                            // generation at click time. Never follow reused IDs.
-                            if let Some(identity) =
-                                view.attach_live_terminal_to_pane(&expected, &attach_target, cx)
-                            {
-                                view.focus_mixed_tab(&identity, window, cx);
-                            }
-                        });
-                    },
-                ));
-            }
             menu.scrollable(true)
                 .max_h(px(new_tab_menu_max_height(viewport_height)))
         }
     }
-
     pub(super) fn kit_pane_actions_menu(
         owner: gpui::WeakEntity<Self>,
         active: Option<WorkbenchTabIdentity>,

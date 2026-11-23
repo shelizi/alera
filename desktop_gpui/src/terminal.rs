@@ -400,6 +400,7 @@ impl RuntimeCliBridge {
         text: &str,
         provider: Option<&str>,
         account_id: Option<&str>,
+        project_id: Option<&str>,
         workspace_id: Option<&str>,
     ) -> io::Result<Value> {
         if text.trim().is_empty()
@@ -421,6 +422,7 @@ impl RuntimeCliBridge {
         for (flag, value) in [
             ("--provider", provider),
             ("--account-id", account_id),
+            ("--project-id", project_id),
             ("--workspace-id", workspace_id),
         ] {
             if let Some(value) = value {
@@ -591,6 +593,21 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
+    /// Live GPUI Inspector raw keyboard/IME input. The same Host route used
+    /// by guarded Agent prompts verifies Workspace + Tab + Session before
+    /// writing each PTY byte. No implicit Enter, new Agent or attach.
+    pub fn write_verified_agent_raw(
+        &self,
+        handle: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        text: &str,
+    ) -> io::Result<()> {
+        let args = verified_agent_raw_verb(handle, workspace_id, tab_id, text)?;
+        self.terminal_json_with_input(&args, text.as_bytes())?;
+        Ok(())
+    }
+
     /// Full Host identity validation is performed inside the write request.
     /// Never resolve a global dashboard target by handle alone.
     pub fn submit_verified_agent_prompt(
@@ -686,6 +703,29 @@ pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<
     Ok(args)
 }
 
+/// Guard every raw PTY key with the exact original Host source identity.
+/// Omit --submit: Escape, arrows, characters and Enter already carry their
+/// native bytes and must not inject a second newline.
+pub fn verified_agent_raw_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+    text: &str,
+) -> io::Result<Vec<OsString>> {
+    if !valid_handle(workspace_id) || !valid_handle(tab_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid guarded Agent owner",
+        ));
+    }
+    let mut args = write_terminal_verb(handle, text, false)?;
+    args.extend([
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+    ]);
+    Ok(args)
+}
+
 /// List workspaces registered with the running Host. No arguments beyond the
 /// verb itself are permitted by the bridge allowlist.
 pub fn verified_agent_prompt_verb(
@@ -734,6 +774,44 @@ pub fn verified_agent_control_verb(
         args.push(OsString::from("--confirm-terminate"));
     }
     Ok(args)
+}
+
+#[cfg(test)]
+mod gpui_agent_inspector_raw_input_tests {
+    use super::*;
+
+    #[test]
+    fn escape_and_enter_go_to_exact_host_agent_as_raw_bytes_without_submit() {
+        for key in ["\u{1b}", "\r", "a", "繁體"] {
+            let args = verified_agent_raw_verb(
+                "current-session",
+                "original-worktree",
+                "original-tab",
+                key,
+            )
+            .expect("valid raw Host key");
+            let rendered = args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(rendered[0], "write");
+            assert!(rendered.contains(&"--stdin".to_owned()));
+            assert!(rendered.contains(&"--expected-workspace-id=original-worktree".to_owned()));
+            assert!(rendered.contains(&"--expected-tab-id=original-tab".to_owned()));
+            assert!(!rendered.contains(&"--enter".to_owned()));
+            assert!(!rendered.contains(&"--submit".to_owned()));
+            assert!(!rendered.iter().any(|part| part == key));
+        }
+    }
+
+    #[test]
+    fn raw_input_rejects_stale_invalid_identifiers_and_nul_or_large_payloads() {
+        assert!(verified_agent_raw_verb("", "workspace", "tab", "a").is_err());
+        assert!(verified_agent_raw_verb("session", "workspace\nbad", "tab", "a").is_err());
+        assert!(verified_agent_raw_verb("session", "workspace", "tab", "").is_err());
+        assert!(verified_agent_raw_verb("session", "workspace", "tab", "\0").is_err());
+        assert!(verified_agent_raw_verb("session", "workspace", "tab", &"x".repeat(4097)).is_err());
+    }
 }
 
 pub fn workspaces_verb() -> Vec<OsString> {

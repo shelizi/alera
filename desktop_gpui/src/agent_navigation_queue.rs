@@ -1,6 +1,6 @@
 //! Explicit navigation intent for an already-existing, Host-verified Agent Tab.
 //!
-//! A historical lookup, a Windows toast, and a live Dashboard card can all
+//! A historical lookup, sidebar row, Windows toast, and Dashboard card can all
 //! schedule navigation on a later GPUI render. The user may switch workspaces
 //! or focus another tab meanwhile. Deferred handlers MUST check this epoch
 //! before changing panes; Host status refresh does not grant UI focus.
@@ -14,6 +14,7 @@ const MAX_HOST_RECHECKS: u8 = 3;
 pub enum AgentNavigationSource {
     History,
     Dashboard,
+    Sidebar,
     Toast,
 }
 
@@ -184,6 +185,36 @@ mod tests {
         assert!(queue.is_current(new_epoch));
         assert_eq!(deferred.session_id, "new");
         assert_eq!(queue.source(), Some(AgentNavigationSource::History));
+    }
+
+    #[test]
+    fn sidebar_click_replaces_dashboard_focus_and_keeps_exact_host_identity() {
+        let mut queue = AgentNavigationQueue::default();
+        queue.begin(target("dashboard"), AgentNavigationSource::Dashboard);
+        let (old_epoch, _) = queue.take_deferred().expect("old dashboard focus");
+
+        // Clicking the project sidebar is a newer explicit Tab selection.
+        queue.begin(target("sidebar"), AgentNavigationSource::Sidebar);
+        assert!(!queue.is_current(old_epoch));
+        assert_eq!(queue.source(), Some(AgentNavigationSource::Sidebar));
+        let (epoch, selected) = queue.take_deferred().expect("sidebar focus");
+        assert!(queue.is_current(epoch));
+        assert_eq!(selected.session_id, "sidebar");
+        assert!(exact_navigation_focus_matches(
+            &selected,
+            Some(&running_session("sidebar")),
+            true,
+        ));
+        assert!(!exact_navigation_focus_matches(
+            &selected,
+            Some(&running_session("sidebar")),
+            false,
+        ));
+
+        // A later manual Workspace/Tab action must cancel this deferred click.
+        queue.cancel();
+        assert!(!queue.is_current(epoch));
+        assert!(queue.take_deferred().is_none());
     }
 
     #[test]

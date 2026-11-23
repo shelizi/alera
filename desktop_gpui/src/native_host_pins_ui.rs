@@ -23,9 +23,21 @@ impl Workbench {
                 | WorkbenchTabIdentity::GitConflictCompare(_) => None,
             })
             .collect();
+        // Dashboard cards may belong to a different registered Worktree
+        // than the currently selected pane. Include their Host owners in
+        // the same bounded, authenticated pin refresh so Flutter and GPUI
+        // display the exact same persisted Tab pin state.
         let attached_workspace_ids: Vec<String> = attached_targets
             .iter()
             .map(|target| target.workspace_id().to_owned())
+            .chain(
+                self.terminals
+                    .sessions
+                    .iter()
+                    .filter(|session| session.running && session.agent_type.is_some())
+                    .map(|session| session.workspace_id.clone()),
+            )
+            .take(128)
             .collect();
         let generation = self.workspace_generation;
         self.host_pins_loading = true;
