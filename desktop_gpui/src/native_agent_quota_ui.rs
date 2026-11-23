@@ -4,10 +4,11 @@ use super::*;
 use alera_gpui_desktop::agent_quota::{
     mark_failed_quota_refresh, merge_quota_snapshots, parse_agent_usage_summary,
     parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label,
-    ClaudeExtraUsageProgress, QuotaReading,
+    ClaudeExtraUsageProgress, QuotaReading, QuotaSnapshot,
 };
 use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_i18n::tr;
+use alera_gpui_desktop::visual_tokens::FAINT;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::Sizable as _;
 use std::io;
@@ -257,10 +258,15 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
 #[cfg(test)]
 mod quota_ui_tests {
     use super::{
-        classic_agent_svg_bytes, light_current_color_icon, quota_overview_status,
-        quota_pin_button_label, quota_reading_color, quota_status_label, QuotaReading,
+        classic_agent_svg_bytes, light_current_color_icon, quota_badge_fill,
+        quota_hover_status_label, quota_hover_value_label, quota_lowest_remaining_percent,
+        quota_overview_name, quota_overview_name_color, quota_overview_status, quota_pin_icon,
+        quota_pin_tooltip, quota_reading_color, quota_remaining_bar_fraction, toggle_unpinned_keys,
+        QuotaReading, QuotaSnapshot, UiIcon,
     };
-    use alera_gpui_desktop::visual_tokens::{AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, FAINT};
+    use alera_gpui_desktop::visual_tokens::{
+        AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, ELEVATED, FAINT, TEXT,
+    };
     use std::sync::OnceLock;
 
     #[test]
@@ -358,18 +364,97 @@ mod quota_ui_tests {
     }
 
     #[test]
-    fn status_bar_exposes_stale_or_unavailable_readings() {
-        assert_eq!(quota_status_label("ok"), None);
-        assert_eq!(quota_status_label("stale"), Some("Stale"));
-        assert_eq!(quota_status_label("error"), Some("Unavailable"));
+    fn hover_status_and_overview_name_match_classic() {
+        assert_eq!(quota_hover_status_label("ok", None), "Live");
+        assert_eq!(
+            quota_hover_status_label("ok", Some("estimated")),
+            "Estimated"
+        );
+        assert_eq!(quota_hover_status_label("ok", Some("measured")), "Live");
+        assert_eq!(quota_hover_status_label("stale", None), "Stale");
+        assert_eq!(quota_hover_status_label("error", None), "Error");
+        assert_eq!(quota_hover_status_label("unavailable", None), "Unavailable");
+        assert_eq!(quota_overview_name_color("ok"), TEXT);
+        assert_eq!(quota_overview_name_color("stale"), FAINT);
+        assert_eq!(quota_overview_name_color("error"), AGENT_BLOCKED);
+        assert_eq!(quota_overview_name("Claude Code", None), "Claude Code");
+        assert_eq!(
+            quota_overview_name("Claude Code", Some("Work")),
+            "Claude Code Work"
+        );
+        assert_eq!(quota_overview_name("Codex", Some("  ")), "Codex");
+        let snapshot = QuotaSnapshot {
+            provider: "claude".into(),
+            account_id: "default".into(),
+            display_name: String::new(),
+            status: "ok".into(),
+            error: None,
+            windows: vec![
+                alera_gpui_desktop::agent_quota::QuotaMetric {
+                    label: "5h".into(),
+                    used_percent: Some(20.0),
+                    resets_at: None,
+                    reset_description: None,
+                },
+                alera_gpui_desktop::agent_quota::QuotaMetric {
+                    label: "week".into(),
+                    used_percent: Some(40.0),
+                    resets_at: None,
+                    reset_description: None,
+                },
+            ],
+            buckets: Vec::new(),
+            amounts: Vec::new(),
+            data_quality: None,
+            updated_at: None,
+        };
+        assert_eq!(quota_lowest_remaining_percent(&snapshot), Some(60.0));
+        let fill = quota_badge_fill(AGENT_DONE);
+        assert_ne!(fill, AGENT_DONE);
+        assert_ne!(fill, ELEVATED);
     }
 
     #[test]
-    fn unavailable_shared_host_does_not_offer_a_misleading_pin_action() {
-        assert_eq!(quota_pin_button_label(false, true), "Pin N/A");
-        assert_eq!(quota_pin_button_label(false, false), "Pin N/A");
-        assert_eq!(quota_pin_button_label(true, true), "Unpin");
-        assert_eq!(quota_pin_button_label(true, false), "Pin");
+    fn quota_pin_toggle_matches_classic_status_bar_list() {
+        assert_eq!(
+            toggle_unpinned_keys(&["agy".into(), "codex".into()], "agy"),
+            vec!["codex".to_owned()]
+        );
+        assert_eq!(
+            toggle_unpinned_keys(&["codex".into()], "claude:default"),
+            vec!["codex".to_owned(), "claude:default".to_owned()]
+        );
+        assert_eq!(quota_pin_icon(true), UiIcon::Pin);
+        assert_eq!(quota_pin_icon(false), UiIcon::PinOff);
+        assert_eq!(quota_pin_tooltip(true, false), "Unpin From Status Bar");
+        assert_eq!(quota_pin_tooltip(false, false), "Pin To Status Bar");
+        assert_eq!(quota_pin_tooltip(true, true), "Shown in status bar");
+        assert_eq!(
+            quota_pin_tooltip(false, true),
+            "Hidden from status bar - available in the quota panel"
+        );
+    }
+
+    #[test]
+    fn quota_usage_bar_fill_follows_classic_remaining_percent() {
+        assert_eq!(quota_remaining_bar_fraction(80.0), Some(0.8));
+        assert_eq!(quota_remaining_bar_fraction(0.0), Some(0.0));
+        assert_eq!(quota_remaining_bar_fraction(100.0), Some(1.0));
+        assert_eq!(quota_remaining_bar_fraction(f64::NAN), None);
+        assert_eq!(quota_remaining_bar_fraction(-1.0), None);
+        let mut reading = QuotaReading {
+            label: "5H".into(),
+            full_label: "5-hour limit".into(),
+            value: "72%".into(),
+            remaining_percent: Some(72.4),
+            reset: None,
+            detail: None,
+            order: 0,
+        };
+        assert_eq!(quota_hover_value_label(&reading), "72% Left");
+        reading.remaining_percent = None;
+        reading.value = "US$1.00 left".into();
+        assert_eq!(quota_hover_value_label(&reading), "US$1.00 left");
     }
 
     #[test]
@@ -403,43 +488,199 @@ fn quota_remaining_color(status: &str, remaining_percent: Option<f64>) -> u32 {
     }
 }
 
-/// Percentages may remain cached after a provider refresh fails. The status
-/// bar must not make a stale percentage look like a current reading.
-fn quota_status_label(status: &str) -> Option<&'static str> {
+/// Classic hover badge. Ok stays "Live" unless the host marked the sample estimated.
+fn quota_hover_status_label(status: &str, data_quality: Option<&str>) -> &'static str {
+    if status == "ok" && data_quality == Some("estimated") {
+        return "Estimated";
+    }
     match status {
-        "ok" => None,
-        "stale" => Some("Stale"),
-        _ => Some("Unavailable"),
+        "ok" => "Live",
+        "stale" => "Stale",
+        "error" => "Error",
+        _ => "Unavailable",
     }
 }
 
-fn quota_pin_button_label(shared_host_supports_pins: bool, pinned: bool) -> &'static str {
-    if !shared_host_supports_pins {
-        "Pin N/A"
-    } else if pinned {
-        "Unpin"
-    } else {
-        "Pin"
+/// Overview names use the provider color, not the remaining-percent color.
+fn quota_overview_name_color(status: &str) -> u32 {
+    match status {
+        "ok" => TEXT,
+        "stale" => FAINT,
+        _ => AGENT_BLOCKED,
     }
 }
 
-fn quota_reading_element(status: &str, reading: &QuotaReading, detailed: bool) -> gpui::AnyElement {
+fn quota_overview_name(provider_label: &str, profile: Option<&str>) -> String {
+    match profile.map(str::trim).filter(|label| !label.is_empty()) {
+        Some(profile) => format!("{provider_label} {profile}"),
+        None => provider_label.to_owned(),
+    }
+}
+
+/// Lowest window or bucket remaining, matching Classic's snapshot badge.
+fn quota_lowest_remaining_percent(snapshot: &QuotaSnapshot) -> Option<f64> {
+    snapshot
+        .windows
+        .iter()
+        .chain(snapshot.buckets.iter())
+        .filter_map(|metric| {
+            metric
+                .used_percent
+                .filter(|value| value.is_finite())
+                .map(|used| (100.0 - used).clamp(0.0, 100.0))
+        })
+        .reduce(f64::min)
+}
+
+/// Classic `AleraBadge` fills the status color at alpha 28 over `surfaceElevated`.
+fn quota_badge_fill(color: u32) -> u32 {
+    const ALPHA: u32 = 28;
+    let mix = |channel: u32, base: u32| (channel * ALPHA + base * (255 - ALPHA)) / 255;
+    let r = mix((color >> 16) & 0xFF, (ELEVATED >> 16) & 0xFF);
+    let g = mix((color >> 8) & 0xFF, (ELEVATED >> 8) & 0xFF);
+    let b = mix(color & 0xFF, ELEVATED & 0xFF);
+    (r << 16) | (g << 8) | b
+}
+
+fn quota_mono_label(size: f32, weight: gpui::FontWeight, color: u32, text: String) -> gpui::Div {
     div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .child(div().text_xs().text_color(rgb(MUTED)).child(if detailed {
-            reading.full_label.clone()
-        } else {
-            reading.label.clone()
-        }))
+        .font_family("JetBrains Mono")
+        .text_size(px(size))
+        .font_weight(weight)
+        .text_color(rgb(color))
+        .whitespace_nowrap()
+        .child(text)
+}
+
+fn quota_pin_icon(pinned: bool) -> UiIcon {
+    if pinned {
+        UiIcon::Pin
+    } else {
+        UiIcon::PinOff
+    }
+}
+
+/// Overview copy matches Classic's quota card. Settings copy matches
+/// `_QuotaPinButton` beside each provider switch.
+fn quota_pin_tooltip(pinned: bool, settings_row: bool) -> &'static str {
+    match (settings_row, pinned) {
+        (false, true) => "Unpin From Status Bar",
+        (false, false) => "Pin To Status Bar",
+        (true, true) => "Shown in status bar",
+        (true, false) => "Hidden from status bar - available in the quota panel",
+    }
+}
+
+fn toggle_unpinned_keys(unpinned: &[String], key: &str) -> Vec<String> {
+    let mut next = unpinned.to_vec();
+    if let Some(index) = next.iter().position(|existing| existing == key) {
+        next.remove(index);
+    } else {
+        next.push(key.to_owned());
+    }
+    next
+}
+
+/// Classic's hover card fills the bar with remaining percent, not used percent.
+fn quota_remaining_bar_fraction(remaining_percent: f64) -> Option<f32> {
+    (remaining_percent.is_finite() && (0.0..=100.0).contains(&remaining_percent))
+        .then_some((remaining_percent / 100.0) as f32)
+}
+
+fn quota_hover_value_label(reading: &QuotaReading) -> String {
+    match reading.remaining_percent {
+        Some(percent) if percent.is_finite() => format!("{}% Left", percent.round() as u32),
+        _ => reading.value.clone(),
+    }
+}
+
+/// 4px pill. Classic draws the track in `surfaceVariant` on the elevated card.
+fn quota_usage_bar(fraction: f32, color: u32) -> gpui::Div {
+    div()
+        .w_full()
+        .h(px(4.0))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(rgb(PANEL))
         .child(
             div()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(quota_reading_color(status, reading)))
-                .child(reading.value.clone()),
+                .w(gpui::relative(fraction.clamp(0.0, 1.0)))
+                .h_full()
+                .rounded_full()
+                .bg(rgb(color)),
         )
+}
+
+/// Status bar uses 8px labels. The all-accounts overview uses 9px. Neither draws a bar.
+fn quota_inline_reading(status: &str, reading: &QuotaReading, label_size: f32) -> gpui::AnyElement {
+    let color = quota_reading_color(status, reading);
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(2.0))
+        .child(quota_mono_label(
+            label_size,
+            gpui::FontWeight::MEDIUM,
+            FAINT,
+            reading.label.clone(),
+        ))
+        .child(quota_mono_label(
+            10.0,
+            gpui::FontWeight::SEMIBOLD,
+            color,
+            reading.value.clone(),
+        ))
+        .into_any_element()
+}
+
+fn quota_hover_reading(status: &str, reading: &QuotaReading) -> gpui::AnyElement {
+    let color = quota_reading_color(status, reading);
+    let fraction = reading
+        .remaining_percent
+        .and_then(quota_remaining_bar_fraction);
+    let reset = reading
+        .reset
+        .clone()
+        .unwrap_or_else(|| "Reset time unavailable".to_owned());
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .overflow_hidden()
+                        .text_size(px(12.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(rgb(MUTED))
+                        .whitespace_nowrap()
+                        .child(reading.full_label.clone()),
+                )
+                .child(quota_mono_label(
+                    11.0,
+                    gpui::FontWeight::SEMIBOLD,
+                    color,
+                    quota_hover_value_label(reading),
+                )),
+        )
+        .when_some(fraction, |column, fraction| {
+            column.child(quota_usage_bar(fraction, color))
+        })
+        .child(quota_mono_label(
+            9.0,
+            gpui::FontWeight::NORMAL,
+            FAINT,
+            reset,
+        ))
         .into_any_element()
 }
 
@@ -448,6 +689,7 @@ fn quota_reading_element(status: &str, reading: &QuotaReading, detailed: bool) -
 fn claude_extra_usage_progress_element(
     status: &str,
     progress: &ClaudeExtraUsageProgress,
+    reset: Option<&str>,
 ) -> gpui::AnyElement {
     let used_percentage = progress.spent_amount / progress.limit_amount * 100.0;
     let remaining_percentage = (1.0 - progress.used_fraction as f64) * 100.0;
@@ -482,21 +724,7 @@ fn claude_extra_usage_progress_element(
                         .child(format!("Monthly limit {}", progress.limit_text())),
                 ),
         )
-        .child(
-            div()
-                .w_full()
-                .h(px(7.0))
-                .rounded_full()
-                .overflow_hidden()
-                .bg(rgb(BORDER))
-                .child(
-                    div()
-                        .w(gpui::relative(progress.used_fraction))
-                        .h_full()
-                        .rounded_full()
-                        .bg(rgb(color)),
-                ),
-        )
+        .child(quota_usage_bar(progress.used_fraction, color))
         .child(
             div()
                 .flex()
@@ -515,6 +743,14 @@ fn claude_extra_usage_progress_element(
                         .child(format!("{} remaining", progress.remaining_text())),
                 ),
         )
+        .when_some(reset, |column, reset| {
+            column.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(FAINT))
+                    .child(reset.to_owned()),
+            )
+        })
         .into_any_element()
 }
 
@@ -572,6 +808,111 @@ impl Workbench {
             .unwrap_or_default()
     }
 
+    /// Classic's pin / pin-off control. A missing host field still means
+    /// every row is pinned; the click writes that default through the
+    /// shared Runtime Host instead of showing a dead label.
+    fn quota_pin_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        pin_key: String,
+        pinned: bool,
+        settings_row: bool,
+        owner: gpui::WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        let tooltip = quota_pin_tooltip(pinned, settings_row);
+        div()
+            .id(id)
+            .cursor_pointer()
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .hover(|style| style.bg(rgb(ACTIVE)))
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+            })
+            .child(icon(
+                quota_pin_icon(pinned),
+                12.0,
+                if pinned {
+                    MUTED
+                } else {
+                    alera_gpui_desktop::visual_tokens::FAINT
+                },
+            ))
+            .on_click(move |_, _, cx| {
+                let _ = owner.update(cx, |view, cx| {
+                    view.toggle_quota_pin(pin_key.clone(), cx);
+                });
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn render_quota_settings_pin_rows(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        if self.quota_snapshots.is_empty() {
+            return vec![div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(
+                    "Pin controls appear on each quota row after the Runtime Host reports usage.",
+                )
+                .into_any_element()];
+        }
+        let owner = cx.entity().downgrade();
+        let unpinned = self.quota_unpinned_keys();
+        let mut entries = self.quota_snapshots.clone();
+        entries.sort_by_key(|row| {
+            let rank = self
+                .quota_enabled_order
+                .as_deref()
+                .and_then(|order| order.iter().position(|id| id == &row.provider))
+                .unwrap_or(usize::MAX);
+            (rank, row.account_id != "default", row.account_id.clone())
+        });
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, snapshot)| {
+                let pin_key = snapshot.pin_key();
+                let pinned = !unpinned.iter().any(|key| key == &pin_key);
+                div()
+                    .id(("native-settings-quota-pin-row", index))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .py_1()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(quota_provider_icon(&snapshot.provider, 16.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(TEXT))
+                                    .child(snapshot.title()),
+                            ),
+                    )
+                    .child(self.quota_pin_button(
+                        ("native-settings-quota-pin", index),
+                        pin_key,
+                        pinned,
+                        true,
+                        owner.clone(),
+                    ))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn toggle_quota_pin(&mut self, key: String, cx: &mut Context<Self>) {
         #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
         if Self::quota_visual_fixture_enabled() {
@@ -588,22 +929,15 @@ impl Workbench {
             cx.notify();
             return;
         }
-        if !self
-            .settings_extra_values
-            .contains_key("agents.quotaUnpinnedKeys")
-        {
+        if !self.settings_native_profile_migrated || self.runtime_bridge.is_none() {
+            self.refresh_shared_desktop_settings(cx);
             self.model.set_status(
                 "Quota pins require the shared Runtime Host; refresh after reconnecting",
             );
             cx.notify();
             return;
         }
-        let mut unpinned = self.quota_unpinned_keys();
-        if unpinned.iter().any(|value| value == &key) {
-            unpinned.retain(|value| value != &key);
-        } else {
-            unpinned.push(key);
-        }
+        let unpinned = toggle_unpinned_keys(&self.quota_unpinned_keys(), &key);
         self.change_shared_desktop_setting(
             "agents.quotaUnpinnedKeys",
             serde_json::json!(unpinned),
@@ -744,25 +1078,13 @@ impl Workbench {
 
     pub(super) fn render_native_quota_status(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let has_data = !self.quota_snapshots.is_empty();
-        let label = if self.quota_loading && !has_data {
-            "Quotas: loading…"
-        } else if self.quota_error.is_some() && !has_data {
-            "Quotas: unavailable"
-        } else if !has_data {
-            "Quotas"
+        let empty_status = if self.quota_loading {
+            "Refreshing quotas"
+        } else if self.quota_error.is_some() {
+            "Quota refresh failed"
         } else {
-            "Quotas"
+            "No quota data"
         };
-        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
-        let label = if Self::quota_visual_fixture_enabled() {
-            "DEMO quotas"
-        } else {
-            label
-        };
-        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
-        let show_label = !has_data || Self::quota_visual_fixture_enabled();
-        #[cfg(not(all(feature = "quota-visual-fixture", debug_assertions)))]
-        let show_label = !has_data;
         let unpinned_keys = self.quota_unpinned_keys();
         let chips = alera_gpui_desktop::agent_quota::status_bar_quotas(
             &self.quota_snapshots,
@@ -776,40 +1098,46 @@ impl Workbench {
             let account_key = snapshot.key();
             let click_account_key = account_key.clone();
             let profile_label = status_bar_account_label(snapshot, &self.quota_snapshots);
+            let reading_chips = if readings.is_empty() {
+                vec![quota_mono_label(
+                    10.0,
+                    gpui::FontWeight::NORMAL,
+                    quota_remaining_color(&snapshot.status, None),
+                    "-".into(),
+                )
+                .into_any_element()]
+            } else {
+                readings
+                    .iter()
+                    .map(|reading| quota_inline_reading(&snapshot.status, reading, 8.0))
+                    .collect::<Vec<_>>()
+            };
             div()
                 .id(("native-quota-status-provider", index))
+                .h(px(STATUS_BAR_HEIGHT))
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap_1()
-                .px_2()
+                .px(px(6.0))
+                .overflow_hidden()
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(ACTIVE)))
                 .border_r_1()
                 .border_color(rgb(BORDER))
-                .child(quota_provider_icon(&snapshot.provider, 14.0))
+                .child(quota_provider_icon(&snapshot.provider, 12.0))
                 // Classic puts the provider identity in the icon and only
                 // adds an account alias when it disambiguates accounts.
                 .children(profile_label.map(|label| {
-                    div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(if snapshot.status == "ok" { TEXT } else { MUTED }))
-                        .child(label)
+                    quota_mono_label(8.0, gpui::FontWeight::SEMIBOLD, MUTED, label).ml(px(4.0))
                 }))
-                .children(
-                    readings
-                        .iter()
-                        .map(|reading| quota_reading_element(&snapshot.status, reading, false)),
+                .child(
+                    div()
+                        .ml(px(6.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .children(reading_chips),
                 )
-                .when(snapshot.status != "ok", |chip| {
-                    chip.child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child(quota_status_label(&snapshot.status).unwrap_or("Unavailable")),
-                    )
-                })
                 .on_hover(cx.listener(move |view, hovering, _, cx| {
                     if *hovering {
                         view.quota_popover_open = true;
@@ -826,26 +1154,27 @@ impl Workbench {
                 }))
         })
         .collect::<Vec<_>>();
+        let hover_card = self.quota_popover_account.is_some() && !self.quota_usage_open;
         div()
             .relative()
             .flex()
             .min_w_0()
             .flex_1()
             .items_center()
-            .gap_1()
             .h(px(STATUS_BAR_HEIGHT))
             .child(
                 div()
                     .id("native-quota-overview")
-                    .cursor_pointer()
+                    .h(px(STATUS_BAR_HEIGHT))
+                    .flex()
                     .flex_shrink_0()
-                    .px_2()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(TEXT))
+                    .items_center()
+                    .px(px(6.0))
+                    .cursor_pointer()
                     .hover(|style| style.bg(rgb(ACTIVE)))
+                    .border_r_1()
+                    .border_color(rgb(BORDER))
                     .child(quota_gauge_icon())
-                    .when(show_label, |button| button.child(label))
                     .on_hover(cx.listener(|view, hovering, _, cx| {
                         if *hovering {
                             view.quota_popover_open = true;
@@ -865,33 +1194,55 @@ impl Workbench {
                     .id("native-quota-status-scroll")
                     .min_w_0()
                     .flex_1()
+                    .h(px(STATUS_BAR_HEIGHT))
                     .overflow_x_scroll()
                     .flex()
                     .items_center()
-                    .children(chips),
-            )
-            .child(
-                div()
-                    .id("native-quota-status-refresh")
-                    .cursor_pointer()
-                    .flex_shrink_0()
-                    .w(px(22.0))
-                    .h(px(22.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_sm()
-                    .hover(|style| style.bg(rgb(ACTIVE)))
-                    .child(icon(
-                        UiIcon::Refresh,
-                        13.0,
-                        if self.quota_loading { MUTED } else { TEXT },
-                    ))
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        if !view.quota_loading {
-                            view.refresh_agent_quotas(true, None, cx);
-                        }
-                    })),
+                    .children(chips)
+                    .when(!has_data, |row| {
+                        row.child(
+                            quota_mono_label(
+                                10.0,
+                                gpui::FontWeight::NORMAL,
+                                MUTED,
+                                empty_status.into(),
+                            )
+                            .px(px(8.0)),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("native-quota-status-refresh")
+                            .h(px(STATUS_BAR_HEIGHT))
+                            .flex_shrink_0()
+                            .px(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(ACTIVE)))
+                            .tooltip({
+                                let label = if self.quota_loading {
+                                    "Refreshing Quotas"
+                                } else {
+                                    "Refresh Quotas - Automatically Refreshes Every 5 Minutes"
+                                };
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(label)
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(icon(
+                                UiIcon::Refresh,
+                                13.0,
+                                if self.quota_loading { FAINT } else { MUTED },
+                            ))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if !view.quota_loading {
+                                    view.refresh_agent_quotas(true, None, cx);
+                                }
+                            })),
+                    ),
             )
             .when(self.quota_popover_open, |root| {
                 root.child(
@@ -900,19 +1251,18 @@ impl Workbench {
                         .absolute()
                         .bottom(px(STATUS_BAR_HEIGHT))
                         .left(px(0.0))
-                        .w(px(380.0))
+                        .w(px(if hover_card { 360.0 } else { 380.0 }))
                         .max_h(px(480.0))
-                        // Only the list scrolls. Keep Refresh and Close in view.
-                        .rounded_lg()
+                        .overflow_hidden()
+                        .rounded(px(10.0))
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(BORDER_ACTIVE))
                         .bg(rgb(ELEVATED))
                         .shadow_lg()
-                        .p_2()
                         .child(if self.quota_usage_open {
                             self.render_native_usage_overview(404.0, cx)
                         } else {
-                            self.render_native_quota_overview(404.0, cx)
+                            self.render_native_quota_overview(cx)
                         })
                         .on_mouse_down_out(cx.listener(|view, _, _, cx| {
                             view.quota_popover_open = false;
@@ -937,6 +1287,7 @@ impl Workbench {
         let empty = !loading && summary.is_none() && error.is_none();
         div()
             .w_full()
+            .p_2()
             .flex()
             .flex_col()
             .gap_2()
@@ -1181,14 +1532,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn render_native_quota_overview(
-        &self,
-        height: f32,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let owner = cx.entity().downgrade();
-        let refresh_owner = owner.clone();
-        let loading = self.quota_loading;
+    fn sorted_quota_entries(&self) -> Vec<QuotaSnapshot> {
         let mut entries = self.quota_snapshots.clone();
         entries.sort_by_key(|row| {
             let rank = self
@@ -1206,320 +1550,390 @@ impl Workbench {
                 .unwrap_or(usize::MAX);
             (rank, row.account_id != "default", row.account_id.clone())
         });
-        let account_filtered = self.quota_popover_account.is_some();
-        if let Some(account) = self.quota_popover_account.as_ref() {
-            entries.retain(|row| &row.key() == account);
-        }
-        let unpinned = self.quota_unpinned_keys();
-        let pins_available = self
-            .settings_extra_values
-            .contains_key("agents.quotaUnpinnedKeys");
-        let status =
-            if account_filtered && entries.is_empty() && !loading && self.quota_error.is_none() {
-                "Selected account is no longer available · choose All accounts"
-            } else {
-                quota_overview_status(loading, self.quota_error.is_some(), !entries.is_empty())
-            };
-        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
-        let status = if Self::quota_visual_fixture_enabled() {
-            "SYNTHETIC TEST DATA - not actual quota"
+        entries
+    }
+
+    fn quota_snapshot_refresh_button(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        loading: bool,
+        provider: String,
+        account: String,
+        owner: gpui::WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        let tooltip = if loading {
+            "Refreshing Agent"
         } else {
-            status
+            "Refresh Agent"
         };
         div()
+            .id(id)
+            .flex_shrink_0()
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|style| style.bg(rgb(ACTIVE)))
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+            })
+            .child(icon(
+                UiIcon::Refresh,
+                13.0,
+                if loading { FAINT } else { MUTED },
+            ))
+            .on_click(move |_, _, cx| {
+                if loading {
+                    return;
+                }
+                let _ = owner.update(cx, |view, cx| {
+                    view.refresh_agent_quotas(true, Some((provider.clone(), account.clone())), cx);
+                });
+            })
+            .into_any_element()
+    }
+
+    /// Gauge hover: one text row per account, pin, and Open Usage. No bars.
+    fn render_native_quota_overview(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut entries = self.sorted_quota_entries();
+        if let Some(account) = self.quota_popover_account.as_ref() {
+            entries.retain(|row| &row.key() == account);
+            return self.render_native_quota_hover_card(entries, cx);
+        }
+        let loading = self.quota_loading;
+        let unpinned = self.quota_unpinned_keys();
+        let all = self.quota_snapshots.clone();
+        let owner = cx.entity().downgrade();
+        let empty_message = if entries.is_empty() {
+            Some(if loading {
+                "Refreshing quotas".to_owned()
+            } else {
+                self.quota_error
+                    .clone()
+                    .unwrap_or_else(|| "No quota data".to_owned())
+            })
+        } else {
+            None
+        };
+        let rows = entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, snapshot)| {
+                self.quota_overview_row(index, &snapshot, &all, &unpinned, loading, owner.clone())
+            })
+            .collect::<Vec<_>>();
+        div()
+            .id("native-quota-overview-scroll")
             .w_full()
+            .max_h(px(480.0))
+            .overflow_y_scroll()
+            .py(px(4.0))
             .flex()
             .flex_col()
-            .gap_2()
+            .children(empty_message.map(|message| {
+                div()
+                    .p(px(12.0))
+                    .text_size(px(12.0))
+                    .text_color(rgb(MUTED))
+                    .child(message)
+            }))
+            .children(rows)
+            .child(div().h(px(1.0)).w_full().bg(rgb(BORDER)))
+            .child(
+                div().p(px(8.0)).child(
+                    div()
+                        .id("native-quota-open-usage")
+                        .w_full()
+                        .cursor_pointer()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(8.0))
+                        .rounded_md()
+                        .bg(rgb(PANEL))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .hover(|style| style.bg(rgb(ACTIVE)))
+                        .child(quota_gauge_icon())
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT))
+                                .child("Open Usage"),
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.quota_usage_open = true;
+                            view.quota_popover_account = None;
+                            view.refresh_agent_usage(7, cx);
+                        })),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn quota_overview_row(
+        &self,
+        index: usize,
+        snapshot: &QuotaSnapshot,
+        all: &[QuotaSnapshot],
+        unpinned: &[String],
+        loading: bool,
+        owner: gpui::WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        let profile = status_bar_account_label(snapshot, all);
+        let name = quota_overview_name(snapshot.provider_label(), profile.as_deref());
+        let tip = quota_row_tooltip(snapshot, &name);
+        let readings = snapshot.readings();
+        let reading_chips = if readings.is_empty() {
+            vec![quota_mono_label(
+                10.0,
+                gpui::FontWeight::NORMAL,
+                quota_remaining_color(&snapshot.status, None),
+                "-".into(),
+            )
+            .into_any_element()]
+        } else {
+            readings
+                .iter()
+                .map(|reading| quota_inline_reading(&snapshot.status, reading, 9.0))
+                .collect::<Vec<_>>()
+        };
+        let pin_key = snapshot.pin_key();
+        let pinned = !unpinned.iter().any(|key| key == &pin_key);
+        div()
+            .id(("native-quota-overview-row", index))
+            .px(px(8.0))
+            .py(px(2.0))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(quota_provider_icon(&snapshot.provider, 14.0))
             .child(
                 div()
+                    .id(("native-quota-overview-name", index))
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .tooltip({
+                        let tip = tip.clone();
+                        move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                .build(window, cx)
+                        }
+                    })
+                    .child(
+                        quota_mono_label(
+                            10.0,
+                            gpui::FontWeight::SEMIBOLD,
+                            quota_overview_name_color(&snapshot.status),
+                            name,
+                        )
+                        .overflow_hidden()
+                        .truncate(),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .children(reading_chips),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .child(self.quota_snapshot_refresh_button(
+                        ("native-quota-refresh-account", index),
+                        loading,
+                        snapshot.provider.clone(),
+                        snapshot.account_id.clone(),
+                        owner.clone(),
+                    ))
+                    .child(self.quota_pin_button(
+                        ("native-quota-pin-account", index),
+                        pin_key,
+                        pinned,
+                        false,
+                        owner,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// Provider-chip hover: remaining bars, status badge, and per-account refresh.
+    fn render_native_quota_hover_card(
+        &self,
+        entries: Vec<QuotaSnapshot>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if entries.is_empty() {
+            return div()
+                .p(px(12.0))
+                .text_size(px(12.0))
+                .text_color(rgb(MUTED))
+                .child("Quota data unavailable")
+                .into_any_element();
+        }
+        let loading = self.quota_loading;
+        let all = self.quota_snapshots.clone();
+        let owner = cx.entity().downgrade();
+        div()
+            .id("native-quota-hover-scroll")
+            .w_full()
+            .max_h(px(480.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .children(entries.into_iter().enumerate().map(|(index, snapshot)| {
+                let profile = status_bar_account_label(&snapshot, &all);
+                let readings = snapshot.readings();
+                let extra_progress = snapshot.claude_extra_usage_progress();
+                let reset = readings.iter().find_map(|reading| {
+                    (reading.label == "Extra")
+                        .then_some(reading.reset.as_deref())
+                        .flatten()
+                        .map(str::to_owned)
+                });
+                let visible_readings = readings
+                    .iter()
+                    .filter(|reading| extra_progress.is_none() || reading.label != "Extra")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let status_color = quota_remaining_color(
+                    &snapshot.status,
+                    quota_lowest_remaining_percent(&snapshot),
+                );
+                let status_label =
+                    quota_hover_status_label(&snapshot.status, snapshot.data_quality.as_deref());
+                let empty = visible_readings.is_empty() && extra_progress.is_none();
+                let empty_message = snapshot
+                    .error
+                    .clone()
+                    .filter(|error| !error.is_empty())
+                    .unwrap_or_else(|| "Quota data unavailable".to_owned());
+                div()
+                    .id(("native-quota-hover-section", index))
+                    .w_full()
                     .flex()
                     .flex_col()
-                    .gap_1()
+                    .gap(px(12.0))
+                    .p(px(12.0))
+                    .when(index > 0, |section| {
+                        section.border_t_1().border_color(rgb(BORDER_ACTIVE))
+                    })
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .gap_2()
+                            .gap(px(8.0))
+                            .child(quota_provider_icon(&snapshot.provider, 18.0))
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(rgb(TEXT))
-                                    .child("Agent Quotas"),
-                            )
-                            .when(account_filtered, |header| {
-                                header.child(
-                                    div()
-                                        .id("native-quota-back-to-all-accounts")
-                                        .cursor_pointer()
-                                        .rounded_md()
-                                        .px_2()
-                                        .py_1()
-                                        .bg(rgb(PANEL))
-                                        .text_xs()
-                                        .text_color(rgb(TEXT))
-                                        .child("All accounts")
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.quota_popover_account = None;
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .id("native-quota-refresh-all")
-                                    .cursor_pointer()
-                                    .rounded_md()
-                                    .px_2()
-                                    .py_1()
-                                    .bg(rgb(PANEL))
-                                    .text_xs()
-                                    .text_color(rgb(if loading { MUTED } else { TEXT }))
-                                    .child(if loading {
-                                        "Refreshing…"
-                                    } else {
-                                        "Refresh all"
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        let _ = refresh_owner.update(cx, |view, cx| {
-                                            view.refresh_agent_quotas(true, None, cx);
-                                        });
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("native-quota-close-popover")
-                                    .cursor_pointer()
-                                    .px_2()
-                                    .text_color(rgb(MUTED))
-                                    .child("×")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.quota_popover_open = false;
-                                        view.quota_popover_account = None;
-                                        cx.notify();
+                                    .min_w_0()
+                                    .flex_1()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .overflow_hidden()
+                                            .text_size(px(14.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(rgb(TEXT))
+                                            .whitespace_nowrap()
+                                            .child(snapshot.provider_label().to_owned()),
+                                    )
+                                    .children(profile.map(|label| {
+                                        quota_mono_label(
+                                            10.0,
+                                            gpui::FontWeight::NORMAL,
+                                            MUTED,
+                                            label,
+                                        )
                                     })),
-                            ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(6.0))
+                                    .py(px(2.0))
+                                    .rounded_full()
+                                    .bg(rgb(quota_badge_fill(status_color)))
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(status_color))
+                                    .whitespace_nowrap()
+                                    .child(status_label),
+                            )
+                            .child(self.quota_snapshot_refresh_button(
+                                ("native-quota-refresh-account", index),
+                                loading,
+                                snapshot.provider.clone(),
+                                snapshot.account_id.clone(),
+                                owner.clone(),
+                            )),
                     )
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(status))
-                    .when(!pins_available, |header| {
-                        header.child(
+                    .when(empty, |section| {
+                        section.child(
                             div()
-                                .text_xs()
+                                .text_size(px(12.0))
                                 .text_color(rgb(MUTED))
-                                .child("Pin sync needs an updated Classic Runtime Host"),
+                                .child(empty_message),
                         )
-                    }),
-            )
-            .child(
-                div()
-                    .id("native-quota-overview-scroll")
-                    .max_h(px(height))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .children(entries.into_iter().enumerate().map(|(index, snapshot)| {
-                        let provider = snapshot.provider.clone();
-                        let account = snapshot.account_id.clone();
-                        let row_owner = owner.clone();
-                        let pin_owner = owner.clone();
-                        let pin_key = snapshot.pin_key();
-                        let pinned = !unpinned.iter().any(|key| key == &pin_key);
-                        let readings = snapshot.readings();
-                        let extra_progress = snapshot.claude_extra_usage_progress();
-                        let status_text = if snapshot.status == "ok" {
-                            snapshot
-                                .data_quality
-                                .as_deref()
-                                .unwrap_or("Current")
-                                .to_owned()
-                        } else {
-                            snapshot.status.clone()
-                        };
-                        div()
-                            .id(("native-quota-overview-row", index))
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .p_2()
-                            .rounded_md()
-                            .bg(rgb(PANEL))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(quota_provider_icon(&snapshot.provider, 16.0))
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                    .text_color(rgb(if snapshot.status == "ok" {
-                                                        TEXT
-                                                    } else {
-                                                        MUTED
-                                                    }))
-                                                    .child(snapshot.title()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(status_text),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .id(("native-quota-pin-account", index))
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_xs()
-                                                    .text_color(rgb(if pins_available && pinned {
-                                                        TEXT
-                                                    } else {
-                                                        MUTED
-                                                    }))
-                                                    .child(quota_pin_button_label(
-                                                        pins_available,
-                                                        pinned,
-                                                    ))
-                                                    .when(pins_available, |button| {
-                                                        button.cursor_pointer().on_click(
-                                                            move |_, _, cx| {
-                                                                let _ = pin_owner.update(
-                                                                    cx,
-                                                                    |view, cx| {
-                                                                        view.toggle_quota_pin(
-                                                                            pin_key.clone(),
-                                                                            cx,
-                                                                        );
-                                                                    },
-                                                                );
-                                                            },
-                                                        )
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id(("native-quota-refresh-account", index))
-                                                    .cursor_pointer()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_xs()
-                                                    .text_color(rgb(if loading {
-                                                        MUTED
-                                                    } else {
-                                                        TEXT
-                                                    }))
-                                                    .child("↻")
-                                                    .on_click(move |_, _, cx| {
-                                                        let _ = row_owner.update(cx, |view, cx| {
-                                                            view.refresh_agent_quotas(
-                                                                true,
-                                                                Some((
-                                                                    provider.clone(),
-                                                                    account.clone(),
-                                                                )),
-                                                                cx,
-                                                            );
-                                                        });
-                                                    }),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("native-quota-reading-scroll", index))
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap_2()
-                                    .children(
-                                        readings
-                                            .iter()
-                                            .filter(|reading| {
-                                                extra_progress.is_none() || reading.label != "Extra"
-                                            })
-                                            .map(|reading| {
-                                                quota_reading_element(
-                                                    &snapshot.status,
-                                                    reading,
-                                                    true,
-                                                )
-                                            }),
-                                    ),
-                            )
-                            .children(extra_progress.iter().map(|progress| {
-                                claude_extra_usage_progress_element(&snapshot.status, progress)
-                            }))
-                            .children(
-                                readings
-                                    .iter()
-                                    .filter(|reading| {
-                                        extra_progress.is_none() || reading.label != "Extra"
-                                    })
-                                    .filter_map(|reading| {
-                                        reading.detail.as_ref().map(|detail| {
-                                            div()
-                                                .text_xs()
-                                                .text_color(rgb(MUTED))
-                                                .child(detail.clone())
-                                        })
+                    })
+                    .when(!empty, |section| {
+                        section.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.0))
+                                .children(
+                                    visible_readings.iter().map(|reading| {
+                                        quota_hover_reading(&snapshot.status, reading)
                                     }),
-                            )
-                            .children(readings.into_iter().filter_map(|reading| {
-                                reading.reset.map(|reset| {
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(format!("{}: {}", reading.full_label, reset))
-                                })
-                            }))
-                            .when(
-                                snapshot
-                                    .error
-                                    .as_ref()
-                                    .is_some_and(|error| !error.is_empty()),
-                                |row| {
-                                    row.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(snapshot.error.unwrap_or_default()),
+                                )
+                                .children(extra_progress.iter().map(|progress| {
+                                    claude_extra_usage_progress_element(
+                                        &snapshot.status,
+                                        progress,
+                                        reset.as_deref(),
                                     )
-                                },
-                            )
-                    })),
-            )
-            .child(
-                div()
-                    .id("native-quota-open-usage")
-                    .cursor_pointer()
-                    .rounded_md()
-                    .bg(rgb(PANEL))
-                    .p_2()
-                    .text_xs()
-                    .text_color(rgb(TEXT))
-                    .child("Open Usage · 7 / 30 days")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.quota_usage_open = true;
-                        view.quota_popover_account = None;
-                        view.refresh_agent_usage(7, cx);
-                    })),
-            )
+                                })),
+                        )
+                    })
+            }))
             .into_any_element()
     }
+}
+
+fn quota_row_tooltip(snapshot: &QuotaSnapshot, name: &str) -> String {
+    let mut lines = vec![name.to_owned()];
+    let readings = snapshot.readings();
+    for reading in &readings {
+        let reset = reading.reset.as_deref().unwrap_or("Reset time unavailable");
+        if let Some(percent) = reading.remaining_percent.filter(|value| value.is_finite()) {
+            lines.push(format!(
+                "{}: {}% Left - {}",
+                reading.full_label,
+                percent.round() as u32,
+                reset
+            ));
+        } else {
+            lines.push(format!(
+                "{}: {} - {}",
+                reading.full_label, reading.value, reset
+            ));
+        }
+    }
+    if let Some(error) = snapshot.error.as_ref().filter(|error| !error.is_empty()) {
+        lines.push(format!("Error: {error}"));
+    } else if readings.is_empty() {
+        lines.push("Quota data unavailable".to_owned());
+    }
+    lines.join("\n")
 }

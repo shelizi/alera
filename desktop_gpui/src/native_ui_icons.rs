@@ -62,6 +62,9 @@ pub enum UiIcon {
     ChevronsLeft,
     Close,
     Pin,
+    /// Classic quota rows use Lucide `pin-off` when a provider is hidden
+    /// from the status bar. GPUI Kit 0.9 has no `PinOff` asset.
+    PinOff,
     Terminal,
     Graph,
     GitCompare,
@@ -124,7 +127,7 @@ impl UiIcon {
             Self::PanelLeft | Self::PanelRight | Self::ChevronsRight => '\u{eab6}',
             Self::ChevronsLeft => '\u{eab5}',
             Self::Close => '\u{ea76}',
-            Self::Pin => '\u{eb2b}',
+            Self::Pin | Self::PinOff => '\u{eb2b}',
             Self::Terminal => '\u{ea85}',
             Self::Graph | Self::GitCompare => '\u{eb03}',
             Self::Branch => '\u{ec8e}',
@@ -217,6 +220,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::ChevronsLeft => LucideIcon::ChevronsLeft,
         UiIcon::Close => LucideIcon::X,
         UiIcon::Pin => LucideIcon::Pin,
+        UiIcon::PinOff => return None,
         UiIcon::Terminal => LucideIcon::Terminal,
         UiIcon::Graph => LucideIcon::GitGraph,
         UiIcon::GitCompare => LucideIcon::GitCompare,
@@ -253,6 +257,14 @@ const CLASSIC_HISTORY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" w
 <path d="M12 7v5l4 2"/>
 </svg>"#;
 
+/// Lucide `pin-off` (ISC), the same glyph Classic uses for an unpinned quota.
+const CLASSIC_PIN_OFF_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M12 17v5"/>
+<path d="M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89"/>
+<path d="m2 2 20 20"/>
+<path d="M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11"/>
+</svg>"#;
+
 // Same Lucide maximize icon as Classic's Open Commit Graph button.
 const CLASSIC_MAXIMIZE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
@@ -276,10 +288,14 @@ pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
                 .text_color(rgb(color)),
         );
     }
-    if icon == UiIcon::History {
+    if let Some(svg) = match icon {
+        UiIcon::History => Some(CLASSIC_HISTORY_SVG),
+        UiIcon::PinOff => Some(CLASSIC_PIN_OFF_SVG),
+        _ => None,
+    } {
         return frame.child(
             Icon::default()
-                .data(CLASSIC_HISTORY_SVG)
+                .data(svg)
                 .with_size(px(size_px))
                 .text_color(rgb(color)),
         );
@@ -444,6 +460,16 @@ mod tests {
         }
         assert_eq!(lucide_name(UiIcon::GitStage), None);
         assert_eq!(lucide_name(UiIcon::GitDiscard), None);
+    }
+
+    #[test]
+    fn quota_pin_icons_match_classic_pin_and_pin_off() {
+        assert!(CLASSIC_ICONS.contains("static const IconData pin = LucideIcons.pin;"));
+        assert!(CLASSIC_ICONS.contains("static const IconData pinOff = LucideIcons.pinOff;"));
+        assert_eq!(lucide_name(UiIcon::Pin), Some(LucideIcon::Pin));
+        assert_eq!(lucide_name(UiIcon::PinOff), None);
+        let svg = std::str::from_utf8(CLASSIC_PIN_OFF_SVG).unwrap();
+        assert!(svg.contains("m2 2 20 20"));
     }
 
     #[test]

@@ -862,7 +862,8 @@ impl Workbench {
                     .child(div().text_sm().child(tr(self.settings_menu_locale, "Provider Quotas")))
                     .child(div().text_xs().text_color(rgb(MUTED)).child(
                         tr(self.settings_menu_locale, "Open the existing provider/account quota overview and refresh from Runtime Host."),
-                    )),
+                    ))
+                    .children(self.render_quota_settings_pin_rows(cx)),
             )
             .child(
                 native_components::action_button(

@@ -9,6 +9,19 @@ fn font_draft_follows_host(draft: &str, last_host_value: &str) -> bool {
     draft == last_host_value
 }
 
+/// Classic treats a missing pin list as "everything shown". An older Host
+/// omits `agents.quotaUnpinnedKeys`; the first toggle still compares against
+/// that empty default instead of refusing the click.
+fn shared_setting_expected(
+    path: &str,
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if let Some(value) = values.get(path) {
+        return Some(value.clone());
+    }
+    (path == "agents.quotaUnpinnedKeys").then(|| serde_json::json!([]))
+}
+
 #[cfg(test)]
 mod settings_font_draft_tests {
     use super::font_draft_follows_host;
@@ -19,6 +32,25 @@ mod settings_font_draft_tests {
         assert!(font_draft_follows_host("Consolas", "Consolas"));
         assert!(!font_draft_follows_host("Cascadia Code", "Consolas"));
         assert!(!font_draft_follows_host("", "Consolas"));
+    }
+
+    #[test]
+    fn missing_quota_pin_field_uses_the_classic_empty_default() {
+        use super::shared_setting_expected;
+        let mut values = serde_json::Map::new();
+        assert_eq!(
+            shared_setting_expected("agents.quotaUnpinnedKeys", &values),
+            Some(serde_json::json!([]))
+        );
+        values.insert(
+            "agents.quotaUnpinnedKeys".into(),
+            serde_json::json!(["agy"]),
+        );
+        assert_eq!(
+            shared_setting_expected("agents.quotaUnpinnedKeys", &values),
+            Some(serde_json::json!(["agy"]))
+        );
+        assert_eq!(shared_setting_expected("editor.twoRowTabs", &values), None);
     }
 }
 
@@ -356,8 +388,8 @@ impl Workbench {
                 cx.notify();
                 return;
             }
-            match self.settings_extra_values.get(path) {
-                Some(value) => value.clone(),
+            match shared_setting_expected(path, &self.settings_extra_values) {
+                Some(value) => value,
                 None => {
                     self.model
                         .set_status("Load shared Rust settings before editing");
