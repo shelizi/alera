@@ -19,6 +19,7 @@ mod native_host_pins_ui;
 mod native_popup_ui;
 mod native_project_sidebar_ui;
 mod native_project_sidebar_modal_ui;
+mod native_sidebar_view_options;
 mod native_review_links;
 mod native_settings_catalog_ui;
 mod native_settings_ui;
@@ -31,7 +32,6 @@ mod win_ime;
 use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 use native_history_sync_ui::AgyAccountEdit;
 use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
-use native_project_sidebar_modal_ui::SidebarOptionsTarget;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -126,7 +126,7 @@ use alera_gpui_desktop::native_settings::{
     NativeSettings, NativeSettingsStore, NativeSidebarLayout,
 };
 use alera_gpui_desktop::project_tree::{
-    collect_project_tree_with_registered, project_group_matches_search,
+    collect_project_tree_with_registered,
     project_title_matches_search, reconcile_sidebar_on_workspace_switch,
     sidebar_workspaces_for_group, worktree_matches_search, ProjectTreeGroup,
 };
@@ -171,7 +171,9 @@ use alera_gpui_desktop::workbench_panes::{
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
-use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows_with_manual;
+use alera_gpui_desktop::workspace_sidebar_order::{
+    order_worktree_rows_with_manual, visible_worktree_rows,
+};
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
     search_worktree_contents, worktree_hit_requires_switch, WorktreeContentMatch,
@@ -186,6 +188,7 @@ use gpui::{
     PathPromptOptions, ScrollHandle, UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::Disableable as _;
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::IconName;
 use gpui_kit::component::WindowExt as _;
@@ -934,6 +937,10 @@ struct Workbench {
     sidebar_options_modal_focus: gpui::FocusHandle,
     sidebar_options_modal_open: bool,
     collapsed_project_roots: HashSet<PathBuf>,
+    collapsed_worktree_paths: HashSet<PathBuf>,
+    sidebar_view_options: native_sidebar_view_options::SidebarViewOptions,
+    sidebar_back: VecDeque<PathBuf>,
+    sidebar_forward: VecDeque<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
     show_recent_workspaces: bool,
@@ -7007,6 +7014,7 @@ impl Workbench {
         }
         self.worktree_create_root = Some(project_root);
         self.worktree_create_from_existing = false;
+        self.worktree_error = None;
         self.worktree_create_input =
             Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)));
         self.show_project_management = true;
@@ -7014,6 +7022,14 @@ impl Workbench {
     }
 
     fn create_worktree(&mut self, cx: &mut Context<Self>) {
+        self.submit_worktree_creation(None, cx);
+    }
+
+    fn create_worktree_in_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_worktree_creation(Some(window.window_handle()), cx);
+    }
+
+    fn submit_worktree_creation(&mut self, dialog: Option<gpui::AnyWindowHandle>, cx: &mut Context<Self>) {
         if self.worktree_busy || self.mcp_workspace_create_busy || self.editor_dirty(cx) {
             self.model
                 .set_status("Save editor changes and finish other worktree operations first");
@@ -7073,6 +7089,12 @@ impl Workbench {
                 view.worktree_busy = false;
                 match result {
                     Ok(path) => {
+                        if let Some(dialog) = dialog.filter(|_| {
+                            view.sidebar_options_modal_open && view.worktree_create_root.is_some()
+                        }) {
+                            view.sidebar_options_modal_open = false;
+                            let _ = dialog.update(cx, |_, window, cx| window.close_dialog(cx));
+                        }
                         view.worktree_create_input = None;
                         view.worktree_create_root = None;
                         view.worktree_create_from_existing = false;
@@ -7152,6 +7174,17 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.switch_workspace_with_history(root, None, cx);
+    }
+
+    fn navigate_sidebar_history(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let history = if forward { &self.sidebar_forward } else { &self.sidebar_back };
+        if let Some(root) = history.back().cloned() {
+            self.switch_workspace_with_history(root, Some(forward), cx);
+        }
+    }
+
+    fn switch_workspace_with_history(&mut self, root: PathBuf, forward: Option<bool>, cx: &mut Context<Self>) {
         if self.worktree_busy
             || self.mcp_workspace_create_busy
             || self.terminal_create_flow.is_creating()
@@ -7218,6 +7251,25 @@ impl Workbench {
         // navigation into the old workspace. A navigation-triggered switch
         // requeues its exact verified target after the switch succeeds.
         self.agent_navigation.cancel();
+        let previous = self.model.root().to_path_buf();
+        let history = match forward {
+            Some(true) => {
+                self.sidebar_forward.pop_back();
+                &mut self.sidebar_back
+            }
+            Some(false) => {
+                self.sidebar_back.pop_back();
+                &mut self.sidebar_forward
+            }
+            None => {
+                self.sidebar_forward.clear();
+                &mut self.sidebar_back
+            }
+        };
+        history.push_back(previous);
+        if history.len() > 128 {
+            history.pop_front();
+        }
         self.model = next;
         self.refresh_review_browser_url();
         self.center_view = CenterView::Terminal;
@@ -12656,7 +12708,6 @@ impl Render for Workbench {
         let sidebar_search_input = self.sidebar_search_input.clone();
         let sidebar_search_query = self.sidebar_search_input.read(cx).query().trim().to_owned();
         let sidebar_search_active = !sidebar_search_query.is_empty();
-        let picking_workspace = self.picking_workspace;
         let workspace_root = self.model.root().to_path_buf();
         let recent_workspaces: Vec<_> = self
             .recent_workspaces
@@ -12666,30 +12717,58 @@ impl Render for Workbench {
             .enumerate()
             .collect();
         let saved_projects: Vec<_> = self.saved_projects.iter().cloned().enumerate().collect();
+        let empty_worktree_collapses = HashSet::new();
+        let active_sidebar_workspaces: HashSet<_> = self.terminals.sessions.iter()
+            .filter(|session| session.running && !self.terminals.session_list_is_stale())
+            .map(|session| session.workspace_id.as_str())
+            .collect();
+        let sidebar_filters = &self.sidebar_view_options;
+        let sidebar_filtered = sidebar_filters.is_filtered();
+        let sidebar_git_project = self.project_tree_groups.iter()
+            .find(|group| group.is_active && !group.worktrees.is_empty())
+            .map(|group| group.root.clone());
+        let sidebar_has_git_projects = self.project_tree_groups.iter()
+            .any(|group| !group.worktrees.is_empty());
         let project_tree_rows: Vec<_> = self
             .project_tree_groups
             .iter()
             .take(45)
             .enumerate()
             .filter(|(_, group)| {
-                project_group_matches_search(
-                    group,
-                    self.runtime_catalog.as_ref(),
-                    &sidebar_search_query,
-                )
+                sidebar_filters.project_roots.is_empty() || sidebar_filters.project_roots.contains(&group.root)
             })
-            .map(|(index, group)| {
+            .filter_map(|(index, group)| {
+                let catalog = self.runtime_catalog.as_ref();
+                let show_all = !sidebar_search_active
+                    || project_title_matches_search(group, catalog, &sidebar_search_query);
+                let mut entries = sidebar_workspaces_for_group(group, catalog);
+                entries.retain(|entry| {
+                    let has_terminal = catalog.is_some_and(|catalog| catalog.workspaces.iter()
+                        .any(|workspace| workspace.path == entry.path
+                            && active_sidebar_workspaces.contains(workspace.id.as_str())));
+                    sidebar_filters.includes_worktree(entry, catalog, has_terminal)
+                        && (show_all || worktree_matches_search(entry, catalog, &sidebar_search_query))
+                });
+                if entries.is_empty() && (sidebar_filtered || !show_all) {
+                    return None;
+                }
+                let rows = order_worktree_rows_with_manual(
+                    &entries, catalog, self.sidebar_order_prefs.as_ref()
+                        .filter(|prefs| prefs.workspace_is_manual())
+                        .map(|prefs| prefs.workspace_order.as_slice()),
+                );
                 // Searching temporarily expands matching descendants without
                 // modifying the user's persisted collapse preference.
                 let collapsed =
                     !sidebar_search_active && self.collapsed_project_roots.contains(&group.root);
-                (index, group.clone(), collapsed)
+                Some((index, group.clone(), collapsed, rows))
             })
             .collect();
-        let sidebar_visible_project_count = project_tree_rows.len();
+        let sidebar_visible_workspace_count: usize = project_tree_rows.iter().map(|(_, _, _, rows)| rows.len()).sum();
         let sidebar_all_projects_collapsed = !project_tree_rows.is_empty()
-            && project_tree_rows.iter().all(|(_, _, collapsed)| *collapsed);
-        let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
+            && project_tree_rows.iter().all(|(_, _, collapsed, _)| *collapsed);
+        let sidebar_search_empty = (sidebar_search_active || sidebar_filtered) && project_tree_rows.is_empty();
+        let sidebar_collapse_roots: Vec<_> = project_tree_rows.iter().map(|(_, group, _, _)| group.root.clone()).collect();
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
         let sidebar_order_prefs = self.sidebar_order_prefs.clone();
@@ -12701,7 +12780,7 @@ impl Render for Workbench {
         let sidebar_drag_generation = self.workspace_generation;
         let visible_project_ids: Vec<String> = project_tree_rows
             .iter()
-            .filter_map(|(_, group, _)| {
+            .filter_map(|(_, group, _, _)| {
                 runtime_catalog
                     .as_ref()
                     .and_then(|catalog| {
@@ -12715,13 +12794,9 @@ impl Render for Workbench {
             .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
+        let sidebar_menu_catalog = runtime_catalog.clone().map(Arc::new);
         let sidebar_rename_input = if self.sidebar_options_modal_open { None } else { self.sidebar_rename_input.clone() };
         let sidebar_create_input = if self.sidebar_options_modal_open { None } else { self.sidebar_create_input.clone() };
-        let selected_sidebar_parent = self.sidebar_selected_parent.clone();
-        let sidebar_project_remove_id = self
-            .sidebar_project_remove_pending
-            .as_ref()
-            .map(|(id, _)| id.clone());
         let worktree_rows: Vec<_> = self
             .worktrees
             .iter()
@@ -17322,54 +17397,44 @@ impl Render for Workbench {
                                     // Classic's single Projects toolbar replaces separate
                                     // Recent and Projects / Worktrees headings.
                                     .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_sm().child("Projects"))
-                                    .child(div().text_xs().text_color(rgb(MUTED)).child(sidebar_visible_project_count.to_string()))
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(sidebar_visible_workspace_count.to_string()))
                                     .child(div().flex_1())
+                                    .child(icon_button("projects-go-back", UiIcon::ChevronLeft,
+                                        "Go Back", false)
+                                        .disabled(self.sidebar_back.is_empty())
+                                        .on_click(cx.listener(|view, _, _, cx| view.navigate_sidebar_history(false, cx))))
+                                    .child(icon_button("projects-go-forward", UiIcon::ChevronRight,
+                                        "Go Forward", false)
+                                        .disabled(self.sidebar_forward.is_empty())
+                                        .on_click(cx.listener(|view, _, _, cx| view.navigate_sidebar_history(true, cx))))
                                     .child(icon_button("projects-view-options", UiIcon::Sliders,
-                                        "Projects, saved and recent workspaces", false)
+                                        "View Options", sidebar_filtered)
                                         .on_click(cx.listener(|view, _, window, cx| {
-                                            view.show_project_management = false;
-                                            view.open_sidebar_options_dialog(
-                                                SidebarOptionsTarget::Management(view.model.root().to_path_buf()),
-                                                window, cx,
-                                            );
+                                            view.open_sidebar_view_options(window, cx);
                                         })))
                                     .child(icon_button("projects-collapse-all",
                                         if sidebar_all_projects_collapsed { UiIcon::ExpandAll } else { UiIcon::CollapseAll },
                                         if sidebar_all_projects_collapsed { "Expand All" } else { "Collapse All" }, false)
-                                        .on_click(cx.listener(|view, _, _, cx| {
+                                        .on_click(cx.listener(move |view, _, _, cx| {
                                             // Searching auto-expands without mutating the user's
                                             // manual collapse state, matching Classic.
                                             if !view.sidebar_search_input.read(cx).query().trim().is_empty() {
                                                 return;
                                             }
-                                            let roots: Vec<_> = view.project_tree_groups.iter()
-                                                .map(|group| group.root.clone()).collect();
-                                            let all_collapsed = !roots.is_empty() && roots.iter()
-                                                .all(|root| view.collapsed_project_roots.contains(root));
-                                            for root in roots {
-                                                if all_collapsed {
-                                                    view.collapsed_project_roots.remove(&root);
+                                            for root in &sidebar_collapse_roots {
+                                                if sidebar_all_projects_collapsed {
+                                                    view.collapsed_project_roots.remove(root);
                                                 } else {
-                                                    view.collapsed_project_roots.insert(root);
+                                                    view.collapsed_project_roots.insert(root.clone());
                                                 }
                                             }
                                             cx.notify();
                                         })))
-                                    .child(icon_button("project-tree-refresh", UiIcon::Refresh,
-                                        "Refresh projects and worktrees", project_tree_loading)
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.refresh_project_tree(cx);
-                                        })))
                                     .child(icon_button("projects-new-workspace", UiIcon::Add,
-                                        "New Workspace", picking_workspace)
-                                        .on_click(cx.listener(|view, _, window, cx| {
-                                            let root = view.model.root().to_path_buf();
-                                            view.show_project_management = false;
-                                            view.open_sidebar_options_dialog(
-                                                SidebarOptionsTarget::Management(root.clone()), window, cx,
-                                            );
-                                            view.begin_worktree_for_project(root, cx);
-                                            view.show_project_management = false;
+                                        if sidebar_has_git_projects { "New Workspace" } else { "Add a Git Project First" }, false)
+                                        .disabled(!sidebar_has_git_projects || self.worktree_busy)
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.open_new_sidebar_workspace(sidebar_git_project.clone(), window, cx);
                                         }))),
                             )
                             .child(
@@ -17483,19 +17548,15 @@ impl Render for Workbench {
                                             .flex_1()
                                             .min_h_0()
                                             .overflow_y_scroll()
-                                            .children(project_tree_rows.into_iter().map(|(index, group, collapsed)| {
-                                                let root = group.root.clone();
+                                            .children(project_tree_rows.into_iter().map(|(index, group, collapsed, rows)| {
                                                 let fold_root = group.root.clone();
                                                 let current = group.is_active;
-                                                let pinned = group.is_saved;
                                                 let menu_project_id = runtime_catalog.as_ref()
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
                                                     .map(|project| project.id.clone());
-                                                let project_remove_armed = menu_project_id.as_deref()
-                                                    == sidebar_project_remove_id.as_deref();
                                                 let project_context_root = group.root.clone();
-                                                let project_options_root = group.root.clone();
                                                 let worktree_project_root = group.root.clone();
+                                                let git_project = !group.worktrees.is_empty();
                                                 let title = runtime_catalog.as_ref()
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
                                                     .map(|project| project.name.clone())
@@ -17512,19 +17573,9 @@ impl Render for Workbench {
                                                 let project_drag_gate = sidebar_reorder_hold.clone();
                                                 let project_hint = sidebar_reorder_hint.clone();
                                                 let project_preview_hint = sidebar_reorder_hint.clone();
-                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active
+                                                let can_reorder_project = menu_project_id.is_some() && !sidebar_search_active && !sidebar_filtered
                                                     && sidebar_order_prefs.as_ref()
                                                         .is_some_and(|prefs| prefs.project_is_manual());
-                                                let show_all_worktrees = project_title_matches_search(
-                                                    &group, runtime_catalog.as_ref(), &sidebar_search_query,
-                                                );
-                                                let rows = order_worktree_rows_with_manual(
-                                                    &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
-                                                    runtime_catalog.as_ref(),
-                                                    sidebar_order_prefs.as_ref()
-                                                        .filter(|prefs| prefs.workspace_sort == "manual")
-                                                        .map(|prefs| prefs.workspace_order.as_slice()),
-                                                );
                                                 let project_workspace_count = rows.len();
                                                 let project_create_root = group.root.clone();
                                                 let visible_worktree_ids: Vec<String> = rows.iter()
@@ -17542,21 +17593,11 @@ impl Render for Workbench {
                                                     .py_1()
                                                     .child(
                                                         div()
+                                                            .id("project-context-header")
                                                             .flex()
                                                             .items_center()
                                                             .gap_1()
-                                                            .child(
-                                                                icon_button(("project-tree-toggle", index),
-                                                                    if collapsed { UiIcon::ChevronRight } else { UiIcon::ChevronDown },
-                                                                    "Expand or collapse this project's worktrees",
-                                                                    false)
-                                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                                        if !this.collapsed_project_roots.insert(fold_root.clone()) {
-                                                                            this.collapsed_project_roots.remove(&fold_root);
-                                                                        }
-                                                                        cx.notify();
-                                                                    })),
-                                                            )
+                                                            .cursor_pointer()
                                                             .child(icon(UiIcon::Folder, 14.0, MUTED))
                                                             .child(
                                                                 div()
@@ -17573,20 +17614,12 @@ impl Render for Workbench {
                                                                     .text_sm()
                                                                     .text_color(rgb(if current { TEXT } else { MUTED }))
                                                                     .child(title)
-                                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                                        this.switch_workspace(root.clone(), cx);
-                                                                    }))
                                                                     .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
                                                                         this.drop_sidebar_order(
                                                                             drag, SidebarOrderKind::Project, project_drop_id.clone(),
                                                                             project_drop_visible_ids.clone(), cx,
                                                                         );
-                                                                    }))
-                                                                    .context_menu(Self::sidebar_project_context_menu(
-                                                                        cx.entity().downgrade(), project_context_root, pinned,
-                                                                        menu_project_id,
-                                                                        project_remove_armed,
-                                                                    ))
+                                                                    })))
                                                             .when(can_reorder_project, |row| row.child(
                                                                 div()
                                                                     .id(("project-reorder-grip", index))
@@ -17622,34 +17655,34 @@ impl Render for Workbench {
                                                                             cx.new(|_| TerminalTabDragPreview { label: caption })
                                                                         },
                                                                     ),
-                                                            )))
-                                                            .when(pinned, |header| header.child(icon(UiIcon::Pin, 12.0, MUTED)))
+                                                            ))
+                                                            .when(group.is_saved, |header| header.child(icon(UiIcon::Pin, 12.0, MUTED)))
                                                             .child(div().text_xs().text_color(rgb(MUTED)).child(project_workspace_count.to_string()))
-                                                            .child(icon_button(("project-create-worktree", index), UiIcon::Add,
-                                                                "New Workspace for this project", false)
+                                                            .child(icon(if collapsed { UiIcon::ChevronDown } else { UiIcon::ChevronUp }, 14.0, MUTED))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                if !sidebar_search_active && !this.collapsed_project_roots.remove(&fold_root) {
+                                                                    this.collapsed_project_roots.insert(fold_root.clone());
+                                                                }
+                                                                cx.notify();
+                                                            }))
+                                                            .when(git_project, |row| row.child(icon_button(("project-create-worktree", index), UiIcon::Add,
+                                                                "New Workspace in This Project", false)
                                                                 .on_click(cx.listener(move |view, _, window, cx| {
-                                                                    let root = project_create_root.clone();
-                                                                    view.open_sidebar_options_dialog(
-                                                                        SidebarOptionsTarget::Project(root.clone()), window, cx,
-                                                                    );
-                                                                    let before = view.show_project_management;
-                                                                    view.begin_worktree_for_project(root, cx);
-                                                                    view.show_project_management = before;
-                                                                })))
-                                                            .child(icon_button(("project-options", index), UiIcon::More,
-                                                                "Project options", false)
-                                                                .on_click(cx.listener(move |view, _, window, cx| {
-                                                                    view.open_sidebar_options_dialog(
-                                                                        SidebarOptionsTarget::Project(project_options_root.clone()),
-                                                                        window, cx,
-                                                                    );
-                                                                }))),
+                                                                    cx.stop_propagation();
+                                                                    view.open_new_sidebar_workspace(Some(project_create_root.clone()), window, cx);
+                                                                }))))
+                                                            .context_menu(Self::sidebar_project_context_menu(
+                                                                cx.entity().downgrade(), project_context_root,
+                                                                menu_project_id, !current, git_project,
+                                                            )),
                                                     )
-                                                    .children(rows.into_iter()
-                                                        .filter(|row| !sidebar_search_active || show_all_worktrees
-                                                            || worktree_matches_search(&row.entry, runtime_catalog.as_ref(), &sidebar_search_query))
+                                                    .children(visible_worktree_rows(rows, if sidebar_search_active {
+                                                            &empty_worktree_collapses
+                                                        } else {
+                                                            &self.collapsed_worktree_paths
+                                                        })
                                                         .take(if collapsed { 0 } else { 96 })
-                                                        .enumerate().map(|(child_index, row)| {
+                                                        .enumerate().map(|(child_index, (row, has_children))| {
                                                         let entry = row.entry;
                                                         // Classic displays explicit custom sections,
                                                         // not an "Other workspaces" label beneath every project.
@@ -17671,11 +17704,11 @@ impl Render for Workbench {
                                                         let active = workspace_root == target;
                                                         let menu_root = worktree_project_root.clone();
                                                         let menu_path = target.clone();
-                                                        let workspace_options_root = worktree_project_root.clone();
-                                                        let workspace_options_path = target.clone();
-                                                        let menu_catalog = runtime_catalog.clone();
+                                                        let fold_path = target.clone();
+                                                        let children_collapsed = !sidebar_search_active
+                                                            && self.collapsed_worktree_paths.contains(&target);
+                                                        let menu_catalog = sidebar_menu_catalog.clone();
                                                         let menu_confirmation = sidebar_pending_action.clone();
-                                                        let menu_selected_parent = selected_sidebar_parent.clone();
                                                         let metadata = runtime_catalog.as_ref().and_then(|catalog|
                                                             catalog.workspaces.iter().find(|workspace| workspace.path == target)
                                                         );
@@ -17697,18 +17730,21 @@ impl Render for Workbench {
                                                         let workspace_drag_gate = sidebar_reorder_hold.clone();
                                                         let workspace_hint = sidebar_reorder_hint.clone();
                                                         let workspace_preview_hint = sidebar_reorder_hint.clone();
-                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active
+                                                        let can_reorder_workspace = metadata.is_some() && !sidebar_search_active && !sidebar_filtered
                                                             && sidebar_order_prefs.as_ref()
                                                                 .is_some_and(|prefs| prefs.workspace_is_manual());
                                                         div()
-                                                            .id(("project-tree-worktree-container", index * 128 + child_index))
+                                                            .id(gpui::SharedString::from(format!("project-tree-worktree:{}", menu_path.display())))
                                                             .flex().flex_col()
                                                             .child(if let Some(section) = section_header {
                                                                 div().pl_3().pt_1().text_xs()
                                                                     .text_color(rgb(MUTED))
                                                                     .child(section).into_any_element()
                                                             } else { div().h(px(0.0)).into_any_element() })
-                                                            .child(div().flex().items_center().child(div()
+                                                            .child(div()
+                                                            .id("project-worktree-header")
+                                                            .flex().items_center()
+                                                            .child(div()
                                                             .id(("project-tree-worktree", index * 128 + child_index))
                                                             .flex_1().min_w_0()
                                                             .pl(px(15.0 + depth.min(8) as f32 * 14.0))
@@ -17749,12 +17785,18 @@ impl Render for Workbench {
                                                                     drag, SidebarOrderKind::Workspace, workspace_drop_id.clone(),
                                                                     workspace_drop_visible.clone(), cx,
                                                                 );
-                                                            }))
-                                                            .context_menu(Self::sidebar_workspace_context_menu(
-                                                                cx.entity().downgrade(), menu_root, menu_path,
-                                                                metadata.cloned(), menu_catalog, menu_confirmation,
-                                                                menu_selected_parent, active,
-                                                            )))
+                                                            })))
+                                                            .when(has_children && !sidebar_search_active, |row| row.child(
+                                                                icon_button(("workspace-toggle-children", index * 128 + child_index),
+                                                                    if children_collapsed { UiIcon::ChevronRight } else { UiIcon::ChevronDown },
+                                                                    "Expand or Collapse Child Worktrees", false)
+                                                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                                                        if !view.collapsed_worktree_paths.remove(&fold_path) {
+                                                                            view.collapsed_worktree_paths.insert(fold_path.clone());
+                                                                        }
+                                                                        cx.notify();
+                                                                    })),
+                                                            ))
                                                             .when(can_reorder_workspace, |row| row.child(
                                                                 div()
                                                                     .id(("workspace-reorder-grip", index * 128 + child_index))
@@ -17790,18 +17832,12 @@ impl Render for Workbench {
                                                                             cx.new(|_| TerminalTabDragPreview { label: caption })
                                                                         },
                                                                     ),
+                                                            ))
+                                                            .context_menu(Self::sidebar_workspace_context_menu(
+                                                                cx.entity().downgrade(), menu_root, menu_path,
+                                                                metadata.cloned(), menu_catalog, menu_confirmation,
+                                                                is_primary_workspace, active,
                                                             )))
-                                                            .child(icon_button(("workspace-options", index * 128 + child_index),
-                                                                UiIcon::More, "Workspace / Worktree options", false)
-                                                                .on_click(cx.listener(move |view, _, window, cx| {
-                                                                    view.open_sidebar_options_dialog(
-                                                                        SidebarOptionsTarget::Workspace {
-                                                                            project_root: workspace_options_root.clone(),
-                                                                            path: workspace_options_path.clone(),
-                                                                        },
-                                                                        window, cx,
-                                                                    );
-                                                                })))
                                                             .children(sidebar_agents.into_iter().take(24).enumerate().map(
                                                                 |(agent_index, (handle, workspace_id, tab_id, agent_type, visual_state))| {
                                                                     let provider_name = native_agent_quota_ui::classic_agent_display_name(&agent_type);
@@ -19083,6 +19119,10 @@ fn main() {
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),
+                            collapsed_worktree_paths: HashSet::new(),
+                            sidebar_view_options: Default::default(),
+                            sidebar_back: VecDeque::new(),
+                            sidebar_forward: VecDeque::new(),
                             show_recent_workspaces: false,
                             sidebar_search_input,
                             worktrees: Vec::new(),

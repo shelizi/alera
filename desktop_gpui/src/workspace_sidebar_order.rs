@@ -3,6 +3,7 @@
 use crate::runtime_catalog::RuntimeCatalog;
 use crate::worktree_manager::WorktreeEntry;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct SidebarWorktreeRow {
@@ -10,6 +11,29 @@ pub struct SidebarWorktreeRow {
     pub depth: usize,
     /// Printed once at the beginning of each top-level section.
     pub section_header: Option<String>,
+}
+
+pub fn visible_worktree_rows(
+    rows: Vec<SidebarWorktreeRow>,
+    collapsed: &HashSet<PathBuf>,
+) -> impl Iterator<Item = (SidebarWorktreeRow, bool)> + '_ {
+    let mut rows = rows.into_iter().peekable();
+    let mut hidden_below = None;
+    std::iter::from_fn(move || {
+        while let Some(row) = rows.next() {
+            if hidden_below.is_some_and(|depth| row.depth > depth) {
+                continue;
+            }
+            let has_children = rows.peek().is_some_and(|next| next.depth > row.depth);
+            hidden_below = if has_children && collapsed.contains(&row.entry.path) {
+                Some(row.depth)
+            } else {
+                None
+            };
+            return Some((row, has_children));
+        }
+        None
+    })
 }
 
 /// A cycle or stale parent cannot hide or infinitely recurse any checkout.
@@ -217,6 +241,48 @@ mod tests {
     use super::*;
     use crate::runtime_catalog::{RuntimeSection, RuntimeWorkspace};
     use std::path::PathBuf;
+
+    #[test]
+    fn worktree_disclosure_hides_only_descendants_and_preserves_nested_state() {
+        let rows: Vec<_> = [("main", 0), ("child", 1), ("grandchild", 2), ("sibling", 0)]
+            .into_iter()
+            .map(|(name, depth)| SidebarWorktreeRow {
+                entry: WorktreeEntry {
+                    path: PathBuf::from(name),
+                    branch: None,
+                    detached: false,
+                    locked: false,
+                    prunable: false,
+                    is_primary: depth == 0 && name == "main",
+                },
+                depth,
+                section_header: None,
+            })
+            .collect();
+        let visible = |collapsed: &HashSet<PathBuf>| {
+            visible_worktree_rows(rows.clone(), collapsed)
+                .map(|(row, has_children)| (row.entry.path, has_children))
+                .collect::<Vec<_>>()
+        };
+        let mut collapsed = HashSet::from([PathBuf::from("main"), PathBuf::from("child")]);
+        assert_eq!(
+            visible(&collapsed),
+            [
+                (PathBuf::from("main"), true),
+                (PathBuf::from("sibling"), false)
+            ]
+        );
+        collapsed.remove(&PathBuf::from("main"));
+        assert_eq!(
+            visible(&collapsed),
+            [
+                (PathBuf::from("main"), true),
+                (PathBuf::from("child"), true),
+                (PathBuf::from("sibling"), false),
+            ]
+        );
+        assert_eq!(visible(&HashSet::new()).len(), rows.len());
+    }
 
     fn git_entry(path: &str, primary: bool) -> WorktreeEntry {
         WorktreeEntry {

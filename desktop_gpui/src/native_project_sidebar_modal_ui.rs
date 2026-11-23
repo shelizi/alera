@@ -7,8 +7,12 @@ use native_project_sidebar_ui::SidebarWorkspaceAction;
 
 #[derive(Clone, Debug)]
 pub(super) enum SidebarOptionsTarget {
-    Management(PathBuf),
     Project(PathBuf),
+    NewWorkspace(PathBuf),
+    RemoveProject {
+        root: PathBuf,
+        id: String,
+    },
     Workspace {
         project_root: PathBuf,
         path: PathBuf,
@@ -18,15 +22,19 @@ pub(super) enum SidebarOptionsTarget {
 impl SidebarOptionsTarget {
     fn title(&self) -> &'static str {
         match self {
-            Self::Management(_) => "Projects & Worktrees",
             Self::Project(_) => "Project options",
+            Self::NewWorkspace(_) => "New Workspace",
+            Self::RemoveProject { .. } => "Remove Project?",
             Self::Workspace { .. } => "Workspace options",
         }
     }
 
     fn path(&self) -> &Path {
         match self {
-            Self::Management(path) | Self::Project(path) | Self::Workspace { path, .. } => path,
+            Self::Project(path)
+            | Self::NewWorkspace(path)
+            | Self::RemoveProject { root: path, .. }
+            | Self::Workspace { path, .. } => path,
         }
     }
 }
@@ -40,8 +48,6 @@ enum SidebarModalAction {
     Rename(&'static str, String),
     ForgetProject(String, PathBuf),
     NewWorktree(PathBuf),
-    RefreshProjects,
-    RefreshWorktrees,
     Create(&'static str, String),
     SelectParent(String, String),
     ChangeParent(String, String, bool),
@@ -86,7 +92,7 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(target, SidebarOptionsTarget::Management(_))
+        if !matches!(target, SidebarOptionsTarget::NewWorkspace(_))
             && !self.project_tree_groups.iter().any(|group| {
                 group.root == target.path()
                     || group
@@ -108,7 +114,14 @@ impl Workbench {
         window.open_dialog(cx, move |dialog, window, cx| {
             if first_focus.replace(false) {
                 if let Some(entity) = owner.upgrade() {
-                    let focus = entity.read(cx).sidebar_options_modal_focus.clone();
+                    let view = entity.read(cx);
+                    let focus = view
+                        .sidebar_rename_input
+                        .as_ref()
+                        .or(view.sidebar_create_input.as_ref())
+                        .or(view.worktree_create_input.as_ref())
+                        .map(|input| input.read(cx).focus_handle(cx))
+                        .unwrap_or_else(|| view.sidebar_options_modal_focus.clone());
                     window.focus(&focus, cx);
                 }
             }
@@ -125,7 +138,7 @@ impl Workbench {
                 .title(target.title())
                 .w(px(580.0))
                 .centered()
-                .close_button(false)
+                .close_button(matches!(target, SidebarOptionsTarget::NewWorkspace(_)))
                 .overlay_closable(true)
                 .on_cancel(move |_, _, cx| {
                     let _ =
@@ -135,6 +148,113 @@ impl Workbench {
                 // Never let the dialog's default Enter invoke an implicit mutation.
                 .on_ok(|_, _, _| false)
                 .child(content)
+        });
+    }
+
+    pub(super) fn open_new_sidebar_workspace(
+        &mut self,
+        project: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.worktree_busy || self.mcp_workspace_create_busy {
+            return;
+        }
+        self.open_sidebar_options_dialog(
+            SidebarOptionsTarget::NewWorkspace(self.model.root().to_path_buf()),
+            window,
+            cx,
+        );
+        if let Some(project) = project {
+            self.run_sidebar_modal_action(
+                SidebarModalAction::NewWorktree(project),
+                self.workspace_generation,
+                window,
+                cx,
+            );
+        }
+    }
+
+    pub(super) fn open_sidebar_project_removal(
+        &mut self,
+        id: String,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_sidebar_options_dialog(
+            SidebarOptionsTarget::RemoveProject {
+                root: root.clone(),
+                id: id.clone(),
+            },
+            window,
+            cx,
+        );
+        self.forget_sidebar_project(id, root, None, cx);
+    }
+
+    pub(super) fn open_sidebar_project_sleep(
+        &mut self,
+        project_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.worktree_busy || self.editor_dirty(cx) {
+            self.model
+                .set_status("Save editor changes and finish the current worktree operation first");
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            return;
+        };
+        let workspaces: Vec<_> = self
+            .runtime_catalog
+            .iter()
+            .flat_map(|catalog| &catalog.workspaces)
+            .filter(|workspace| workspace.project_id == project_id && !workspace.is_archived)
+            .map(|workspace| workspace.id.clone())
+            .collect();
+        if workspaces.is_empty() {
+            return;
+        }
+        let owner = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |dialog, _, _| {
+            let owner = owner.clone();
+            let (bridge, workspaces) = (bridge.clone(), workspaces.clone());
+            dialog.title("Sleep Project?").width(px(460.0)).confirm()
+                .description(div().text_sm().child(format!(
+                    "This closes Host tabs and terminal sessions for {} workspaces. Git branches and files are kept.",
+                    workspaces.len(),
+                )))
+                .on_ok(move |_, _, cx| {
+                    let (bridge, workspaces) = (bridge.clone(), workspaces.clone());
+                    owner.update(cx, |view, cx| {
+                        if view.worktree_busy || view.editor_dirty(cx) {
+                            return false;
+                        }
+                        view.worktree_busy = true;
+                        cx.spawn(async move |view, cx| {
+                            let result = cx.background_spawn(async move {
+                                workspaces.iter()
+                                    .filter(|id| bridge.sleep_registered_workspace(id).is_err())
+                                    .count()
+                            }).await;
+                            let _ = view.update(cx, |view, cx| {
+                                view.worktree_busy = false;
+                                view.model.set_status(if result == 0 {
+                                    "Project workspaces slept".to_owned()
+                                } else {
+                                    format!("Could not sleep {result} project workspaces")
+                                });
+                                view.refresh_terminals(cx);
+                                cx.notify();
+                            });
+                        }).detach();
+                        cx.notify();
+                        true
+                    }).unwrap_or(false)
+                })
         });
     }
 
@@ -192,10 +312,8 @@ impl Workbench {
                 }
             }
             SidebarModalAction::ForgetProject(id, path) => {
-                self.forget_sidebar_project(id, path, cx);
+                self.forget_sidebar_project(id, path, Some(window.window_handle()), cx);
             }
-            SidebarModalAction::RefreshProjects => self.refresh_project_tree(cx),
-            SidebarModalAction::RefreshWorktrees => self.refresh_worktrees(cx),
             SidebarModalAction::NewWorktree(root) => {
                 let before = self.show_project_management;
                 self.begin_worktree_for_project(root, cx);
@@ -231,63 +349,25 @@ impl Workbench {
     fn sidebar_modal_rows(&self, target: &SidebarOptionsTarget) -> Vec<SidebarModalRow> {
         let mut rows = Vec::new();
         match target {
-            SidebarOptionsTarget::Management(root) => {
-                let pinned = self.saved_projects.iter().any(|saved| saved == root);
-                rows.push(SidebarModalRow::new(
-                    "Actions",
-                    "Refresh projects",
-                    SidebarModalAction::RefreshProjects,
-                ));
-                rows.push(SidebarModalRow::new(
-                    "Actions",
-                    "Refresh Git Worktrees",
-                    SidebarModalAction::RefreshWorktrees,
-                ));
-                rows.push(SidebarModalRow::new(
-                    "Actions",
-                    "New Git Worktree",
-                    SidebarModalAction::NewWorktree(root.clone()),
-                ));
-                rows.push(
-                    SidebarModalRow::new(
-                        "Actions",
-                        if pinned {
-                            "Unpin current project"
-                        } else {
-                            "Pin current project"
-                        },
-                        SidebarModalAction::PinProject(root.clone(), !pinned),
-                    )
-                    .selected(pinned),
-                );
-                for path in self.saved_projects.iter().take(12) {
+            SidebarOptionsTarget::RemoveProject { .. } => {}
+            SidebarOptionsTarget::NewWorkspace(_) => {
+                for group in self
+                    .project_tree_groups
+                    .iter()
+                    .filter(|group| !group.worktrees.is_empty())
+                {
                     rows.push(SidebarModalRow::new(
-                        "Saved projects",
-                        format!(
-                            "Open: {}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        ),
-                        SidebarModalAction::Open(path.clone()),
-                    ));
-                }
-                for path in self.recent_workspaces.iter().take(12) {
-                    rows.push(SidebarModalRow::new(
-                        "Recent workspaces",
-                        format!(
-                            "Open: {}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        ),
-                        SidebarModalAction::Open(path.clone()),
-                    ));
-                }
-                for entry in self.worktrees.iter().take(24) {
-                    rows.push(SidebarModalRow::new(
-                        "Git Worktrees",
-                        format!(
-                            "Open: {}",
-                            entry.path.file_name().unwrap_or_default().to_string_lossy()
-                        ),
-                        SidebarModalAction::Open(entry.path.clone()),
+                        "Select a Git Project",
+                        self.runtime_catalog
+                            .as_ref()
+                            .and_then(|catalog| {
+                                catalog
+                                    .projects
+                                    .iter()
+                                    .find(|project| project.root == group.root)
+                            })
+                            .map_or_else(|| group.label.clone(), |project| project.name.clone()),
+                        SidebarModalAction::NewWorktree(group.root.clone()),
                     ));
                 }
             }
@@ -613,6 +693,7 @@ impl Workbench {
         generation: u64,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let new_workspace_only = matches!(target, SidebarOptionsTarget::NewWorkspace(_));
         if self.workspace_generation != generation {
             return div()
                 .p_3()
@@ -625,13 +706,67 @@ impl Workbench {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child(target.path().display().to_string()),
-            )
+            .when(!new_workspace_only, |body| {
+                body.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(target.path().display().to_string()),
+                )
+            })
             .child(div().border_b_1().border_color(rgb(BORDER)));
+
+        if let SidebarOptionsTarget::RemoveProject { root, id } = target {
+            let preview = self
+                .sidebar_project_remove_pending
+                .as_ref()
+                .filter(|(pending_id, _)| pending_id == id);
+            let message = preview.map_or_else(
+                || if self.worktree_busy { "Checking project removal impact…".into() }
+                    else { self.model.status().to_owned() },
+                |(_, impact)| format!(
+                    "This removes the project and its registrations for {} workspaces, {} tabs, and {} live sessions. Git files and branches are kept.",
+                    impact.workspace_count, impact.tab_count, impact.active_session_count,
+                ),
+            );
+            let root = root.clone();
+            let id = id.clone();
+            return body
+                .child(div().text_sm().child(message))
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            action_button("sidebar-project-remove-cancel", "Cancel", false, false)
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.cancel_sidebar_options_dialog(cx);
+                                    window.close_dialog(cx);
+                                })),
+                        )
+                        .child(
+                            action_button(
+                                "sidebar-project-remove-confirm",
+                                "Remove Project",
+                                false,
+                                true,
+                            )
+                            .disabled(preview.is_none() || self.worktree_busy)
+                            .on_click(cx.listener(
+                                move |view, _, window, cx| {
+                                    view.forget_sidebar_project(
+                                        id.clone(),
+                                        root.clone(),
+                                        Some(window.window_handle()),
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element();
+        }
 
         if let (Some((kind, _)), Some(input)) = (
             self.sidebar_rename_target.as_ref(),
@@ -724,7 +859,7 @@ impl Workbench {
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("New Git Worktree"),
+                        .child("Branch"),
                 )
                 .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
                         "Project: {}",
@@ -734,6 +869,27 @@ impl Workbench {
                             .display()
                     )))
                 .child(input)
+                .children(
+                    self.worktree_error
+                        .as_ref()
+                        .map(|error| div().text_sm().text_color(rgb(MUTED)).child(error.clone())),
+                )
+                .when(new_workspace_only, |body| {
+                    body.child(
+                        action_button(
+                            "sidebar-modal-new-workspace-project",
+                            "Change Project",
+                            false,
+                            false,
+                        )
+                        .disabled(self.worktree_busy)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.worktree_create_input = None;
+                            view.worktree_create_root = None;
+                            cx.notify();
+                        })),
+                    )
+                })
                 .child(
                     action_button(
                         "sidebar-modal-branch-mode",
@@ -757,10 +913,15 @@ impl Workbench {
                         .gap_2()
                         .child(
                             action_button("sidebar-modal-worktree-cancel", "Cancel", false, false)
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.worktree_create_input = None;
-                                    view.worktree_create_root = None;
-                                    cx.notify();
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    if new_workspace_only {
+                                        view.cancel_sidebar_options_dialog(cx);
+                                        window.close_dialog(cx);
+                                    } else {
+                                        view.worktree_create_input = None;
+                                        view.worktree_create_root = None;
+                                        cx.notify();
+                                    }
                                 })),
                         )
                         .child(
@@ -769,12 +930,17 @@ impl Workbench {
                                 if self.worktree_busy {
                                     "Creating..."
                                 } else {
-                                    "Create Worktree"
+                                    "Create Workspace"
                                 },
                                 true,
                                 false,
                             )
-                            .on_click(cx.listener(|view, _, _, cx| view.create_worktree(cx))),
+                            .disabled(self.worktree_busy)
+                            .on_click(cx.listener(
+                                |view, _, window, cx| {
+                                    view.create_worktree_in_window(window, cx);
+                                },
+                            )),
                         ),
                 )
                 .into_any_element();

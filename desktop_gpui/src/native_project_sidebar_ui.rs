@@ -2,6 +2,8 @@
 //! GPUI Kit shell. All settings UI stays owned by native_settings_ui.rs.
 use super::*;
 use alera_gpui_desktop::runtime_catalog::{RuntimeCatalog, RuntimeWorkspace};
+use gpui_kit::component::menu::PopupMenu;
+use native_project_sidebar_modal_ui::SidebarOptionsTarget;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SidebarOrderKind {
@@ -305,7 +307,9 @@ impl Workbench {
         self.sidebar_create_target = Some((kind.to_owned(), workspace_id));
         self.sidebar_create_input =
             Some(cx.new(|cx| QuickOpenInput::with_placeholder("Name…", cx)));
-        self.show_project_management = true;
+        if !self.sidebar_options_modal_open {
+            self.show_project_management = true;
+        }
         cx.notify();
     }
 
@@ -389,7 +393,9 @@ impl Workbench {
             input.update(cx, |input, cx| { input.set_query(&current_name, cx); });
         }
         self.sidebar_rename_input = Some(input);
-        self.show_project_management = true;
+        if !self.sidebar_options_modal_open {
+            self.show_project_management = true;
+        }
         cx.notify();
     }
     pub(super) fn submit_sidebar_rename(&mut self, cx: &mut Context<Self>) {
@@ -469,12 +475,36 @@ impl Workbench {
         if self.worktree_busy {
             return;
         }
+        let previous_parent = self
+            .runtime_catalog
+            .as_ref()
+            .and_then(|catalog| {
+                catalog
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == child_id)
+            })
+            .and_then(|workspace| workspace.parent_workspace_id.clone())
+            .filter(|previous| link && previous != &parent_id);
         self.worktree_busy = true;
         let generation = self.workspace_generation;
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    bridge.set_workspace_parent(&parent_id, &child_id, link)
+                    if let Some(previous) = &previous_parent {
+                        bridge.set_workspace_parent(previous, &child_id, false)?;
+                    }
+                    let result = bridge.set_workspace_parent(&parent_id, &child_id, link);
+                    if let (Err(error), Some(previous)) = (&result, previous_parent) {
+                        if let Err(restore_error) =
+                            bridge.set_workspace_parent(&previous, &child_id, true)
+                        {
+                            return Err(std::io::Error::other(format!(
+                                "{error}. Previous parent restore failed: {restore_error}"
+                            )));
+                        }
+                    }
+                    result
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -487,12 +517,12 @@ impl Workbench {
                         view.sidebar_selected_parent = None;
                         view.model
                             .set_status("Classic workspace parent relationship updated");
-                        view.refresh_project_tree(cx);
                     }
                     Err(error) => view
                         .model
                         .set_status(format!("Parent relationship rejected: {error}")),
                 }
+                view.refresh_project_tree(cx);
                 cx.notify();
             })
             .ok();
@@ -577,6 +607,7 @@ impl Workbench {
         &mut self,
         project_id: String,
         root: PathBuf,
+        dialog: Option<gpui::AnyWindowHandle>,
         cx: &mut Context<Self>,
     ) {
         if self.worktree_busy
@@ -620,14 +651,20 @@ impl Workbench {
                 match result {
                     Ok(Err((id, preview))) => {
                         view.model.set_status(format!(
-                            "Project removal impact: {} workspaces, {} tabs, {} live sessions; config override {}. Right-click again to confirm.",
+                            "Project removal impact: {} workspaces, {} tabs, {} live sessions. Config override {}.",
                             preview.workspace_count, preview.tab_count, preview.active_session_count,
                             if preview.has_config_override { "yes" } else { "no" },
                         ));
                         view.sidebar_project_remove_pending = Some((id, preview));
                     }
                     Ok(Ok(root)) => {
+                        let removal_dialog_open =
+                            view.sidebar_options_modal_open && view.sidebar_project_remove_pending.is_some();
                         view.sidebar_project_remove_pending = None;
+                        if let Some(dialog) = dialog.filter(|_| removal_dialog_open) {
+                            view.sidebar_options_modal_open = false;
+                            let _ = dialog.update(cx, |_, window, cx| window.close_dialog(cx));
+                        }
                         if let Some(store) = &view.session_store {
                             let _ = store.unsave_project(&root);
                             let _ = store.forget_recent_workspace(&root);
@@ -696,91 +733,58 @@ impl Workbench {
     pub(super) fn sidebar_project_context_menu(
         owner: gpui::WeakEntity<Self>,
         root: PathBuf,
-        pinned: bool,
         project_id: Option<String>,
-        remove_armed: bool,
-    ) -> impl Fn(
-        gpui_kit::component::menu::PopupMenu,
-        &mut Window,
-        &mut Context<gpui_kit::component::menu::PopupMenu>,
-    ) -> gpui_kit::component::menu::PopupMenu
-           + 'static {
+        can_remove: bool,
+        git_project: bool,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
         move |mut menu, _, _| {
-            let target = root.clone();
-            let owner_open = owner.clone();
-            menu = menu.item(
-                PopupMenuItem::new("Open project").on_click(move |_, _, cx| {
-                    let _ =
-                        owner_open.update(cx, |view, cx| view.switch_workspace(target.clone(), cx));
-                }),
-            );
-            let owner_pin = owner.clone();
-            let target = root.clone();
-            menu = menu.item(
-                PopupMenuItem::new(if pinned {
-                    "Unpin project"
-                } else {
-                    "Pin project"
-                })
-                .on_click(move |_, _, cx| {
-                    let _ = owner_pin.update(cx, |view, cx| {
-                        if pinned {
-                            view.unpin_project(&target, cx)
-                        } else {
-                            view.pin_sidebar_project(&target, cx)
+            if let Some(id) = &project_id {
+                let settings_id = id.clone();
+                let rename_id = id.clone();
+                let rename_root = root.clone();
+                menu = menu
+                    .item(sidebar_menu_item("Open Project Settings", &owner, move |view, _, cx| {
+                        if view.show_native_settings_section("projects", cx).is_ok() {
+                            view.select_host_project_settings_project(&settings_id, cx);
                         }
-                    });
-                }),
-            );
-            if let Some(project_id) = project_id.clone() {
-                let rename_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Rename project…").on_click(
-                    move |_, _, cx| {
-                        let _ = rename_owner.update(cx, |view, cx| {
-                            view.begin_sidebar_rename("project", project_id.clone(), cx);
-                        });
-                    },
-                ));
+                    }))
+                    .item(sidebar_menu_item("Rename", &owner, move |view, window, cx| {
+                        view.open_sidebar_options_dialog(SidebarOptionsTarget::Project(rename_root.clone()), window, cx);
+                        if view.sidebar_options_modal_open {
+                            view.begin_sidebar_rename("project", rename_id.clone(), cx);
+                        }
+                    }));
             }
-            if let Some(project_id) = project_id.clone() {
-                let remove_owner = owner.clone();
-                let remove_root = root.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(if remove_armed {
-                        "Confirm forget project"
-                    } else {
-                        "Forget project…"
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = remove_owner.update(cx, |view, cx| {
-                            view.forget_sidebar_project(
-                                project_id.clone(),
-                                remove_root.clone(),
-                                cx,
-                            );
-                        });
-                    }),
-                );
+            if project_id.is_none() {
+                let path = root.clone();
+                menu = menu.item(sidebar_menu_item("Open Project", &owner, move |view, _, cx| {
+                    view.switch_workspace(path.clone(), cx);
+                }));
             }
-            let owner_worktree = owner.clone();
-            let worktree_root = root.clone();
-            menu = menu.item(
-                PopupMenuItem::new("New Worktree…").on_click(move |_, _, cx| {
-                    let _ = owner_worktree.update(cx, |view, cx| {
-                        view.begin_worktree_for_project(worktree_root.clone(), cx);
-                    });
-                }),
-            );
-            let owner_folder = owner.clone();
-            let target = root.clone();
-            menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| {
-                let _ = owner_folder.update(cx, |view, cx| view.sidebar_open_folder(&target, cx));
-            }));
-            let owner_copy = owner.clone();
-            let target = root.clone();
-            menu.item(PopupMenuItem::new("Copy path").on_click(move |_, _, cx| {
-                let _ = owner_copy.update(cx, |view, cx| view.sidebar_copy_path(&target, cx));
-            }))
+            let project = root.clone();
+            menu = menu.item(sidebar_menu_item("New Workspace", &owner, move |view, window, cx| {
+                view.open_new_sidebar_workspace(Some(project.clone()), window, cx);
+            }).disabled(!git_project));
+            if git_project {
+                menu = menu.item(sidebar_menu_item("Refresh Worktrees", &owner, |view, _, cx| {
+                    view.refresh_project_tree(cx);
+                    view.refresh_worktrees(cx);
+                }));
+            }
+            if let Some(id) = &project_id {
+                let sleep_id = id.clone();
+                menu = menu.item(sidebar_menu_item("Sleep Project…", &owner, move |view, window, cx| {
+                    view.open_sidebar_project_sleep(sleep_id.clone(), window, cx);
+                }));
+                let id = id.clone();
+                let root = root.clone();
+                menu = menu.separator().item(sidebar_menu_item(
+                    "Remove Project…",
+                    &owner,
+                    move |view, window, cx| view.open_sidebar_project_removal(id.clone(), root.clone(), window, cx),
+                ).disabled(!can_remove));
+            }
+            menu
         }
     }
 
@@ -789,130 +793,35 @@ impl Workbench {
         project_root: PathBuf,
         target: PathBuf,
         metadata: Option<RuntimeWorkspace>,
-        catalog: Option<RuntimeCatalog>,
+        catalog: Option<Arc<RuntimeCatalog>>,
         confirmation: Option<String>,
-        selected_parent: Option<(String, String)>,
+        is_primary: bool,
         is_active: bool,
-    ) -> impl Fn(
-        gpui_kit::component::menu::PopupMenu,
-        &mut Window,
-        &mut Context<gpui_kit::component::menu::PopupMenu>,
-    ) -> gpui_kit::component::menu::PopupMenu
-           + 'static {
-        move |mut menu, _, _| {
-            let owner_open = owner.clone();
-            let root = target.clone();
-            menu = menu.item(
-                PopupMenuItem::new("Open Workspace").on_click(move |_, _, cx| {
-                    let _ =
-                        owner_open.update(cx, |view, cx| view.switch_workspace(root.clone(), cx));
-                }),
-            );
-            let owner_folder = owner.clone();
-            let root = target.clone();
-            menu = menu.item(PopupMenuItem::new("Open folder").on_click(move |_, _, cx| {
-                let _ = owner_folder.update(cx, |view, cx| view.sidebar_open_folder(&root, cx));
-            }));
-            let owner_copy = owner.clone();
-            let root = target.clone();
-            menu = menu.item(PopupMenuItem::new("Copy path").on_click(move |_, _, cx| {
-                let _ = owner_copy.update(cx, |view, cx| view.sidebar_copy_path(&root, cx));
-            }));
-            if let Some(workspace) = metadata.clone() {
-                let id = workspace.id.clone();
-                for (kind, label) in [
-                    ("tag", "New shared tag…"),
-                    ("section", "New workspace section…"),
-                ] {
-                    let owner_create = owner.clone();
-                    let workspace_id = id.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                        let _ = owner_create.update(cx, |view, cx| {
-                            view.begin_sidebar_create(kind, workspace_id.clone(), cx);
-                        });
-                    }));
-                }
-
-                let rename_owner = owner.clone();
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
+        move |mut menu, window, cx| {
+            let action_item = |label: &str, action| {
+                sidebar_workspace_action_item(label.to_owned(), &owner, action)
+            };
+            if let Some(workspace) = &metadata {
+                let id = &workspace.id;
                 let rename_id = id.clone();
-                menu = menu.item(PopupMenuItem::new("Rename Workspace…").on_click(
-                    move |_, _, cx| {
-                        let _ = rename_owner.update(cx, |view, cx| {
-                            view.begin_sidebar_rename("workspace", rename_id.clone(), cx);
-                        });
-                    },
-                ));
-                let select_parent_owner = owner.clone();
-                let select_id = id.clone();
-                let select_project = workspace.project_id.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("Use as parent").on_click(move |_, _, cx| {
-                        let _ = select_parent_owner.update(cx, |view, cx| {
-                            view.select_sidebar_parent(
-                                select_id.clone(),
-                                select_project.clone(),
-                                cx,
-                            );
-                        });
-                    }),
-                );
-                if let Some(parent_id) = workspace.parent_workspace_id.clone() {
-                    let detach_owner = owner.clone();
-                    let child = id.clone();
-                    menu = menu.item(PopupMenuItem::new("Detach parent").on_click(
-                        move |_, _, cx| {
-                            let _ = detach_owner.update(cx, |view, cx| {
-                                view.change_sidebar_parent(
-                                    parent_id.clone(),
-                                    child.clone(),
-                                    false,
-                                    cx,
-                                );
-                            });
+                let workspace_target = SidebarOptionsTarget::Workspace {
+                    project_root: project_root.clone(),
+                    path: target.clone(),
+                };
+                let rename_target = workspace_target.clone();
+                menu = menu
+                    .item(sidebar_menu_item(
+                        "Rename",
+                        &owner,
+                        move |view, window, cx| {
+                            view.open_sidebar_options_dialog(rename_target.clone(), window, cx);
+                            if view.sidebar_options_modal_open {
+                                view.begin_sidebar_rename("workspace", rename_id.clone(), cx);
+                            }
                         },
-                    ));
-                } else if let Some((parent_id, project_id)) = selected_parent.clone() {
-                    if project_id == workspace.project_id && parent_id != id {
-                        let attach_owner = owner.clone();
-                        let child = id.clone();
-                        menu = menu.item(PopupMenuItem::new("Attach to selected parent").on_click(
-                            move |_, _, cx| {
-                                let _ = attach_owner.update(cx, |view, cx| {
-                                    view.change_sidebar_parent(
-                                        parent_id.clone(),
-                                        child.clone(),
-                                        true,
-                                        cx,
-                                    );
-                                });
-                            },
-                        ));
-                    }
-                }
-                if catalog.as_ref().is_some_and(|catalog| {
-                    alera_gpui_desktop::runtime_catalog::workspace_family_ids(catalog, &id).len()
-                        > 1
-                }) {
-                    for pinned in [true, false] {
-                        let tree_owner = owner.clone();
-                        let root_id = id.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(if pinned {
-                                "Pin workspace tree"
-                            } else {
-                                "Unpin workspace tree"
-                            })
-                            .on_click(move |_, _, cx| {
-                                let _ = tree_owner.update(cx, |view, cx| {
-                                    view.pin_sidebar_workspace_tree(root_id.clone(), pinned, cx);
-                                });
-                            }),
-                        );
-                    }
-                }
-
-                for (label, action) in [
-                    (
+                    ))
+                    .item(action_item(
                         if workspace.is_pinned {
                             "Unpin Workspace"
                         } else {
@@ -922,170 +831,315 @@ impl Workbench {
                             id: id.clone(),
                             pinned: !workspace.is_pinned,
                         },
-                    ),
-                    (
+                    ));
+
+                if let Some(catalog) = &catalog {
+                    let family =
+                        alera_gpui_desktop::runtime_catalog::workspace_family_ids(catalog, id);
+                    if family.len() > 1 {
+                        for pinned in [true, false] {
+                            let id = id.clone();
+                            menu = menu.item(sidebar_menu_item(
+                                if pinned {
+                                    "Pin Workspace Tree"
+                                } else {
+                                    "Unpin Workspace Tree"
+                                },
+                                &owner,
+                                move |view, _, cx| {
+                                    view.pin_sidebar_workspace_tree(id.clone(), pinned, cx)
+                                },
+                            ));
+                        }
+                    }
+
+                    let tag_items: Vec<_> = catalog
+                        .tags
+                        .iter()
+                        .map(|tag| {
+                            let selected = workspace.tag_ids.contains(&tag.id);
+                            let label = if selected {
+                                format!("✓ {}", tag.name)
+                            } else {
+                                tag.name.clone()
+                            };
+                            (
+                                label,
+                                SidebarWorkspaceAction::Tag {
+                                    id: id.clone(),
+                                    tag_id: tag.id.clone(),
+                                    assign: !selected,
+                                },
+                            )
+                        })
+                        .collect();
+                    let tag_owner = owner.clone();
+                    let tag_id = id.clone();
+                    let tag_target = workspace_target.clone();
+                    menu = menu.submenu("Manage Tags", window, cx, move |menu, _, _| {
+                        let id = tag_id.clone();
+                        let target = tag_target.clone();
+                        let menu = tag_items
+                            .iter()
+                            .cloned()
+                            .fold(menu, |menu, (label, action)| {
+                                menu.item(sidebar_workspace_action_item(label, &tag_owner, action))
+                            });
+                        menu.item(sidebar_menu_item(
+                            "New Tag…",
+                            &tag_owner,
+                            move |view, window, cx| {
+                                view.open_sidebar_options_dialog(target.clone(), window, cx);
+                                if view.sidebar_options_modal_open {
+                                    view.begin_sidebar_create("tag", id.clone(), cx);
+                                }
+                            },
+                        ))
+                        .scrollable(true)
+                        .max_h(px(300.0))
+                    });
+
+                    let parents: Vec<_> = catalog
+                        .workspaces
+                        .iter()
+                        .filter(|parent| {
+                            parent.project_id == workspace.project_id
+                                && !parent.is_archived
+                                && !family.contains(&parent.id)
+                                && Some(&parent.id) != workspace.parent_workspace_id.as_ref()
+                        })
+                        .cloned()
+                        .collect();
+                    if !parents.is_empty() {
+                        let parent_owner = owner.clone();
+                        let child = id.clone();
+                        menu =
+                            menu.submenu("Set Parent Workspace", window, cx, move |menu, _, _| {
+                                parents
+                                    .iter()
+                                    .fold(menu, |menu, parent| {
+                                        let parent_id = parent.id.clone();
+                                        let child = child.clone();
+                                        menu.item(sidebar_menu_item(
+                                            parent.name.clone(),
+                                            &parent_owner,
+                                            move |view, _, cx| {
+                                                view.change_sidebar_parent(
+                                                    parent_id.clone(),
+                                                    child.clone(),
+                                                    true,
+                                                    cx,
+                                                );
+                                            },
+                                        ))
+                                    })
+                                    .scrollable(true)
+                                    .max_h(px(300.0))
+                            });
+                    }
+                    if let Some(parent) = &workspace.parent_workspace_id {
+                        let parent = parent.clone();
+                        let child = id.clone();
+                        menu = menu.item(sidebar_menu_item(
+                            "Clear Parent Workspace",
+                            &owner,
+                            move |view, _, cx| {
+                                view.change_sidebar_parent(
+                                    parent.clone(),
+                                    child.clone(),
+                                    false,
+                                    cx,
+                                );
+                            },
+                        ));
+                    }
+
+                    let section_items: Vec<_> = catalog
+                        .sections
+                        .iter()
+                        .filter(|section| Some(&section.id) != workspace.section_id.as_ref())
+                        .map(|section| {
+                            (
+                                section.name.clone(),
+                                SidebarWorkspaceAction::Section {
+                                    id: id.clone(),
+                                    section_id: Some(section.id.clone()),
+                                },
+                            )
+                        })
+                        .collect();
+                    let section_owner = owner.clone();
+                    let section_id = id.clone();
+                    let section_target = workspace_target.clone();
+                    menu = menu.submenu("Set Section", window, cx, move |menu, _, _| {
+                        let id = section_id.clone();
+                        let target = section_target.clone();
+                        let menu = section_items.iter().cloned().fold(
+                            menu,
+                            |menu, (label, action)| {
+                                menu.item(sidebar_workspace_action_item(
+                                    label,
+                                    &section_owner,
+                                    action,
+                                ))
+                            },
+                        );
+                        menu.item(sidebar_menu_item(
+                            "New Section…",
+                            &section_owner,
+                            move |view, window, cx| {
+                                view.open_sidebar_options_dialog(target.clone(), window, cx);
+                                if view.sidebar_options_modal_open {
+                                    view.begin_sidebar_create("section", id.clone(), cx);
+                                }
+                            },
+                        ))
+                        .scrollable(true)
+                        .max_h(px(300.0))
+                    });
+                    if workspace.section_id.is_some() {
+                        menu = menu.item(action_item(
+                            "Clear Section",
+                            SidebarWorkspaceAction::Section {
+                                id: id.clone(),
+                                section_id: None,
+                            },
+                        ));
+                    }
+                }
+                menu = menu.separator();
+            }
+
+            let folder_label = if cfg!(windows) {
+                "Open in File Explorer"
+            } else if cfg!(target_os = "macos") {
+                "Open in Finder"
+            } else {
+                "Open in File Manager"
+            };
+            let browser_root = target.clone();
+            let folder_root = target.clone();
+            let copy_root = target.clone();
+            menu = menu
+                .item(sidebar_menu_item(
+                    "Open in Browser",
+                    &owner,
+                    move |view, _, cx| {
+                        view.open_sidebar_repository(browser_root.clone(), cx);
+                    },
+                ))
+                .item(sidebar_menu_item(
+                    folder_label,
+                    &owner,
+                    move |view, _, cx| {
+                        view.sidebar_open_folder(&folder_root, cx);
+                    },
+                ));
+            if let Some(workspace) = &metadata {
+                let project_id = workspace.project_id.clone();
+                menu = menu.item(sidebar_menu_item(
+                    "Open in Project Settings",
+                    &owner,
+                    move |view, _, cx| {
+                        if view.show_native_settings_section("projects", cx).is_ok() {
+                            view.select_host_project_settings_project(&project_id, cx);
+                        }
+                    },
+                ));
+            }
+            menu = menu.item(sidebar_menu_item(
+                "Copy Path",
+                &owner,
+                move |view, _, cx| {
+                    view.sidebar_copy_path(&copy_root, cx);
+                },
+            ));
+
+            if let Some(workspace) = &metadata {
+                let id = &workspace.id;
+                menu = menu.separator();
+                if !workspace.is_archived && !is_active {
+                    let armed = confirmation.as_deref() == Some(&format!("sleep:{id}"));
+                    menu = menu.item(action_item(
+                        if armed { "Confirm Sleep" } else { "Sleep…" },
+                        SidebarWorkspaceAction::Sleep { id: id.clone() },
+                    ));
+                }
+                if workspace.is_archived || !is_primary {
+                    menu = menu.item(action_item(
                         if workspace.is_archived {
-                            "Restore Workspace"
+                            "Restore"
                         } else {
-                            "Archive Workspace"
+                            "Archive"
                         },
                         SidebarWorkspaceAction::Archive {
                             id: id.clone(),
                             archived: !workspace.is_archived,
                         },
-                    ),
-                ] {
-                    let call_owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                        let action = action.clone();
-                        let _ = call_owner.update(cx, |view, cx| {
-                            view.begin_sidebar_workspace_action(action, cx)
-                        });
-                    }));
+                    ));
                 }
-                if let Some(catalog) = catalog.as_ref() {
-                    for tag in catalog.tags.iter().take(12) {
-                        let tag_id = tag.id.clone();
-                        let selected = workspace.tag_ids.contains(&tag_id);
-                        let action = SidebarWorkspaceAction::Tag {
-                            id: id.clone(),
-                            tag_id,
-                            assign: !selected,
-                        };
-                        let call_owner = owner.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!(
-                                "{} {}",
-                                if selected { "✓" } else { "+" },
-                                tag.name
-                            ))
-                            .on_click(move |_, _, cx| {
-                                let action = action.clone();
-                                let _ = call_owner.update(cx, |view, cx| {
-                                    view.begin_sidebar_workspace_action(action, cx)
-                                });
-                            }),
-                        );
-                    }
-                    if let Some(tag) = catalog
-                        .tags
-                        .iter()
-                        .find(|tag| workspace.tag_ids.contains(&tag.id))
-                    {
-                        let tag_id = tag.id.clone();
-                        let key = format!("tag:{tag_id}");
-                        let confirmed = confirmation.as_deref() == Some(key.as_str());
-                        let remove_owner = owner.clone();
-                        let action = SidebarWorkspaceAction::DeleteTag { id: tag_id };
-                        menu = menu.item(
-                            PopupMenuItem::new(if confirmed {
-                                "Confirm delete assigned tag globally"
-                            } else {
-                                "Delete assigned tag globally…"
-                            })
-                            .on_click(move |_, _, cx| {
-                                let action = action.clone();
-                                let _ = remove_owner.update(cx, |view, cx| {
-                                    view.begin_sidebar_workspace_action(action, cx);
-                                });
-                            }),
-                        );
-                    }
-                    if let Some(section_id) = workspace.section_id.clone() {
-                        let key = format!("section:{section_id}");
-                        let confirmed = confirmation.as_deref() == Some(key.as_str());
-                        let remove_owner = owner.clone();
-                        let action = SidebarWorkspaceAction::DeleteSection { id: section_id };
-                        menu = menu.item(
-                            PopupMenuItem::new(if confirmed {
-                                "Confirm delete current section"
-                            } else {
-                                "Delete current section…"
-                            })
-                            .on_click(move |_, _, cx| {
-                                let action = action.clone();
-                                let _ = remove_owner.update(cx, |view, cx| {
-                                    view.begin_sidebar_workspace_action(action, cx);
-                                });
-                            }),
-                        );
-                    }
-                    if workspace.section_id.is_some() {
-                        let action = SidebarWorkspaceAction::Section {
-                            id: id.clone(),
-                            section_id: None,
-                        };
-                        let call_owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new("Move to Others").on_click(
-                            move |_, _, cx| {
-                                let action = action.clone();
-                                let _ = call_owner.update(cx, |view, cx| {
-                                    view.begin_sidebar_workspace_action(action, cx)
-                                });
-                            },
-                        ));
-                    }
-                    for section in catalog
-                        .sections
-                        .iter()
-                        .filter(|section| Some(&section.id) != workspace.section_id.as_ref())
-                        .take(10)
-                    {
-                        let action = SidebarWorkspaceAction::Section {
-                            id: id.clone(),
-                            section_id: Some(section.id.clone()),
-                        };
-                        let call_owner = owner.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!("Section: {}", section.name)).on_click(
-                                move |_, _, cx| {
-                                    let action = action.clone();
-                                    let _ = call_owner.update(cx, |view, cx| {
-                                        view.begin_sidebar_workspace_action(action, cx)
-                                    });
-                                },
-                            ),
-                        );
-                    }
-                }
-                if !is_active {
-                    let key = format!("sleep:{id}");
-                    let label = if confirmation.as_deref() == Some(&key) {
-                        "Confirm Sleep Workspace"
-                    } else {
-                        "Sleep Workspace…"
-                    };
-                    let action = SidebarWorkspaceAction::Sleep { id: id.clone() };
-                    let call_owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                        let action = action.clone();
-                        let _ = call_owner.update(cx, |view, cx| {
-                            view.begin_sidebar_workspace_action(action, cx)
-                        });
-                    }));
-                    if target != project_root {
-                        let key = format!("remove:{id}");
-                        let label = if confirmation.as_deref() == Some(&key) {
+                let armed = confirmation.as_deref() == Some(&format!("remove:{id}"));
+                menu = menu.item(
+                    action_item(
+                        if armed {
                             "Confirm Remove Worktree"
                         } else {
-                            "Remove Worktree…"
-                        };
-                        let action = SidebarWorkspaceAction::Remove {
-                            id,
+                            "Remove…"
+                        },
+                        SidebarWorkspaceAction::Remove {
+                            id: id.clone(),
                             root: project_root.clone(),
                             target: target.clone(),
-                        };
-                        let call_owner = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                            let action = action.clone();
-                            let _ = call_owner.update(cx, |view, cx| {
-                                view.begin_sidebar_workspace_action(action, cx)
-                            });
-                        }));
-                    }
-                }
+                        },
+                    )
+                    .disabled(is_primary || is_active),
+                );
             }
             menu.scrollable(true).max_h(px(360.0))
         }
     }
+
+    fn open_sidebar_repository(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        cx.spawn(async move |view, cx| {
+            let url = cx
+                .background_spawn(async move {
+                    alera_core::git::repository_remote_url(&root.to_string_lossy())
+                        .ok()
+                        .flatten()
+                        .and_then(|remote| native_review_links::repository_home_url(&remote))
+                })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if let Some(url) = url {
+                    cx.open_url(&url);
+                } else {
+                    view.model
+                        .set_status("No supported Git remote was found for this workspace");
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+}
+
+fn sidebar_menu_item(
+    label: impl Into<gpui::SharedString>,
+    owner: &gpui::WeakEntity<Workbench>,
+    action: impl Fn(&mut Workbench, &mut Window, &mut Context<Workbench>) + 'static,
+) -> PopupMenuItem {
+    let owner = owner.clone();
+    PopupMenuItem::new(label).on_click(move |_, window, cx| {
+        let _ = owner.update(cx, |view, cx| action(view, window, cx));
+    })
+}
+
+fn sidebar_workspace_action_item(
+    label: impl Into<gpui::SharedString>,
+    owner: &gpui::WeakEntity<Workbench>,
+    action: SidebarWorkspaceAction,
+) -> PopupMenuItem {
+    sidebar_menu_item(label, owner, move |view, _, cx| {
+        view.begin_sidebar_workspace_action(action.clone(), cx);
+    })
 }

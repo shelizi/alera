@@ -52,7 +52,7 @@ fn safe_host(value: &str) -> Option<&str> {
 
 /// Accept HTTPS, standard SSH and scp-style Git remotes. Never forward
 /// arbitrary schemes, credentials, fragments or a remote's query string.
-pub fn repository_pull_requests_url(remote: &str) -> Option<String> {
+fn repository_host_and_path(remote: &str) -> Option<(&str, &str)> {
     let remote = remote.trim();
     let (host, path) = if let Some(remainder) = remote.strip_prefix("https://") {
         remainder.split_once('/')?
@@ -70,6 +70,16 @@ pub fn repository_pull_requests_url(remote: &str) -> Option<String> {
     };
     let host = safe_host(host)?;
     let path = safe_repo_path(path)?;
+    Some((host, path))
+}
+
+pub fn repository_home_url(remote: &str) -> Option<String> {
+    let (host, path) = repository_host_and_path(remote)?;
+    Some(format!("https://{host}/{path}"))
+}
+
+pub fn repository_pull_requests_url(remote: &str) -> Option<String> {
+    let (host, path) = repository_host_and_path(remote)?;
     let is_gitlab = host.eq_ignore_ascii_case("gitlab.com")
         || host.to_ascii_lowercase().starts_with("gitlab.")
         || host.to_ascii_lowercase().contains(".gitlab.");
@@ -84,6 +94,18 @@ pub fn repository_pull_requests_url(remote: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_link_opens_the_repository_home_and_rejects_credentials() {
+        assert_eq!(
+            repository_home_url("git@github.com:org/worktree.git").as_deref(),
+            Some("https://github.com/org/worktree"),
+        );
+        assert_eq!(
+            repository_home_url("https://token@github.com/org/worktree"),
+            None
+        );
+    }
 
     #[test]
     fn github_gitea_and_gitlab_https_ssh_remotes() {

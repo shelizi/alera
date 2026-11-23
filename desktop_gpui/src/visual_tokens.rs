@@ -517,13 +517,14 @@ mod tests {
         assert!(source.contains("let explorer_filter_active = !explorer_filter_query.is_empty()"));
 
         for expected in [
-            "project-options",
-            "workspace-options",
             "projects-view-options",
             "projects-new-workspace",
-            "SidebarOptionsTarget::Project(",
-            "SidebarOptionsTarget::Workspace {",
-            "SidebarOptionsTarget::Management(",
+            "projects-go-back",
+            "projects-go-forward",
+            "view.open_sidebar_view_options(window, cx)",
+            "view.open_new_sidebar_workspace(",
+            ".context_menu(Self::sidebar_project_context_menu(",
+            ".context_menu(Self::sidebar_workspace_context_menu(",
             "sidebar_options_modal_open",
         ] {
             assert!(source.contains(expected), "Missing modal route: {expected}");
@@ -538,7 +539,7 @@ mod tests {
             "fn run_sidebar_modal_action",
             "view.submit_sidebar_create(cx)",
             "view.submit_sidebar_rename(cx)",
-            "view.create_worktree(cx)",
+            "view.create_worktree_in_window(window, cx)",
             "SidebarWorkspaceAction::Remove",
             "SidebarWorkspaceAction::Sleep",
             "SidebarWorkspaceAction::DeleteTag",
@@ -549,6 +550,9 @@ mod tests {
                 "Missing safe modal UX: {expected}"
             );
         }
+        let view_options = include_str!("native_sidebar_view_options.rs");
+        assert!(view_options.contains("window.open_dialog(cx"));
+        assert!(view_options.contains(".title(\"View Options\")"));
     }
     #[test]
     fn source_control_parity_keeps_commit_editor_without_redundant_git_and_agent_buttons() {
