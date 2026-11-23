@@ -5533,6 +5533,8 @@ impl Workbench {
 
     fn focus_git_original_tab(&mut self, instance: u64, cx: &mut Context<Self>) {
         if self.git_original_tabs.activate(instance) {
+            self.global_agent_maximized = false;
+            self.global_agent_history_open = false;
             self.git_original_active = true;
             self.explorer_preview_active = false;
             self.center_view = CenterView::Editor;
@@ -6255,16 +6257,22 @@ impl Workbench {
         cx.notify();
     }
 
-    /// Global history is a read-only entrypoint. Open the right side even when
-    /// the user previously collapsed it, and focus search without creating a
-    /// Host, starting an Agent or performing an index scan.
+    /// Show the global Dashboard inside the center workspace, preserving
+    /// both existing sidebars and the selected Editor/Terminal tabs.
+    fn open_global_agent_dashboard(&mut self, cx: &mut Context<Self>) {
+        self.global_agent_maximized = true;
+        self.global_agent_history_open = false;
+        self.refresh_terminals(cx);
+        self.refresh_host_tab_pins(cx);
+        cx.notify();
+    }
+
+    /// Search historical Agent sessions in the center content area, without
+    /// expanding/overwriting the user's right sidebar or starting any Agent.
     fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.right_sidebar_view = RightSidebarView::AgentContext;
-        self.right_sidebar_visible = true;
         self.global_agent_maximized = true;
         self.global_agent_history_open = true;
         self.explorer_context_menu = None;
-        self.save_sidebar_layout(cx);
         window.focus(
             &self.global_agent_history_input.read(cx).focus_handle(cx),
             cx,
@@ -10949,6 +10957,10 @@ impl Workbench {
             cx.notify();
             return;
         }
+        // A real Editor/Terminal/Git tab leaves the center Dashboard without
+        // touching the Agent Host session or unsaved editor contents.
+        self.global_agent_maximized = false;
+        self.global_agent_history_open = false;
         // Selecting or dragging an actual Tab is a newer user focus intent.
         // Never let an older Host recheck or deferred navigation steal it.
         self.agent_navigation.cancel();
@@ -13618,15 +13630,9 @@ impl Render for Workbench {
                                     })))
                                     .child(icon_button(
                                         "right-sidebar-agent-context", UiIcon::List, "Global Agents / Context",
-                                        self.right_sidebar_view == RightSidebarView::AgentContext,
+                                        self.global_agent_maximized,
                                     ).on_click(cx.listener(|view, _, _, cx| {
-                                        view.right_sidebar_view = RightSidebarView::AgentContext;
-                                        view.global_agent_history_open = false;
-                                        view.global_agent_maximized = true;
-                                        view.refresh_terminals(cx);
-                                        view.refresh_host_tab_pins(cx);
-                                        view.save_sidebar_layout(cx);
-                                        cx.notify();
+                                        view.open_global_agent_dashboard(cx);
                                     })))
                                     .child(icon_button(
                                         "right-sidebar-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false,
@@ -13654,11 +13660,9 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
-                                            .child(if self.global_agent_maximized {
-                                                div().into_any_element()
-                                            } else {
-                                                native_global_agents_ui::panel(self, cx)
-                                            })
+                                            // This sidebar is for the selected Agent's
+                                            // context only. The global Kanban Dashboard
+                                            // is always rendered in the central workspace.
                                             .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
                                     ),
                             )
@@ -15962,15 +15966,9 @@ impl Render for Workbench {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.open_pull_requests_panel(cx);
                                 })))
-                            .child(icon_button("right-rail-agents", UiIcon::List, "Open full-size Global Agent Dashboard", false)
+                            .child(icon_button("right-rail-agents", UiIcon::List, "Open Agents in center", self.global_agent_maximized)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.right_sidebar_view = RightSidebarView::AgentContext;
-                            this.right_sidebar_visible = true;
-                            this.global_agent_history_open = false;
-                            this.global_agent_maximized = true;
-                            this.refresh_terminals(cx);
-                            this.refresh_host_tab_pins(cx);
-                            cx.notify();
+                            this.open_global_agent_dashboard(cx);
                         })))
                     .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -16005,6 +16003,50 @@ impl Render for Workbench {
                             })),
                     )
                     .child(
+                        // Central page routing: only one child owns the center
+                        // height. No absolute modal and no hidden flex sibling.
+                        if self.global_agent_maximized {
+                            div()
+                                .id("global-agent-center-page")
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .bg(rgb(BG))
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .id("global-agent-center-tab-bar")
+                                        .h(px(TAB_STRIP_HEIGHT))
+                                        .px_3()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .bg(rgb(TOOLBAR))
+                                        .border_b_1()
+                                        .border_color(rgb(BORDER))
+                                        .child(icon(UiIcon::List, 14.0, TEXT))
+                                        .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Dashboard"))
+                                        .child(div().flex_1())
+                                        .child(
+                                            div()
+                                                .id("global-agent-return-workspace")
+                                                .cursor_pointer()
+                                                .px_2()
+                                                .py_2()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child("← Workspace")
+                                                .on_click(cx.listener(|view, _, _, cx| {
+                                                    view.global_agent_maximized = false;
+                                                    view.global_agent_history_open = false;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .child(native_global_agents_ui::panel(self, cx))
+                                .into_any_element()
+                        } else {
                         div()
                             .flex_1()
                             .min_w_0()
@@ -16076,6 +16118,28 @@ impl Render for Workbench {
                                             .items_center()
                                             .overflow_x_scroll()
                                             .pl(px(TAB_STRIP_LEADING_PADDING))
+                                            .child(
+                                                div()
+                                                    .id("mixed-dashboard-tab")
+                                                    .h(px(32.0))
+                                                    .mr_2()
+                                                    .px(px(TAB_CHIP_HORIZONTAL_PADDING))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(rgb(if self.global_agent_maximized { BORDER_ACTIVE } else { BORDER }))
+                                                    .bg(rgb(if self.global_agent_maximized { ELEVATED } else { TOOLBAR }))
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(if self.global_agent_maximized { TEXT } else { MUTED }))
+                                                    .child(icon(UiIcon::List, 14.0, if self.global_agent_maximized { TEXT } else { MUTED }))
+                                                    .child("Dashboard")
+                                                    .on_click(cx.listener(|view, _, _, cx| {
+                                                        view.open_global_agent_dashboard(cx);
+                                                    })),
+                                            )
                                             .children(mixed_primary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = !showing_explorer_preview
                                                     && mixed_primary_active.as_ref() == Some(&tab.identity);
@@ -16158,6 +16222,8 @@ impl Render for Workbench {
                                                                     }
                                                                 } else {
                                                                     this.explorer_preview_active = true;
+                                                                    this.global_agent_maximized = false;
+                                                                    this.global_agent_history_open = false;
                                                                     this.center_view = CenterView::Editor;
                                                                     window.focus(&this.explorer_keyboard_focus, cx);
                                                                 }
@@ -17215,6 +17281,8 @@ impl Render for Workbench {
                                         div().h(px(0.0)).into_any_element()
                                     }),
                             )
+                        .into_any_element()
+                        }
                     )
                     .child(
                         div()
@@ -18283,48 +18351,6 @@ impl Render for Workbench {
                         cx,
                     )),
             )
-            .when(self.global_agent_maximized, |root| {
-                root.child(
-                    div()
-                        .id("global-agent-maximized-overlay")
-                        .absolute()
-                        .inset_0()
-                        .bg(rgb(PANEL))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .h(px(SECTION_HEADER_HEIGHT))
-                                .px_3()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .border_b_1()
-                                .border_color(rgb(BORDER))
-                                .child(div().font_weight(gpui::FontWeight::BOLD).child("Global Agents"))
-                                .child(div().text_xs().text_color(rgb(MUTED)).child("Pinned Kanban cards by Host status · inspect without leaving Dashboard"))
-                                .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .id("global-agent-restore-sidebar")
-                                        .cursor_pointer()
-                                        .text_sm()
-                                        .child("Return to workspace ×")
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.global_agent_maximized = false;
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .min_w_0()
-                                .child(native_global_agents_ui::panel(self, cx)),
-                        ),
-                )
-            })
             .when(self.global_agent_inspector.is_some(), |root| {
                 root.child(native_global_agents_ui::inspector_overlay(self, cx))
             })

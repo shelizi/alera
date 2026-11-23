@@ -2462,12 +2462,12 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
         .child(
             div().w_full().flex().items_center().gap_3()
                 .child(div().font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_sm().child("Historical Agent Sessions"))
+                    .text_sm().child("History"))
                 .child(div().flex_1())
                 .child(
                     div().id("global-history-return-to-live")
                         .text_xs().cursor_pointer().text_color(rgb(TEXT))
-                        .child("← Live Agents")
+                        .child("← Agents")
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.agent_navigation.cancel();
                             view.global_agent_history_open = false;
@@ -2476,10 +2476,6 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                             cx.notify();
                         })),
                 ),
-        )
-        .child(
-            div().text_xs().text_color(rgb(MUTED))
-                .child("Search native Claude / Codex message previews. Explicit local opt-in; no cloud upload or automatic Agent resume."),
         )
         .child(
             div().w_full().flex().items_center().gap_2()
@@ -2492,7 +2488,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(if busy || !consented { MUTED } else { TEXT }))
-                        .child(if busy { "Searching…" } else { "Search History" })
+                        .child(if busy { "Searching…" } else { "Search" })
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.search_global_agent_history(cx);
                         })),
@@ -2505,9 +2501,9 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                     div().id("global-history-advanced-toggle")
                         .cursor_pointer().text_xs().text_color(rgb(TEXT))
                         .child(if view.global_agent_history_filters_expanded {
-                            "▴ Less filters"
+                            "▴ Filters"
                         } else {
-                            "⚙ Advanced filters"
+                            "⚙ Filters"
                         })
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.global_agent_history_filters_expanded =
@@ -2530,9 +2526,9 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
             div().id("global-history-consent").text_xs().cursor_pointer()
                 .text_color(rgb(if consented { TEXT } else { MUTED }))
                 .child(if consented {
-                    "☑ Local preview indexing enabled (SQLite is not encrypted)"
+                    "☑ Local index on · private SQLite, not encrypted"
                 } else {
-                    "☐ Enable limited local preview indexing (private SQLite, not encrypted)"
+                    "☐ Enable local index · private SQLite, not encrypted"
                 })
                 .on_click(cx.listener(|view, _, _, cx| {
                     if view.global_agent_history_busy { return; }
@@ -2556,9 +2552,9 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .cursor_pointer().text_xs()
                         .text_color(rgb(if view.global_agent_history_clear_armed { TEXT } else { MUTED }))
                         .child(if view.global_agent_history_clear_armed {
-                            "Confirm clear local index (keeps originals)"
+                            "Confirm clear · originals kept"
                         } else {
-                            "Clear local index…"
+                            "Clear cache…"
                         })
                         .on_click(cx.listener(|view, _, _, cx| {
                             if view.global_agent_history_busy { return; }
@@ -2574,10 +2570,16 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         })),
                 ),
         )
-        .child(
-            div().text_xs().text_color(rgb(MUTED))
-                .child(view.global_agent_history_status.clone()),
-        );
+        .when(!view.global_agent_history_status.is_empty(), |panel| {
+            panel.child(
+                div()
+                    .max_w(px(700.0))
+                    .truncate()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(view.global_agent_history_status.clone()),
+            )
+        });
     let mut results = div()
         .id("global-history-results-scroll")
         .flex_1()
@@ -3238,131 +3240,183 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         create_form = form.into_any_element();
     }
 
-    let list =
-        div()
-            .id("global-live-agent-sessions")
-            .when(view.global_agent_maximized, |list| list.flex_1().min_h_0())
-            .when(!view.global_agent_maximized, |list| {
-                list.h(px(if view.global_agent_create_open {
-                    580.0
-                } else {
-                    340.0
-                }))
-                .flex_shrink_0()
-            })
-            .overflow_y_scroll()
-            .px_3()
-            .py_2()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_sm()
-                    .child(format!("All Agent Sessions ({})", sessions.len())),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child("Global Host inventory, all registered workspaces"),
-            )
-            .when(view.global_agent_pin_feedback.is_some(), |panel| {
-                panel.child(
+    let list = div()
+        .id("global-live-agent-sessions")
+        .when(view.global_agent_maximized, |list| list.flex_1().min_h_0())
+        .when(!view.global_agent_maximized, |list| {
+            list.h(px(if view.global_agent_create_open {
+                580.0
+            } else {
+                340.0
+            }))
+            .flex_shrink_0()
+        })
+        .when(!view.global_agent_maximized, |panel| {
+            panel.overflow_y_scroll()
+        })
+        .px_3()
+        .py_2()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .border_b_1()
+        .border_color(rgb(BORDER))
+        // One compact tool row; column headers own the status/counts.
+        .child(
+            div()
+                .id("global-agent-toolbar")
+                .w_full()
+                .min_h(px(46.0))
+                .flex()
+                .items_center()
+                .gap_3()
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .child(
                     div()
-                        .id("global-agent-pin-feedback")
-                        .text_xs()
-                        .text_color(rgb(if view.global_agent_pin_pending.is_some() {
-                            MUTED
-                        } else {
-                            TEXT
-                        }))
-                        .child(view.global_agent_pin_feedback.clone().unwrap_or_default()),
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(format!("Agents · {}", sessions.len())),
                 )
-            })
-            .child(
-                div()
-                    .id("global-agent-open-history")
-                    .text_xs()
-                    .cursor_pointer()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Search historical Claude / Codex Sessions")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.global_agent_history_open = true;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("global-agent-show-hidden")
-                    .text_xs()
-                    .cursor_pointer()
-                    .text_color(rgb(MUTED))
-                    .child(if view.global_agent_show_hidden {
-                        format!(
-                            "Show only visible cards ({} hidden)",
-                            view.global_agent_hidden.len()
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .id("global-agent-toolbar-actions")
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .overflow_x_scroll()
+                        .child(
+                            div()
+                                .id("global-agent-refresh")
+                                .cursor_pointer()
+                                .px_2()
+                                .py_2()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("↻")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.refresh_terminals(cx);
+                                    view.refresh_host_tab_pins(cx);
+                                })),
                         )
-                    } else {
-                        format!("Show hidden cards ({})", view.global_agent_hidden.len())
-                    })
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.global_agent_show_hidden = !view.global_agent_show_hidden;
-                        cx.notify();
-                    })),
-            )
-            .child(
+                        .child(
+                            div()
+                                .id("global-agent-needs-review-toggle")
+                                .cursor_pointer()
+                                .px_2()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(if view.global_agent_needs_review_only {
+                                    ELEVATED
+                                } else {
+                                    BG
+                                }))
+                                .text_xs()
+                                .text_color(rgb(if view.global_agent_needs_review_only {
+                                    TEXT
+                                } else {
+                                    MUTED
+                                }))
+                                .child(if view.global_agent_needs_review_only {
+                                    "All".to_owned()
+                                } else {
+                                    format!("Needs you · {needs_review_count}")
+                                })
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.global_agent_needs_review_only =
+                                        !view.global_agent_needs_review_only;
+                                    view.global_agent_collapsed_groups.clear();
+                                    view.close_original_conversation();
+                                    view.global_agent_control_armed = None;
+                                    view.global_agent_target = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .when(!view.global_agent_hidden.is_empty(), |actions| {
+                            actions.child(
+                                div()
+                                    .id("global-agent-show-hidden")
+                                    .cursor_pointer()
+                                    .px_2()
+                                    .py_2()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .text_color(rgb(if view.global_agent_show_hidden {
+                                        TEXT
+                                    } else {
+                                        MUTED
+                                    }))
+                                    .child(if view.global_agent_show_hidden {
+                                        "Visible".to_owned()
+                                    } else {
+                                        format!("Hidden · {}", view.global_agent_hidden.len())
+                                    })
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.global_agent_show_hidden =
+                                            !view.global_agent_show_hidden;
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("global-agent-open-history")
+                                .cursor_pointer()
+                                .px_2()
+                                .py_2()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("History")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.global_agent_history_open = true;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("global-agent-launch-current-workspace")
+                                .cursor_pointer()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(ELEVATED))
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("+ Agent")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.open_global_agent_create(cx);
+                                })),
+                        ),
+                ),
+        )
+        .when(view.global_agent_pin_feedback.is_some(), |panel| {
+            panel.child(
                 div()
-                    .id("global-agent-needs-review-toggle")
-                    .cursor_pointer()
+                    .id("global-agent-pin-feedback")
+                    .max_w(px(560.0))
+                    .truncate()
                     .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(if view.global_agent_needs_review_only {
-                        "Show all Agent Sessions".to_owned()
+                    .text_color(rgb(if view.global_agent_pin_pending.is_some() {
+                        MUTED
                     } else {
-                        format!("Needs You · review Waiting/Blocked ({needs_review_count})")
-                    })
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.global_agent_needs_review_only = !view.global_agent_needs_review_only;
-                        view.global_agent_collapsed_groups.clear();
-                        view.close_original_conversation();
-                        // A view change must not retain an invisible input target
-                        // or a previously armed destructive action.
-                        view.global_agent_control_armed = None;
-                        view.global_agent_target = None;
-                        view.global_agent_submit_status =
-                            "Filter changed; select an Agent before sending".into();
-                        cx.notify();
-                    })),
+                        TEXT
+                    }))
+                    .child(view.global_agent_pin_feedback.clone().unwrap_or_default()),
             )
-            .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Host Hook state only · this is a review queue, not proof of pending approval",
-            ))
-            .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Select Inspect on an Agent card to type directly in its live Terminal. Esc reaches the Agent.",
-            ))
-            .child(
+        })
+        .child(create_form)
+        .when(!view.global_agent_control_status.is_empty(), |panel| {
+            panel.child(
                 div()
-                    .id("global-agent-launch-current-workspace")
-                    .cursor_pointer()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("+ New Agent · choose any registered Worktree")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.open_global_agent_create(cx);
-                    })),
-            )
-            .child(create_form)
-            .child(
-                div()
+                    .max_w(px(560.0))
+                    .truncate()
                     .text_xs()
                     .text_color(rgb(MUTED))
                     .child(view.global_agent_control_status.clone()),
             )
-            ;
+        });
 
     if !fresh {
         return list
