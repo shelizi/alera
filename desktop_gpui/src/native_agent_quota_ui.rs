@@ -13,6 +13,28 @@ use gpui_kit::component::Sizable as _;
 use std::io;
 use std::sync::OnceLock;
 
+/// Display provider names as Classic does, instead of Host abbreviations.
+/// Unknown providers keep their original identity and artwork lookup.
+pub(super) fn classic_agent_display_name(provider: &str) -> &str {
+    match provider {
+        "agy" => "Antigravity",
+        "claude" => "Claude",
+        "codex" => "Codex",
+        "cursor" => "Cursor",
+        "devin" => "Devin",
+        "copilot" => "GitHub Copilot",
+        "opencode" | "opencode2" => "OpenCode",
+        "grok" => "Grok",
+        "gemini" => "Gemini",
+        "minimax" => "MiniMax",
+        "kimi" => "Kimi",
+        "zai" => "Z.ai",
+        "pi" => "Pi",
+        "amp" => "Amp",
+        _ => provider,
+    }
+}
+
 /// Classic uses one animated glyph for a working Agent and colored static
 /// status dots for other states. GPUI Kit's spinner animates its own element
 /// (not the entire Workbench) and follows OS reduced-motion preferences.
@@ -240,6 +262,14 @@ mod quota_ui_tests {
     };
     use alera_gpui_desktop::visual_tokens::{AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, FAINT};
     use std::sync::OnceLock;
+
+    #[test]
+    fn nested_sidebar_agent_names_match_classic_without_losing_unknown_provider() {
+        assert_eq!(super::classic_agent_display_name("agy"), "Antigravity");
+        assert_eq!(super::classic_agent_display_name("claude"), "Claude");
+        assert_eq!(super::classic_agent_display_name("opencode2"), "OpenCode");
+        assert_eq!(super::classic_agent_display_name("custom-agent"), "custom-agent");
+    }
 
     #[test]
     fn status_bar_remaining_colors_follow_classic_thresholds_without_stale_green() {

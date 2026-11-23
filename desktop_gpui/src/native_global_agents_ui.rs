@@ -1256,6 +1256,36 @@ impl GlobalAgentInspectorState {
 }
 
 impl Workbench {
+    /// Classic-style sidebar Agent row: open the same read/write Inspector as
+    /// the Kanban card, never attach or resume a Host PTY by a stale handle.
+    pub(super) fn inspect_sidebar_agent(
+        &mut self,
+        handle: String,
+        workspace_id: String,
+        tab_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.terminals.sessions.iter().find(|session| {
+            session.running
+                && session.handle == handle
+                && session.workspace_id == workspace_id
+                && session.tab_id == tab_id
+                && session.agent_type.is_some()
+        }) else {
+            self.terminals.status = "Agent identity changed; refresh before inspecting".into();
+            cx.notify();
+            return;
+        };
+        let target = GlobalAgentPromptTarget {
+            handle,
+            workspace_id,
+            tab_id,
+            agent_type: session.agent_type.clone().unwrap_or_default(),
+        };
+        self.open_global_agent_inspector(target, window, cx);
+    }
+
     fn open_global_agent_inspector(
         &mut self,
         target: GlobalAgentPromptTarget,

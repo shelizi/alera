@@ -12541,6 +12541,9 @@ impl Render for Workbench {
                 (index, group.clone(), collapsed)
             })
             .collect();
+        let sidebar_visible_project_count = project_tree_rows.len();
+        let sidebar_all_projects_collapsed = !project_tree_rows.is_empty()
+            && project_tree_rows.iter().all(|(_, _, collapsed)| *collapsed);
         let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
@@ -12679,6 +12682,41 @@ impl Render for Workbench {
                 )
             })
             .collect();
+        // Display live Host Agents beneath their registered Workspace, as in
+        // Classic. Match the trusted Host workspace ID to the registered path;
+        // never infer ownership from Agent names, branch labels or handles.
+        let registered_sidebar_workspaces: HashMap<&str, &PathBuf> = self
+            .mcp_host_workspaces
+            .iter()
+            .map(|workspace| (workspace.id.as_str(), &workspace.path))
+            .collect();
+        let mut sidebar_agents_by_workspace: HashMap<
+            PathBuf,
+            Vec<(String, String, String, String, Option<AgentVisualState>)>,
+        > = HashMap::new();
+        if !self.terminals.session_list_is_stale() {
+            for session in &self.terminals.sessions {
+                let Some(agent_type) = session.agent_type.as_ref() else {
+                    continue;
+                };
+                if !session.running {
+                    continue;
+                }
+                let Some(path) = registered_sidebar_workspaces.get(session.workspace_id.as_str()) else {
+                    continue;
+                };
+                sidebar_agents_by_workspace
+                    .entry((*path).clone())
+                    .or_default()
+                    .push((
+                        session.handle.clone(),
+                        session.workspace_id.clone(),
+                        session.tab_id.clone(),
+                        agent_type.clone(),
+                        AgentVisualState::for_session(session, agent_inventory_current),
+                    ));
+            }
+        }
         let terminal_create_busy = self.terminal_create_flow.is_active();
         let terminal_create_unknown = self.terminal_create_flow.is_outcome_unknown();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
@@ -17319,32 +17357,54 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("projects-sidebar-actions")
-                                    .h(px(36.0))
+                                    .h(px(38.0))
                                     .px_1()
                                     .flex()
                                     .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .id("projects-toggle")
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .cursor_pointer()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(icon(if show_recent_workspaces { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 12.0, MUTED))
-                                            .child("Recent")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.show_recent_workspaces = !this.show_recent_workspaces;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        icon_button("projects-open-folder", UiIcon::NewFolder, "Open a project folder…", picking_workspace)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.pick_workspace(cx);
-                                            })),
-                                    ),
+                                    .gap_1()
+                                    // Classic's single Projects toolbar replaces separate
+                                    // Recent and Projects / Worktrees headings.
+                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_sm().child("Projects"))
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(sidebar_visible_project_count.to_string()))
+                                    .child(div().flex_1())
+                                    .child(icon_button("projects-view-options", UiIcon::Sliders,
+                                        "View options / recent workspaces", self.show_project_management)
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.show_project_management = !view.show_project_management;
+                                            cx.notify();
+                                        })))
+                                    .child(icon_button("projects-collapse-all",
+                                        if sidebar_all_projects_collapsed { UiIcon::ExpandAll } else { UiIcon::CollapseAll },
+                                        if sidebar_all_projects_collapsed { "Expand All" } else { "Collapse All" }, false)
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            // Searching auto-expands without mutating the user's
+                                            // manual collapse state, matching Classic.
+                                            if !view.sidebar_search_input.read(cx).query().trim().is_empty() {
+                                                return;
+                                            }
+                                            let roots: Vec<_> = view.project_tree_groups.iter()
+                                                .map(|group| group.root.clone()).collect();
+                                            let all_collapsed = !roots.is_empty() && roots.iter()
+                                                .all(|root| view.collapsed_project_roots.contains(root));
+                                            for root in roots {
+                                                if all_collapsed {
+                                                    view.collapsed_project_roots.remove(&root);
+                                                } else {
+                                                    view.collapsed_project_roots.insert(root);
+                                                }
+                                            }
+                                            cx.notify();
+                                        })))
+                                    .child(icon_button("project-tree-refresh", UiIcon::Refresh,
+                                        "Refresh projects and worktrees", project_tree_loading)
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.refresh_project_tree(cx);
+                                        })))
+                                    .child(icon_button("projects-new-workspace", UiIcon::Add,
+                                        "New Workspace", picking_workspace)
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.begin_worktree_for_project(view.model.root().to_path_buf(), cx);
+                                        }))),
                             )
                             .child(
                                 div()
@@ -17354,33 +17414,6 @@ impl Render for Workbench {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .font_weight(gpui::FontWeight::BOLD)
-                                                    .text_sm()
-                                                    .child("Projects / Worktrees"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .child(icon_button("projects-management-toggle", UiIcon::Settings, "Manage saved projects and Git worktrees", self.show_project_management)
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.show_project_management = !this.show_project_management;
-                                                            cx.notify();
-                                                        })))
-                                                    .child(icon_button("project-tree-refresh", UiIcon::Refresh, "Refresh saved projects and worktrees", project_tree_loading)
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.refresh_project_tree(cx);
-                                                        }))),
-                                            ),
-                                    )
                                     .child(if let Some(error) = runtime_catalog_error {
                                         div()
                                             .flex()
@@ -17525,6 +17558,8 @@ impl Render for Workbench {
                                                         .filter(|prefs| prefs.workspace_sort == "manual")
                                                         .map(|prefs| prefs.workspace_order.as_slice()),
                                                 );
+                                                let project_workspace_count = rows.len();
+                                                let project_create_root = group.root.clone();
                                                 let visible_worktree_ids: Vec<String> = rows.iter()
                                                     .filter_map(|row| runtime_catalog.as_ref()
                                                         .and_then(|catalog| catalog.workspaces.iter()
@@ -17555,19 +17590,22 @@ impl Render for Workbench {
                                                                         cx.notify();
                                                                     })),
                                                             )
+                                                            .child(icon(UiIcon::Folder, 14.0, MUTED))
                                                             .child(
                                                                 div()
                                                                     .id(("project-tree-open", index))
                                                                     .flex_1()
                                                                     .min_w_0()
-                                                                    .px_2()
+                                                                    .px_1()
                                                                     .py_1()
+                                                                    .truncate()
+                                                                    .rounded_md()
                                                                     .bg(rgb(if current { ACTIVE } else { PANEL }))
                                                                     .hover(|style| style.bg(rgb(ACTIVE)))
                                                                     .cursor_pointer()
                                                                     .text_sm()
                                                                     .text_color(rgb(if current { TEXT } else { MUTED }))
-                                                                    .child(format!("{}{}", if pinned { "★ " } else { "" }, title))
+                                                                    .child(title)
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
                                                                     }))
@@ -17617,7 +17655,14 @@ impl Render for Workbench {
                                                                             cx.new(|_| TerminalTabDragPreview { label: caption })
                                                                         },
                                                                     ),
-                                                            ))),
+                                                            )))
+                                                            .when(pinned, |header| header.child(icon(UiIcon::Pin, 12.0, MUTED)))
+                                                            .child(div().text_xs().text_color(rgb(MUTED)).child(project_workspace_count.to_string()))
+                                                            .child(icon_button(("project-create-worktree", index), UiIcon::Add,
+                                                                "New Workspace for this project", false)
+                                                                .on_click(cx.listener(move |view, _, _, cx| {
+                                                                    view.begin_worktree_for_project(project_create_root.clone(), cx);
+                                                                }))),
                                                     )
                                                     .children(rows.into_iter()
                                                         .filter(|row| !sidebar_search_active || show_all_worktrees
@@ -17625,9 +17670,23 @@ impl Render for Workbench {
                                                         .take(if collapsed { 0 } else { 96 })
                                                         .enumerate().map(|(child_index, row)| {
                                                         let entry = row.entry;
-                                                        let section_header = row.section_header;
+                                                        // Classic displays explicit custom sections,
+                                                        // not an "Other workspaces" label beneath every project.
+                                                        let section_header = row.section_header.filter(|section| {
+                                                            !section.eq_ignore_ascii_case("Other workspaces")
+                                                                && !section.eq_ignore_ascii_case("Others")
+                                                        });
                                                         let depth = row.depth;
+                                                        let is_primary_workspace = entry.is_primary;
                                                         let target = entry.path.clone();
+                                                        let sidebar_agents = sidebar_agents_by_workspace
+                                                            .get(&target).cloned().unwrap_or_default();
+                                                        let workspace_agent_state = sidebar_agents.iter()
+                                                            .find_map(|(_, _, _, _, state)| *state);
+                                                        let mut sibling_agent_counts: HashMap<String, usize> = HashMap::new();
+                                                        for (_, _, _, kind, _) in &sidebar_agents {
+                                                            *sibling_agent_counts.entry(kind.clone()).or_default() += 1;
+                                                        }
                                                         let active = workspace_root == target;
                                                         let menu_root = worktree_project_root.clone();
                                                         let menu_path = target.clone();
@@ -17640,15 +17699,12 @@ impl Render for Workbench {
                                                         let workspace_drop_id = metadata.map(|workspace| workspace.id.clone());
                                                         let workspace_drag_id = workspace_drop_id.clone().unwrap_or_default();
                                                         let workspace_drop_visible = visible_worktree_ids.clone();
-                                                        let label = metadata.map(|workspace| {
-                                                            let mut text = workspace.name.clone();
-                                                            if workspace.is_pinned { text.push_str(" ★"); }
-                                                            if workspace.is_archived { text.push_str(" (archived)"); }
-                                                            if !workspace.tag_names.is_empty() { text.push_str(&format!(" [{}]", workspace.tag_names.join(", "))); }
-                                                            text
-                                                        }).unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
-                                                            if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
-                                                        }));
+                                                        let workspace_pinned = metadata.is_some_and(|workspace| workspace.is_pinned);
+                                                        let workspace_archived = metadata.is_some_and(|workspace| workspace.is_archived);
+                                                        let label = metadata.map(|workspace| workspace.name.clone())
+                                                            .unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
+                                                                if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
+                                                            }));
                                                         let workspace_drag_caption = label.clone();
                                                         let workspace_hold_key = format!("workspace:{workspace_drag_id}");
                                                         let workspace_press_key = workspace_hold_key.clone();
@@ -17672,19 +17728,36 @@ impl Render for Workbench {
                                                             .child(div().flex().items_center().child(div()
                                                             .id(("project-tree-worktree", index * 128 + child_index))
                                                             .flex_1().min_w_0()
-                                                            .pl(px(16.0 + depth.min(8) as f32 * 14.0))
+                                                            .pl(px(15.0 + depth.min(8) as f32 * 14.0))
+                                                            .pr_1()
                                                             .py_1()
+                                                            .rounded_md()
+                                                            .border_1()
+                                                            .border_color(rgb(if active { BORDER_ACTIVE } else { PANEL }))
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
                                                             .cursor_pointer()
-                                                            .text_xs()
-                                                            .text_color(rgb(if active { TEXT } else { MUTED }))
-                                                            .child(format!(
-                                                                "{} {} {}",
-                                                                if active { "●" } else { "○" },
-                                                                if depth > 0 { "↳" } else if entry.is_primary { "main:" } else { "worktree:" },
-                                                                label
-                                                            ))
+                                                            .text_sm()
+                                                            .text_color(rgb(if active && !workspace_archived { TEXT } else { MUTED }))
+                                                            .child(
+                                                                div().min_w_0().w_full().flex().items_center().gap_2()
+                                                                    .child(
+                                                                        div().w(px(12.0)).h(px(12.0)).flex_shrink_0()
+                                                                            .flex().items_center().justify_center()
+                                                                            .child(if let Some(state) = workspace_agent_state {
+                                                                                native_agent_quota_ui::agent_run_indicator(state, 10.0)
+                                                                            } else {
+                                                                                div().w(px(8.0)).h(px(8.0)).rounded_full()
+                                                                                    .bg(rgb(if active { AGENT_DONE } else { MUTED }))
+                                                                                    .into_any_element()
+                                                                            }),
+                                                                    )
+                                                                    .child(div().flex_1().min_w_0().truncate()
+                                                                        .font_weight(if active { gpui::FontWeight::SEMIBOLD } else { gpui::FontWeight::NORMAL })
+                                                                        .child(label))
+                                                                    .when(workspace_pinned, |row| row.child(icon(UiIcon::Pin, 12.0, MUTED)))
+                                                                    .child(icon(if is_primary_workspace { UiIcon::Folder } else { UiIcon::Branch }, 12.0, MUTED)),
+                                                            )
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
                                                             }))
@@ -17735,6 +17808,51 @@ impl Render for Workbench {
                                                                         },
                                                                     ),
                                                             )))
+                                                            .children(sidebar_agents.into_iter().take(24).enumerate().map(
+                                                                |(agent_index, (handle, workspace_id, tab_id, agent_type, visual_state))| {
+                                                                    let provider_name = native_agent_quota_ui::classic_agent_display_name(&agent_type);
+                                                                    let duplicate = sibling_agent_counts.get(&agent_type).copied().unwrap_or(0) > 1;
+                                                                    let agent_caption = if duplicate {
+                                                                        format!("{} · {}", provider_name, tab_id.chars().take(6).collect::<String>())
+                                                                    } else {
+                                                                        provider_name.to_owned()
+                                                                    };
+                                                                    let agent_tooltip = format!("Inspect {} · Host Tab {}", provider_name, tab_id);
+                                                                    div()
+                                                                        .id(("project-tree-agent", index * 4096 + child_index * 32 + agent_index))
+                                                                        .ml(px(29.0 + depth.min(8) as f32 * 14.0))
+                                                                        .px_2()
+                                                                        .py_1()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_2()
+                                                                        .rounded_md()
+                                                                        .cursor_pointer()
+                                                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                                                        .tooltip(move |window, cx| {
+                                                                            gpui_kit::component::tooltip::Tooltip::new(agent_tooltip.clone()).build(window, cx)
+                                                                        })
+                                                                        .child(native_agent_quota_ui::quota_provider_icon(&agent_type, 14.0))
+                                                                        .child(
+                                                                            div().w(px(12.0)).h(px(12.0)).flex_shrink_0()
+                                                                                .flex().items_center().justify_center()
+                                                                                .child(if let Some(state) = visual_state {
+                                                                                    native_agent_quota_ui::agent_run_indicator(state, 10.0)
+                                                                                } else {
+                                                                                    div().w(px(7.0)).h(px(7.0)).rounded_full()
+                                                                                        .bg(rgb(MUTED)).into_any_element()
+                                                                                }),
+                                                                        )
+                                                                        .child(div().flex_1().min_w_0().truncate()
+                                                                            .text_xs().text_color(rgb(MUTED)).child(agent_caption))
+                                                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                                                            view.inspect_sidebar_agent(
+                                                                                handle.clone(), workspace_id.clone(),
+                                                                                tab_id.clone(), window, cx,
+                                                                            );
+                                                                        }))
+                                                                },
+                                                            ))
                                                     }))
                                                     .child(if let Some(error) = error {
                                                         div().text_xs().text_color(rgb(MUTED))
@@ -17764,12 +17882,18 @@ impl Render for Workbench {
                                             .text_sm()
                                             .child("Saved projects"),
                                     )
-                                    .child(
-                                        icon_button("project-pin-current", UiIcon::Check, "Save / pin the current project", false)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.pin_current_project(cx);
-                                            })),
-                                    ),
+                                    .child(div().flex().items_center().gap_1()
+                                        .child(icon_button("project-management-recent", UiIcon::History,
+                                            "Show recent workspaces", show_recent_workspaces)
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.show_recent_workspaces = !view.show_recent_workspaces;
+                                                cx.notify();
+                                            })))
+                                        .child(icon_button("project-pin-current", UiIcon::Check,
+                                            "Save / pin the current project", false)
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.pin_current_project(cx);
+                                            })))),
                             )
                             .child(
                                 div()
@@ -18713,7 +18837,7 @@ fn main() {
                         cx.observe(&git_branch_picker_input, |_: &mut Workbench, _, cx| cx.notify())
                             .detach();
                         let sidebar_search_input = cx.new(|cx| {
-                            QuickOpenInput::with_placeholder("Search projects / worktrees…", cx)
+                            QuickOpenInput::with_placeholder("Search workspaces", cx)
                         });
                         cx.observe(&sidebar_search_input, |_, _, cx| cx.notify())
                             .detach();
