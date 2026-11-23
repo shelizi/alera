@@ -8551,31 +8551,6 @@ impl Workbench {
         self.create_host_agent_in_pane(target.clone(), agent_id.to_owned(), cx);
     }
 
-    fn prepare_agent_in_pane(
-        &mut self,
-        profile_id: &str,
-        target: &PaneAttachGuard,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !target.still_valid(self.workspace_generation, &self.mixed_panes)
-            || !self
-                .agent_profiles
-                .iter()
-                .any(|profile| profile.id == profile_id)
-        {
-            self.agent_status = "Pane or Agent Profile changed; reopen + → Agent".into();
-            cx.notify();
-            return;
-        }
-        self.agent_launch_pane = Some(target.clone());
-        self.agent_selected_profile = Some(profile_id.to_owned());
-        self.runtime_details_open = true;
-        self.agent_status = "Enter an Agent task, then choose Launch Agent".into();
-        window.focus(&self.agent_prompt_input.read(cx).focus_handle(cx), cx);
-        cx.notify();
-    }
-
     fn launch_selected_agent(&mut self, cx: &mut Context<Self>) {
         if self.agent_launch_busy || self.agent_pending_tab.is_some() {
             self.agent_status =
@@ -8660,7 +8635,7 @@ impl Workbench {
                         view.agent_launch_pane = None;
                         let guidance = classify_agent_profile_launch_failure(&error).guidance();
                         view.agent_status = format!(
-                            "Agent launch not confirmed: {guidance} Check Attach existing before retrying; the Host might have created the tab."
+                            "Agent launch not confirmed: {guidance} Check Runtime / Agents > Terminal sessions before retrying; the Host might have created the tab."
                         );
                         view.refresh_terminals(cx);
                     }
@@ -8687,7 +8662,7 @@ impl Workbench {
                         "Previous Host create unresolved; inspect existing sessions before acknowledging (no new PTY)"
                             .into();
                     self.model
-                        .set_status("Host create interrupted; inspect + → Attach existing");
+                        .set_status("Host create interrupted; inspect Runtime / Agents > Terminal sessions");
                 }
             }
             Err(error) => {
@@ -8805,7 +8780,7 @@ impl Workbench {
             Err(error) => {
                 self.restore_host_create_journal();
                 self.terminals.status = format!(
-                    "Host create blocked by recovery journal: {error}. Check + → Attach existing; no new PTY issued"
+                    "Host create blocked by recovery journal: {error}. Check Runtime / Agents > Terminal sessions; no new PTY issued"
                 );
                 self.model
                     .set_status("Unresolved Host create: inspect existing sessions before retry");
@@ -8891,7 +8866,7 @@ impl Workbench {
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host reply unverified: {error}. Inspect Attach running Host session, then dismiss the pending request before another New Terminal."
+                                "Host reply unverified: {error}. Inspect Runtime / Agents > Terminal sessions, then dismiss the pending request before another New Terminal."
                             )
                         } else {
                             format!("Host create outcome unknown: {error}. Inspect existing sessions, then dismiss the pending request before another PTY.")
@@ -9087,12 +9062,12 @@ impl Workbench {
                                 if let (Some(pending), Some(session)) = (pending, session) {
                                     if !pending.target.still_valid(view.workspace_generation, &view.mixed_panes) {
                                         view.terminals.status =
-                                            "Host terminal created, but its pane changed; use + → Attach existing (PTY kept alive)".into();
+                                            "Host terminal created, but its pane changed; use Runtime / Agents > Terminal sessions (PTY kept alive)".into();
                                     } else if view.attach_live_terminal_to_pane(
                                         &session, &pending.target, cx,
                                     ).is_none() {
                                         view.terminals.status =
-                                            "Host terminal created but Native attach was refused; use + → Attach existing".into();
+                                            "Host terminal created but Native attach was refused; use Runtime / Agents > Terminal sessions".into();
                                     } else if let Some(agent_id) = pending.expected_agent_id.as_deref() {
                                         // Host PTY input can be ready before
                                         // the provider Hook reports an Agent.
@@ -9110,7 +9085,7 @@ impl Workbench {
                                     }
                                 } else {
                                     view.terminals.status =
-                                        "Host terminal confirmed without a current pane request; use + → Attach existing".into();
+                                        "Host terminal confirmed without a current pane request; use Runtime / Agents > Terminal sessions".into();
                                 }
                             }
                             // Launch reply contains a Host workspace+tab id,
@@ -9149,7 +9124,7 @@ impl Workbench {
                                         );
                                     } else {
                                         view.agent_status =
-                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use + → Attach existing".into();
+                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use Runtime / Agents > Terminal sessions".into();
                                     }
                                 } else {
                                     // The Agent still belongs to Runtime Host.
@@ -9158,7 +9133,7 @@ impl Workbench {
                                     view.agent_pending_tab = None;
                                     view.agent_launch_pane = None;
                                     view.agent_status =
-                                        "Agent created; origin pane closed. Use + → Attach existing to place it manually".into();
+                                        "Agent created; origin pane closed. Use Runtime / Agents > Terminal sessions to place it manually".into();
                                 }
                             }
                         }
@@ -12655,6 +12630,8 @@ impl Render for Workbench {
                         session.handle,
                     ),
                     session.workspace_id.clone(),
+                    session.tab_id.clone(),
+                    session.running,
                     // Do not advertise a stale branded session when its
                     // Host PTY is no longer running.
                     session
@@ -12721,6 +12698,9 @@ impl Render for Workbench {
         let terminal_create_unknown = self.terminal_create_flow.is_outcome_unknown();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_creating = self.terminal_create_flow.is_creating();
+        let host_restore_available = self.terminal_layout_restore
+            .as_ref()
+            .is_some_and(|layout| !layout.tabs.is_empty());
         // The primary pane renders its own Host identity, even when the
         // second pane currently owns keyboard focus. The global TerminalDock
         // selection alone cannot identify two simultaneous pane contents.
@@ -16258,21 +16238,12 @@ impl Render for Workbench {
                                                 // menu after all real content tabs.
                                                 let owner = cx.entity().downgrade();
                                                 let refresh_owner = owner.clone();
-                                                let running = self.terminals.sessions.iter()
-                                                    .filter(|session| session.running)
-                                                    .map(|session| (
-                                                        session.clone(),
-                                                        format!("{} · {}", session.label(), session.workspace_id),
-                                                    ))
-                                                    .collect::<Vec<_>>();
                                                 let target = PaneAttachGuard::capture(
                                                     self.workspace_generation,
                                                     PaneSlot::Primary,
                                                     &self.mixed_panes,
                                                 );
-                                                let profiles = self.agent_profiles.clone();
                                                 let installed = self.installed_agent_clis.clone();
-                                                let installed_loading = self.installed_agent_clis_loading;
                                                 icon_button("mixed-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab"), terminal_creating
                                                     && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
@@ -16280,19 +16251,11 @@ impl Render for Workbench {
                                                     .dropdown_menu(Self::kit_new_tab_menu(
                                                         owner,
                                                         target,
-                                                        running,
-                                                        profiles,
                                                         installed,
-                                                        installed_loading,
-                                                        terminal_create_busy,
-                                                        terminal_create_timed_out,
-                                                        terminal_create_unknown,
                                                     ))
                                                     .on_open_change(move |open, _, cx| {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
-                                                                view.refresh_terminals(cx);
-                                                                view.refresh_agent_profiles(cx);
                                                                 view.refresh_installed_agent_clis(cx);
                                                             });
                                                         }
@@ -16448,21 +16411,12 @@ impl Render for Workbench {
                                                     .child({
                                                         let owner = cx.entity().downgrade();
                                                         let refresh_owner = owner.clone();
-                                                        let running = self.terminals.sessions.iter()
-                                                            .filter(|session| session.running)
-                                                            .map(|session| (
-                                                                session.clone(),
-                                                                format!("{} · {}", session.label(), session.workspace_id),
-                                                            ))
-                                                            .collect::<Vec<_>>();
                                                         let target = PaneAttachGuard::capture(
                                                             self.workspace_generation,
                                                             PaneSlot::Secondary,
                                                             &self.mixed_panes,
                                                         );
-                                                        let profiles = self.agent_profiles.clone();
                                                         let installed = self.installed_agent_clis.clone();
-                                                        let installed_loading = self.installed_agent_clis_loading;
                                                         icon_button("mixed-secondary-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab in second pane"), terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
@@ -16470,19 +16424,11 @@ impl Render for Workbench {
                                                             .dropdown_menu(Self::kit_new_tab_menu(
                                                                 owner,
                                                                 target,
-                                                                running,
-                                                                profiles,
                                                                 installed,
-                                                                installed_loading,
-                                                                terminal_create_busy,
-                                                                terminal_create_timed_out,
-                                                                terminal_create_unknown,
                                                             ))
                                                             .on_open_change(move |open, _, cx| {
                                                                 if *open {
                                                                     let _ = refresh_owner.update(cx, |view, cx| {
-                                                                        view.refresh_terminals(cx);
-                                                                        view.refresh_agent_profiles(cx);
                                                                         view.refresh_installed_agent_clis(cx);
                                                                     });
                                                                 }
@@ -17061,21 +17007,12 @@ impl Render for Workbench {
                                                     .child({
                                                         let owner = cx.entity().downgrade();
                                                         let refresh_owner = owner.clone();
-                                                        let running = self.terminals.sessions.iter()
-                                                            .filter(|session| session.running)
-                                                            .map(|session| (
-                                                                session.clone(),
-                                                                format!("{} · {}", session.label(), session.workspace_id),
-                                                            ))
-                                                            .collect::<Vec<_>>();
                                                         let target = PaneAttachGuard::capture(
                                                             self.workspace_generation,
                                                             PaneSlot::Secondary,
                                                             &self.mixed_panes,
                                                         );
-                                                        let profiles = self.agent_profiles.clone();
                                                         let installed = self.installed_agent_clis.clone();
-                                                        let installed_loading = self.installed_agent_clis_loading;
                                                         icon_button("mixed-secondary-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab in second pane"), terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
@@ -17083,19 +17020,11 @@ impl Render for Workbench {
                                                             .dropdown_menu(Self::kit_new_tab_menu(
                                                                 owner,
                                                                 target,
-                                                                running,
-                                                                profiles,
                                                                 installed,
-                                                                installed_loading,
-                                                                terminal_create_busy,
-                                                                terminal_create_timed_out,
-                                                                terminal_create_unknown,
                                                             ))
                                                             .on_open_change(move |open, _, cx| {
                                                                 if *open {
                                                                     let _ = refresh_owner.update(cx, |view, cx| {
-                                                                        view.refresh_terminals(cx);
-                                                                        view.refresh_agent_profiles(cx);
                                                                         view.refresh_installed_agent_clis(cx);
                                                                     });
                                                                 }
@@ -18264,7 +18193,7 @@ impl Render for Workbench {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.agent_pending_tab = None;
                                             this.agent_launch_pane = None;
-                                            this.agent_status = "Agent still belongs to Host; use Attach existing to find it".into();
+                                            this.agent_status = "Agent still belongs to Host; use Runtime / Agents > Terminal sessions to find it".into();
                                             cx.notify();
                                         }))
                                         .into_any_element()
@@ -18306,11 +18235,52 @@ impl Render for Workbench {
                                     .child(HOST_SESSION_LIST_SCOPE),
                             )
                             .child(
+                                 div()
+                                     .id("runtime-host-recovery-actions")
+                                     .flex()
+                                     .flex_col()
+                                     .gap_1()
+                                     .when(!(host_restore_available || terminal_create_busy || terminal_create_timed_out || terminal_create_unknown), |row| row.hidden())
+                                     .when(host_restore_available, |row| row.child(
+                                         div()
+                                             .id("runtime-host-restore-saved")
+                                             .cursor_pointer()
+                                             .text_xs()
+                                             .text_color(rgb(TEXT))
+                                             .child("Restore saved Agent / Terminal tabs")
+                                             .on_click(cx.listener(|view, _, _, cx| {
+                                                 view.restore_saved_host_tabs(cx);
+                                             })),
+                                     ))
+                                     .when(terminal_create_timed_out, |row| row.child(
+                                         div()
+                                             .id("runtime-host-recheck-pending")
+                                             .cursor_pointer()
+                                             .text_xs()
+                                             .text_color(rgb(TEXT))
+                                             .child("Recheck pending Host session (no new PTY)")
+                                             .on_click(cx.listener(|view, _, _, cx| {
+                                                 view.retry_host_terminal_confirmation(cx);
+                                             })),
+                                     ))
+                                     .when(terminal_create_busy || terminal_create_unknown || terminal_create_timed_out, |row| row.child(
+                                         div()
+                                             .id("runtime-host-dismiss-pending")
+                                             .cursor_pointer()
+                                             .text_xs()
+                                             .text_color(rgb(MUTED))
+                                             .child("Dismiss pending request (keep Host PTY)")
+                                             .on_click(cx.listener(|view, _, _, cx| {
+                                                 view.cancel_host_terminal_confirmation(cx);
+                                             })),
+                                     )),
+                             )
+                             .child(
                                 div()
                                     .id("terminal-sessions-scroll")
                                     .max_h(px(310.0))
                                     .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type, visual_state, goal, progress))| {
+                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, tab_id, session_running, agent_type, visual_state, goal, progress))| {
                                         let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
                                         let row_status_tooltip = visual_state
                                             .map(|state| state.tooltip(&brand, agent_ui_locale));
@@ -18376,9 +18346,45 @@ impl Render for Workbench {
                                                     .text_color(rgb(MUTED))
                                                     .child(format!("Host workspace: {workspace_id}")),
                                             )
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_terminal(handle.clone(), cx);
-                                            }))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                 if !session_running || this.terminals.session_list_is_stale() {
+                                                     this.terminals.status = "Host session no longer live; refresh the list before attaching".into();
+                                                     cx.notify();
+                                                     return;
+                                                 }
+                                                 let original = this.terminals.sessions.iter()
+                                                     .find(|session| {
+                                                         session.running
+                                                             && session.handle == handle
+                                                             && session.workspace_id == workspace_id
+                                                             && session.tab_id == tab_id
+                                                     })
+                                                     .cloned();
+                                                 let Some(original) = original else {
+                                                     this.terminals.status = "Host session changed; refresh before attaching".into();
+                                                     cx.notify();
+                                                     return;
+                                                 };
+                                                 let current_workspace =
+                                                     select_registered_host_workspace(this.model.root(), &this.mcp_host_workspaces).ok();
+                                                 if current_workspace.as_deref() != Some(workspace_id.as_str()) {
+                                                     this.terminals.status = "Switch to this Host session's registered Worktree before attaching".into();
+                                                     cx.notify();
+                                                     return;
+                                                 }
+                                                 let Some(target) = PaneAttachGuard::capture(
+                                                     this.workspace_generation,
+                                                     this.mixed_panes.focused_pane(),
+                                                     &this.mixed_panes,
+                                                 ) else {
+                                                     this.terminals.status = "Active pane changed; choose a pane and retry".into();
+                                                     cx.notify();
+                                                     return;
+                                                 };
+                                                 if let Some(identity) = this.attach_live_terminal_to_pane(&original, &target, cx) {
+                                                     this.focus_mixed_tab(&identity, window, cx);
+                                                 }
+                                             }))
                                     })),
                             )
                             )

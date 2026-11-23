@@ -461,7 +461,43 @@ mod tests {
         assert!(menu.contains("new_tab_menu_max_height("));
         // Formatting must not affect this structural UX guard.
         let compact = menu.split_whitespace().collect::<String>();
-        assert!(compact.contains(".separator().label(tr(locale,\"AttachrunningHostsession\"))"));
+        let file = compact
+            .find("PopupMenuItem::new(tr(locale,\"NewFile\"))")
+            .unwrap();
+        let terminal = compact
+            .find("PopupMenuItem::new(tr(locale,\"NewTerminal\"))")
+            .unwrap();
+        let agent = compact
+            .find("branded_agent_popup_item(agent_id.clone(),label)")
+            .unwrap();
+        assert!(
+            file < terminal && terminal < agent,
+            "Classic menu item order"
+        );
+        assert!(compact.contains("view.create_host_terminal_in_pane("));
+        assert!(compact.contains("view.prepare_detected_agent_in_pane("));
+        // No extra Host-session or Profile-selection step belongs to +.
+        for advanced in [
+            "Attach running Host session",
+            "Restore saved Agent / Terminal tabs",
+            "Host Agent Profiles",
+            "Pending Host requests",
+            "Rescan installed agents",
+        ] {
+            assert!(
+                !menu.contains(advanced),
+                "{advanced} must live outside New Tab"
+            );
+        }
+        let workbench = include_str!("main.rs");
+        assert_eq!(
+            workbench
+                .matches(".dropdown_menu(Self::kit_new_tab_menu(")
+                .count(),
+            3
+        );
+        assert!(workbench.contains("runtime-host-recovery-actions"));
+        assert!(workbench.contains("this.attach_live_terminal_to_pane(&original, &target, cx)"));
     }
 
     #[test]
