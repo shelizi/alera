@@ -113,4 +113,56 @@ void main() {
       expect(batches, hasLength(1));
     });
   });
+  test('continuous changes never starve Explorer refresh', () {
+    fakeAsync((clock) {
+      final batches = <List<String>>[];
+      final queue = WorkspaceExplorerWatchRefreshQueue(
+        refresh: (paths) async => batches.add(paths),
+        debounce: const Duration(milliseconds: 120),
+        maxWait: const Duration(milliseconds: 350),
+      );
+
+      for (var index = 0; index < 40; index++) {
+        queue.enqueue(const ['lib', 'lib', 'src']);
+        clock.elapse(const Duration(milliseconds: 40));
+      }
+
+      // No 120-ms idle gap occurred, but the 350-ms maximum wait forces
+      // several snapshots instead of hiding all updates until the build ends.
+      expect(batches.length, greaterThanOrEqualTo(4));
+      expect(batches.length, lessThan(9));
+      expect(batches.every((batch) => batch.length == 2), isTrue);
+      queue.dispose();
+    });
+  });
+
+  test('a due trailing batch runs when an in-flight scan completes', () {
+    fakeAsync((clock) {
+      final firstRead = Completer<void>();
+      final batches = <List<String>>[];
+      final queue = WorkspaceExplorerWatchRefreshQueue(
+        refresh: (paths) {
+          batches.add(paths);
+          return batches.length == 1 ? firstRead.future : Future<void>.value();
+        },
+        debounce: const Duration(milliseconds: 120),
+        maxWait: const Duration(milliseconds: 250),
+      );
+      queue.enqueue(const ['src'], immediate: true);
+      for (var index = 0; index < 20; index++) {
+        queue.enqueue(const ['test']);
+        clock.elapse(const Duration(milliseconds: 30));
+      }
+      expect(batches, [
+        <String>['src'],
+      ]);
+      firstRead.complete();
+      clock.flushMicrotasks();
+      expect(batches, [
+        <String>['src'],
+        <String>['test'],
+      ]);
+      queue.dispose();
+    });
+  });
 }

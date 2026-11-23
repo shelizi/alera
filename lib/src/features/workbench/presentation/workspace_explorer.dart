@@ -742,35 +742,47 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   Future<void> _loadDirectory(String relativePath) async {
+    final projectionGeneration = _nativeProjectionGeneration;
+    final workspacePath = widget.workspace.path;
     final rawChildren = await _workspaceFiles.listChildren(
-      workspacePath: widget.workspace.path,
+      workspacePath: workspacePath,
       relativePath: relativePath,
       hideIgnored: widget.mode == WorkspaceExplorerMode.hideIgnored,
       hideHidden:
           defaultTargetPlatform == TargetPlatform.windows &&
           !widget.showHiddenFiles,
     );
+    // A worktree switch or a mode refresh may retire this directory read
+    // before the native file listing arrives. Never attach its rows to a
+    // newer Explorer projection, even if the relative folder name matches.
+    if (!mounted ||
+        projectionGeneration != _nativeProjectionGeneration ||
+        workspacePath != widget.workspace.path) {
+      return;
+    }
     final children = _workspaceFiles.applyGitStatusSnapshot(
       rawChildren,
       _gitStatusSnapshot,
     );
-    if (!mounted) {
-      return;
-    }
     await _replaceDirectoryChildren(relativePath, children);
   }
 
   Future<void> _refreshGitStatusSnapshot() async {
     final workspacePath = widget.workspace.path;
+    final projectionGeneration = _nativeProjectionGeneration;
     try {
       final snapshot = await _gitBackend.explorerStatusSnapshot(workspacePath);
       // A slow Git scan from a retired worktree must never overwrite the
       // Explorer's status badges after its workspace changes.
-      if (mounted && workspacePath == widget.workspace.path) {
+      if (mounted &&
+          projectionGeneration == _nativeProjectionGeneration &&
+          workspacePath == widget.workspace.path) {
         _gitStatusSnapshot = snapshot;
       }
     } catch (_) {
-      if (mounted && workspacePath == widget.workspace.path) {
+      if (mounted &&
+          projectionGeneration == _nativeProjectionGeneration &&
+          workspacePath == widget.workspace.path) {
         _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
       }
     }

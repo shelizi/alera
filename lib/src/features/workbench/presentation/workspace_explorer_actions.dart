@@ -704,29 +704,44 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
   Future<void> _refreshDirectory(
     String relativePath, {
     bool refreshGitStatus = true,
+    bool refreshQuickOpen = true,
   }) async {
+    final generation = _nativeProjectionGeneration;
+    final workspacePath = widget.workspace.path;
     try {
       if (refreshGitStatus) {
         await _refreshGitStatusSnapshot();
       }
+      if (!mounted ||
+          generation != _nativeProjectionGeneration ||
+          workspacePath != widget.workspace.path) {
+        return;
+      }
       final previousStructureRevision = _treeStructureRevision;
       await _loadDirectory(relativePath);
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _nativeProjectionGeneration ||
+          workspacePath != widget.workspace.path) {
+        return;
+      }
       // Metadata-only and identical watcher events retain TreeData and the
       // flattened visible list. Changed rows repaint through their notifier.
       // Only native graph/entry-binding changes require controller.rebuild.
       if (_treeStructureRevision != previousStructureRevision) {
         _rebuildTree();
       }
-      // Keep the file filter index in sync with edits made by either view.
-      if (_isFiltering) {
+      // Watcher batches already scheduled one debounced Quick Open refresh.
+      // Explicit directory edits still request their own immediate refresh.
+      if (refreshQuickOpen && _isFiltering) {
         _workspaceFiles.scheduleQuickOpenRefresh(
-          workspacePath: widget.workspace.path,
+          workspacePath: workspacePath,
           debounce: Duration.zero,
         );
       }
     } catch (error) {
-      _showError(error);
+      if (mounted && generation == _nativeProjectionGeneration) {
+        _showError(error);
+      }
     }
   }
 

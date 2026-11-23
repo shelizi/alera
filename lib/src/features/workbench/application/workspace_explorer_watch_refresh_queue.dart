@@ -8,13 +8,20 @@ class WorkspaceExplorerWatchRefreshQueue {
   WorkspaceExplorerWatchRefreshQueue({
     required this.refresh,
     this.debounce = const Duration(milliseconds: 120),
-  });
+    this.maxWait = const Duration(milliseconds: 750),
+  }) : assert(maxWait > Duration.zero);
 
   final Future<void> Function(List<String>) refresh;
   final Duration debounce;
+
+  /// A sustained build/formatter stream must not starve Explorer updates
+  /// indefinitely by continuously resetting the short quiet-period timer.
+  final Duration maxWait;
   final Set<String> _pending = <String>{};
   Timer? _timer;
+  Timer? _maxWaitTimer;
   bool _inFlight = false;
+  bool _overdue = false;
   bool _urgent = false;
   bool _disposed = false;
 
@@ -26,20 +33,26 @@ class WorkspaceExplorerWatchRefreshQueue {
     if (_pending.isEmpty) return;
     if (immediate) {
       _urgent = true;
-      _timer?.cancel();
-      _timer = null;
       _drainIfReady();
       return;
     }
     if (_urgent) return;
     _timer?.cancel();
     _timer = Timer(debounce, _drainIfReady);
+    _maxWaitTimer ??= Timer(maxWait, _drainIfReady);
   }
 
   void _drainIfReady() {
+    if (_disposed || _pending.isEmpty) return;
+    if (_inFlight) {
+      _overdue = true;
+      return;
+    }
     _timer?.cancel();
     _timer = null;
-    if (_disposed || _inFlight || _pending.isEmpty) return;
+    _maxWaitTimer?.cancel();
+    _maxWaitTimer = null;
+    _overdue = false;
     _inFlight = true;
     _urgent = false;
     final batch = List<String>.unmodifiable(_pending);
@@ -56,10 +69,11 @@ class WorkspaceExplorerWatchRefreshQueue {
     } finally {
       _inFlight = false;
       if (!_disposed && _pending.isNotEmpty) {
-        if (_urgent) {
+        if (_urgent || _overdue) {
           _drainIfReady();
         } else {
           _timer ??= Timer(debounce, _drainIfReady);
+          _maxWaitTimer ??= Timer(maxWait, _drainIfReady);
         }
       }
     }
@@ -70,7 +84,10 @@ class WorkspaceExplorerWatchRefreshQueue {
   void clear() {
     _timer?.cancel();
     _timer = null;
+    _maxWaitTimer?.cancel();
+    _maxWaitTimer = null;
     _pending.clear();
+    _overdue = false;
     _urgent = false;
   }
 

@@ -168,23 +168,30 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
 
   Future<void> _refreshWatchedDirectories(List<String> relativePaths) async {
     final generation = _watcherGeneration;
+    final projectionGeneration = _nativeProjectionGeneration;
     final workspacePath = widget.workspace.path;
     await _refreshGitStatusSnapshot();
     if (!mounted ||
         generation != _watcherGeneration ||
+        projectionGeneration != _nativeProjectionGeneration ||
         workspacePath != widget.workspace.path) {
       return;
     }
     for (final relativePath in relativePaths) {
       if (!mounted ||
           generation != _watcherGeneration ||
+          projectionGeneration != _nativeProjectionGeneration ||
           workspacePath != widget.workspace.path) {
         return;
       }
       if (!_childrenByDirectory.containsKey(relativePath)) {
         continue;
       }
-      await _refreshDirectory(relativePath, refreshGitStatus: false);
+      await _refreshDirectory(
+        relativePath,
+        refreshGitStatus: false,
+        refreshQuickOpen: false,
+      );
     }
   }
 }
