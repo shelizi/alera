@@ -17817,7 +17817,7 @@ impl Render for Workbench {
                                                                     } else {
                                                                         provider_name.to_owned()
                                                                     };
-                                                                    let agent_tooltip = format!("Inspect {} · Host Tab {}", provider_name, tab_id);
+                                                                    let agent_tooltip = format!("Open {} · Host Tab {}", provider_name, tab_id);
                                                                     div()
                                                                         .id(("project-tree-agent", index * 4096 + child_index * 32 + agent_index))
                                                                         .ml(px(29.0 + depth.min(8) as f32 * 14.0))
@@ -17845,10 +17845,10 @@ impl Render for Workbench {
                                                                         )
                                                                         .child(div().flex_1().min_w_0().truncate()
                                                                             .text_xs().text_color(rgb(MUTED)).child(agent_caption))
-                                                                        .on_click(cx.listener(move |view, _, window, cx| {
-                                                                            view.inspect_sidebar_agent(
+                                                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                                                            view.open_sidebar_agent_tab(
                                                                                 handle.clone(), workspace_id.clone(),
-                                                                                tab_id.clone(), window, cx,
+                                                                                tab_id.clone(), agent_type.clone(), cx,
                                                                             );
                                                                         }))
                                                                 },

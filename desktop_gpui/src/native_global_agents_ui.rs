@@ -1256,34 +1256,36 @@ impl GlobalAgentInspectorState {
 }
 
 impl Workbench {
-    /// Classic-style sidebar Agent row: open the same read/write Inspector as
-    /// the Kanban card, never attach or resume a Host PTY by a stale handle.
-    pub(super) fn inspect_sidebar_agent(
+    /// Sidebar Agent rows follow Classic: focus the verified Host Tab in its
+    /// original pane/workspace. Only Dashboard cards open the Inspector modal.
+    pub(super) fn open_sidebar_agent_tab(
         &mut self,
         handle: String,
         workspace_id: String,
         tab_id: String,
-        window: &mut Window,
+        agent_type: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.terminals.sessions.iter().find(|session| {
-            session.running
-                && session.handle == handle
-                && session.workspace_id == workspace_id
-                && session.tab_id == tab_id
-                && session.agent_type.is_some()
-        }) else {
-            self.terminals.status = "Agent identity changed; refresh before inspecting".into();
-            cx.notify();
-            return;
-        };
-        let target = GlobalAgentPromptTarget {
-            handle,
+        let target = AgentNavigationTarget {
+            session_id: handle,
             workspace_id,
             tab_id,
-            agent_type: session.agent_type.clone().unwrap_or_default(),
+            agent_type,
         };
-        self.open_global_agent_inspector(target, window, cx);
+        if self.terminals.session_list_is_stale()
+            || validated_agent_navigation_target(&target, &self.terminals.sessions).is_none()
+        {
+            self.agent_navigation.cancel();
+            self.terminals.status = "Agent identity changed; refresh before opening Tab".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        }
+        // The shared deferred navigation rechecks the full Host identity,
+        // reuses the existing Tab or opens a local view, and never resumes an Agent.
+        self.agent_navigation
+            .begin(target, AgentNavigationSource::Sidebar);
+        cx.notify();
     }
 
     fn open_global_agent_inspector(
