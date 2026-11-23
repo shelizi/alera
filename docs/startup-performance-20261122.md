@@ -9,6 +9,7 @@ must not be inferred from compile or unit-test durations.
 
 ## Changes
 
+- **GPUI:** Read saved read-only preview tabs on a background thread after the native window is created. The pre-window trace is `preview_session_deferred`; `preview_session_restored` is recorded when that read finishes. A workspace switch before the read finishes keeps the on-disk snapshot. A malformed snapshot is still not overwritten.
 - **GPUI:** Reopen authenticated Host Terminal inventory immediately. Schedule
   saved file-backed Editor hydration 150 ms after window creation rather than
   synchronously in the initial Workbench constructor. Preserve pane layout

@@ -965,6 +965,10 @@ struct Workbench {
     mixed_layout_restore: Option<SavedWorkbenchLayoutV1>,
     /// Guard deferred file-backed Editor hydration against early Host layout reconciliation.
     startup_editor_restore_pending: bool,
+    /// The saved read-only preview is still being read off the UI thread.
+    /// Persisting or switching before it lands must not replace that snapshot
+    /// with the still-empty in-memory tab list.
+    startup_preview_restore_pending: bool,
     mixed_layout_read_only: bool,
     mixed_tab_context: Option<WorkbenchTabIdentity>,
     runtime_bridge: Option<RuntimeCliBridge>,
@@ -6571,6 +6575,9 @@ impl Workbench {
     }
 
     fn persist_session(&mut self) {
+        if self.startup_preview_restore_pending {
+            return;
+        }
         if let Some(store) = &self.session_store {
             if let Err(error) = store.save(&self.model) {
                 eprintln!("Alera GPUI: unable to persist preview session: {error}");
@@ -6876,8 +6883,13 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let keep_saved_preview = self.startup_preview_restore_pending;
         let result = if let Some(store) = &self.session_store {
-            store.switch_workspace(&self.model, &canonical)
+            if keep_saved_preview {
+                store.switch_workspace_keeping_saved_departing(&self.model, &canonical)
+            } else {
+                store.switch_workspace(&self.model, &canonical)
+            }
         } else {
             WorkbenchModel::new(&canonical)
         };
@@ -6890,6 +6902,7 @@ impl Workbench {
                 return;
             }
         };
+        self.startup_preview_restore_pending = false;
         // Preserve only tab identities/display mode, never PTY output or
         // credentials. Other workspaces never inherit this local layout.
         self.save_mixed_pane_layout(cx);
@@ -9953,21 +9966,94 @@ impl Workbench {
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation {
+                    view.startup_editor_restore_pending = false;
                     return;
                 }
-                view.startup_editor_restore_pending = false;
                 if view.mixed_layout_restore.is_none() {
+                    view.startup_editor_restore_pending = false;
                     return;
                 }
+                // Keep the pending guard set while files open. A nested strip
+                // sync must not consume the saved layout before every buffer
+                // exists. set_pinned ignores identities that are not in the
+                // strip yet, so the layout is applied only after reconcile.
                 view.restore_file_tabs_from_pane_layout(cx);
-                // Host inventory might have arrived in the meantime. Complete
-                // the saved split layout once actual editor owners exist.
-                view.apply_restored_mixed_panes(cx);
+                view.startup_editor_restore_pending = false;
+                view.sync_mixed_tabs(cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Read the saved read-only preview after the window exists. File contents
+    /// stay on a background thread. A workspace switch during the read keeps
+    /// the on-disk snapshot and drops the late result.
+    fn defer_preview_session_restore(&mut self, startup_started: Instant, cx: &mut Context<Self>) {
+        let Some(store) = self.session_store.clone() else {
+            trace_native_startup(startup_started, "preview_session_restored");
+            return;
+        };
+        self.startup_preview_restore_pending = true;
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let restored = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut model = WorkbenchModel::session_restore_model(&root)
+                        .map_err(|error| error.to_string())?;
+                    store
+                        .restore(&mut model)
+                        .map_err(|error| error.to_string())?;
+                    Ok(model)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.finish_deferred_preview_restore(
+                    generation,
+                    restored,
+                    startup_started,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_deferred_preview_restore(
+        &mut self,
+        generation: u64,
+        restored: Result<WorkbenchModel, String>,
+        startup_started: Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_generation != generation || !self.startup_preview_restore_pending {
+            self.startup_preview_restore_pending = false;
+            trace_native_startup(startup_started, "preview_session_restored");
+            return;
+        }
+        self.startup_preview_restore_pending = false;
+        match restored {
+            Ok(restored) => {
+                if self.model.adopt_deferred_preview(restored) {
+                    if let Some(store) = &self.session_store {
+                        if let Err(error) = store.save(&self.model) {
+                            eprintln!("Alera GPUI: cannot save preview session: {error}");
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Alera GPUI: cannot restore preview session: {error}");
+                self.model
+                    .set_status(format!("Previous preview session unavailable: {error}"));
+            }
+        }
+        trace_native_startup(startup_started, "preview_session_restored");
+        cx.notify();
     }
 
     /// Recover only files that are validated by the ordinary EditorTabs
@@ -18200,7 +18286,7 @@ fn main() {
             }
         })
         .unwrap_or_else(|| std::env::current_dir().expect("current working directory"));
-    let mut model = match WorkbenchModel::new(root) {
+    let model = match WorkbenchModel::new(root) {
         Ok(model) => model,
         Err(error) => {
             eprintln!("Alera GPUI: unable to open workspace: {error}");
@@ -18208,22 +18294,11 @@ fn main() {
         }
     };
     trace_native_startup(startup_started, "workspace_model_initialized");
-    if let Some(store) = &session_store {
-        // Preserve a malformed snapshot for possible recovery instead of
-        // overwriting it with an empty workspace at startup.
-        match store.restore(&mut model) {
-            Ok(_) => {
-                if let Err(error) = store.save(&model) {
-                    eprintln!("Alera GPUI: cannot save preview session: {error}");
-                }
-            }
-            Err(error) => {
-                eprintln!("Alera GPUI: cannot restore preview session: {error}");
-                model.set_status(format!("Previous preview session unavailable: {error}"));
-            }
-        }
-    }
-    trace_native_startup(startup_started, "preview_session_restored");
+    // Preview tabs read workspace files. Doing that before the window existed
+    // stalled cold start for seconds when the disk was slow. The read now
+    // starts after the window is created. A malformed snapshot is still left
+    // on disk: the deferred path saves only after a successful restore.
+    trace_native_startup(startup_started, "preview_session_deferred");
     let runtime_bridge = RuntimeCliBridge::discover().ok();
     let runtime_status = if runtime_bridge.is_some() {
         "Not checked · use existing Alera CLI".into()
@@ -18764,6 +18839,7 @@ fn main() {
                             mixed_panes: WorkbenchPaneLayout::default(),
                             mixed_layout_restore: None,
                             startup_editor_restore_pending: false,
+                            startup_preview_restore_pending: false,
                             mixed_layout_read_only: false,
                             mixed_tab_context: None,
                             runtime_bridge,
@@ -19025,6 +19101,7 @@ fn main() {
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_after_first_paint(cx);
+                        workbench.defer_preview_session_restore(startup_started, cx);
                         workbench.restore_host_create_journal();
                         workbench.refresh_shared_desktop_settings(cx);
                         workbench.refresh_agent_quotas(false, None, cx);

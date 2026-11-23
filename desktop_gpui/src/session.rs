@@ -624,6 +624,27 @@ impl PreviewSessionStore {
         departing: &WorkbenchModel,
         destination: impl AsRef<Path>,
     ) -> io::Result<WorkbenchModel> {
+        self.switch_workspace_inner(departing, destination, true)
+    }
+
+    /// Switch while the departing model has not absorbed its saved preview.
+    /// The destination is restored and the active hints move, but the departing
+    /// workspace file stays as the last successful snapshot. Writing the empty
+    /// in-memory model would drop those tabs.
+    pub fn switch_workspace_keeping_saved_departing(
+        &self,
+        departing: &WorkbenchModel,
+        destination: impl AsRef<Path>,
+    ) -> io::Result<WorkbenchModel> {
+        self.switch_workspace_inner(departing, destination, false)
+    }
+
+    fn switch_workspace_inner(
+        &self,
+        departing: &WorkbenchModel,
+        destination: impl AsRef<Path>,
+        persist_departing: bool,
+    ) -> io::Result<WorkbenchModel> {
         let mut next = WorkbenchModel::new(destination)?;
         self.restore(&mut next)?;
 
@@ -644,11 +665,13 @@ impl PreviewSessionStore {
         }
 
         let mut writes = Vec::new();
-        push_write(
-            &mut writes,
-            self.session_path(departing.root()),
-            encode_json(&session_snapshot(departing))?,
-        );
+        if persist_departing {
+            push_write(
+                &mut writes,
+                self.session_path(departing.root()),
+                encode_json(&session_snapshot(departing))?,
+            );
+        }
         push_write(
             &mut writes,
             self.session_path(next.root()),
@@ -1468,6 +1491,31 @@ mod tests {
         );
         let restored_a = store.switch_workspace(&switched, root_a.path()).unwrap();
         assert_eq!(restored_a.content(), "A");
+    }
+
+    #[test]
+    fn deferred_preview_switch_keeps_the_saved_departing_snapshot() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        fs::write(root_a.path().join("a.txt"), "A").unwrap();
+        fs::write(root_b.path().join("b.txt"), "B").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut saved = WorkbenchModel::new(root_a.path()).unwrap();
+        saved.open_entry(0);
+        store.save(&saved).unwrap();
+        let empty = WorkbenchModel::new(root_a.path()).unwrap();
+        let switched = store
+            .switch_workspace_keeping_saved_departing(&empty, root_b.path())
+            .unwrap();
+        assert_eq!(switched.content(), "");
+        assert_eq!(
+            store.last_workspace().unwrap(),
+            Some(switched.root().to_path_buf())
+        );
+        let mut reopened = WorkbenchModel::new(root_a.path()).unwrap();
+        assert_eq!(store.restore(&mut reopened).unwrap(), 1);
+        assert_eq!(reopened.content(), "A");
     }
 
     #[test]
