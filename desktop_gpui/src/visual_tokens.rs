@@ -501,6 +501,56 @@ mod tests {
     }
 
     #[test]
+    fn git_filter_refreshes_visible_rows_and_project_worktree_options_use_modals() {
+        let source = include_str!("main.rs");
+        // Typing into the real Source Control input must re-render the parent,
+        // not merely update the field's own placeholder/text entity.
+        assert!(source.contains("cx.observe(&git_filter_input"));
+        assert!(source.contains("view.git_selected_changes.clear();"));
+        assert!(source.contains("view.git_selected_folders.clear();"));
+        assert!(source.contains("view.git_selection_anchor = None;"));
+        assert!(source.contains(
+            "let git_sidebar_layout = layout_git_sidebar(&git_all_changes, &git_sidebar_options);"
+        ));
+        assert!(source.contains("git_filter_input,"));
+        assert!(source.contains("cx.observe(&explorer_filter_input"));
+        assert!(source.contains("let explorer_filter_active = !explorer_filter_query.is_empty()"));
+
+        for expected in [
+            "project-options",
+            "workspace-options",
+            "projects-view-options",
+            "projects-new-workspace",
+            "SidebarOptionsTarget::Project(",
+            "SidebarOptionsTarget::Workspace {",
+            "SidebarOptionsTarget::Management(",
+            "sidebar_options_modal_open",
+        ] {
+            assert!(source.contains(expected), "Missing modal route: {expected}");
+        }
+        let modal = include_str!("native_project_sidebar_modal_ui.rs");
+        for expected in [
+            "window.open_dialog(cx",
+            ".overlay_closable(true)",
+            ".on_ok(|_, _, _| false)",
+            "fn render_sidebar_options_dialog",
+            "fn add_sidebar_workspace_modal_rows",
+            "fn run_sidebar_modal_action",
+            "view.submit_sidebar_create(cx)",
+            "view.submit_sidebar_rename(cx)",
+            "view.create_worktree(cx)",
+            "SidebarWorkspaceAction::Remove",
+            "SidebarWorkspaceAction::Sleep",
+            "SidebarWorkspaceAction::DeleteTag",
+            "SidebarWorkspaceAction::DeleteSection",
+        ] {
+            assert!(
+                modal.contains(expected),
+                "Missing safe modal UX: {expected}"
+            );
+        }
+    }
+    #[test]
     fn source_control_parity_keeps_commit_editor_without_redundant_git_and_agent_buttons() {
         let source = include_str!("main.rs");
         for removed in [

@@ -18,6 +18,7 @@ mod native_history_sync_ui;
 mod native_host_pins_ui;
 mod native_popup_ui;
 mod native_project_sidebar_ui;
+mod native_project_sidebar_modal_ui;
 mod native_review_links;
 mod native_settings_catalog_ui;
 mod native_settings_ui;
@@ -30,6 +31,7 @@ mod win_ime;
 use alera_gpui_desktop::sidebar_manual_order::SidebarReorderHoldGate;
 use native_history_sync_ui::AgyAccountEdit;
 use native_project_sidebar_ui::{SidebarOrderDrag, SidebarOrderKind};
+use native_project_sidebar_modal_ui::SidebarOptionsTarget;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -929,6 +931,8 @@ struct Workbench {
     sidebar_project_remove_pending: Option<(String, ProjectRemovalPreview)>,
     sidebar_create_target: Option<(String, String)>,
     sidebar_create_input: Option<Entity<QuickOpenInput>>,
+    sidebar_options_modal_focus: gpui::FocusHandle,
+    sidebar_options_modal_open: bool,
     collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
@@ -12544,8 +12548,8 @@ impl Render for Workbench {
             .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
-        let sidebar_rename_input = self.sidebar_rename_input.clone();
-        let sidebar_create_input = self.sidebar_create_input.clone();
+        let sidebar_rename_input = if self.sidebar_options_modal_open { None } else { self.sidebar_rename_input.clone() };
+        let sidebar_create_input = if self.sidebar_options_modal_open { None } else { self.sidebar_create_input.clone() };
         let selected_sidebar_parent = self.sidebar_selected_parent.clone();
         let sidebar_project_remove_id = self
             .sidebar_project_remove_pending
@@ -17154,10 +17158,13 @@ impl Render for Workbench {
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(sidebar_visible_project_count.to_string()))
                                     .child(div().flex_1())
                                     .child(icon_button("projects-view-options", UiIcon::Sliders,
-                                        "View options / recent workspaces", self.show_project_management)
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.show_project_management = !view.show_project_management;
-                                            cx.notify();
+                                        "Projects, saved and recent workspaces", false)
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            view.show_project_management = false;
+                                            view.open_sidebar_options_dialog(
+                                                SidebarOptionsTarget::Management(view.model.root().to_path_buf()),
+                                                window, cx,
+                                            );
                                         })))
                                     .child(icon_button("projects-collapse-all",
                                         if sidebar_all_projects_collapsed { UiIcon::ExpandAll } else { UiIcon::CollapseAll },
@@ -17188,8 +17195,14 @@ impl Render for Workbench {
                                         })))
                                     .child(icon_button("projects-new-workspace", UiIcon::Add,
                                         "New Workspace", picking_workspace)
-                                        .on_click(cx.listener(|view, _, _, cx| {
-                                            view.begin_worktree_for_project(view.model.root().to_path_buf(), cx);
+                                        .on_click(cx.listener(|view, _, window, cx| {
+                                            let root = view.model.root().to_path_buf();
+                                            view.show_project_management = false;
+                                            view.open_sidebar_options_dialog(
+                                                SidebarOptionsTarget::Management(root.clone()), window, cx,
+                                            );
+                                            view.begin_worktree_for_project(root, cx);
+                                            view.show_project_management = false;
                                         }))),
                             )
                             .child(
@@ -17314,6 +17327,7 @@ impl Render for Workbench {
                                                 let project_remove_armed = menu_project_id.as_deref()
                                                     == sidebar_project_remove_id.as_deref();
                                                 let project_context_root = group.root.clone();
+                                                let project_options_root = group.root.clone();
                                                 let worktree_project_root = group.root.clone();
                                                 let title = runtime_catalog.as_ref()
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
@@ -17446,8 +17460,22 @@ impl Render for Workbench {
                                                             .child(div().text_xs().text_color(rgb(MUTED)).child(project_workspace_count.to_string()))
                                                             .child(icon_button(("project-create-worktree", index), UiIcon::Add,
                                                                 "New Workspace for this project", false)
-                                                                .on_click(cx.listener(move |view, _, _, cx| {
-                                                                    view.begin_worktree_for_project(project_create_root.clone(), cx);
+                                                                .on_click(cx.listener(move |view, _, window, cx| {
+                                                                    let root = project_create_root.clone();
+                                                                    view.open_sidebar_options_dialog(
+                                                                        SidebarOptionsTarget::Project(root.clone()), window, cx,
+                                                                    );
+                                                                    let before = view.show_project_management;
+                                                                    view.begin_worktree_for_project(root, cx);
+                                                                    view.show_project_management = before;
+                                                                })))
+                                                            .child(icon_button(("project-options", index), UiIcon::More,
+                                                                "Project options", false)
+                                                                .on_click(cx.listener(move |view, _, window, cx| {
+                                                                    view.open_sidebar_options_dialog(
+                                                                        SidebarOptionsTarget::Project(project_options_root.clone()),
+                                                                        window, cx,
+                                                                    );
                                                                 }))),
                                                     )
                                                     .children(rows.into_iter()
@@ -17476,6 +17504,8 @@ impl Render for Workbench {
                                                         let active = workspace_root == target;
                                                         let menu_root = worktree_project_root.clone();
                                                         let menu_path = target.clone();
+                                                        let workspace_options_root = worktree_project_root.clone();
+                                                        let workspace_options_path = target.clone();
                                                         let menu_catalog = runtime_catalog.clone();
                                                         let menu_confirmation = sidebar_pending_action.clone();
                                                         let menu_selected_parent = selected_sidebar_parent.clone();
@@ -17594,6 +17624,17 @@ impl Render for Workbench {
                                                                         },
                                                                     ),
                                                             )))
+                                                            .child(icon_button(("workspace-options", index * 128 + child_index),
+                                                                UiIcon::More, "Workspace / Worktree options", false)
+                                                                .on_click(cx.listener(move |view, _, window, cx| {
+                                                                    view.open_sidebar_options_dialog(
+                                                                        SidebarOptionsTarget::Workspace {
+                                                                            project_root: workspace_options_root.clone(),
+                                                                            path: workspace_options_path.clone(),
+                                                                        },
+                                                                        window, cx,
+                                                                    );
+                                                                })))
                                                             .children(sidebar_agents.into_iter().take(24).enumerate().map(
                                                                 |(agent_index, (handle, workspace_id, tab_id, agent_type, visual_state))| {
                                                                     let provider_name = native_agent_quota_ui::classic_agent_display_name(&agent_type);
@@ -18665,7 +18706,19 @@ fn main() {
                             },
                         )
                         .detach();
-                        let explorer_filter_input =
+                        // React to each Git filter keystroke, as Explorer does:
+                        // otherwise the source-control file list never repaints.
+                        let git_filter_input =
+                            cx.new(|cx| QuickOpenInput::with_placeholder("Filter files...", cx));
+                        cx.observe(&git_filter_input, |view: &mut Workbench, _, cx| {
+                            // No invisible selection may survive into a bulk mutation.
+                            view.git_selected_changes.clear();
+                            view.git_selected_folders.clear();
+                            view.git_selection_anchor = None;
+                            view.git_discard_armed = None;
+                            cx.notify();
+                        })
+                        .detach();                        let explorer_filter_input =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
                         cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
                             // The visual result set has changed; never let hidden
@@ -18855,6 +18908,8 @@ fn main() {
                             sidebar_project_remove_pending: None,
                             sidebar_create_target: None,
                             sidebar_create_input: None,
+                            sidebar_options_modal_focus: cx.focus_handle(),
+                            sidebar_options_modal_open: false,
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),
@@ -18966,8 +19021,7 @@ fn main() {
                             git_conflict_loading: false,
                             git_conflict_request: 0,
                             git_conflict_confirm_armed: false,
-                            git_filter_input: cx
-                                .new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx)),
+                            git_filter_input,
                             git_graph_search_input,
                             git_branch_picker_input,
                             git_branch_picker_mode: None,
