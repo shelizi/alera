@@ -37,6 +37,7 @@ pub enum UiIcon {
     FileZip,
     FileBinary,
     Open,
+    Maximize,
     ChevronUp,
     ChevronDown,
     ChevronRight,
@@ -105,7 +106,7 @@ impl UiIcon {
             Self::FilePdf => '\u{eaeb}',
             Self::FileZip => '\u{eaef}',
             Self::FileBinary => '\u{eae8}',
-            Self::Open => '\u{eaf7}',
+            Self::Open | Self::Maximize => '\u{eaf7}',
             Self::ChevronUp => '\u{eab7}',
             Self::ChevronDown => '\u{eab4}',
             Self::ChevronRight => '\u{eab6}',
@@ -189,6 +190,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::NewFolder => LucideIcon::FolderPlus,
         UiIcon::Folder => LucideIcon::Folder,
         UiIcon::FolderOpen | UiIcon::Open => LucideIcon::FolderOpen,
+        UiIcon::Maximize => return None, // Classic's Lucide maximize SVG below.
         UiIcon::Files => LucideIcon::Files,
         UiIcon::File => LucideIcon::FileText,
         UiIcon::ChevronUp => LucideIcon::ChevronUp,
@@ -251,6 +253,14 @@ const CLASSIC_HISTORY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" w
 <path d="M12 7v5l4 2"/>
 </svg>"#;
 
+// Same Lucide maximize icon as Classic's Open Commit Graph button.
+const CLASSIC_MAXIMIZE_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+<path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+<path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+<path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+</svg>"#;
+
 pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
     let frame = div()
         .w(px(size_px))
@@ -258,6 +268,14 @@ pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
         .flex()
         .items_center()
         .justify_center();
+    if icon == UiIcon::Maximize {
+        return frame.child(
+            Icon::default()
+                .data(CLASSIC_MAXIMIZE_SVG)
+                .with_size(px(size_px))
+                .text_color(rgb(color)),
+        );
+    }
     if icon == UiIcon::History {
         return frame.child(
             Icon::default()

@@ -14502,6 +14502,17 @@ impl Render for Workbench {
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child(tr(self.settings_menu_locale, "Source Control")),
                                     )
+                                    // Classic's Git History provides a maximize entry even
+                                    // when the commits list is collapsed. Also keep it beside
+                                    // Source Control where it cannot be buried by the scroll.
+                                    .child(sidebar_icon_button(
+                                        "git-open-commit-graph-toolbar",
+                                        UiIcon::Maximize,
+                                        tr(self.settings_menu_locale, "Open Commit Graph"),
+                                        self.git_graph_center_open,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.open_center_git_graph(cx);
+                                    })))
                                     .child(
                                         div()
                                             .id("git-source-control-actions-scroll")
@@ -15397,8 +15408,8 @@ impl Render for Workbench {
                                     .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(tr(self.settings_menu_locale, "Commits")))
                                     .child(div().flex_1())
-                                    .child(icon_button("git-graph-expand-center", UiIcon::Open,
-                                        "Open persistent Git History tab in workbench", false)
+                                    .child(icon_button("git-graph-expand-center", UiIcon::Maximize,
+                                        tr(self.settings_menu_locale, "Open Commit Graph"), self.git_graph_center_open)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             cx.stop_propagation();
                                             this.open_center_git_graph(cx);

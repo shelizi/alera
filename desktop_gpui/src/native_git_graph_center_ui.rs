@@ -20,6 +20,11 @@ fn center_graph_title(compact: bool, commits: usize) -> String {
 
 impl Workbench {
     pub(super) fn open_center_git_graph(&mut self, cx: &mut Context<Self>) {
+        // The large Commit Graph is a central workbench tab, not a sidebar
+        // preview. Opening from Source Control must leave the Dashboard page
+        // before selecting GitHistory, without touching any running Agent.
+        self.global_agent_maximized = false;
+        self.global_agent_history_open = false;
         self.git_history_tab_open = true;
         self.git_graph_center_open = true;
         self.active_git_compare_tab = None;
