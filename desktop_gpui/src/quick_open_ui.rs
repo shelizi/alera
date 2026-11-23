@@ -103,7 +103,7 @@ fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Opt
     Some(range.start)
 }
 
-/// The Profile Prompt is the only QuickOpenInput mode that preserves lines.
+/// Git commit messages and Profile prompts preserve newlines; searches remain single-line.
 fn normalize_input_text(raw: &str, multiline: bool) -> String {
     if multiline {
         raw.replace("\r\n", "\n")
@@ -183,6 +183,15 @@ impl QuickOpenInput {
     /// supports the validated 4 KiB Host command limit.
     pub fn profile_command(cx: &mut Context<Self>) -> Self {
         let mut input = Self::with_placeholder("Host Command (4 KiB max)…", cx);
+        input.max_input_bytes = 4096;
+        input
+    }
+
+    /// Classic Source Control edits multiline commit messages directly.
+    /// The Git service rejects messages over 4096 bytes, so cap at entry.
+    pub fn git_commit_message(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::with_placeholder("Message", cx);
+        input.multiline_mode = true;
         input.max_input_bytes = 4096;
         input
     }

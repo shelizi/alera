@@ -983,8 +983,8 @@ struct Workbench {
     git_trash_loading: bool,
     git_trash_request: u64,
     git_sidebar_options: GitSidebarOptions,
-    /// Classic shows changed files first; side patch text is an optional detail.
-    git_sidebar_patch_expanded: bool,
+    /// Source Control keeps changed files here; clicking them opens a center diff.
+
     /// Keep infrequent Git/remote operations out of the primary Source Control workflow.
     git_advanced_actions_open: bool,
     git_history: Option<GitHistorySnapshot>,
@@ -5643,9 +5643,8 @@ impl Workbench {
             self.center_git_diff_scroll
                 .scroll_to_item(0, gpui::ScrollStrategy::Top);
         } else {
-            // Conflict resolution keeps the existing exact-area side preview.
+            // A non-paged preview has no navigable center source.
             self.center_git_diff_source = None;
-            self.git_sidebar_patch_expanded = true;
         }
         cx.notify();
     }
@@ -13434,26 +13433,6 @@ impl Render for Workbench {
                 .clone()
                 .unwrap_or_else(|| "Git status not loaded".into())
         };
-        let git_diff = self.git_diff.clone().unwrap_or_else(|| {
-            if self.git_diff_loading {
-                "Reading read-only diff…".to_string()
-            } else {
-                "Select a changed file to preview its patch".to_string()
-            }
-        });
-        let git_diff_expand_available = native_action_dialog_ui::can_expand_read_only_diff(
-            self.git_diff.as_deref(),
-            self.git_diff_loading,
-        );
-        let git_file_page = self.git_file_diff_paging.as_ref().map(|page| {
-            (
-                page.previous_starts.len() + 1,
-                !page.previous_starts.is_empty() && !self.git_diff_loading,
-                page.next_line.is_some()
-                    && page.previous_starts.len() < 31
-                    && !self.git_diff_loading,
-            )
-        });
         let show_center_git_diff = native_center_git_diff_ui::should_show_center_git_diff_view(
             git_original_is_active,
             self.center_git_diff_is_current(),
@@ -13612,11 +13591,6 @@ impl Render for Workbench {
                                         self.global_agent_maximized,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.open_global_agent_dashboard(cx);
-                                    })))
-                                    .child(icon_button(
-                                        "right-sidebar-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false,
-                                    ).on_click(cx.listener(|view, _, window, cx| {
-                                        view.open_global_agent_history(window, cx);
                                     })))
                                     .child(div().flex_1())
                                     .child(icon_button(
@@ -14481,17 +14455,6 @@ impl Render for Workbench {
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child(tr(self.settings_menu_locale, "Source Control")),
                                     )
-                                    // Classic's Git History provides a maximize entry even
-                                    // when the commits list is collapsed. Also keep it beside
-                                    // Source Control where it cannot be buried by the scroll.
-                                    .child(sidebar_icon_button(
-                                        "git-open-commit-graph-toolbar",
-                                        UiIcon::Maximize,
-                                        tr(self.settings_menu_locale, "Open Commit Graph"),
-                                        self.git_graph_center_open,
-                                    ).on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_center_git_graph(cx);
-                                    })))
                                     .child(
                                         div()
                                             .id("git-source-control-actions-scroll")
@@ -14596,7 +14559,31 @@ impl Render for Workbench {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .child(div().w_full().min_w_0().child(git_commit_input))
+                                    .child(
+                                         div()
+                                             .id("git-commit-message-field")
+                                             .w_full()
+                                             .min_w_0()
+                                             .flex()
+                                             .flex_col()
+                                             .gap_1()
+                                             .child(div()
+                                                 .text_xs()
+                                                 .text_color(rgb(MUTED))
+                                                 .child(tr(self.settings_menu_locale, "Message")))
+                                             .child(div()
+                                                 .id("git-commit-message-editor")
+                                                 .w_full()
+                                                 .min_w_0()
+                                                 .min_h(px(108.0))
+                                                 .rounded_md()
+                                                 .border_1()
+                                                 .border_color(rgb(BORDER))
+                                                 .bg(rgb(ACTIVE))
+                                                 .text_color(rgb(TEXT))
+                                                 .p_1()
+                                                 .child(git_commit_input))
+                                     )
                                     .child(div().flex().items_center().gap_1()
                                         .child(div().flex_1().min_w_0().child(Button::new("git-primary-action")
                                             .label(tr(self.settings_menu_locale, match git_primary_action {
@@ -15242,132 +15229,6 @@ impl Render for Workbench {
                                             .into_any_element()
                                     })),
                             )
-                            .child(
-                                div()
-                                    .id("git-patch-preview-toggle")
-                                    .h(px(30.0))
-                                    .px_2()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .border_t_1()
-                                    .border_color(rgb(BORDER))
-                                    .cursor_pointer()
-                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                    .child(icon(if self.git_sidebar_patch_expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
-                                    .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(tr(self.settings_menu_locale, "Git Diff Preview")))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.git_sidebar_patch_expanded = !this.git_sidebar_patch_expanded;
-                                        cx.notify();
-                                    })),
-                            )
-                            .when(self.git_sidebar_patch_expanded, |panel| panel.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(div().text_xs().text_color(rgb(MUTED))
-                                        .child(tr(self.settings_menu_locale, "Git diff preview · read-only")))
-                                    .child(if git_diff_expand_available {
-                                        div()
-                                            .id("git-diff-expand")
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT))
-                                            .child("Expand diff")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.open_kit_git_diff_dialog(window, cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().text_xs().text_color(rgb(MUTED))
-                                            .child("Expand diff").into_any_element()
-                                    })
-                                    .child(if git_diff_expand_available && git_file_page.is_some() {
-                                        div()
-                                            .id("git-diff-open-center")
-                                            .cursor_pointer()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT))
-                                            .child("Center")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.open_center_git_diff(cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().into_any_element()
-                                    }),
-                            )
-                            .child(if let Some((page, can_previous, can_next)) = git_file_page {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(format!("Page {page} · live Git · 32 KiB/page")),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(if can_previous {
-                                                div()
-                                                    .id("git-diff-previous-page")
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Previous")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.change_git_file_diff_page(false, cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("Previous")
-                                                    .into_any_element()
-                                            })
-                                            .child(if can_next {
-                                                div()
-                                                    .id("git-diff-next-page")
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Next")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.change_git_file_diff_page(true, cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("Next")
-                                                    .into_any_element()
-                                            }),
-                                    )
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
-                            .child(
-                                div()
-                                    .id("git-diff-scroll")
-                                    .max_h(px(170.0))
-                                    .overflow_y_scroll()
-                                    .text_xs()
-                                    .font_family(terminal_font_family.clone())
-                                    .text_color(rgb(MUTED))
-                                    .child(git_diff),
-                            ))
                                     )
                             // Classic docks Git History after the changed-file list.
                             .child(
@@ -15958,12 +15819,8 @@ impl Render for Workbench {
                                 })))
                             .child(icon_button("right-rail-agents", UiIcon::List, "Open Agents in center", self.global_agent_maximized)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_global_agent_dashboard(cx);
+                             this.open_global_agent_dashboard(cx);
                         })))
-                    .child(icon_button("right-rail-history", UiIcon::History, "Search Agent history (Ctrl+Alt+G)", false)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_global_agent_history(window, cx);
-                                })))
                             .child(div().flex_1())
                             .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -18913,7 +18770,7 @@ fn main() {
                         // Classic primary action label depends on message text:
                         // refresh the parent whenever the commit input changes.
                         let git_commit_input = cx.new(|cx| {
-                            QuickOpenInput::with_placeholder("Commit message", cx)
+                            QuickOpenInput::git_commit_message(cx)
                         });
                         cx.observe(&git_commit_input, |_: &mut Workbench, _, cx| cx.notify())
                             .detach();
@@ -19053,7 +18910,7 @@ fn main() {
                             git_trash_loading: false,
                             git_trash_request: 0,
                             git_sidebar_options: GitSidebarOptions::default(),
-                            git_sidebar_patch_expanded: false,
+
                             git_advanced_actions_open: false,
                             git_history: None,
                             git_graph_render_cache: None,

@@ -501,6 +501,43 @@ mod tests {
     }
 
     #[test]
+    fn source_control_parity_keeps_commit_editor_without_redundant_git_and_agent_buttons() {
+        let source = include_str!("main.rs");
+        for removed in [
+            "right-sidebar-history",
+            "right-rail-history",
+            "git-open-commit-graph-toolbar",
+            "git-patch-preview-toggle",
+            "git-diff-scroll",
+            "git-diff-expand",
+        ] {
+            assert!(
+                !source.contains(removed),
+                "redundant right panel item: {removed}"
+            );
+        }
+        // Keep the intended full-height Graph action in the Commits section,
+        // and retain the central diff that opens from a changed-file click.
+        assert!(source.contains("git-graph-expand-center"));
+        assert!(source.contains("this.open_git_sidebar_file_diff("));
+        assert!(source.contains("git-commit-message-field"));
+        assert!(source.contains("git-commit-message-editor"));
+        assert!(source.contains("QuickOpenInput::git_commit_message(cx)"));
+        assert!(source.contains(".child(git_commit_input)"));
+
+        let inputs = include_str!("quick_open_ui.rs");
+        let commit_input = inputs
+            .split_once("pub fn git_commit_message(")
+            .expect("commit message input constructor")
+            .1
+            .split_once("pub fn profile_multiline(")
+            .expect("dedicated multiline input section")
+            .0;
+        assert!(commit_input.contains("input.multiline_mode = true;"));
+        assert!(commit_input.contains("input.max_input_bytes = 4096;"));
+        assert!(source.contains("self.git_commit_input.read(cx).query()"));
+    }
+    #[test]
     fn editor_find_bar_does_not_consume_a_row_while_closed() {
         let find_ui = include_str!("editor_find_ui.rs");
         let closed = find_ui
