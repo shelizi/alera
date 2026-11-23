@@ -20,6 +20,16 @@ use std::time::{Duration, Instant};
 
 pub const STREAM_EVENT_BUDGET_PER_TICK: usize = 128;
 
+/// Adding or reordering previews must not tear down the shared Host stream:
+/// all existing VT screens already have a valid authenticated subscription.
+/// Removing/recycling a tab, however, must release the old Host view lease.
+pub fn terminal_stream_views_need_restart(
+    old: &[(String, u64)],
+    new: &[(String, u64)],
+) -> bool {
+    old.iter().any(|view| !new.contains(view))
+}
+
 /// A failed private CLI/Host stream must not permanently disable push output.
 /// Retry only when a running Host tab is visible, with an exponential
 /// backoff to avoid child-process storms while a Host is unavailable.
@@ -90,6 +100,11 @@ pub enum StreamViewUpdate {
         cursor: u64,
         rows: u16,
         cols: u16,
+    },
+    /// Snapshot fragments are parsed into a private emulator, not painted.
+    /// The UI swaps the completed VT screen in one frame at this boundary.
+    SnapshotComplete {
+        identity: StreamSessionIdentity,
     },
     Output {
         identity: StreamSessionIdentity,
@@ -232,13 +247,18 @@ impl StreamSubscriptions {
                     .unwrap_or(80) as u16;
                 self.active.insert(session_id.clone(), identity.clone());
                 self.rejected.remove(&session_id);
-                let mut updates = vec![StreamViewUpdate::Snapshot {
-                    identity: identity.clone(),
-                    bytes,
-                    cursor,
-                    rows,
-                    cols,
-                }];
+                let mut updates = vec![
+                    StreamViewUpdate::Snapshot {
+                        identity: identity.clone(),
+                        bytes,
+                        cursor,
+                        rows,
+                        cols,
+                    },
+                    StreamViewUpdate::SnapshotComplete {
+                        identity: identity.clone(),
+                    },
+                ];
                 for bytes in self.buffered.remove(&session_id).unwrap_or_default() {
                     updates.push(StreamViewUpdate::Output {
                         identity: identity.clone(),
@@ -848,6 +868,24 @@ mod subscription_tests {
     use super::*;
 
     #[test]
+    fn agent_tab_add_and_reorder_do_not_restart_shared_stream() {
+        let a = ("host-a".to_owned(), 7);
+        let b = ("host-b".to_owned(), 9);
+        assert!(!terminal_stream_views_need_restart(&[], &[a.clone()]));
+        assert!(!terminal_stream_views_need_restart(
+            &[a.clone()], &[a.clone(), b.clone()]
+        ));
+        assert!(!terminal_stream_views_need_restart(
+            &[a.clone(), b.clone()], &[b.clone(), a.clone()]
+        ));
+        assert!(terminal_stream_views_need_restart(
+            &[a.clone(), b.clone()], &[a.clone()]
+        ));
+        assert!(terminal_stream_views_need_restart(
+            &[a.clone()], &[("host-a".to_owned(), 8)]
+        ));
+    }
+    #[test]
     fn snapshot_is_applied_before_output_arriving_during_observation() {
         let mut sessions = StreamSubscriptions::default();
         sessions.pending.insert(
@@ -874,11 +912,12 @@ mod subscription_tests {
             }),
             error: None,
         });
-        assert_eq!(updates.len(), 2);
+        assert_eq!(updates.len(), 3);
         assert!(
             matches!(&updates[0], StreamViewUpdate::Snapshot { bytes, cursor: 3, .. } if bytes==b"old")
         );
-        assert!(matches!(&updates[1], StreamViewUpdate::Output { bytes, .. } if bytes==b"new"));
+        assert!(matches!(&updates[1], StreamViewUpdate::SnapshotComplete { .. }));
+        assert!(matches!(&updates[2], StreamViewUpdate::Output { bytes, .. } if bytes==b"new"));
         assert!(sessions.active("pty-1", "ws-1", "tab-1"));
         assert!(!sessions.active("pty-1", "wrong-worktree", "tab-1"));
     }

@@ -1793,6 +1793,42 @@ pub struct TerminalTab {
     stream_utf8_pending: Vec<u8>,
     stream_attached: bool,
     stream_fallback_pending: bool,
+    staged_snapshot: Option<StagedTerminalSnapshot>,
+}
+
+/// Build a Host restore snapshot offscreen at the same adaptive byte budget
+/// as live output. The previous Agent frame remains visible until complete.
+#[derive(Debug)]
+struct StagedTerminalSnapshot {
+    screen: VtScreen,
+    output: String,
+    decoder: TextDecoder,
+    utf8_pending: Vec<u8>,
+    parse_budget: TerminalParseBudget,
+    cursor: u64,
+}
+
+impl StagedTerminalSnapshot {
+    fn new(rows: u16, cols: u16, scrollback_lines: usize, cursor: u64) -> Self {
+        Self {
+            screen: VtScreen::with_scrollback(rows, cols, scrollback_lines),
+            output: String::new(),
+            decoder: TextDecoder::default(),
+            utf8_pending: Vec::new(),
+            parse_budget: TerminalParseBudget::default(),
+            cursor,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        let started = Instant::now();
+        let text = decode_terminal_stream_text(&mut self.utf8_pending, bytes);
+        self.screen.feed(&text);
+        self.decoder.append(&mut self.output, &text);
+        self.parse_budget
+            .observe(Instant::now(), bytes.len(), started.elapsed());
+        self.cursor = self.cursor.saturating_add(bytes.len() as u64);
+    }
 }
 
 /// Host output events contain raw PTY bytes; unlike CLI terminal.read JSON
@@ -2231,6 +2267,7 @@ impl TerminalTab {
             stream_utf8_pending: Vec::new(),
             stream_attached: false,
             stream_fallback_pending: false,
+            staged_snapshot: None,
         }
     }
 
@@ -2746,6 +2783,7 @@ impl TerminalDock {
     /// read to restore Host scrollback from scratch after stream loss.
     pub fn invalidate_stream_observers(&mut self) {
         for tab in &mut self.tabs {
+            tab.staged_snapshot = None;
             if tab.stream_attached {
                 tab.next_cursor = None;
                 tab.stream_fallback_pending = true;
@@ -2772,9 +2810,10 @@ impl TerminalDock {
         })
     }
 
-    /// Replace an existing Terminal's emulator state from an authenticated
-    /// Host observation. Never creates a new preview or shell implicitly.
-    pub fn apply_stream_snapshot(
+    /// Buffer a Host snapshot into a private VT emulator. A large snapshot
+    /// is delivered in multiple budgeted frames; none should replay history
+    /// visibly while the user switches back to this Agent tab.
+    pub fn stage_stream_snapshot(
         &mut self,
         session_id: &str,
         workspace_id: &str,
@@ -2787,21 +2826,59 @@ impl TerminalDock {
         let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
             return false;
         };
-        tab.output.clear();
-        // Use the original PTY dimensions before replaying absolute cursor
-        // moves/hard wraps. This changes only local VT preview geometry.
-        tab.screen = VtScreen::with_scrollback(rows, cols, tab.screen.scrollback_lines());
-        tab.decoder = TextDecoder::default();
-        tab.stream_utf8_pending.clear();
-        tab.parse_budget = TerminalParseBudget::default();
-        let text = decode_terminal_stream_text(&mut tab.stream_utf8_pending, bytes);
-        tab.screen.feed(&text);
-        tab.decoder.append(&mut tab.output, &text);
-        tab.next_cursor = Some(output_cursor);
+        let mut staged = StagedTerminalSnapshot::new(
+            rows,
+            cols,
+            tab.screen.scrollback_lines(),
+            output_cursor.saturating_sub(bytes.len() as u64),
+        );
+        staged.feed(bytes);
+        tab.staged_snapshot = Some(staged);
+        true
+    }
+
+    /// Atomically expose the restored screen only after every snapshot byte
+    /// was parsed. Output frames arriving after the snapshot marker are
+    /// appended normally; the PTY and its Host identity are unchanged.
+    pub fn finish_stream_snapshot(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+    ) -> bool {
+        let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
+            return false;
+        };
+        let Some(staged) = tab.staged_snapshot.take() else {
+            return false;
+        };
+        tab.screen = staged.screen;
+        tab.output = staged.output;
+        tab.decoder = staged.decoder;
+        tab.stream_utf8_pending = staged.utf8_pending;
+        tab.parse_budget = staged.parse_budget;
+        tab.next_cursor = Some(staged.cursor);
         tab.running = true;
         tab.stream_attached = true;
         tab.stream_fallback_pending = false;
         true
+    }
+
+    /// One-piece snapshot convenience for tests and callers that have the
+    /// complete restored state. Live UI uses staged + finish separately.
+    pub fn apply_stream_snapshot(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        output_cursor: u64,
+        rows: u16,
+        cols: u16,
+        bytes: &[u8],
+    ) -> bool {
+        self.stage_stream_snapshot(
+            session_id, workspace_id, tab_id, output_cursor, rows, cols, bytes,
+        ) && self.finish_stream_snapshot(session_id, workspace_id, tab_id)
     }
 
     /// Append exactly one ordered Host output frame, retaining UTF-8 split
@@ -2819,6 +2896,12 @@ impl TerminalDock {
         let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
             return false;
         };
+        if let Some(staged) = tab.staged_snapshot.as_mut() {
+            // These bytes may be the *rest* of a large Host snapshot.
+            // Keep decoding offscreen until SnapshotComplete arrives.
+            staged.feed(bytes);
+            return true;
+        }
         let started = Instant::now();
         let text = decode_terminal_stream_text(&mut tab.stream_utf8_pending, bytes);
         tab.screen.feed(&text);
@@ -3211,7 +3294,9 @@ impl TerminalDock {
         // cursor, so cursor/generation equality alone cannot prevent it
         // overwriting fresh stream output. Only a confirmed stream loss
         // unlocks the full retained-Host-read fallback.
-        if tab.stream_attached && !tab.stream_fallback_pending {
+        if tab.staged_snapshot.is_some()
+            || (tab.stream_attached && !tab.stream_fallback_pending)
+        {
             return false;
         }
         if ticket.generation != tab.generation || ticket.cursor != tab.next_cursor {
@@ -4184,6 +4269,80 @@ mod tests {
         assert_eq!(dock.active().unwrap().next_cursor, Some(123));
     }
 
+    #[test]
+    fn existing_agent_tab_switch_keeps_emulator_and_incremental_cursor() {
+        let mut dock = TerminalDock::for_workspace(34);
+        assert!(dock.apply_session_list(
+            34, vec![session("pty-1"), session("pty-2")]
+        ));
+        assert!(dock.open("pty-1"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1", "workspace-1", "tab-pty-1", 19, 24, 80, b"agent one"
+        ));
+        let first_generation = dock.active().unwrap().view_generation();
+        assert!(dock.open("pty-2"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-2", "workspace-1", "tab-pty-2", 42, 24, 80, b"agent two"
+        ));
+        assert!(dock.open("pty-1"));
+        assert_eq!(dock.active().unwrap().view_generation(), first_generation);
+        assert_eq!(dock.active().unwrap().next_cursor, Some(19));
+        assert_eq!(dock.active().unwrap().output, "agent one");
+        assert!(dock.apply_stream_output(
+            "pty-1", "workspace-1", "tab-pty-1", b" continues"
+        ));
+        assert_eq!(dock.active().unwrap().output, "agent one continues");
+        assert_eq!(dock.active().unwrap().next_cursor, Some(29));
+        assert!(dock.open("pty-2"));
+        assert_eq!(dock.active().unwrap().next_cursor, Some(42));
+        assert_eq!(dock.active().unwrap().output, "agent two");
+    }
+    #[test]
+    fn switching_back_to_agent_does_not_paint_partial_host_history() {
+        let mut dock = TerminalDock::for_workspace(29);
+        assert!(dock.apply_session_list(29, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1", "workspace-1", "tab-pty-1", 30, 24, 80, b"cached frame\n"
+        ));
+        let before = dock.active().unwrap().output.clone();
+        assert!(dock.stage_stream_snapshot(
+            "pty-1", "workspace-1", "tab-pty-1", 103, 40, 100, b"new"
+        ));
+        assert!(dock.apply_stream_output(
+            "pty-1", "workspace-1", "tab-pty-1", b" state"
+        ));
+        assert_eq!(dock.active().unwrap().output, before);
+        assert_eq!(dock.active().unwrap().next_cursor, Some(30));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (24, 80));
+        assert!(!dock.finish_stream_snapshot("pty-1", "other-ws", "tab-pty-1"));
+        assert!(dock.finish_stream_snapshot("pty-1", "workspace-1", "tab-pty-1"));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (40, 100));
+        assert_eq!(dock.active().unwrap().output, "new state");
+        assert_eq!(dock.active().unwrap().next_cursor, Some(109));
+        assert!(!dock.finish_stream_snapshot("pty-1", "workspace-1", "tab-pty-1"));
+        assert!(dock.apply_stream_output(
+            "pty-1", "workspace-1", "tab-pty-1", b"!"
+        ));
+        assert_eq!(dock.active().unwrap().output, "new state!");
+        assert_eq!(dock.active().unwrap().next_cursor, Some(110));
+    }
+
+    #[test]
+    fn aborted_host_snapshot_keeps_last_complete_terminal_frame() {
+        let mut dock = TerminalDock::for_workspace(31);
+        assert!(dock.apply_session_list(31, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1", "workspace-1", "tab-pty-1", 20, 24, 80, b"old"
+        ));
+        assert!(dock.stage_stream_snapshot(
+            "pty-1", "workspace-1", "tab-pty-1", 60, 24, 80, b"unfinished"
+        ));
+        dock.invalidate_stream_observers();
+        assert_eq!(dock.active().unwrap().output, "old");
+        assert!(!dock.finish_stream_snapshot("pty-1", "workspace-1", "tab-pty-1"));
+    }
     #[test]
     fn host_snapshot_replays_at_original_pty_geometry_without_host_resize() {
         let mut dock = TerminalDock::for_workspace(5);

@@ -149,7 +149,8 @@ use alera_gpui_desktop::terminal::{
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
-    NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
+    terminal_stream_views_need_restart, NativeTerminalStreamBridge, StreamViewUpdate,
+    TerminalStreamRetryGate,
 };
 use alera_gpui_desktop::visual_tokens::{
     clamp_context_sidebar_width, clamp_projects_sidebar_width,
@@ -12020,13 +12021,17 @@ impl Workbench {
             .map(|tab| (tab.handle.clone(), tab.view_generation()))
             .collect();
         if live_views != self.terminal_stream_view_snapshot {
-            // Closing/reopening a preview invalidates its old output cursor
-            // even if the Host later reuses the same handle. Re-observe with
-            // a fresh private CLI connection; never reuse the old view lease
-            // or feed a stale frame into a newly created emulator surface.
-            self.terminal_stream = None;
-            self.terminals.invalidate_stream_observers();
-            self.terminal_stream_retry.recovered(Instant::now());
+            if terminal_stream_views_need_restart(
+                &self.terminal_stream_view_snapshot,
+                &live_views,
+            ) {
+                // A tab was closed or its Host identity was recycled. Drop
+                // stale leases before reopening. Merely adding/reordering
+                // tabs must NOT replay every other Agent's history.
+                self.terminal_stream = None;
+                self.terminals.invalidate_stream_observers();
+                self.terminal_stream_retry.recovered(Instant::now());
+            }
             self.terminal_stream_view_snapshot = live_views;
         }
         let mut visible = Vec::new();
@@ -12120,7 +12125,7 @@ impl Workbench {
                     rows,
                     cols,
                 } => {
-                    if self.terminals.apply_stream_snapshot(
+                    if self.terminals.stage_stream_snapshot(
                         &identity.session_id,
                         &identity.workspace_id,
                         &identity.tab_id,
@@ -12129,8 +12134,18 @@ impl Workbench {
                         cols,
                         &bytes,
                     ) {
-                        self.terminal_stream_retry.recovered(Instant::now());
                         parsed_bytes += bytes.len();
+                    }
+                }
+                StreamViewUpdate::SnapshotComplete { identity } => {
+                    if self.terminals.finish_stream_snapshot(
+                        &identity.session_id,
+                        &identity.workspace_id,
+                        &identity.tab_id,
+                    ) {
+                        self.terminal_stream_retry.recovered(Instant::now());
+                        // Present the entire reconstructed terminal in one
+                        // frame, not the initial Host history line by line.
                         repaint = true;
                     }
                 }
