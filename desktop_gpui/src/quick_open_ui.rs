@@ -114,6 +114,39 @@ fn normalize_input_text(raw: &str, multiline: bool) -> String {
     }
 }
 
+/// Windows often delivers plain ASCII only as KeyDown. IME composition and
+/// Unicode commits stay on the input handler, so this returns nothing while
+/// a candidate is open or IMM is in native conversion mode.
+pub(super) fn plain_query_key_insert(
+    key: &str,
+    key_char: Option<&str>,
+    control: bool,
+    alt: bool,
+    platform: bool,
+    function: bool,
+    composing: bool,
+    native_ime: bool,
+) -> Option<String> {
+    if composing || native_ime || control || alt || platform || function {
+        return None;
+    }
+    // Enter, Tab and Escape belong to the dialog or the multiline newline action.
+    if matches!(
+        key,
+        "enter" | "return" | "tab" | "escape" | "backspace" | "delete"
+    ) {
+        return None;
+    }
+    if let Some(text) = key_char {
+        // A non-ASCII character belongs to the IME commit, not this KeyDown.
+        if text.is_empty() || !text.chars().all(|ch| ch.is_ascii_graphic() || ch == ' ') {
+            return None;
+        }
+        return Some(text.to_owned());
+    }
+    (key.len() == 1 && key.chars().all(|ch| ch.is_ascii_graphic())).then(|| key.to_owned())
+}
+
 actions!(
     alera_gpui_quick_open,
     [QueryBackspace, QuerySelectAll, QueryPaste, QueryNewline]
@@ -159,7 +192,7 @@ impl QuickOpenInput {
 
     pub fn with_placeholder(placeholder: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             text: String::new(),
             placeholder: placeholder.into(),
             terminal_mode: false,
@@ -428,7 +461,21 @@ impl EntityInputHandler for QuickOpenInput {
             }
             return;
         }
+        // KeyDown already inserted this ASCII. A later WM_CHAR for the same
+        // key must not append a second copy. IME commits are not ASCII-only
+        // duplicates of that KeyDown and still pass the gate.
+        if !self.terminal_mode
+            && !text.is_empty()
+            && !self
+                .terminal_commit_gate
+                .should_forward(text, false, Instant::now())
+        {
+            return;
+        }
         self.replace(range, text, false, cx);
+        if focused {
+            window.notify_text_input_changed(&self.focus);
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -455,6 +502,9 @@ impl EntityInputHandler for QuickOpenInput {
             return;
         }
         self.replace(range, text, true, cx);
+        if focused {
+            window.notify_text_input_changed(&self.focus);
+        }
     }
 
     fn bounds_for_range(
@@ -479,6 +529,9 @@ impl EntityInputHandler for QuickOpenInput {
 
 struct QuickOpenCapture {
     input: Entity<QuickOpenInput>,
+    /// Non-terminal fields register the handler over the visible control.
+    /// The Terminal sink stays a 1px caret anchor positioned by its parent.
+    cover_field: bool,
 }
 
 impl Element for QuickOpenCapture {
@@ -500,7 +553,13 @@ impl Element for QuickOpenCapture {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
-        style.size.height = px(1.0).into();
+        if self.cover_field {
+            style.position = gpui::Position::Absolute;
+            style.inset = gpui::Edges::all(px(0.0).into());
+            style.size.height = relative(1.0).into();
+        } else {
+            style.size.height = px(1.0).into();
+        }
         (window.request_layout(style, [], cx), ())
     }
     fn prepaint(
@@ -540,22 +599,27 @@ impl IntoElement for QuickOpenCapture {
 }
 
 impl Render for QuickOpenInput {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.terminal_mode {
             // Keep a full-width native TextInput capture for Windows IME
             // candidate placement. It remains only 1px tall and paints
             // no visible text or command bar.
             return div()
-                .id("terminal-ime-capture")
+                .id(("terminal-ime-capture", cx.entity().entity_id()))
                 .key_context("AleraGpuiTerminalInput")
                 .track_focus(&self.focus)
                 .w_full()
                 .h(px(1.0))
-                .child(QuickOpenCapture { input: cx.entity() })
+                .child(QuickOpenCapture {
+                    input: cx.entity(),
+                    cover_field: false,
+                })
                 .into_any_element();
         }
+        let focused = self.focus.is_focused(window);
+        let placeholder = self.text.is_empty();
         div()
-            .id("quick-open-query")
+            .id(("quick-open-query", cx.entity().entity_id()))
             .key_context(if self.multiline_mode {
                 "AleraGpuiProfileMultiline"
             } else {
@@ -576,15 +640,61 @@ impl Render for QuickOpenInput {
                             this.focus.is_focused(window)
                         );
                     }
+                    // Parents such as the Git file list also focus on mouse down.
+                    // Keep this field, and do it again on mouse up: on Windows the
+                    // pointer's default focus can win after MouseDown.
                     window.focus(&this.focus, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
                 }),
             )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.focus, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }),
+            )
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if !this.focus.is_focused(window) {
+                    return;
+                }
+                let Some(text) = plain_query_key_insert(
+                    &event.keystroke.key,
+                    event.keystroke.key_char.as_deref(),
+                    event.keystroke.modifiers.control,
+                    event.keystroke.modifiers.alt,
+                    event.keystroke.modifiers.platform,
+                    event.keystroke.modifiers.function,
+                    this.marked.is_some(),
+                    crate::win_ime::focused_native_text_mode(),
+                ) else {
+                    return;
+                };
+                this.terminal_commit_gate
+                    .note_raw_ascii_key(&text, Instant::now());
+                this.replace(None, &text, false, cx);
+                window.notify_text_input_changed(&this.focus);
+            }))
+            .relative()
             .flex()
             .flex_col()
+            .cursor(gpui::CursorStyle::IBeam)
             .bg(rgb(alera_gpui_desktop::visual_tokens::ACTIVE))
+            .when(focused, |input| {
+                input
+                    .border_1()
+                    .border_color(rgb(alera_gpui_desktop::visual_tokens::ACCENT))
+            })
             .px_2()
             .py_1()
             .text_sm()
+            .text_color(rgb(if placeholder {
+                alera_gpui_desktop::visual_tokens::MUTED
+            } else {
+                alera_gpui_desktop::visual_tokens::TEXT
+            }))
             // Search and quick-open fields are single-line even inside a
             // narrow split pane. Without this, a long placeholder wraps into
             // several clipped rows and visually covers the Graph toolbar.
@@ -607,7 +717,10 @@ impl Render for QuickOpenInput {
                     format!("⌕ {}", self.text)
                 }
             })
-            .child(QuickOpenCapture { input: cx.entity() })
+            .child(QuickOpenCapture {
+                input: cx.entity(),
+                cover_field: true,
+            })
             .into_any_element()
     }
 }
@@ -615,9 +728,9 @@ impl Render for QuickOpenInput {
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_native_text_event, normalize_input_text, query_backspace_range,
-        quick_open_enter_accepts_match, quick_open_move_selection, quick_open_target_is_active,
-        remove_marked_preedit,
+        accepts_native_text_event, normalize_input_text, plain_query_key_insert,
+        query_backspace_range, quick_open_enter_accepts_match, quick_open_move_selection,
+        quick_open_target_is_active, remove_marked_preedit,
     };
 
     #[test]
@@ -702,6 +815,57 @@ mod tests {
         assert!(!quick_open_enter_accepts_match("escape", false, true));
         assert!(quick_open_enter_accepts_match("Enter", false, true));
         assert!(quick_open_enter_accepts_match("return", false, true));
+    }
+
+    #[test]
+    fn plain_ascii_keydown_inserts_when_ime_is_not_composing() {
+        assert_eq!(
+            plain_query_key_insert("a", Some("a"), false, false, false, false, false, false)
+                .as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            plain_query_key_insert("a", Some("A"), false, false, false, false, false, false)
+                .as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            plain_query_key_insert("space", Some(" "), false, false, false, false, false, false)
+                .as_deref(),
+            Some(" ")
+        );
+        assert_eq!(
+            plain_query_key_insert("a", None, false, false, false, false, false, false).as_deref(),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn plain_keydown_leaves_ime_shortcuts_and_dialog_keys_alone() {
+        assert_eq!(
+            plain_query_key_insert("a", Some("a"), false, false, false, false, true, false),
+            None
+        );
+        assert_eq!(
+            plain_query_key_insert("s", Some("s"), false, false, false, false, false, true),
+            None
+        );
+        assert_eq!(
+            plain_query_key_insert("c", Some("c"), true, false, false, false, false, false),
+            None
+        );
+        assert_eq!(
+            plain_query_key_insert("enter", Some("\r"), false, false, false, false, false, false),
+            None
+        );
+        assert_eq!(
+            plain_query_key_insert("tab", Some("\t"), false, false, false, false, false, false),
+            None
+        );
+        assert_eq!(
+            plain_query_key_insert("m", Some("中"), false, false, false, false, false, false),
+            None
+        );
     }
 
     #[test]
