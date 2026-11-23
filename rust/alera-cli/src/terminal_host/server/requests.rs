@@ -441,10 +441,12 @@ impl ServerActor {
                 let session_id = self.require_session(payload)?;
                 let cols = int_or(payload, "cols", 80) as u16;
                 let rows = int_or(payload, "rows", 24) as u16;
+                let mut applied = false;
                 if self.is_mobile_client(client_id) {
                     // A mobile resize (keyboard open/close, rotation) claims
                     // the driver seat and applies the phone viewport in place.
                     self.claim_mobile_driver(client_id, &session_id, Some((cols, rows)));
+                    applied = true;
                 } else if let Some(session) = self.sessions.get_mut(&session_id) {
                     if matches!(session.driver, SessionDriver::Mobile { .. }) {
                         // The phone drives; remember the desktop's ask so
@@ -452,9 +454,18 @@ impl ServerActor {
                         session.desktop_dims = Some((cols, rows));
                     } else {
                         session.resize(cols, rows);
+                        applied = true;
                     }
                 }
-                Ok(json!({}))
+                // Additive response fields: older clients can ignore them,
+                // while GPUI must not resize its preview for a deferred PTY.
+                let actual = self.sessions.get(&session_id).map(|session| session.current_dims);
+                Ok(json!({
+                    "applied": applied,
+                    "deferred": !applied,
+                    "cols": actual.map_or(cols, |dims| dims.0),
+                    "rows": actual.map_or(rows, |dims| dims.1),
+                }))
             }
             "terminal.reclaim" => {
                 self.require_auth(client_id)?;

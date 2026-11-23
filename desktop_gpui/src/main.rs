@@ -144,7 +144,7 @@ use alera_gpui_desktop::terminal::{
     terminal_clipboard_payload, terminal_ime_anchor_with_cell_metrics, terminal_key_dispatch,
     TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
     TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
-    TerminalPollGate, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
+    TerminalPollGate, TerminalResizeOutcome, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
     TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
@@ -9426,15 +9426,27 @@ impl Workbench {
                     return;
                 }
                 view.terminals.status = match result {
-                    Ok(()) => {
-                        if let Some(target) = view
-                            .terminals
-                            .active_tab
-                            .and_then(|index| view.terminals.context_target_at(index))
-                        {
-                            view.terminals.apply_host_accepted_viewport(&target, cols, rows);
+                    Ok(outcome) => {
+                        if outcome.may_update_preview() {
+                            if let Some(target) = view
+                                .terminals
+                                .active_tab
+                                .and_then(|index| view.terminals.context_target_at(index))
+                            {
+                                view.terminals.apply_host_accepted_viewport(&target, cols, rows);
+                            }
                         }
-                        format!("Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control")
+                        match outcome {
+                            TerminalResizeOutcome::Applied => {
+                                format!("Host viewport applied: {cols}×{rows}")
+                            }
+                            TerminalResizeOutcome::Deferred => {
+                                format!("Host viewport {cols}×{rows} deferred: mobile client controls PTY")
+                            }
+                            TerminalResizeOutcome::LegacyUnconfirmed => {
+                                format!("Requested {cols}×{rows}; legacy Host did not confirm PTY resize")
+                            }
+                        }
                     }
                     Err(error) => format!("Host Resize refused: {error}"),
                 };
@@ -9462,6 +9474,7 @@ impl Workbench {
             }
             let handle = change.target.handle.clone();
             let target = change.target.clone();
+            let requested = change.clone();
             let generation = self.workspace_generation;
             let (cols, rows) = (change.cols, change.rows);
             let bridge = bridge.clone();
@@ -9472,18 +9485,27 @@ impl Workbench {
                 view.update(cx, |view, cx| {
                     if view.workspace_generation != generation
                         || !view.terminals.context_target_is_live(&target)
+                        || !view.terminal_auto_resize.can_apply_response(&requested)
                     {
                         return;
                     }
                     match result {
-                        Ok(()) => {
-                            // The Host accepted the resize. Expand the local
-                            // VT grid as well; otherwise a 24x80 preview keeps
-                            // letterboxing in a much larger GPUI pane.
+                        Ok(outcome) if outcome.may_update_preview() => {
+                            // Resize was applied (or legacy Host did not
+                            // report disposition). Keep local preview in sync.
                             if view.terminals.apply_host_accepted_viewport(&target, cols, rows) {
                                 cx.notify();
                             }
                         }
+                        Ok(TerminalResizeOutcome::Deferred) => {
+                            // The phone owns the PTY: keep its actual grid,
+                            // which follows ConPTY resize notifications.
+                            view.terminals.status = format!(
+                                "Host deferred {cols}×{rows}: mobile client controls this Terminal"
+                            );
+                            cx.notify();
+                        }
+                        Ok(_) => {}
                         Err(error) => {
                             view.terminals.status = format!(
                                 "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"

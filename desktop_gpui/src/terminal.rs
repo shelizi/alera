@@ -666,12 +666,41 @@ impl RuntimeCliBridge {
         parse_created_agent_terminal(&response, workspace_id, agent_id, executable)
     }
 
-    /// Request only explicit dimensions for an already known Host terminal.
-    /// Host mobile-driver lease semantics may defer actual PTY resizing.
-    pub fn resize_terminal(&self, handle: &str, cols: u16, rows: u16) -> io::Result<()> {
+    /// Resize requests can succeed without changing the PTY while a mobile
+    /// client holds the viewport lease. Older Hosts respond with {}.
+    pub fn resize_terminal(
+        &self,
+        handle: &str,
+        cols: u16,
+        rows: u16,
+    ) -> io::Result<TerminalResizeOutcome> {
         let args = resize_terminal_verb(handle, cols, rows)?;
-        self.terminal_json(&args)?;
-        Ok(())
+        let result = self.terminal_json(&args)?;
+        Ok(TerminalResizeOutcome::from_host_payload(&result))
+    }
+}
+
+/// Host request acceptance is not proof that ConPTY was resized. Older Host
+/// binaries return an empty payload; retain their legacy behavior until they
+/// are upgraded to report applied vs deferred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalResizeOutcome {
+    Applied,
+    Deferred,
+    LegacyUnconfirmed,
+}
+
+impl TerminalResizeOutcome {
+    pub fn from_host_payload(value: &Value) -> Self {
+        match value.get("applied").and_then(Value::as_bool) {
+            Some(true) => Self::Applied,
+            Some(false) => Self::Deferred,
+            None => Self::LegacyUnconfirmed,
+        }
+    }
+
+    pub fn may_update_preview(self) -> bool {
+        !matches!(self, Self::Deferred)
     }
 }
 
@@ -1972,12 +2001,14 @@ pub fn terminal_ime_anchor_with_cell_metrics(
 pub struct TerminalAutoResizeGate {
     pending: Vec<(TerminalViewportProposal, std::time::Instant)>,
     attempted: Vec<TerminalViewportProposal>,
+    manually_suspended: Vec<TerminalTabContextTarget>,
 }
 
 impl TerminalAutoResizeGate {
     pub fn clear(&mut self) {
         self.pending.clear();
         self.attempted.clear();
+        self.manually_suspended.clear();
     }
 
     /// Explicit manual viewport presets win over a pending auto-resize until
@@ -1994,6 +2025,12 @@ impl TerminalAutoResizeGate {
         }
         self.pending
             .retain(|(current, _)| &current.target != target);
+        // Invalidate any in-flight automatic response even when debounce
+        // already dispatched it before the user chose a manual size.
+        if self.attempted.iter().any(|current| &current.target == target) {
+            self.manually_suspended.retain(|old| old != target);
+            self.manually_suspended.push(target.clone());
+        }
     }
 
     pub fn observe(&mut self, visible: Vec<TerminalViewportProposal>, now: std::time::Instant) {
@@ -2012,6 +2049,14 @@ impl TerminalAutoResizeGate {
                 unique.push(proposal);
             }
         }
+        // A manual preset stays authoritative until the observable pane
+        // geometry changes or its Host tab disappears.
+        self.manually_suspended.retain(|target| {
+            unique.iter().any(|visible| {
+                &visible.target == target
+                    && self.attempted.iter().any(|previous| previous == visible)
+            })
+        });
         self.pending
             .retain(|(pending, _)| unique.iter().any(|new| new.target == pending.target));
         self.attempted
@@ -2056,6 +2101,16 @@ impl TerminalAutoResizeGate {
             self.attempted.push(change.clone());
         }
         ready
+    }
+
+    /// A resize request may return after the window has been resized again.
+    /// Only the latest still-visible proposal can change the local VT grid.
+    pub fn can_apply_response(&self, request: &TerminalViewportProposal) -> bool {
+        !self.manually_suspended.contains(&request.target)
+            && self.attempted.iter().any(|attempted| attempted == request)
+            && !self.pending.iter().any(|(pending, _)| {
+                pending.target == request.target && pending != request
+            })
     }
 }
 
@@ -3525,6 +3580,100 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn manual_resize_invalidates_inflight_auto_reply_until_geometry_changes() {
+        let now = std::time::Instant::now();
+        let target = TerminalTabContextTarget {
+            handle: "pty".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 1,
+            workspace_generation: 1,
+        };
+        let first = TerminalViewportProposal {
+            target: target.clone(), cols: 90, rows: 30,
+        };
+        let next = TerminalViewportProposal {
+            target: target.clone(), cols: 130, rows: 45,
+        };
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(vec![first.clone()], now);
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(310)),
+            vec![first.clone()],
+        );
+        assert!(gate.can_apply_response(&first));
+        gate.suspend_until_changed(&target);
+        assert!(!gate.can_apply_response(&first));
+        gate.observe(vec![first.clone()], now + std::time::Duration::from_millis(320));
+        assert!(gate.take_ready(now + std::time::Duration::from_secs(3)).is_empty());
+        gate.observe(vec![next.clone()], now + std::time::Duration::from_secs(4));
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(4310)),
+            vec![next.clone()],
+        );
+        assert!(gate.can_apply_response(&next));
+    }
+
+    #[test]
+    fn host_resize_disposition_is_explicit_and_legacy_compatible() {
+        assert_eq!(
+            TerminalResizeOutcome::from_host_payload(&serde_json::json!({
+                "applied": true, "deferred": false, "cols": 100, "rows": 30
+            })),
+            TerminalResizeOutcome::Applied,
+        );
+        assert_eq!(
+            TerminalResizeOutcome::from_host_payload(&serde_json::json!({
+                "applied": false, "deferred": true, "cols": 48, "rows": 22
+            })),
+            TerminalResizeOutcome::Deferred,
+        );
+        assert_eq!(
+            TerminalResizeOutcome::from_host_payload(&serde_json::json!({})),
+            TerminalResizeOutcome::LegacyUnconfirmed,
+        );
+        assert!(!TerminalResizeOutcome::Deferred.may_update_preview());
+        assert!(TerminalResizeOutcome::Applied.may_update_preview());
+        assert!(TerminalResizeOutcome::LegacyUnconfirmed.may_update_preview());
+    }
+
+    #[test]
+    fn stale_host_resize_reply_must_not_overwrite_newer_viewport() {
+        let now = std::time::Instant::now();
+        let target = TerminalTabContextTarget {
+            handle: "same-host".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 4,
+            workspace_generation: 7,
+        };
+        let old = TerminalViewportProposal {
+            target: target.clone(), cols: 80, rows: 24,
+        };
+        let latest = TerminalViewportProposal {
+            target, cols: 120, rows: 40,
+        };
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(vec![old.clone()], now);
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(310)),
+            vec![old.clone()],
+        );
+        assert!(gate.can_apply_response(&old));
+        gate.observe(vec![latest.clone()], now + std::time::Duration::from_millis(320));
+        assert!(!gate.can_apply_response(&old), "newer pending dimensions win");
+        assert!(!gate.can_apply_response(&latest), "not yet sent to Host");
+        assert_eq!(
+            gate.take_ready(now + std::time::Duration::from_millis(630)),
+            vec![latest.clone()],
+        );
+        assert!(!gate.can_apply_response(&old), "older response must remain stale");
+        assert!(gate.can_apply_response(&latest));
+        gate.observe(vec![], now + std::time::Duration::from_secs(2));
+        assert!(!gate.can_apply_response(&latest), "hidden tab invalidates reply");
+    }
 
     #[test]
     fn three_visible_terminal_previews_each_receive_an_auto_resize() {

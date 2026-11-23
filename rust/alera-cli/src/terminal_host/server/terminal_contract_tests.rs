@@ -101,6 +101,59 @@ async fn request(
 }
 
 #[tokio::test]
+async fn terminal_resize_response_reports_applied_or_deferred_without_lying_about_pty_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let (local_handle, mut local_rx) = ClientHandle::test_channels();
+    let (mobile_handle, _mobile_rx) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([
+            (1, local_client(local_handle)),
+            (2, mobile_client(mobile_handle, "phone")),
+        ]),
+        HashMap::from([("s1".to_string(), Session::driver_test_stub("s1", 120, 40))]),
+    )
+    .await;
+    let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    let applied = request(
+        &mut actor,
+        1,
+        100,
+        "resize",
+        json!({"sessionId": "s1", "cols": 100, "rows": 35}),
+        &mut local_rx,
+        &mut inbox_rx,
+    )
+    .await;
+    assert_eq!(applied["ok"], true);
+    assert_eq!(applied["payload"]["applied"], true);
+    assert_eq!(applied["payload"]["deferred"], false);
+    assert_eq!(applied["payload"]["cols"], 100);
+    assert_eq!(applied["payload"]["rows"], 35);
+
+    actor.claim_mobile_driver(2, "s1", Some((48, 22)));
+    let deferred = request(
+        &mut actor,
+        1,
+        101,
+        "resize",
+        json!({"sessionId": "s1", "cols": 120, "rows": 42}),
+        &mut local_rx,
+        &mut inbox_rx,
+    )
+    .await;
+    assert_eq!(deferred["ok"], true);
+    assert_eq!(deferred["payload"]["applied"], false);
+    assert_eq!(deferred["payload"]["deferred"], true);
+    assert_eq!(deferred["payload"]["cols"], 48);
+    assert_eq!(deferred["payload"]["rows"], 22);
+    assert_eq!(actor.sessions["s1"].current_dims, (48, 22));
+    assert_eq!(actor.sessions["s1"].desktop_dims, Some((120, 42)));
+}
+
+#[tokio::test]
 async fn create_or_attach_rejects_stale_owner_then_reuses_original_live_pty() {
     let dir = tempfile::tempdir().unwrap();
     let (handle_one, mut receiver_one) = ClientHandle::test_channels();
