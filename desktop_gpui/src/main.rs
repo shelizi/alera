@@ -156,7 +156,7 @@ use alera_gpui_desktop::visual_tokens::{
     AGENT_WAITING, BG, BORDER, BORDER_ACTIVE, EDITOR_TOOLBAR_HEIGHT, ELEVATED, MUTED, PANEL,
     PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME, SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
     STATUS_BAR_HEIGHT, TAB_ATTENTION_DOT_SIZE, TAB_CHIP_HORIZONTAL_PADDING, TAB_STRIP_HEIGHT,
-    TAB_STRIP_LEADING_PADDING, TERMINAL_INNER_SPLIT_HEADER_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+    TAB_STRIP_LEADING_PADDING, TERMINAL_INNER_SPLIT_HEADER_HEIGHT, TEXT, TOOLBAR,
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
@@ -13524,45 +13524,6 @@ impl Render for Workbench {
             .text_color(rgb(TEXT))
             .child(
                 div()
-                    .h(px(TOP_BAR_HEIGHT))
-                    .px_4()
-                    .bg(rgb(TOOLBAR))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(gpui::img(classic_brand_logo()).w(px(16.0)).h(px(16.0)))
-                            .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child("Native"),
-                    )
-                    .child(div().flex_1())
-                    .child(div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(icon(UiIcon::Branch, 14.0, MUTED))
-                        .child(branch.clone()))
-                    .child(icon_button("native-settings-open", UiIcon::Settings, "Settings", false)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            if let Err(code) = view.show_native_settings_section("application", cx) {
-                                view.model.set_status(format!("Native settings unavailable: {code}"));
-                                cx.notify();
-                            }
-                        })))
-            )
-            .child(
-                div()
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
@@ -18297,6 +18258,55 @@ impl Render for Workbench {
                                     })),
                             )
                             )
+                            // Match Classic: keep Settings anchored at the bottom of
+                            // the left sidebar rather than consuming a whole title row.
+                            .child(
+                                div()
+                                    .id("projects-sidebar-footer")
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .flex_shrink_0()
+                                    .px_1()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .id("projects-footer-add-project")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(icon(UiIcon::NewFolder, 15.0, TEXT))
+                                            .child(div().text_xs().child("Add Project"))
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                view.pick_workspace(cx);
+                                            })),
+                                    )
+                                    .child(div().flex_1())
+                                    .child(
+                                        icon_button(
+                                            "projects-footer-global-agents", UiIcon::Bot,
+                                            "Global Agents", self.global_agent_maximized,
+                                        ).on_click(cx.listener(|view, _, _, cx| {
+                                            view.open_global_agent_dashboard(cx);
+                                        })),
+                                    )
+                                    .child(
+                                        icon_button("native-settings-open", UiIcon::Settings, "Settings", self.settings_section.is_some())
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                if let Err(code) = view.show_native_settings_section("application", cx) {
+                                                    view.model.set_status(format!("Native settings unavailable: {code}"));
+                                                    cx.notify();
+                                                }
+                                            })),
+                                    ),
+                            )
                     )
                     .child(
                         div()
@@ -18327,7 +18337,37 @@ impl Render for Workbench {
                                 "projects-sidebar-rail-open", UiIcon::NewFolder, "Open project folder", false,
                             ).on_click(cx.listener(|this, _, _, cx| {
                                 this.pick_workspace(cx);
-                            }))),
+                            })))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .id("projects-sidebar-rail-footer")
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .py_2()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        icon_button(
+                                            "projects-sidebar-rail-agents", UiIcon::Bot, "Global Agents", self.global_agent_maximized,
+                                        ).on_click(cx.listener(|view, _, _, cx| {
+                                            view.open_global_agent_dashboard(cx);
+                                        })),
+                                    )
+                                    .child(
+                                        icon_button("native-settings-open-collapsed", UiIcon::Settings, "Settings", self.settings_section.is_some())
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                if let Err(code) = view.show_native_settings_section("application", cx) {
+                                                    view.model.set_status(format!("Native settings unavailable: {code}"));
+                                                    cx.notify();
+                                                }
+                                            })),
+                                    ),
+                            ),
                     ),
             )
             .child(
