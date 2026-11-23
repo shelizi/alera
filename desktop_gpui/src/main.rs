@@ -1126,6 +1126,12 @@ struct Workbench {
     host_pins_error: Option<String>,
     mixed_panes: WorkbenchPaneLayout,
     mixed_layout_restore: Option<SavedWorkbenchLayoutV1>,
+    /// Guard deferred file-backed Editor hydration against early Host layout reconciliation.
+    startup_editor_restore_pending: bool,
+    /// The saved read-only preview is still being read off the UI thread.
+    /// Persisting or switching before it lands must not replace that snapshot
+    /// with the still-empty in-memory tab list.
+    startup_preview_restore_pending: bool,
     mixed_layout_read_only: bool,
     mixed_tab_context: Option<WorkbenchTabIdentity>,
     runtime_bridge: Option<RuntimeCliBridge>,
@@ -6267,6 +6273,45 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Startup Git remote lookup is not on the window creation path: even a
+    /// simple Git config query may spawn a process on Windows/Dropbox.
+    /// Explicit user review actions still use their existing fresh lookup.
+    fn discover_review_url_in_background(&mut self, cx: &mut Context<Self>) {
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let found = cx.background_spawn(async move {
+                alera_core::git::repository_remote_url(&root.to_string_lossy())
+                    .map_err(|error| error.to_string())
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                match found {
+                    Ok(Some(remote)) => {
+                        view.review_browser_url = repository_pull_requests_url(&remote);
+                        view.review_browser_error = if view.review_browser_url.is_none() {
+                            Some("This Git remote cannot be mapped safely to a GitHub, Gitea or GitLab review URL".into())
+                        } else {
+                            None
+                        };
+                    }
+                    Ok(None) => {
+                        view.review_browser_url = None;
+                        view.review_browser_error = Some("This workspace has no Git remote".into());
+                    }
+                    Err(error) => {
+                        view.review_browser_url = None;
+                        view.review_browser_error =
+                            Some(format!("Cannot inspect Git remote: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
     /// Read-only review entry until Native's provider-authenticated API
     /// controller is connected. This never stores credentials or fetches a PR.
     fn refresh_review_browser_url(&mut self) {
@@ -6812,6 +6857,9 @@ impl Workbench {
     }
 
     fn persist_session(&mut self) {
+        if self.startup_preview_restore_pending {
+            return;
+        }
         if let Some(store) = &self.session_store {
             if let Err(error) = store.save(&self.model) {
                 eprintln!("Alera GPUI: unable to persist preview session: {error}");
@@ -7117,8 +7165,13 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let keep_saved_preview = self.startup_preview_restore_pending;
         let result = if let Some(store) = &self.session_store {
-            store.switch_workspace(&self.model, &canonical)
+            if keep_saved_preview {
+                store.switch_workspace_keeping_saved_departing(&self.model, &canonical)
+            } else {
+                store.switch_workspace(&self.model, &canonical)
+            }
         } else {
             WorkbenchModel::new(&canonical)
         };
@@ -7131,10 +7184,12 @@ impl Workbench {
                 return;
             }
         };
+        self.startup_preview_restore_pending = false;
         // Preserve only tab identities/display mode, never PTY output or
         // credentials. Other workspaces never inherit this local layout.
         self.save_mixed_pane_layout(cx);
         self.save_terminal_layout();
+        self.startup_editor_restore_pending = false;
         // Explicit workspace switches retire any queued or already-deferred
         // navigation into the old workspace. A navigation-triggered switch
         // requeues its exact verified target after the switch succeeds.
@@ -10182,6 +10237,114 @@ impl Workbench {
         }
     }
 
+    /// File-backed Editor recovery opens files and may trigger language
+    /// services. Delaying it just past first paint avoids a large synchronous
+    /// I/O batch before the Native window becomes interactive.
+    ///
+    /// A workspace switch invalidates this task; no stale file from another
+    /// Worktree may be restored into the new one.
+    fn restore_file_tabs_after_first_paint(&mut self, cx: &mut Context<Self>) {
+        if self.mixed_layout_restore.is_none() {
+            return;
+        }
+        self.startup_editor_restore_pending = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    view.startup_editor_restore_pending = false;
+                    return;
+                }
+                if view.mixed_layout_restore.is_none() {
+                    view.startup_editor_restore_pending = false;
+                    return;
+                }
+                // Keep the pending guard set while files open. A nested strip
+                // sync must not consume the saved layout before every buffer
+                // exists. set_pinned ignores identities that are not in the
+                // strip yet, so the layout is applied only after reconcile.
+                view.restore_file_tabs_from_pane_layout(cx);
+                view.startup_editor_restore_pending = false;
+                view.sync_mixed_tabs(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Read the saved read-only preview after the window exists. File contents
+    /// stay on a background thread. A workspace switch during the read keeps
+    /// the on-disk snapshot and drops the late result.
+    fn defer_preview_session_restore(&mut self, startup_started: Instant, cx: &mut Context<Self>) {
+        let Some(store) = self.session_store.clone() else {
+            trace_native_startup(startup_started, "preview_session_restored");
+            return;
+        };
+        self.startup_preview_restore_pending = true;
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let restored = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut model = WorkbenchModel::session_restore_model(&root)
+                        .map_err(|error| error.to_string())?;
+                    store
+                        .restore(&mut model)
+                        .map_err(|error| error.to_string())?;
+                    Ok(model)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.finish_deferred_preview_restore(
+                    generation,
+                    restored,
+                    startup_started,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_deferred_preview_restore(
+        &mut self,
+        generation: u64,
+        restored: Result<WorkbenchModel, String>,
+        startup_started: Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_generation != generation || !self.startup_preview_restore_pending {
+            self.startup_preview_restore_pending = false;
+            trace_native_startup(startup_started, "preview_session_restored");
+            return;
+        }
+        self.startup_preview_restore_pending = false;
+        match restored {
+            Ok(restored) => {
+                if self.model.adopt_deferred_preview(restored) {
+                    if let Some(store) = &self.session_store {
+                        if let Err(error) = store.save(&self.model) {
+                            eprintln!("Alera GPUI: cannot save preview session: {error}");
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("Alera GPUI: cannot restore preview session: {error}");
+                self.model
+                    .set_status(format!("Previous preview session unavailable: {error}"));
+            }
+        }
+        trace_native_startup(startup_started, "preview_session_restored");
+        cx.notify();
+    }
+
     /// Recover only files that are validated by the ordinary EditorTabs
     /// path guard. A saved relative key never authorizes reading outside
     /// this workspace and never restores a Host session.
@@ -10263,6 +10426,10 @@ impl Workbench {
     }
 
     fn apply_restored_mixed_panes(&mut self, cx: &mut Context<Self>) {
+        if self.startup_editor_restore_pending {
+            // Do not consume pane order before delayed file buffers exist.
+            return;
+        }
         let Some(saved) = self.mixed_layout_restore.take() else {
             return;
         };
@@ -18323,7 +18490,19 @@ fn install_native_windows_app_identity() {
     }
 }
 
+/// Opt-in cold-start phase timings. Normal releases never emit these logs,
+/// and no workspace path, Session ID or Agent message is included.
+fn trace_native_startup(started: Instant, stage: &str) {
+    if std::env::var_os("ALERA_GPUI_STARTUP_TRACE").is_some() {
+        eprintln!(
+            "ALERA_GPUI_STARTUP stage={stage} elapsed_ms={}",
+            started.elapsed().as_millis(),
+        );
+    }
+}
+
 fn main() {
+    let startup_started = Instant::now();
     #[cfg(windows)]
     install_native_windows_app_identity();
     // Only this process registers its ephemeral class factory. Persistent
@@ -18373,28 +18552,19 @@ fn main() {
             }
         })
         .unwrap_or_else(|| std::env::current_dir().expect("current working directory"));
-    let mut model = match WorkbenchModel::new(root) {
+    let model = match WorkbenchModel::new(root) {
         Ok(model) => model,
         Err(error) => {
             eprintln!("Alera GPUI: unable to open workspace: {error}");
             std::process::exit(1);
         }
     };
-    if let Some(store) = &session_store {
-        // Preserve a malformed snapshot for possible recovery instead of
-        // overwriting it with an empty workspace at startup.
-        match store.restore(&mut model) {
-            Ok(_) => {
-                if let Err(error) = store.save(&model) {
-                    eprintln!("Alera GPUI: cannot save preview session: {error}");
-                }
-            }
-            Err(error) => {
-                eprintln!("Alera GPUI: cannot restore preview session: {error}");
-                model.set_status(format!("Previous preview session unavailable: {error}"));
-            }
-        }
-    }
+    trace_native_startup(startup_started, "workspace_model_initialized");
+    // Preview tabs read workspace files. Doing that before the window existed
+    // stalled cold start for seconds when the disk was slow. The read now
+    // starts after the window is created. A malformed snapshot is still left
+    // on disk: the deferred path saves only after a successful restore.
+    trace_native_startup(startup_started, "preview_session_deferred");
     let runtime_bridge = RuntimeCliBridge::discover().ok();
     let runtime_status = if runtime_bridge.is_some() {
         "Not checked · use existing Alera CLI".into()
@@ -18423,17 +18593,16 @@ fn main() {
             Some("Native state directory unavailable".into()),
         ),
     };
-    let initial_review_url =
-        alera_core::git::repository_remote_url(&model.root().to_string_lossy())
-            .ok()
-            .flatten()
-            .and_then(|remote| repository_pull_requests_url(&remote));
+    // Do not spawn Git just to find a PR link before the Native window opens.
+    // The review URL is discovered on a background worker after first paint.
+    let initial_review_url: Option<String> = None;
     let initial_visibility = ExplorerVisibilityOptions {
         show_ignored: native_settings.explorer_show_ignored,
         show_hidden: native_settings.explorer_show_hidden,
     };
 
     let initial_native_scrollback_lines = native_settings.terminal_scrollback_lines as usize;
+    trace_native_startup(startup_started, "settings_and_cli_discovered");
 
     gpui_kit::application()
         // Match Classic's Lucide action set in addition to Codicon Git glyphs.
@@ -18459,6 +18628,7 @@ fn main() {
             ]) {
                 eprintln!("Alera GPUI: cannot load bundled desktop fonts: {error}");
             }
+            trace_native_startup(startup_started, "fonts_and_theme_loaded");
             bind_editor_keys(cx);
             bind_quick_open_keys(cx);
             cx.bind_keys([
@@ -18935,6 +19105,8 @@ fn main() {
                             host_pins_error: None,
                             mixed_panes: WorkbenchPaneLayout::default(),
                             mixed_layout_restore: None,
+                            startup_editor_restore_pending: false,
+                            startup_preview_restore_pending: false,
                             mixed_layout_read_only: false,
                             mixed_tab_context: None,
                             runtime_bridge,
@@ -19195,7 +19367,8 @@ fn main() {
                         workbench.restore_scratch_tabs(cx);
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
-                        workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench.restore_file_tabs_after_first_paint(cx);
+                        workbench.defer_preview_session_restore(startup_started, cx);
                         workbench.restore_host_create_journal();
                         workbench.refresh_shared_desktop_settings(cx);
                         workbench.refresh_agent_quotas(false, None, cx);
@@ -19239,19 +19412,46 @@ fn main() {
                         // first 1.5s housekeeping session-list tick.
                         // Uses authenticated CLI --no-start; no PTY is minted.
                         view.refresh_terminals(cx);
-                        view.refresh_project_tree(cx);
-                        view.refresh_worktrees(cx);
-                        view.start_git_watch(cx);
-                        view.refresh_git(cx);
-                        view.refresh_shared_git_favorites(cx);
-                        view.refresh_agent_profiles(cx);
-                        view.refresh_installed_agent_clis(cx);
-                        view.connect_mcp_ui_bridge(cx);
+                        // Terminal inventory is the only startup request
+                        // needed immediately to reconnect visible Host tabs.
+                        // Let the initial window paint before launching several
+                        // independent Git/Host CLI jobs on Windows.
+                        let generation = view.workspace_generation;
+                        cx.spawn(async move |view, cx| {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(180))
+                                .await;
+                            if view.update(cx, |view, cx| {
+                                if view.workspace_generation != generation { return; }
+                                view.refresh_project_tree(cx);
+                                view.refresh_worktrees(cx);
+                                view.start_git_watch(cx);
+                                view.refresh_git(cx);
+                                view.discover_review_url_in_background(cx);
+                            }).is_err() { return; }
+                            // Less-visible optional metadata must not compete
+                            // with the first Terminal reconnect and editor
+                            // restoration for startup CPU, disk and memory.
+                            cx.background_executor()
+                                .timer(Duration::from_millis(220))
+                                .await;
+                            view.update(cx, |view, cx| {
+                                if view.workspace_generation == generation {
+                                    view.refresh_shared_git_favorites(cx);
+                                    view.refresh_agent_profiles(cx);
+                                }
+                                // Window-global discovery and MCP bridge startup must
+                                // survive an early workspace switch.
+                                view.refresh_installed_agent_clis(cx);
+                                view.connect_mcp_ui_bridge(cx);
+                            }).ok();
+                        }).detach();
                     });
                     view
                 },
             )
             .expect("create native GPUI desktop window");
+            trace_native_startup(startup_started, "native_window_created");
             cx.activate(true);
         });
 }

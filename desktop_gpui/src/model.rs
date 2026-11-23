@@ -59,6 +59,60 @@ impl WorkbenchModel {
         Ok(model)
     }
 
+    /// A second model used only to read a saved preview off the UI thread.
+    /// It does not query Git; the live model already owns the branch name.
+    pub fn session_restore_model(root: impl AsRef<Path>) -> io::Result<Self> {
+        let root = dunce::canonicalize(root)?;
+        if !root.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Workspace is not a directory",
+            ));
+        }
+        Ok(Self {
+            directory: root.clone(),
+            root,
+            branch: String::new(),
+            entries: Vec::new(),
+            tabs: Vec::new(),
+            active_tab: None,
+            status: "Ready · open a file or Terminal tab".into(),
+        })
+    }
+
+    /// Take a preview that was restored off the UI thread.
+    /// An untouched model adopts its directory, listing, tabs and status.
+    /// Tabs the user already opened stay in front, and missing restored tabs
+    /// are appended. A different workspace is refused.
+    pub fn adopt_deferred_preview(&mut self, restored: Self) -> bool {
+        if self.root != restored.root {
+            return false;
+        }
+        let untouched = self.tabs.is_empty() && self.directory == self.root;
+        if untouched {
+            if restored.directory != restored.root || !restored.entries.is_empty() {
+                self.directory = restored.directory;
+                self.entries = restored.entries;
+            }
+            self.tabs = restored.tabs;
+            self.active_tab = restored.active_tab;
+            if !self.tabs.is_empty() || self.directory != self.root {
+                self.status = restored.status;
+            }
+            return true;
+        }
+        for tab in restored.tabs {
+            if self.tabs.iter().any(|existing| existing.path == tab.path) {
+                continue;
+            }
+            if self.tabs.len() >= MAX_TABS {
+                break;
+            }
+            self.tabs.push(tab);
+        }
+        true
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -602,5 +656,38 @@ mod tests {
         model.close_tab(MAX_TABS);
         model.activate_tab(MAX_TABS);
         assert_eq!(model.tabs().len(), MAX_TABS);
+    }
+
+    #[test]
+    fn deferred_preview_fills_an_untouched_model_and_keeps_user_tabs() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("src")).unwrap();
+        fs::write(temp.path().join("src").join("a.txt"), "alpha").unwrap();
+        fs::write(temp.path().join("b.txt"), "beta").unwrap();
+
+        let mut restored = WorkbenchModel::session_restore_model(temp.path()).unwrap();
+        assert!(restored.branch().is_empty());
+        assert!(restored.open_path(temp.path().join("src")));
+        assert!(restored.open_path(temp.path().join("src").join("a.txt")));
+        let mut live = WorkbenchModel::new(temp.path()).unwrap();
+        let branch = live.branch().to_owned();
+        assert!(live.adopt_deferred_preview(restored));
+        assert_eq!(live.branch(), branch);
+        assert!(live.directory().ends_with("src"));
+        assert_eq!(live.content(), "alpha");
+
+        let mut user = WorkbenchModel::new(temp.path()).unwrap();
+        assert!(user.open_path(user.root().join("b.txt")));
+        let mut again = WorkbenchModel::session_restore_model(temp.path()).unwrap();
+        assert!(again.open_path(temp.path().join("src").join("a.txt")));
+        assert!(user.adopt_deferred_preview(again));
+        assert_eq!(user.tabs().len(), 2);
+        assert_eq!(user.content(), "beta");
+        assert_eq!(user.directory(), user.root());
+
+        let other = tempfile::tempdir().unwrap();
+        let foreign = WorkbenchModel::session_restore_model(other.path()).unwrap();
+        assert!(!user.adopt_deferred_preview(foreign));
+        assert_eq!(user.tabs().len(), 2);
     }
 }
