@@ -638,6 +638,16 @@ class WorkspaceSourceControlController
         debugPrint('[stale-completion] watcher generation=$loadGeneration');
         return;
       }
+      // A native watcher may report several events for an unchanged Git
+      // snapshot. Keep manual refresh revisions, but avoid rebuilding the
+      // visible Source Control tree for identical background results.
+      final current = state.asData?.value;
+      if (current != null &&
+          identical(next.status, current.status) &&
+          identical(next.repositoryState, current.repositoryState) &&
+          identical(next.stashes, current.stashes)) {
+        return;
+      }
       state = AsyncData(next);
     } catch (_) {
       // Best-effort background refresh: keep the current state on failure.

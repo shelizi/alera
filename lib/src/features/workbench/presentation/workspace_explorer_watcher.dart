@@ -71,11 +71,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
       workspacePath: widget.workspace.path,
       debounce: const Duration(milliseconds: 120),
     );
-    _pendingWatchedDirectories.add('');
-    if (!_watchRefreshInFlight) {
-      _watchRefreshInFlight = true;
-      unawaited(_drainWatchedRefreshes());
-    }
+    _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
     final exponent = _watcherFailureCount.clamp(0, 4);
     _watcherFailureCount += 1;
     _watcherRetryTimer = Timer(
@@ -104,6 +100,11 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     }
     if (mounted && widget.workspace.path == workspacePath) {
       await _startNativeWatcher();
+      // An in-flight reconciliation may have been invalidated when the
+      // watcher generation changed. Always reconcile once after reattach.
+      if (mounted && _watcherHandle != null) {
+        _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
+      }
     }
   }
 
@@ -115,7 +116,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     final handle = _watcherHandle;
     _watchSubscription = null;
     _watcherHandle = null;
-    if (discardPending) _pendingWatchedDirectories.clear();
+    if (discardPending) _watchRefreshQueue.clear();
     _lastSyncedWatchedDirectories = null;
     await subscription?.cancel();
     if (handle != null) {
@@ -162,40 +163,25 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
         debounce: const Duration(milliseconds: 120),
       );
     }
-    _pendingWatchedDirectories.addAll(batch.directoryRelativePaths);
-    if (_pendingWatchedDirectories.isEmpty) {
-      return;
-    }
-    if (_watchRefreshInFlight) {
-      return;
-    }
-    _watchRefreshInFlight = true;
-    unawaited(_drainWatchedRefreshes());
-  }
-
-  Future<void> _drainWatchedRefreshes() async {
-    try {
-      while (mounted && _pendingWatchedDirectories.isNotEmpty) {
-        final relativePaths = _pendingWatchedDirectories.toList(
-          growable: false,
-        );
-        _pendingWatchedDirectories.clear();
-        try {
-          await _refreshWatchedDirectories(relativePaths);
-        } catch (_) {
-          // Best-effort watcher refresh: a failed batch must not strand
-          // directories that were queued behind it.
-        }
-      }
-    } finally {
-      _watchRefreshInFlight = false;
-    }
+    _watchRefreshQueue.enqueue(batch.directoryRelativePaths);
   }
 
   Future<void> _refreshWatchedDirectories(List<String> relativePaths) async {
+    final generation = _watcherGeneration;
+    final workspacePath = widget.workspace.path;
     await _refreshGitStatusSnapshot();
-    for (final relativePath in relativePaths.toSet()) {
-      if (!mounted || !_childrenByDirectory.containsKey(relativePath)) {
+    if (!mounted ||
+        generation != _watcherGeneration ||
+        workspacePath != widget.workspace.path) {
+      return;
+    }
+    for (final relativePath in relativePaths) {
+      if (!mounted ||
+          generation != _watcherGeneration ||
+          workspacePath != widget.workspace.path) {
+        return;
+      }
+      if (!_childrenByDirectory.containsKey(relativePath)) {
         continue;
       }
       await _refreshDirectory(relativePath, refreshGitStatus: false);

@@ -451,6 +451,11 @@ void main() {
       final (container, _) = await _boot(backend, watcher);
       final provider = workspaceSourceControlControllerProvider(_workspacePath);
       final before = container.read(provider).requireValue;
+      var notifications = 0;
+      final subscription = container.listen(provider, (_, _) {
+        notifications += 1;
+      });
+      addTearDown(subscription.close);
 
       backend.gitStatusResult = _statusWith(_initialEntries());
       backend.gitRepositoryStateResult = GitRepositoryState(
@@ -472,10 +477,11 @@ void main() {
       await _reloadFromWatcher(watcher);
 
       final after = container.read(provider).requireValue;
-      // The wrapper gets a fresh revision so listeners still fire; the
-      // expensive payloads keep their instances.
-      expect(identical(after, before), isFalse);
-      expect(after.revision, before.revision + 1);
+      // Identical native watch events must not trigger a full UI rebuild;
+      // manual refresh retains its normal action/completion notifications.
+      expect(identical(after, before), isTrue);
+      expect(after.revision, before.revision);
+      expect(notifications, 0);
       expect(identical(after.status, before.status), isTrue);
       for (var index = 0; index < before.status.entries.length; index += 1) {
         expect(

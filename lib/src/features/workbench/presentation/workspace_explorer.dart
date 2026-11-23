@@ -21,6 +21,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_launch
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_watch_refresh_queue.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/windows_file_drag.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
@@ -153,8 +154,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   Timer? _watcherRetryTimer;
   int _watcherFailureCount = 0;
   bool _watcherRecoveryInFlight = false;
-  bool _watchRefreshInFlight = false;
-  final Set<String> _pendingWatchedDirectories = <String>{};
+  late final WorkspaceExplorerWatchRefreshQueue _watchRefreshQueue =
+      WorkspaceExplorerWatchRefreshQueue(refresh: _refreshWatchedDirectories);
   Set<String>? _lastSyncedWatchedDirectories;
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
@@ -266,6 +267,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _treeRevealGeneration++;
     _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
+    _watchRefreshQueue.dispose();
     _disposeNativeProjectionSession();
     unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
@@ -759,12 +761,18 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   Future<void> _refreshGitStatusSnapshot() async {
+    final workspacePath = widget.workspace.path;
     try {
-      _gitStatusSnapshot = await _gitBackend.explorerStatusSnapshot(
-        widget.workspace.path,
-      );
+      final snapshot = await _gitBackend.explorerStatusSnapshot(workspacePath);
+      // A slow Git scan from a retired worktree must never overwrite the
+      // Explorer's status badges after its workspace changes.
+      if (mounted && workspacePath == widget.workspace.path) {
+        _gitStatusSnapshot = snapshot;
+      }
     } catch (_) {
-      _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
+      if (mounted && workspacePath == widget.workspace.path) {
+        _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
+      }
     }
   }
 
