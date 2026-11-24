@@ -395,12 +395,14 @@ async fn legacy_mobile_view_prefs_request_is_accepted_and_backfilled() {
     let payload = &response["payload"];
     assert_eq!(payload["revision"], 8);
     assert_eq!(payload["lastWriter"], "mobile");
-    // The legacy payload omits the section fields; the host backfills them
-    // from the stored record before applying the update.
+    // The legacy payload omits the section and manual-order fields; the
+    // current Host backfills them from the stored record before updating.
     let mut expected_prefs = request["payload"]["prefs"].clone();
     expected_prefs["sectionSort"] = json!("name");
     expected_prefs["collapsedSectionIds"] = json!([]);
     expected_prefs["othersSectionCollapsed"] = json!(false);
+    expected_prefs["projectOrder"] = json!([]);
+    expected_prefs["workspaceOrder"] = json!([]);
     assert_eq!(payload["prefs"], expected_prefs);
 }
 
