@@ -247,45 +247,29 @@ impl ServerActor {
     /// injection-ready agent presence, no active dispatch, and not the
     /// coordinator's own terminal.
     async fn coordinator_available_terminals(
-        &mut self,
+        &self,
         config: &CoordinatorConfig,
     ) -> anyhow::Result<Vec<String>> {
-        let mut candidates = Vec::new();
-        let session_ids: Vec<(String, String, bool)> = self
+        // Filter in-memory before cloning handles or touching SQLite.
+        let mut candidates: Vec<String> = self
             .sessions
             .iter()
-            .map(|(session_id, session)| {
-                (
-                    session_id.clone(),
-                    session.workspace_id.clone(),
-                    session.running(),
-                )
+            .filter(|(handle, session)| {
+                session.running()
+                    && config
+                        .workspace_id
+                        .as_ref()
+                        .is_none_or(|scope| &session.workspace_id == scope)
+                    && config.coordinator_handle.as_deref() != Some(handle.as_str())
+                    && self.agent_presence.is_injection_ready(handle)
             })
+            .map(|(handle, _)| handle.clone())
             .collect();
-        for (session_id, workspace_id, running) in session_ids {
-            if !running {
-                continue;
-            }
-            if let Some(scope) = &config.workspace_id {
-                if &workspace_id != scope {
-                    continue;
-                }
-            }
-            if config.coordinator_handle.as_deref() == Some(session_id.as_str()) {
-                continue;
-            }
-            if !self.agent_presence.is_injection_ready(&session_id) {
-                continue;
-            }
-            let busy = self
-                .runtime_store
-                .active_orchestration_dispatch_for_handle(&session_id)
-                .await?
-                .is_some();
-            if !busy {
-                candidates.push(session_id);
-            }
-        }
+        let busy = self
+            .runtime_store
+            .active_orchestration_dispatch_handles(&candidates)
+            .await?;
+        candidates.retain(|handle| !busy.contains(handle));
         Ok(candidates)
     }
 
@@ -299,6 +283,7 @@ impl ServerActor {
         let tabs = self.runtime_store.list_workspace_tabs(workspace_id).await?;
         let now = chrono::Utc::now();
         let mut pending = 0;
+        let mut unready_running = Vec::new();
         for tab in tabs.into_iter().filter(|tab| tab.kind == "terminal") {
             let Some((handle, created_at)) = (|| {
                 if !is_pending_orchestration_worker(&tab.payload, &config.agent_type) {
@@ -330,26 +315,23 @@ impl ServerActor {
                 pending += 1;
                 continue;
             }
-            let active_dispatch = self
-                .runtime_store
-                .active_orchestration_dispatch_for_handle(&handle)
-                .await?
-                .is_some();
-            if active_dispatch {
+            // Ready workers are not pending, regardless of their dispatch.
+            // Only unresolved running workers need the batched busy check.
+            if self.agent_presence.get(&handle).is_some_and(|presence| {
+                presence.state.accepts_injection() || presence.state == AgentPresenceState::Done
+            }) {
                 continue;
             }
-            let Some(presence) = self.agent_presence.get(&handle) else {
-                pending += 1;
-                continue;
-            };
-            if presence.state.accepts_injection() {
-                continue;
-            }
-            if presence.state == AgentPresenceState::Done {
-                continue;
-            }
-            pending += 1;
+            unready_running.push(handle);
         }
+        let busy = self
+            .runtime_store
+            .active_orchestration_dispatch_handles(&unready_running)
+            .await?;
+        pending += unready_running
+            .iter()
+            .filter(|handle| !busy.contains(*handle))
+            .count();
         Ok(pending)
     }
 
@@ -468,5 +450,319 @@ impl ServerActor {
             }
         }
         Some(stripped_spec)
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::terminal_host::server::actor_test_harness::test_actor;
+    use crate::terminal_host::server::orchestration_contract_tests::ready_task;
+    use alera_core::runtime::WorkspaceTabRecord;
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+
+    fn config() -> CoordinatorConfig {
+        CoordinatorConfig {
+            run_id: "run".into(),
+            coordinator_handle: Some("coord".into()),
+            poll_interval_ms: 2000,
+            max_concurrent: 4,
+            workspace_id: Some("w1".into()),
+            agent_type: "codex".into(),
+        }
+    }
+
+    fn worker(
+        actor: &mut ServerActor,
+        handle: &str,
+        workspace: &str,
+        state: Option<AgentPresenceState>,
+        running: bool,
+    ) {
+        let mut session = Session::driver_test_stub(handle, 80, 24);
+        session.workspace_id = workspace.into();
+        if !running {
+            session.handle_exit(0);
+        }
+        actor.sessions.insert(handle.into(), session);
+        if let Some(state) = state {
+            actor.agent_presence.update(handle, "codex".into(), state);
+        }
+    }
+
+    async fn dispatch_status(actor: &ServerActor, handle: &str, status: &str) {
+        let task = ready_task(actor, "coord").await;
+        let dispatch = actor
+            .runtime_store
+            .create_orchestration_dispatch(&task, handle)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE orchestrationDispatchContexts SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(&dispatch.id)
+            .execute(actor.runtime_store.pool())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn available_workers_match_legacy_checks_across_batch_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        let mut expected: HashSet<String> = (0..260).map(|i| format!("worker-{i}")).collect();
+        for handle in &expected {
+            worker(
+                &mut actor,
+                handle,
+                "w1",
+                Some(AgentPresenceState::Done),
+                true,
+            );
+        }
+        for (i, status) in [
+            "pending",
+            "dispatched",
+            "awaiting_acceptance",
+            "stalled",
+            "completed",
+            "failed",
+            "cancelled",
+            "superseded",
+            "startup_failed",
+            "circuit_broken",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let handle = format!("worker-{}", i * 28);
+            dispatch_status(&actor, &handle, status).await;
+            if i < 4 {
+                expected.remove(&handle);
+            }
+        }
+        for (handle, workspace, state, running) in [
+            ("coord", "w1", Some(AgentPresenceState::Done), true),
+            (
+                "other-workspace",
+                "w2",
+                Some(AgentPresenceState::Done),
+                true,
+            ),
+            ("working", "w1", Some(AgentPresenceState::Working), true),
+            ("waiting", "w1", Some(AgentPresenceState::Waiting), true),
+            ("blocked", "w1", Some(AgentPresenceState::Blocked), true),
+            ("exited", "w1", Some(AgentPresenceState::Done), false),
+            ("unknown", "w1", None, true),
+        ] {
+            worker(&mut actor, handle, workspace, state, running);
+        }
+
+        let actual = actor
+            .coordinator_available_terminals(&config())
+            .await
+            .unwrap();
+        assert_eq!(actual.len(), expected.len());
+        assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
+        // A global run may select idle terminals outside the original scope,
+        // but never the coordinator itself, or a busy/non-ready session.
+        let mut global = config();
+        global.workspace_id = None;
+        expected.insert("other-workspace".into());
+        let actual = actor
+            .coordinator_available_terminals(&global)
+            .await
+            .unwrap();
+        assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
+
+        // The availability snapshot does not grant dispatch authority:
+        // the transaction still rejects a conflicting assignment.
+        let task = ready_task(&actor, "coord").await;
+        assert!(actor
+            .runtime_store
+            .create_orchestration_dispatch(&task, "worker-0")
+            .await
+            .is_err());
+    }
+
+    async fn tab(
+        actor: &ServerActor,
+        id: &str,
+        handle: Option<&str>,
+        workspace: &str,
+        age_secs: i64,
+        kind: &str,
+        command: &str,
+    ) {
+        let created_at = Utc::now() - Duration::seconds(age_secs);
+        let mut payload = json!({"spawnOnCreate": true, "initialCommand": command});
+        if let Some(handle) = handle {
+            payload["terminalSessionId"] = json!(handle);
+        }
+        actor
+            .runtime_store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: id.into(),
+                workspace_id: workspace.into(),
+                kind: kind.into(),
+                title: "worker".into(),
+                created_at,
+                updated_at: created_at,
+                payload,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_worker_scan_excludes_ready_busy_old_and_out_of_scope_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(&dir, HashMap::new(), HashMap::new()).await;
+        let command = agent_descriptor("codex").unwrap().default_command;
+        for i in 0..140 {
+            let handle = format!("pending-{i}");
+            worker(
+                &mut actor,
+                &handle,
+                "w1",
+                Some(AgentPresenceState::Working),
+                true,
+            );
+            tab(
+                &actor,
+                &format!("tab-{i}"),
+                Some(&handle),
+                "w1",
+                0,
+                "terminal",
+                command,
+            )
+            .await;
+        }
+        for (handle, status) in [
+            ("pending-0", "pending"),
+            ("pending-127", "dispatched"),
+            ("pending-128", "awaiting_acceptance"),
+            ("pending-139", "stalled"),
+        ] {
+            dispatch_status(&actor, handle, status).await;
+        }
+        worker(
+            &mut actor,
+            "done",
+            "w1",
+            Some(AgentPresenceState::Done),
+            true,
+        );
+        worker(
+            &mut actor,
+            "exited",
+            "w1",
+            Some(AgentPresenceState::Done),
+            false,
+        );
+        worker(&mut actor, "fallback", "w1", None, true);
+        tab(
+            &actor,
+            "ready-tab",
+            Some("done"),
+            "w1",
+            0,
+            "terminal",
+            command,
+        )
+        .await;
+        tab(
+            &actor,
+            "dead-tab",
+            Some("exited"),
+            "w1",
+            0,
+            "terminal",
+            command,
+        )
+        .await;
+        tab(
+            &actor,
+            "not-started-tab",
+            Some("not-started"),
+            "w1",
+            0,
+            "terminal",
+            command,
+        )
+        .await;
+        tab(&actor, "fallback", None, "w1", 0, "terminal", command).await;
+        tab(
+            &actor,
+            "old-tab",
+            Some("old"),
+            "w1",
+            600,
+            "terminal",
+            command,
+        )
+        .await;
+        tab(
+            &actor,
+            "foreign-tab",
+            Some("foreign"),
+            "w2",
+            0,
+            "terminal",
+            command,
+        )
+        .await;
+        tab(&actor, "file-tab", Some("file"), "w1", 0, "editor", command).await;
+        tab(
+            &actor,
+            "different-agent-tab",
+            Some("different-agent"),
+            "w1",
+            0,
+            "terminal",
+            "unrelated command",
+        )
+        .await;
+        // Two tabs may refer to the same handle; preserve the old per-tab
+        // count rather than treating duplicate handles as one pending tab.
+        tab(
+            &actor,
+            "duplicate-tab",
+            Some("pending-1"),
+            "w1",
+            0,
+            "terminal",
+            command,
+        )
+        .await;
+        assert_eq!(
+            actor
+                .coordinator_pending_worker_tabs(&config())
+                .await
+                .unwrap(),
+            140
+        );
+
+        // Completing an active dispatch makes its still-unready tab pending.
+        sqlx::query("UPDATE orchestrationDispatchContexts SET status = 'completed' WHERE assignee_handle = 'pending-127'")
+            .execute(actor.runtime_store.pool()).await.unwrap();
+        assert_eq!(
+            actor
+                .coordinator_pending_worker_tabs(&config())
+                .await
+                .unwrap(),
+            141
+        );
+        let mut global = config();
+        global.workspace_id = None;
+        assert_eq!(
+            actor
+                .coordinator_pending_worker_tabs(&global)
+                .await
+                .unwrap(),
+            0
+        );
     }
 }
