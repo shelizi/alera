@@ -224,7 +224,7 @@ fn report(name: &str, samples: &[Sample]) {
                 .collect(),
         );
     }
-    let counts: [(&str, fn(&Sample) -> usize); 7] = [
+    let counts: [(&str, fn(&Sample) -> usize); 10] = [
         ("parsed", |s| s.response.parsed_files),
         ("reused", |s| s.response.reused_files),
         ("added", |s| s.response.writes.added),
@@ -235,6 +235,13 @@ fn report(name: &str, samples: &[Sample]) {
         }),
         ("json_buffer_starts", |s| {
             s.response.writes.json_buffer_starts
+        }),
+        ("warm_check_queries", |s| {
+            s.response.writes.warm_check_queries
+        }),
+        ("warm_check_hits", |s| s.response.writes.warm_check_hits),
+        ("existing_rows_loaded", |s| {
+            s.response.writes.existing_rows_loaded
         }),
     ];
     for (metric, select) in counts {
@@ -296,6 +303,8 @@ async fn history_search_phase_benchmark() {
         assert_eq!(s.response.reused_files, FILES);
         assert_eq!(s.response.writes.unchanged, FILES);
         assert_eq!(s.response.writes.write_statements, 0);
+        assert_eq!(s.response.writes.warm_check_hits, 1);
+        assert_eq!(s.response.writes.existing_rows_loaded, 0);
         warm.push(s);
     }
     report("warm", &warm);

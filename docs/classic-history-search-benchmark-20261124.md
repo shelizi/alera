@@ -97,3 +97,22 @@ Process other-I/O median counts are identical across all three runs per version:
 Warm search has 15.44% fewer counted other-I/O operations than the previous implementation and 35.39% fewer than the initial 4340 baseline. All process read/write operation counts and SQL write counts remain unchanged. This is two fewer counted other-I/O operations per ordinary file, not a direct syscall or physical disk transfer count. Wall-clock changes are not uniformly positive: single-file-change median increased by about 2.8%, and one after run had a cold scan tail near 2 seconds. The repeatable I/O reduction justifies retaining this scoped fast path; do not claim guaranteed elapsed-time improvements. No release-profile, full suite or RSS measurement was performed.
 
 Validation: 32 history regressions passed (one benchmark ignored in the normal run), 10 exact resume tests and 2 Agent Context tests passed. The actual Windows symlink fixture was created and rejected. The new direct-snapshot test verified exact EOF for an 8193-byte file, pre-epoch and submillisecond timestamps against legacy std metadata, and identical cache stamp fields. Existing freshness and scope regressions remain green.
+
+## Read-only warm batch equality check
+
+For requests whose native preview reuse count covers the current result batch, attempt a single read-only SQLite statement using a bounded transient canonical JSON batch. The statement joins bound document keys and exact canonical JSON against the persisted rows, checks text types and verifies the retention count in the same statement snapshot. An exact match skips the explicit update transaction, previous-row materialization, and separate retention SELECT. It does not use a hash or retain any additional cross-request cache. Any missing or changed record, noncanonical JSON, conflicting duplicate, oversized index, or batch exceeding the 2 MiB serialized JSON threshold falls back to the existing transaction path. All records use the same scope and field-budget validation. Cold and partially changed native scans continue to use the original path.
+
+Interleaved Windows Debug A/B runs against `cbf721a0d` (before/after/after/before/before/after), 42 measured requests per run, 252 total. Values are individual run p50 values followed by their median, not pooled percentiles.
+
+| Scenario | Before run p50 (ms) | After run p50 (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold total | 131.254, 67.682, 76.499 | 61.639, 74.888, 67.577 | 76.499 | 67.577 |
+| Warm total | 70.219, 66.624, 67.119 | 62.625, 25.982, 62.416 | 67.119 | 62.416 |
+| Index reopen total | 71.667, 72.352, 71.173 | 65.415, 29.451, 70.033 | 71.667 | 65.415 |
+| One file changed total | 75.903, 75.495, 76.340 | 71.697, 71.234, 82.596 | 75.903 | 71.697 |
+| Warm upsert check | 11.910, 11.392, 11.397 | 8.213, 4.399, 8.413 | 11.397 | 8.213 |
+| Index reopen upsert check | 11.897, 12.687, 12.603 | 9.663, 5.231, 9.680 | 12.603 | 9.663 |
+
+Warm upsert check median declined 27.9%, warm total 7.0%, reopen upsert check 23.3%, reopen total 8.7%. Warm/reopen fast-path counters show one equality SELECT and no old document rows returned to Rust for every measured request (84 total warm/reopen requests across the three after runs). The previous path materializes up to 256 existing rows and executes two SELECTs in an explicit transaction. Warm/reopen SQL writes remain zero. Cold and one-file-change paths are unchanged; do not attribute their noisy elapsed-time differences to this optimization. Windows process read/write and other-I/O operation counts were unchanged; this improvement targets SQLite/Rust row materialization and query overhead, not physical disk transfers. Complete JSON serialization is still required. The fast path aggregates serialized JSON into one temporary buffer, with a threshold checked after each record; its peak capacity and RSS have not been measured.
+
+Validation: 33 history regressions passed (one benchmark ignored in the ordinary run), 10 exact resume tests, 2 Agent Context tests. New tests exercise exact canonical comparison, rejection of an over-retention snapshot, same-file persisted JSON repair, duplicate update/revert order, clear/recreation and invalid input rejection. The existing service test confirms the warm fast path with an unregistered file excluded. Six benchmark runs passed. Shared-host Debug timings remain noisy, especially the unusually fast second after run. No complete Rust suite, release benchmark or RSS measurement was performed.

@@ -195,7 +195,13 @@ pub(crate) async fn search_history_on_demand(
         }
         #[cfg(test)]
         let upsert_started = Instant::now();
-        empty.writes = index.upsert_prepared(&batch).await?;
+        // Reused native previews make a fully unchanged SQLite batch likely,
+        // but never prove that the persistent index still has the same rows.
+        empty.writes = if scan.reused_files >= scan.records.len() {
+            index.upsert_warm_prepared(&batch).await?
+        } else {
+            index.upsert_prepared(&batch).await?
+        };
         #[cfg(test)]
         {
             empty.timings.upsert = upsert_started.elapsed();
@@ -357,6 +363,8 @@ mod tests {
                 .unwrap();
         assert_eq!(second.hits.len(), 1);
         assert_eq!(second.writes.unchanged, 1);
+        assert_eq!(second.writes.warm_check_hits, 1);
+        assert_eq!(second.writes.existing_rows_loaded, 0);
         assert!(second.index_reused);
         assert_eq!(
             second.parsed_files, 1,
