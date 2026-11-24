@@ -119,6 +119,7 @@ pub use driver::SessionDriver;
 pub struct DurableOutputBatch {
     pub data: Vec<u8>,
     pub sequence: i64,
+    pub end_cursor: u64,
 }
 
 /// A hosted terminal session. The PTY is read on a dedicated OS thread; other
@@ -750,9 +751,33 @@ impl Session {
         self.checkpoint_armed = false;
     }
 
-    /// Capture the current session state without touching SQLite. The repository
-    /// owns persistence and keeps this snapshot in memory until it is durable.
+    /// Capture the current session state without touching SQLite. Used for
+    /// new or finalized sessions, when an exact full snapshot must reseed
+    /// the repository regardless of any previous stream identity.
     pub fn checkpoint(
+        &mut self,
+        ended_at_override: Option<DateTime<Utc>>,
+    ) -> TerminalHostCheckpoint {
+        let mut checkpoint = self.checkpoint_metadata(ended_at_override);
+        checkpoint.buffer = self.buffer.to_bytes();
+        checkpoint
+    }
+
+    /// Called by the actor only after flushing the durable output batch.
+    /// The repository can reuse its contiguous verified tail, or lazily
+    /// capture this exact buffer when the cache is absent or incomplete.
+    pub(super) fn queue_live_checkpoint(
+        &mut self,
+        history: &TerminalHostHistoryRepository,
+        max_bytes: usize,
+    ) {
+        let checkpoint = self.checkpoint_metadata(None);
+        history.queue_checkpoint_from_live(checkpoint, self.buffer.len(), max_bytes, || {
+            self.buffer.to_bytes()
+        });
+    }
+
+    fn checkpoint_metadata(
         &mut self,
         ended_at_override: Option<DateTime<Utc>>,
     ) -> TerminalHostCheckpoint {
@@ -769,7 +794,7 @@ impl Session {
             ended_at: self.ended_at,
             output_stream_bytes: self.output_stream_bytes,
             updated_at: Utc::now(),
-            buffer: self.buffer.to_bytes(),
+            buffer: Vec::new(),
         }
     }
 }

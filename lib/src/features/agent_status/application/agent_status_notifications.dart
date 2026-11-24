@@ -102,23 +102,28 @@ class AgentStatusNotificationTracker({
     required Map<String, AgentStatusEntry>? previous,
     required Map<String, AgentStatusEntry> next,
     required bool includeFinished,
+    bool Function(AgentStatusEntry)? isEnabled,
   }) {
     final deliveredAt = now();
-    _forgetClosedSessions(next);
+    _forgetClosedSessions(next, isEnabled);
     final pending = <AgentStatusEntry>[];
     for (final entry in next.values) {
+      final prior = previous?[entry.terminalSessionId];
+      // Controllers retain identical objects for unaffected sessions. Skip
+      // them before consulting settings or cooldown state.
+      if (identical(prior, entry)) continue;
       if (!_isNotifiableState(entry.state, includeFinished: includeFinished)) {
         continue;
       }
       if (entry.stateStartedAt.isBefore(notifiableFrom)) {
         continue;
       }
-      final prior = previous?[entry.terminalSessionId];
       if (prior != null &&
           prior.state == entry.state &&
           prior.stateStartedAt == entry.stateStartedAt) {
         continue;
       }
+      if (isEnabled != null && !isEnabled(entry)) continue;
       final key = (entry.terminalSessionId, entry.state);
       if (_lastNotifiedAt[key] case final previousDelivery?) {
         if (deliveredAt.difference(previousDelivery) < cooldown) {
@@ -131,9 +136,16 @@ class AgentStatusNotificationTracker({
     return pending;
   }
 
-  /// Keeps the delivery map bounded: a terminal that is gone cannot repeat.
-  void _forgetClosedSessions(Map<String, AgentStatusEntry> next) {
-    _lastNotifiedAt.removeWhere((key, _) => !next.containsKey(key.$1));
+  /// Forget closed and disabled sessions, as if the incoming snapshot had
+  /// been filtered first, without constructing a filtered map on every hook.
+  void _forgetClosedSessions(
+    Map<String, AgentStatusEntry> next,
+    bool Function(AgentStatusEntry)? isEnabled,
+  ) {
+    _lastNotifiedAt.removeWhere((key, _) {
+      final entry = next[key.$1];
+      return entry == null || (isEnabled != null && !isEnabled(entry));
+    });
   }
 }
 

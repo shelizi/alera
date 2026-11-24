@@ -8,136 +8,137 @@ fn is_utf8_continuation(byte: u8) -> bool {
     byte & 0b1100_0000 == 0b1000_0000
 }
 
-/// Bounded scrollback buffer retaining at most `max_bytes` of the most recent
-/// PTY output, including drop-oldest trimming and the special case for a single
-/// chunk larger than the cap.
+/// Copy the logical range of a byte ring using at most two bulk copies.
+/// This does not rotate or traverse the discarded prefix.
+fn copy_deque_from(buffer: &VecDeque<u8>, start: usize) -> Vec<u8> {
+    if start >= buffer.len() {
+        return Vec::new();
+    }
+    let (first, second) = buffer.as_slices();
+    let mut output = Vec::with_capacity(buffer.len() - start);
+    if start < first.len() {
+        output.extend_from_slice(&first[start..]);
+        output.extend_from_slice(second);
+    } else {
+        output.extend_from_slice(&second[start - first.len()..]);
+    }
+    output
+}
+
+pub(super) fn copy_deque_tail(buffer: &VecDeque<u8>, max_bytes: usize) -> Vec<u8> {
+    copy_deque_from(buffer, buffer.len().saturating_sub(max_bytes))
+}
+
+pub(super) fn retain_deque_tail(buffer: &mut VecDeque<u8>, max_bytes: usize) {
+    if max_bytes == 0 {
+        *buffer = VecDeque::new();
+        return;
+    }
+    if buffer.len() > max_bytes {
+        buffer.drain(..buffer.len() - max_bytes);
+    }
+    // An explicit cap reduction should release an unnecessarily large ring.
+    if buffer.capacity() > max_bytes {
+        buffer.shrink_to(max_bytes);
+    }
+}
+
+pub(super) fn append_deque_tail(buffer: &mut VecDeque<u8>, data: &[u8], max_bytes: usize) {
+    if max_bytes == 0 {
+        *buffer = VecDeque::new();
+        return;
+    }
+    let data = &data[data.len().saturating_sub(max_bytes)..];
+    let keep_before = max_bytes - data.len();
+    if buffer.len() > keep_before {
+        buffer.drain(..buffer.len() - keep_before);
+    }
+    // Grow only with bytes actually retained, and never request more than
+    // the configured cap. Reuse the allocation as the oldest bytes expire.
+    let required = buffer.len() + data.len();
+    if required > buffer.capacity() {
+        let target = buffer
+            .capacity()
+            .saturating_mul(2)
+            .max(required)
+            .min(max_bytes);
+        buffer.reserve_exact(target - buffer.len());
+    } else if buffer.capacity() > max_bytes.saturating_mul(2) {
+        // A caller can lower the cap on append without a separate trim.
+        buffer.shrink_to(max_bytes);
+    }
+    buffer.extend(data);
+}
+
+/// Bounded scrollback buffer retaining at most the configured number of bytes.
+/// A byte ring avoids per-PTY-read allocations and repeated partial-chunk
+/// copies while dropping the oldest bytes. Reads never make it contiguous.
 pub struct ScrollbackBuffer {
-    chunks: VecDeque<Vec<u8>>,
-    length: usize,
+    bytes: VecDeque<u8>,
     max_bytes: usize,
 }
 
 impl ScrollbackBuffer {
     pub fn new(max_bytes: usize, initial: &[u8]) -> Self {
-        let mut buffer = ScrollbackBuffer {
-            chunks: VecDeque::new(),
-            length: 0,
+        let mut buffer = Self {
+            bytes: VecDeque::new(),
             max_bytes,
         };
-        if !initial.is_empty() {
-            buffer.append(initial);
-        }
+        buffer.append(initial);
         buffer
     }
 
     pub fn set_max_bytes(&mut self, value: usize) {
         self.max_bytes = value;
-        self.trim_to_limit();
+        retain_deque_tail(&mut self.bytes, value);
     }
 
     pub fn append(&mut self, data: &[u8]) {
-        if data.is_empty() {
-            return;
+        if !data.is_empty() {
+            append_deque_tail(&mut self.bytes, data, self.max_bytes);
         }
-        // A single write larger than the cap collapses the buffer to its tail.
-        if data.len() >= self.max_bytes {
-            self.chunks.clear();
-            let tail = data[data.len() - self.max_bytes..].to_vec();
-            self.length = tail.len();
-            self.chunks.push_back(tail);
-            return;
-        }
-        self.chunks.push_back(data.to_vec());
-        self.length += data.len();
-        self.trim_to_limit();
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut output = Vec::with_capacity(self.length);
-        for chunk in &self.chunks {
-            output.extend_from_slice(chunk);
-        }
-        output
+        copy_deque_from(&self.bytes, 0)
     }
 
-    /// The buffer from `start` on, without materialising what comes before.
-    ///
-    /// A resuming client usually missed a few kilobytes of a multi-megabyte
-    /// buffer, so copying the whole thing to slice off the tail is the bulk of
-    /// the cost of answering it.
+    /// The buffer from an offset, without visiting or copying earlier bytes.
     pub fn slice_from(&self, start: usize) -> Vec<u8> {
-        if start >= self.length {
-            return Vec::new();
-        }
-        let mut output = Vec::with_capacity(self.length - start);
-        let mut skipped = 0;
-        for chunk in &self.chunks {
-            if skipped + chunk.len() <= start {
-                skipped += chunk.len();
-                continue;
-            }
-            let offset = start.saturating_sub(skipped);
-            output.extend_from_slice(&chunk[offset..]);
-            skipped += chunk.len();
-        }
-        output
+        copy_deque_from(&self.bytes, start)
     }
 
-    /// The last `max_bytes`, started at a line boundary when one is close by.
+    /// The last bytes, started at a line boundary when one is close by.
     ///
-    /// Replaying more than the emulator will keep costs a VT parse per byte for
-    /// history it drops on the floor. Cutting at a newline rather than mid-line
-    /// also keeps a half-finished escape sequence out of the first row, since
-    /// escapes almost never span one.
+    /// Determine the alignment directly on the ring before allocating the
+    /// replay buffer, so even a multi-megabyte snapshot is copied only once.
     pub fn tail(&self, max_bytes: usize) -> Vec<u8> {
-        if self.length <= max_bytes {
+        if self.bytes.len() <= max_bytes {
             return self.to_bytes();
         }
-        let bytes = self.slice_from(self.length - max_bytes);
-        let start = match bytes
-            .iter()
+        let start = self.bytes.len() - max_bytes;
+        let mut bytes = self.bytes.range(start..);
+        let skip = match bytes
+            .clone()
             .take(LINE_ALIGN_SCAN_BYTES)
-            .position(|b| *b == b'\n')
+            .position(|byte| *byte == b'\n')
         {
             Some(newline) => newline + 1,
-            // No line break within reach, so settle for a code point boundary.
             None => bytes
-                .iter()
                 .position(|byte| !is_utf8_continuation(*byte))
-                .unwrap_or(bytes.len()),
+                .unwrap_or(max_bytes),
         };
-        bytes[start..].to_vec()
+        self.slice_from(start + skip)
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.length
+        self.bytes.len()
     }
 
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    fn trim_to_limit(&mut self) {
-        if self.length <= self.max_bytes {
-            return;
-        }
-        let mut excess = self.length - self.max_bytes;
-        while excess > 0 {
-            let Some(first) = self.chunks.pop_front() else {
-                break;
-            };
-            if first.len() <= excess {
-                self.length -= first.len();
-                excess -= first.len();
-                continue;
-            }
-            let remaining = first[excess..].to_vec();
-            self.length -= excess;
-            self.chunks.push_front(remaining);
-            excess = 0;
-        }
+        self.bytes.is_empty()
     }
 }
 
@@ -227,5 +228,130 @@ mod tests {
         assert_eq!(buffer.slice_from(4), b"efgh");
         assert_eq!(buffer.slice_from(8), b"");
         assert_eq!(buffer.slice_from(99), b"");
+    }
+
+    fn reference_tail(bytes: &[u8], limit: usize) -> Vec<u8> {
+        if bytes.len() <= limit {
+            return bytes.to_vec();
+        }
+        let tail = &bytes[bytes.len() - limit..];
+        let skip = match tail
+            .iter()
+            .take(LINE_ALIGN_SCAN_BYTES)
+            .position(|b| *b == b'\n')
+        {
+            Some(newline) => newline + 1,
+            None => tail
+                .iter()
+                .position(|byte| !is_utf8_continuation(*byte))
+                .unwrap_or(tail.len()),
+        };
+        tail[skip..].to_vec()
+    }
+
+    #[test]
+    fn ring_read_ranges_match_reference_through_wrap_resize_and_binary_output() {
+        let mut buffer = ScrollbackBuffer::new(257, &[]);
+        let mut expected = Vec::new();
+        let mut cap = 257;
+        let mut rng = 0x12345678_u32;
+        for step in 0..2400 {
+            rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+            if step % 37 == 0 {
+                cap = (rng as usize) % 800;
+                buffer.set_max_bytes(cap);
+            } else {
+                let len = (rng as usize) % 91;
+                let data: Vec<u8> = (0..len)
+                    .map(|i| ((rng as usize + i * 29) % 256) as u8)
+                    .collect();
+                expected.extend_from_slice(&data);
+                buffer.append(&data);
+            }
+            expected.drain(..expected.len().saturating_sub(cap));
+            assert_eq!(buffer.len(), expected.len());
+            assert_eq!(buffer.is_empty(), expected.is_empty());
+            assert_eq!(buffer.to_bytes(), expected);
+            for start in [0, 1, expected.len() / 2, expected.len(), usize::MAX] {
+                assert_eq!(
+                    buffer.slice_from(start),
+                    expected.get(start..).unwrap_or(&[])
+                );
+            }
+            for limit in [0, 1, 3, 19, 160, cap, usize::MAX] {
+                assert_eq!(buffer.tail(limit), reference_tail(&expected, limit));
+            }
+        }
+    }
+
+    #[test]
+    fn large_ring_reuses_its_allocation_during_tiny_steady_state_appends() {
+        let cap = 1024 * 1024;
+        let initial = vec![b'x'; cap];
+        let mut buffer = ScrollbackBuffer::new(cap, &initial);
+        let capacity = buffer.bytes.capacity();
+        for _ in 0..8192 {
+            buffer.append(b"a");
+            assert_eq!(buffer.bytes.capacity(), capacity);
+            assert_eq!(buffer.len(), cap);
+        }
+        assert_eq!(buffer.tail(8192), vec![b'a'; 8192]);
+        assert_eq!(
+            buffer.slice_from(cap - 8193),
+            [b"x".as_slice(), &vec![b'a'; 8192]].concat()
+        );
+        assert!(
+            !buffer.bytes.as_slices().1.is_empty(),
+            "the test must exercise wraparound"
+        );
+        buffer.set_max_bytes(16);
+        assert_eq!(buffer.to_bytes(), vec![b'a'; 16]);
+        assert!(buffer.bytes.capacity() < capacity);
+        buffer.set_max_bytes(0);
+        assert_eq!(buffer.bytes.capacity(), 0);
+        buffer.append(b"ignored");
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn aligned_tail_scans_across_wrap_and_preserves_utf8_and_scan_limit() {
+        let mut buffer = ScrollbackBuffer::new(16, b"0123456789abcdef");
+        buffer.append("界\n😀end".as_bytes());
+        let bytes = buffer.to_bytes();
+        assert!(!buffer.bytes.as_slices().1.is_empty());
+        for limit in 0..=bytes.len() + 1 {
+            assert_eq!(buffer.tail(limit), reference_tail(&bytes, limit));
+        }
+
+        let mut input = vec![0x80; LINE_ALIGN_SCAN_BYTES + 8];
+        input.push(b'\n');
+        input.extend_from_slice(b"end");
+        let mut buffer = ScrollbackBuffer::new(input.len() + 1, b"x");
+        buffer.append(&input);
+        assert_eq!(buffer.tail(input.len()), b"\nend");
+        input[LINE_ALIGN_SCAN_BYTES - 1] = b'\n';
+        let mut buffer = ScrollbackBuffer::new(input.len() + 1, b"x");
+        buffer.append(&input);
+        assert_eq!(buffer.tail(input.len()), &input[LINE_ALIGN_SCAN_BYTES..]);
+    }
+
+    #[test]
+    fn deque_copy_skips_wrapped_prefix_without_mutation() {
+        let mut ring = VecDeque::from(vec![0x80, 0xff, b'a', b'b', b'c', b'd', b'e', b'f']);
+        let capacity = ring.capacity();
+        append_deque_tail(&mut ring, b"123", 8);
+        assert!(!ring.as_slices().1.is_empty());
+        let before = ring.clone();
+        let expected: Vec<u8> = ring.iter().copied().collect();
+        for limit in 0..=10 {
+            assert_eq!(
+                copy_deque_tail(&ring, limit),
+                expected[expected.len().saturating_sub(limit)..]
+            );
+            assert_eq!(ring, before);
+            assert_eq!(ring.capacity(), capacity);
+        }
+        append_deque_tail(&mut ring, b"oversized", 3);
+        assert_eq!(copy_deque_tail(&ring, 10), b"zed");
     }
 }

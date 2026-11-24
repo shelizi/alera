@@ -38,8 +38,11 @@ class AgentAwakeService({
   bool _disposed = false;
   Future<void> _operationTail = Future<void>.value();
   Future<void>? _disposeFuture;
+  Future<void>? _pendingRefresh;
+  String? _pendingRefreshReason;
+  bool _assertionsInactive = true;
   AgentStatusHookSettings _hookSettings = .defaults;
-  Map<String, AgentStatusEntry> _statuses = const <String, AgentStatusEntry>{};
+  List<AgentStatusEntry> _workingStatuses = const <AgentStatusEntry>[];
   Timer? _staleTimer;
 
   Future<void> setEnabled(bool enabled) async {
@@ -55,13 +58,26 @@ class AgentAwakeService({
       return;
     }
     _hookSettings = settings;
-    await _refresh('hook-settings-change');
+    if (_needsRefresh) {
+      await _refresh('hook-settings-change');
+    }
   }
 
   Future<void> setStatuses(Map<String, AgentStatusEntry> statuses) async {
-    _statuses = Map<String, AgentStatusEntry>.unmodifiableOf(statuses);
-    await _refresh('status-change');
+    if (_disposed) return;
+    // Retain a private snapshot of only the entries that can keep the
+    // machine awake, including while disabled for a later settings change.
+    _workingStatuses = [
+      for (final entry in statuses.values)
+        if (entry.state == AgentStatusState.working) entry,
+    ];
+    if (_needsRefresh) {
+      await _refresh('status-change');
+    }
   }
+
+  bool get _needsRefresh =>
+      _enabled || !_assertionsInactive || _displayLockEnabled;
 
   Future<void> dispose() async {
     final existingDispose = _disposeFuture;
@@ -84,66 +100,73 @@ class AgentAwakeService({
     if (_disposed) {
       return Future<void>.value();
     }
-    return _enqueue(() => _performRefresh(reason));
+    // Refreshes read the latest settings and status snapshot when they run,
+    // not the snapshot at submission time. Keep at most one queued refresh
+    // behind the running operation instead of replaying every intermediate
+    // status burst against the same final state.
+    _pendingRefreshReason = reason;
+    if (_pendingRefresh case final pending?) return pending;
+    final pending = _enqueue(() async {
+      final reason = _pendingRefreshReason!;
+      _pendingRefresh = null;
+      _pendingRefreshReason = null;
+      await _performRefresh(reason);
+    });
+    _pendingRefresh = pending;
+    return pending;
   }
 
   Future<void> _performRefresh(String reason) async {
     if (_disposed) {
       return;
     }
-    _scheduleStaleTimer();
-    final runningStatusCount = _eligibleRunningStatusCount();
-    final shouldStayAwake = _enabled && runningStatusCount > 0;
-    if (shouldStayAwake) {
+    final now = _now();
+    final earliestExpiry = _enabled ? _earliestExpiry(now) : null;
+    _scheduleStaleTimer(earliestExpiry, now);
+    // The same scan determines both wake eligibility and the next expiry.
+    if (earliestExpiry != null) {
+      _assertionsInactive = false;
       await _setDisplayLock(true, reason);
       for (final assertion in _assertions) {
         await _tryAssertion('start assertion', () => assertion.start(reason));
       }
     } else {
-      for (final assertion in _assertions) {
-        await _tryAssertion('stop assertion', () => assertion.stop(reason));
+      // There is nothing to stop before any start, or after a successful
+      // stop. A failed stop remains unsettled and is retried on later input.
+      if (!_assertionsInactive) {
+        var stopped = true;
+        for (final assertion in _assertions) {
+          final success = await _tryAssertion(
+            'stop assertion',
+            () => assertion.stop(reason),
+          );
+          stopped = stopped && success;
+        }
+        _assertionsInactive = stopped;
       }
       await _setDisplayLock(false, reason);
     }
   }
 
-  int _eligibleRunningStatusCount() {
-    final now = _now();
-    return _statuses.values
-        .where((entry) => _isWakeEligible(entry, now))
-        .length;
-  }
-
-  bool _isWakeEligible(AgentStatusEntry entry, DateTime now) {
-    return entry.state == AgentStatusState.working &&
-        _isAgentHookEnabled(entry.agentType) &&
-        now.difference(entry.updatedAt) <= statusStaleAfter;
-  }
-
-  bool _isAgentHookEnabled(AgentType agentType) {
-    return isAgentSettingEnabled(_hookSettings.values, agentType);
-  }
-
-  void _scheduleStaleTimer() {
-    _clearStaleTimer();
-    if (!_enabled) {
-      return;
-    }
-    final now = _now();
+  DateTime? _earliestExpiry(DateTime now) {
     DateTime? earliestExpiry;
-    for (final entry in _statuses.values) {
-      if (entry.state != AgentStatusState.working ||
-          !_isAgentHookEnabled(entry.agentType)) {
+    for (final entry in _workingStatuses) {
+      if (!isAgentSettingEnabled(_hookSettings.values, entry.agentType)) {
         continue;
       }
       final expiry = entry.updatedAt.add(statusStaleAfter);
-      if (!expiry.isAfter(now)) {
-        continue;
+      // At the expiry instant the entry is stale. Treating it as eligible
+      // while omitting its timer would leave the assertion active forever.
+      if (!expiry.isAfter(now)) continue;
+      if (earliestExpiry == null || expiry.isBefore(earliestExpiry)) {
+        earliestExpiry = expiry;
       }
-      earliestExpiry = earliestExpiry == null || expiry.isBefore(earliestExpiry)
-          ? expiry
-          : earliestExpiry;
     }
+    return earliestExpiry;
+  }
+
+  void _scheduleStaleTimer(DateTime? earliestExpiry, DateTime now) {
+    _clearStaleTimer();
     if (earliestExpiry == null) {
       return;
     }
@@ -174,18 +197,20 @@ class AgentAwakeService({
     }
   }
 
-  Future<void> _tryAssertion(
+  Future<bool> _tryAssertion(
     String description,
     Future<void> Function() action,
   ) async {
     try {
       await action();
+      return true;
     } catch (error, stackTrace) {
       _logger.warning(
         '[agent-awake] failed to $description',
         error,
         stackTrace,
       );
+      return false;
     }
   }
 

@@ -6,8 +6,8 @@ Map<String, Object?>? _parseJsonObjectString(Object? value) {
   }
   try {
     final decoded = jsonDecode(value);
-    if (decoded is Map) {
-      return Map<String, Object?>.from(decoded);
+    if (decoded is Map<String, Object?>) {
+      return decoded;
     }
   } catch (_) {}
   return null;
@@ -53,8 +53,9 @@ String? _deriveToolInputPreview(String? toolName, Object? input) {
     ];
     for (final key in keys) {
       final value = input[key];
-      if (value is String && value.trim().isNotEmpty) {
-        return _normalizeSingleLine(value, 160);
+      if (value is String) {
+        final preview = _normalizeSingleLine(value, 160);
+        if (preview.isNotEmpty) return preview;
       }
       if (value is List && value.isNotEmpty) {
         if (key == 'questions') {
@@ -67,17 +68,14 @@ String? _deriveToolInputPreview(String? toolName, Object? input) {
       }
     }
   }
-  try {
-    return _normalizeSingleLine(jsonEncode(input), 160);
-  } catch (_) {
-    return null;
-  }
+  return normalizeAgentHookJsonPreview(input, 160);
 }
 
 String? _deriveQuestionListPreview(List<Object?> questions) {
   for (final question in questions) {
-    if (question is String && question.trim().isNotEmpty) {
-      return _normalizeSingleLine(question, 160);
+    if (question is String) {
+      final preview = _normalizeSingleLine(question, 160);
+      if (preview.isNotEmpty) return preview;
     }
     if (question is Map) {
       final text = _readFirstString(
@@ -93,8 +91,9 @@ String? _deriveQuestionListPreview(List<Object?> questions) {
 }
 
 String? _extractToolResponseText(Object? response) {
-  if (response is String && response.trim().isNotEmpty) {
-    return _normalizeMultiline(response, 8000);
+  if (response is String) {
+    final preview = _normalizeMultiline(response, 8000);
+    return preview.isEmpty ? null : preview;
   }
   if (response is Map) {
     final text = _readFirstString(Map<String, Object?>.from(response), const [

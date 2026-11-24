@@ -120,6 +120,126 @@ async fn append_output_keeps_tail_of_single_oversized_chunk() {
     assert_eq!(read.buffer, b"efg");
 }
 
+#[test]
+fn history_read_tail_matches_byte_suffix_for_arbitrary_chunk_boundaries() {
+    // Includes empty rows, varying lengths, invalid UTF-8 and rows larger
+    // than the normal coalescing target. Every cut remains a raw byte cut.
+    let chunks: Vec<Vec<u8>> = (0..97_usize)
+        .map(|index| {
+            let len = if index == 41 {
+                OUTPUT_CHUNK_TARGET_BYTES * 3 + 11
+            } else {
+                (index * 43) % 139
+            };
+            (0..len)
+                .map(|offset| ((index * 17 + offset * 29) % 256) as u8)
+                .collect()
+        })
+        .collect();
+    let expected = chunks.concat();
+    let mut limits: Vec<usize> = (0..256).collect();
+    let mut boundary = 0;
+    for chunk in chunks.iter().rev() {
+        boundary += chunk.len();
+        limits.extend([boundary.saturating_sub(1), boundary, boundary + 1]);
+    }
+    limits.extend([expected.len() + 1, usize::MAX]);
+    for limit in limits {
+        let mut tail = HistoryReadTail::new(limit);
+        for chunk in chunks.iter().rev() {
+            if tail.remaining() == 0 {
+                break;
+            }
+            tail.prepend(chunk);
+            assert!(tail.buffer.len() <= limit);
+            assert!(tail.buffer.len() <= tail.len().saturating_mul(2));
+        }
+        assert_eq!(
+            tail.finish(),
+            expected[expected.len().saturating_sub(limit)..],
+            "limit {limit}"
+        );
+    }
+}
+
+#[test]
+fn history_read_tail_copies_only_requested_suffix_of_oversized_blob() {
+    let oversized = vec![0x80; 2 * 1024 * 1024];
+    let mut tail = HistoryReadTail::new(31);
+    tail.prepend(&oversized);
+    assert_eq!(tail.buffer.len(), 31);
+    assert_eq!(tail.remaining(), 0);
+    assert_eq!(tail.finish(), vec![0x80; 31]);
+
+    // An unlimited caller must not turn a small history into a huge
+    // allocation; no growth or finish copy is needed for a single row.
+    let mut tail = HistoryReadTail::new(usize::MAX);
+    tail.prepend(b"tiny");
+    assert_eq!(tail.buffer.len(), 4);
+    let ptr = tail.buffer.as_ptr();
+    let result = tail.finish();
+    assert_eq!(result.as_ptr(), ptr);
+    assert_eq!(result, b"tiny");
+}
+
+#[tokio::test]
+async fn bounded_history_read_preserves_binary_rows_and_sequence_ties() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.upsert(sample("other")).await.unwrap();
+
+    let oversized: Vec<u8> = (0..2 * 1024 * 1024)
+        .map(|offset| (offset % 256) as u8)
+        .collect();
+    // Out-of-order sequence values, ties ordered by row id, and raw UTF-8
+    // fragments spanning rows must all retain the original byte ordering.
+    store
+        .append_output("s1", 4, &[0xad, 0x80, 0xff])
+        .await
+        .unwrap();
+    store.append_output("s1", 0, &oversized).await.unwrap();
+    store.append_output("s1", 3, &[0xe4, 0xb8]).await.unwrap();
+    store
+        .append_output("s1", 4, &[0, 0xfe, 0x61])
+        .await
+        .unwrap();
+    store
+        .append_output("other", 10, b"other history")
+        .await
+        .unwrap();
+
+    let mut expected = oversized;
+    expected.extend_from_slice(&[0xe4, 0xb8, 0xad, 0x80, 0xff, 0, 0xfe, 0x61]);
+    for limit in [
+        0,
+        1,
+        3,
+        5,
+        6,
+        7,
+        8,
+        9,
+        31,
+        16_384,
+        expected.len() - 1,
+        usize::MAX,
+    ] {
+        let read = store.read("s1", limit).await.unwrap().unwrap();
+        assert_eq!(
+            read.buffer,
+            expected[expected.len().saturating_sub(limit)..]
+        );
+    }
+    assert_eq!(output_row_count(&store, "s1").await, 4);
+    assert_eq!(
+        store.read("other", 1024).await.unwrap().unwrap().buffer,
+        b"other history"
+    );
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 5);
+    store.close_for_test().await;
+}
+
 #[tokio::test]
 async fn shrinking_the_limit_cuts_across_chunks() {
     let dir = tempfile::tempdir().unwrap();
