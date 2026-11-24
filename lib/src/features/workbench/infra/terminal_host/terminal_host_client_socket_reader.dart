@@ -104,6 +104,18 @@ final class _TerminalHostSocketReader._(
               ),
             );
           }
+        case terminalHostIsolateOutputBatch:
+          // This is only a transport envelope. Keep the existing one-event
+          // per decoded frame contract for every session consumer.
+          for (var index = 1; index + 1 < message.length; index += 2) {
+            if (_output.isClosed) break;
+            _output.add(
+              TerminalHostOutputTextEvent(
+                message[index] as String,
+                message[index + 1] as String,
+              ),
+            );
+          }
         case terminalHostIsolateError:
           _failureStage = switch (message.length > 1 ? message[1] : null) {
             'connect' => 'connect',

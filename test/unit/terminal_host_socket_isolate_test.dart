@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_codec.dart';
 import 'package:alera/src/platform/runtime_host/transport/terminal_host_socket_isolate.dart';
@@ -47,7 +48,192 @@ String _sentinelLine() {
   return '${jsonEncode(<String, Object?>{'event': terminalHostBinaryFramesEnabledLine, 'payload': const <String, Object?>{}})}\n';
 }
 
+TerminalHostOutputFrame _outputFrame(String sessionId, String text) =>
+    TerminalHostOutputFrame(sessionId, utf8.encode(text));
+
+List<List<Object?>> _expandOutput(List<Object?> message) {
+  if (message.first != terminalHostIsolateOutputBatch) return [message];
+  return [
+    for (var i = 1; i < message.length; i += 2)
+      <Object?>[terminalHostIsolateOutput, message[i], message[i + 1]],
+  ];
+}
+
 void main() {
+  group('bounded socket isolate output envelopes', () {
+    test('2048 frames need only 32 port messages without changing events', () {
+      final messages = <List<Object?>>[];
+      final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+      const count = 2048;
+      final frames = [
+        for (var i = 0; i < count; i++)
+          _outputFrame('session-${i % 4}', '繁體中文😀 $i\r\n'),
+      ];
+      dispatcher.dispatch(frames);
+      expect(messages, hasLength(32));
+      expect(
+        messages.every(
+          (message) =>
+              message.first == terminalHostIsolateOutputBatch &&
+              message.length ==
+                  1 + 2 * TerminalHostSocketFrameDispatcher.maxBatchEvents,
+        ),
+        isTrue,
+      );
+      final expanded = messages.expand(_expandOutput).toList();
+      expect(expanded, hasLength(count));
+      for (var i = 0; i < count; i++) {
+        expect(expanded[i], <Object?>[
+          terminalHostIsolateOutput,
+          'session-${i % 4}',
+          '繁體中文😀 $i\r\n',
+        ]);
+      }
+    });
+
+    test('control frames are barriers and each read flushes immediately', () {
+      final messages = <List<Object?>>[];
+      final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+      dispatcher.dispatch([
+        _outputFrame('a', 'before-1'),
+        _outputFrame('b', 'before-2'),
+        const TerminalHostJsonFrame(
+          '{"event":"outputResyncRequired","payload":{"sessionId":"a"}}',
+        ),
+        _outputFrame('a', 'after-1'),
+        _outputFrame('a', 'after-2'),
+      ]);
+      expect(messages, [
+        [terminalHostIsolateOutputBatch, 'a', 'before-1', 'b', 'before-2'],
+        [
+          terminalHostIsolateLine,
+          {
+            'event': 'outputResyncRequired',
+            'payload': {'sessionId': 'a'},
+          },
+        ],
+        [terminalHostIsolateOutputBatch, 'a', 'after-1', 'a', 'after-2'],
+      ]);
+      dispatcher.dispatch([_outputFrame('a', 'interactive')]);
+      expect(messages.last, [terminalHostIsolateOutput, 'a', 'interactive']);
+      expect(messages, hasLength(4));
+    });
+
+    test(
+      'characters cap batches and large individual frames remain intact',
+      () {
+        final messages = <List<Object?>>[];
+        final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+        const limit = TerminalHostSocketFrameDispatcher.maxBatchChars;
+        final half = 'x' * (limit ~/ 2);
+        final oversized = 'z' * (limit + 1);
+        dispatcher.dispatch([
+          _outputFrame('a', half),
+          _outputFrame('b', half),
+          _outputFrame('a', 'small'),
+          _outputFrame('a', oversized),
+          _outputFrame('b', 'last'),
+        ]);
+        expect(messages, [
+          [terminalHostIsolateOutputBatch, 'a', half, 'b', half],
+          [terminalHostIsolateOutput, 'a', 'small'],
+          [terminalHostIsolateOutput, 'a', oversized],
+          [terminalHostIsolateOutput, 'b', 'last'],
+        ]);
+      },
+    );
+
+    test(
+      'split UTF-8 state survives batches independently for each session',
+      () {
+        final messages = <List<Object?>>[];
+        final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+        final chinese = utf8.encode('中');
+        final emoji = utf8.encode('😀');
+        dispatcher.dispatch([
+          TerminalHostOutputFrame('a', chinese.sublist(0, 1)),
+          TerminalHostOutputFrame('b', emoji.sublist(0, 2)),
+          _outputFrame('c', 'first'),
+        ]);
+        expect(messages, [
+          [terminalHostIsolateOutput, 'c', 'first'],
+        ]);
+        dispatcher.dispatch([
+          TerminalHostOutputFrame('b', emoji.sublist(2)),
+          TerminalHostOutputFrame('a', chinese.sublist(1)),
+          _outputFrame('c', 'last'),
+        ]);
+        expect(messages.last, [
+          terminalHostIsolateOutputBatch,
+          'b',
+          '😀',
+          'a',
+          '中',
+          'c',
+          'last',
+        ]);
+      },
+    );
+  });
+
+  test('loopback burst preserves every frame and control barrier', () async {
+    final harness = await _startIsolate();
+    final socket = await harness.ready;
+    final messages = <List<Object?>>[];
+    final done = Completer<void>();
+    final sub = harness.messages.stream.listen((message) {
+      messages.add(message);
+      if (message.first == terminalHostIsolateLine &&
+          message[1] is Map &&
+          (message[1] as Map)['id'] == 99 &&
+          !done.isCompleted) {
+        done.complete();
+      }
+    });
+    addTearDown(sub.cancel);
+    addTearDown(socket.destroy);
+
+    const count = 130;
+    final wire = BytesBuilder(copy: false)..add(utf8.encode(_sentinelLine()));
+    for (var i = 0; i < count; i++) {
+      if (i == 65) {
+        wire.add(encodeTerminalHostJsonFrame('{"event":"barrier"}'));
+      }
+      wire.add(
+        encodeTerminalHostOutputFrame(
+          'session-${i % 2}',
+          utf8.encode('中文😀 $i'),
+        ),
+      );
+    }
+    wire.add(encodeTerminalHostJsonFrame('{"id":99,"ok":true}'));
+    socket.add(wire.takeBytes());
+    await socket.flush();
+    await done.future.timeout(const Duration(seconds: 5));
+
+    final actual = messages
+        .where(
+          (message) =>
+              message.first == terminalHostIsolateOutput ||
+              message.first == terminalHostIsolateOutputBatch ||
+              (message.first == terminalHostIsolateLine &&
+                  message[1] is Map &&
+                  (message[1] as Map)['event'] == 'barrier'),
+        )
+        .expand(_expandOutput)
+        .toList();
+    expect(actual, [
+      for (var i = 0; i < count; i++) ...[
+        if (i == 65)
+          [
+            terminalHostIsolateLine,
+            {'event': 'barrier'},
+          ],
+        [terminalHostIsolateOutput, 'session-${i % 2}', '中文😀 $i'],
+      ],
+    ]);
+  });
+
   test('reader reports a protocol fault before closing the socket', () async {
     final harness = await _startIsolate();
     final socket = await harness.ready;

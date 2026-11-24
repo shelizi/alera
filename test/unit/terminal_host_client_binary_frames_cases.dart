@@ -89,6 +89,62 @@ void _registerTerminalHostClientBinaryFrameTests() {
     expect(server.acceptedConnections, 1);
   });
 
+  test(
+    'coalesced output batches preserve session events around resync',
+    () async {
+      final server = await _TerminalHostTestServer.start(
+        negotiateBinaryFrames: true,
+      );
+      addTearDown(server.dispose);
+      final client = await _binaryClient(server, advertiseCapability: true);
+      await client.runtimeRequest('status.get');
+
+      const count = 140;
+      final actual = <Object?>[];
+      final other = <String>[];
+      final done = Completer<void>();
+      final otherDone = Completer<void>();
+      final sub = client.eventsForSession('session-1').listen((event) {
+        switch (event) {
+          case TerminalHostOutputTextEvent(:final text):
+            actual.add(text);
+          case TerminalHostOutputResyncRequiredEvent():
+            actual.add('resync');
+          default:
+            return;
+        }
+        if (actual.length == count + 1 && !done.isCompleted) done.complete();
+      });
+      final otherSub = client.eventsForSession('session-2').listen((event) {
+        if (event is TerminalHostOutputTextEvent) {
+          other.add(event.text);
+          if (other.length == count && !otherDone.isCompleted)
+            otherDone.complete();
+        }
+      });
+      addTearDown(sub.cancel);
+      addTearDown(otherSub.cancel);
+      server.sendFramedBytes(<int>[
+        for (var i = 0; i < count; i++) ...[
+          if (i == 70)
+            ...encodeTerminalHostJsonFrame(
+              '{"event":"outputResyncRequired","payload":{"sessionId":"session-1"}}',
+            ),
+          ...encodeTerminalHostOutputFrame('session-1', utf8.encode('a$i')),
+          ...encodeTerminalHostOutputFrame('session-2', utf8.encode('b$i')),
+        ],
+      ]);
+      await Future.wait([done.future, otherDone.future])
+          .timeout(const Duration(seconds: 5));
+      expect(actual, [
+        for (var i = 0; i < count; i++) ...[if (i == 70) 'resync', 'a$i'],
+      ]);
+      expect(other, [for (var i = 0; i < count; i++) 'b$i']);
+      await client.runtimeRequest('status.get');
+      expect(server.acceptedConnections, 1);
+    },
+  );
+
   test('broken frame exposes a classified close and allows reattach', () async {
     final warnings = <LogRecord>[];
     final logSub = Logger('SocketTerminalHostClient').onRecord.listen((record) {

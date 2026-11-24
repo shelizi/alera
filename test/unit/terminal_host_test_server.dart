@@ -265,6 +265,14 @@ final class _TerminalHostTestServer._(
     _client!.writeln(jsonEncode(message));
   }
 
+  /// Sends a sequence of already encoded frames as one socket write.
+  void sendFramedBytes(List<int> bytes) {
+    if (!_binaryFrames) {
+      throw StateError('framed-byte test requires negotiated frames');
+    }
+    _client!.add(bytes);
+  }
+
   /// Sends deliberately malformed wire bytes to validate reader failures.
   /// Only an isolated test-server socket is affected.
   void sendMalformedFrameHeader() {

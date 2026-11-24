@@ -20,6 +20,7 @@ import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_co
 const String terminalHostIsolateReady = 'ready';
 const String terminalHostIsolateLine = 'line';
 const String terminalHostIsolateOutput = 'output';
+const String terminalHostIsolateOutputBatch = 'outputBatch';
 const String terminalHostIsolateClosed = 'closed';
 const String terminalHostIsolateError = 'error';
 
@@ -58,8 +59,7 @@ Future<void> terminalHostSocketIsolateMain(
 
   final commands = ReceivePort();
   final reader = TerminalHostFrameReader();
-  final decoders = <String, ByteConversionSink>{};
-  final decoded = <String, StringBuffer>{};
+  final dispatcher = TerminalHostSocketFrameDispatcher(toMain.send);
   var closed = false;
 
   void closeSocket() {
@@ -69,25 +69,6 @@ Future<void> terminalHostSocketIsolateMain(
     closed = true;
     socket.destroy();
     commands.close();
-  }
-
-  /// One decoder per session, kept across chunks so a split code point is not
-  /// corrupted at a frame boundary.
-  void emitOutput(String sessionId, Uint8List bytes) {
-    final buffer = decoded.putIfAbsent(sessionId, StringBuffer.new);
-    final sink = decoders.putIfAbsent(sessionId, () {
-      // fromStringSink, not withCallback: the latter only delivers on close,
-      // which for a long-lived PTY means never.
-      return const Utf8Decoder(allowMalformed: true)
-          .startChunkedConversion(StringConversionSink.fromStringSink(buffer));
-    });
-    sink.add(bytes);
-    if (buffer.isEmpty) {
-      return;
-    }
-    final text = buffer.toString();
-    buffer.clear();
-    toMain.send(<Object?>[terminalHostIsolateOutput, sessionId, text]);
   }
 
   commands.listen((Object? message) {
@@ -114,17 +95,7 @@ Future<void> terminalHostSocketIsolateMain(
     (Uint8List chunk) {
       if (closed) return;
       try {
-        for (final frame in reader.add(chunk)) {
-          switch (frame) {
-            case TerminalHostJsonFrame(:final json):
-              toMain.send(<Object?>[
-                terminalHostIsolateLine,
-                decodeHostLine(json),
-              ]);
-            case TerminalHostOutputFrame(:final sessionId, :final data):
-              emitOutput(sessionId, data);
-          }
-        }
+        dispatcher.dispatch(reader.add(chunk));
       } on Object {
         toMain.send(const <Object?>[terminalHostIsolateError, 'protocol']);
         closeSocket();
@@ -144,6 +115,88 @@ Future<void> terminalHostSocketIsolateMain(
   );
 
   toMain.send(<Object?>[terminalHostIsolateReady, commands.sendPort]);
+}
+
+/// Decodes the complete frames from one socket read and sends bounded output
+/// envelopes. Keep each logical output event (including its session ID) intact:
+/// only the isolate message overhead is shared. Never wait for the next read.
+final class TerminalHostSocketFrameDispatcher {
+  TerminalHostSocketFrameDispatcher(this._send);
+
+  final void Function(List<Object?>) _send;
+  final _decoders = <String, ByteConversionSink>{};
+  final _decoded = <String, StringBuffer>{};
+
+  // Keep the UI-side unpack bounded, even for a very large coalesced socket
+  // read. An individual oversized frame is still delivered on its own.
+  static const int maxBatchEvents = 64;
+  static const int maxBatchChars = 128 * 1024;
+
+  void dispatch(List<TerminalHostFrame> frames) {
+    List<Object?>? pending;
+    var pendingChars = 0;
+
+    void flush() {
+      final message = pending;
+      if (message == null) return;
+      pending = null;
+      pendingChars = 0;
+      _send(message);
+    }
+
+    try {
+      for (final frame in frames) {
+        switch (frame) {
+          case TerminalHostJsonFrame(:final json):
+            // A control reply can change the meaning of subsequent PTY
+            // bytes (e.g. resync). Keep it as a separate port message and
+            // never batch output across it.
+            flush();
+            _send(<Object?>[terminalHostIsolateLine, decodeHostLine(json)]);
+          case TerminalHostOutputFrame(:final sessionId, :final data):
+            final text = _decodeOutput(sessionId, data);
+            if (text == null) continue;
+            final previous = pending;
+            if (previous != null &&
+                (previous.length >= 1 + 2 * maxBatchEvents ||
+                    pendingChars + text.length > maxBatchChars)) {
+              flush();
+            }
+            final message = pending;
+            if (message == null) {
+              pending = <Object?>[terminalHostIsolateOutput, sessionId, text];
+            } else {
+              // Flat pairs avoid allocating a second List for every frame.
+              message[0] = terminalHostIsolateOutputBatch;
+              message
+                ..add(sessionId)
+                ..add(text);
+            }
+            pendingChars += text.length;
+            if (pendingChars >= maxBatchChars) flush();
+        }
+      }
+    } finally {
+      // Preserve already decoded output if a later frame fails, and preserve
+      // the usual immediate delivery for a single interactive output frame.
+      flush();
+    }
+  }
+
+  /// Decoder state belongs to each session, not each frame or batch.
+  String? _decodeOutput(String sessionId, Uint8List bytes) {
+    final buffer = _decoded.putIfAbsent(sessionId, StringBuffer.new);
+    final sink = _decoders.putIfAbsent(sessionId, () {
+      // withCallback would only deliver on close for a long-lived PTY.
+      return const Utf8Decoder(allowMalformed: true)
+          .startChunkedConversion(StringConversionSink.fromStringSink(buffer));
+    });
+    sink.add(bytes);
+    if (buffer.isEmpty) return null;
+    final text = buffer.toString();
+    buffer.clear();
+    return text;
+  }
 }
 
 /// Parses a control line here rather than on the UI isolate.
