@@ -61,6 +61,53 @@ struct TrimRequest {
 struct PendingOutput {
     revision: u64,
     data: Bytes,
+    // Capacity of the backing byte allocation, not just the visible slice.
+    // A snapshot may share it, so changing this view must not mutate it.
+    backing_bytes: usize,
+}
+
+impl PendingOutput {
+    fn from_vec(revision: u64, data: Vec<u8>) -> Self {
+        let len = data.len();
+        let capacity = data.capacity();
+        let (data, backing_bytes) = if capacity > len.saturating_mul(2) {
+            // Producers can deliver a short Vec with a large spare capacity.
+            // Do not retain that excess for the lifetime of the queue.
+            (Bytes::copy_from_slice(&data), len)
+        } else {
+            (Bytes::from(data), capacity)
+        };
+        Self {
+            revision,
+            data,
+            backing_bytes,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_static(revision: u64, data: &'static [u8]) -> Self {
+        Self {
+            revision,
+            data: Bytes::from_static(data),
+            backing_bytes: data.len(),
+        }
+    }
+
+    /// Reuse a shared suffix while at least half of its backing remains.
+    /// Compact geometrically after that point. Pending backing allocations
+    /// are bounded by twice the visible pending bytes, while trimming one
+    /// byte at a time no longer copies the entire surviving row every time.
+    fn trim_prefix(&mut self, bytes: usize, revision: u64) {
+        debug_assert!(bytes > 0 && bytes < self.data.len());
+        let remaining = self.data.len() - bytes;
+        if self.backing_bytes > remaining.saturating_mul(2) {
+            self.data = Bytes::copy_from_slice(&self.data[bytes..]);
+            self.backing_bytes = remaining;
+        } else {
+            self.data = self.data.slice(bytes..);
+        }
+        self.revision = revision;
+    }
 }
 
 #[derive(Clone)]
@@ -199,10 +246,7 @@ impl SessionPersistenceState {
 
             let revision = self.next_revision();
             if let Some(output) = self.outputs.get_mut(&sequence) {
-                // Preserve any in-flight snapshot and release the discarded
-                // allocation rather than retaining an arbitrarily large backing buffer.
-                output.data = Bytes::copy_from_slice(&output.data[excess..]);
-                output.revision = revision;
+                output.trim_prefix(excess, revision);
                 self.pending_bytes -= excess;
             }
         }
@@ -314,14 +358,7 @@ impl TerminalHostHistoryRepository {
                 append_tail(&mut state.memory_tail, &data, max_bytes);
                 state.verify_appended_tail(end, data.len());
                 let revision = state.next_revision();
-                // Bytes takes ownership of the Vec without copying its payload.
-                state.insert_pending_output(
-                    sequence,
-                    PendingOutput {
-                        revision,
-                        data: Bytes::from(data),
-                    },
-                );
+                state.insert_pending_output(sequence, PendingOutput::from_vec(revision, data));
                 state.trim_pending_outputs();
                 // If configuration changed while a trim was in flight,
                 // its old cap must not acknowledge the new cap.
@@ -831,13 +868,7 @@ mod tests {
             assert_eq!(state.trim_request, Some(initial_request));
         }
         let revision = state.next_revision();
-        state.insert_pending_output(
-            0,
-            PendingOutput {
-                revision,
-                data: Bytes::from_static(b"later"),
-            },
-        );
+        state.insert_pending_output(0, PendingOutput::from_static(revision, b"later"));
         state.request_trim();
         let output_request = state.trim_request.unwrap();
         assert_ne!(initial_request.revision, output_request.revision);
@@ -1207,21 +1238,9 @@ mod tests {
             ..Default::default()
         };
         let first_revision = state.next_revision();
-        state.insert_pending_output(
-            0,
-            PendingOutput {
-                revision: first_revision,
-                data: Bytes::from_static(b"abcd"),
-            },
-        );
+        state.insert_pending_output(0, PendingOutput::from_static(first_revision, b"abcd"));
         let second_revision = state.next_revision();
-        state.insert_pending_output(
-            1,
-            PendingOutput {
-                revision: second_revision,
-                data: Bytes::from_static(b"efgh"),
-            },
-        );
+        state.insert_pending_output(1, PendingOutput::from_static(second_revision, b"efgh"));
 
         let snapshot = state.snapshot().unwrap();
         state.trim_pending_outputs();
@@ -1243,17 +1262,218 @@ mod tests {
             state.outputs[&1].data.as_ptr(),
             "unchanged output shares allocation"
         );
-        state.insert_pending_output(
-            1,
-            PendingOutput {
-                revision: second_revision,
-                data: Bytes::from_static(b"xyz"),
-            },
-        );
+        state.insert_pending_output(1, PendingOutput::from_static(second_revision, b"xyz"));
         assert_eq!(state.pending_bytes, 4);
         state.remove_pending_output(0);
         state.remove_pending_output(1);
         assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn pending_trim_amortizes_copies_and_bounds_backing_capacity() {
+        let size = 1024 * 1024;
+        let source: Vec<u8> = (0..size).map(|index| index as u8).collect();
+        let mut state = SessionPersistenceState {
+            max_bytes: size,
+            ..Default::default()
+        };
+        let revision = state.next_revision();
+        state.insert_pending_output(0, PendingOutput::from_vec(revision, source.clone()));
+        let snapshot = state.snapshot().unwrap();
+
+        // Repeated one-byte shrinks used to copy nearly 8 GiB across
+        // these 8192 calls. The new path retains the same backing.
+        let original_ptr = state.outputs[&0].data.as_ptr();
+        for discarded in 1..=8192 {
+            state.max_bytes = size - discarded;
+            state.trim_pending_outputs();
+            let output = &state.outputs[&0];
+            assert_eq!(output.data.as_ptr(), original_ptr.wrapping_add(discarded));
+            assert_eq!(output.backing_bytes, size);
+            assert_eq!(output.data.len(), size - discarded);
+            assert_eq!(state.pending_bytes, size - discarded);
+        }
+        assert_eq!(state.outputs[&0].data.as_ref(), &source[8192..]);
+        // At exactly half, the existing backing still meets the bound.
+        state.max_bytes = size / 2;
+        state.trim_pending_outputs();
+        assert_eq!(
+            state.outputs[&0].data.as_ptr(),
+            original_ptr.wrapping_add(size / 2)
+        );
+        // Crossing the threshold compacts the live queue. The snapshot
+        // retains its original bytes independently until it is acknowledged.
+        state.max_bytes -= 1;
+        state.trim_pending_outputs();
+        assert_eq!(state.outputs[&0].backing_bytes, state.max_bytes);
+        assert_ne!(
+            state.outputs[&0].data.as_ptr(),
+            original_ptr.wrapping_add(size - state.max_bytes)
+        );
+        assert_eq!(
+            state.outputs[&0].data.as_ref(),
+            &source[size - state.max_bytes..]
+        );
+        assert_ne!(state.outputs[&0].revision, revision);
+        let FlushSnapshot::Persist { outputs, .. } = snapshot else {
+            panic!("expected persist snapshot");
+        };
+        assert_eq!(outputs[0].2.as_ref(), source);
+        state.max_bytes = 0;
+        state.trim_pending_outputs();
+        assert!(state.outputs.is_empty());
+        assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn pending_output_compacts_excessive_vec_capacity_but_reuses_normal_allocations() {
+        let mut oversized = Vec::with_capacity(1024 * 1024);
+        oversized.extend_from_slice(b"abc");
+        let output = PendingOutput::from_vec(1, oversized);
+        assert_eq!(output.data.as_ref(), b"abc");
+        assert_eq!(output.backing_bytes, 3);
+
+        let mut normal = Vec::with_capacity(128);
+        normal.resize(100, 0xff);
+        let ptr = normal.as_ptr();
+        let capacity = normal.capacity();
+        let mut output = PendingOutput::from_vec(2, normal);
+        assert_eq!(output.data.as_ptr(), ptr);
+        assert_eq!(output.backing_bytes, capacity);
+        output.trim_prefix(36, 3);
+        assert_eq!(output.data.as_ptr(), ptr.wrapping_add(36));
+        assert_eq!(output.backing_bytes, 128);
+        let snapshot = output.data.clone();
+        output.trim_prefix(1, 4);
+        assert_eq!(output.backing_bytes, 63);
+        assert_eq!(output.data.len(), 63);
+        assert_ne!(output.data.as_ptr(), ptr.wrapping_add(37));
+        assert_eq!(snapshot.as_ref(), &[0xff; 64]);
+        assert_eq!(output.revision, 4);
+    }
+
+    #[test]
+    fn pending_output_randomized_trims_and_replacements_match_reference() {
+        let mut state = SessionPersistenceState {
+            max_bytes: 512,
+            ..Default::default()
+        };
+        let mut expected: BTreeMap<i64, Vec<u8>> = BTreeMap::new();
+        let mut random = 0x51db_fa93_62a2_441du64;
+        let mut next = || {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            random >> 32
+        };
+        for index in 0..2400 {
+            if next() % 3 != 0 {
+                let sequence = (next() % 48) as i64;
+                let len = (next() % 400 + 1) as usize;
+                let mut bytes = Vec::with_capacity(len * (1 + (next() % 8) as usize));
+                bytes.extend((0..len).map(|byte| (byte + index) as u8));
+                expected.insert(sequence, bytes.clone());
+                let revision = state.next_revision();
+                state.insert_pending_output(sequence, PendingOutput::from_vec(revision, bytes));
+            }
+            state.max_bytes = (next() % 1024) as usize;
+            state.trim_pending_outputs();
+
+            let mut excess = expected
+                .values()
+                .map(Vec::len)
+                .sum::<usize>()
+                .saturating_sub(state.max_bytes);
+            while excess > 0 {
+                let sequence = *expected.keys().next().unwrap();
+                let len = expected[&sequence].len();
+                if len <= excess {
+                    expected.remove(&sequence);
+                    excess -= len;
+                } else {
+                    expected.get_mut(&sequence).unwrap().drain(..excess);
+                    excess = 0;
+                }
+            }
+            assert_eq!(state.outputs.len(), expected.len(), "iteration {index}");
+            let mut total = 0;
+            let mut backing = 0;
+            for (sequence, output) in &state.outputs {
+                assert_eq!(
+                    output.data.as_ref(),
+                    expected[sequence],
+                    "iteration {index}"
+                );
+                total += output.data.len();
+                backing += output.backing_bytes;
+                assert!(output.backing_bytes <= output.data.len() * 2);
+            }
+            assert_eq!(state.pending_bytes, total);
+            assert!(total <= state.max_bytes);
+            assert!(backing <= total * 2);
+        }
+    }
+
+    /// Compare the original eager copy against the production queue trim
+    /// on the same byte-by-byte workload; count only copied payload bytes.
+    #[test]
+    #[ignore = "manual pending output trim microbenchmark"]
+    fn benchmark_pending_output_trim() {
+        use std::time::Instant;
+        const SIZE: usize = 1024 * 1024;
+        const STEPS: usize = 4096;
+        let seed: Vec<u8> = (0..SIZE).map(|index| index as u8).collect();
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut copied_before = 0u64;
+        let mut copied_after = 0u64;
+        for round in 0..9 {
+            for optimized in [round % 2 != 0, round % 2 == 0] {
+                let mut state = SessionPersistenceState {
+                    max_bytes: SIZE,
+                    ..Default::default()
+                };
+                state.insert_pending_output(0, PendingOutput::from_vec(1, seed.clone()));
+                // A durable flush may already hold a shared snapshot.
+                let snapshot = state.snapshot().unwrap();
+                let mut copied = 0u64;
+                let start = Instant::now();
+                for _ in 0..STEPS {
+                    state.max_bytes -= 1;
+                    if optimized {
+                        let backing = state.outputs[&0].backing_bytes;
+                        state.trim_pending_outputs();
+                        let output = &state.outputs[&0];
+                        if output.backing_bytes != backing {
+                            copied += output.data.len() as u64;
+                        }
+                    } else {
+                        let output = state.outputs.get_mut(&0).unwrap();
+                        output.data = Bytes::copy_from_slice(&output.data[1..]);
+                        copied += output.data.len() as u64;
+                        output.backing_bytes = output.data.len();
+                        state.pending_bytes -= 1;
+                    }
+                }
+                let ms = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(state.outputs[&0].data.as_ref(), &seed[STEPS..]);
+                let FlushSnapshot::Persist { outputs, .. } = snapshot else {
+                    panic!("expected snapshot");
+                };
+                assert_eq!(outputs[0].2.as_ref(), seed);
+                if round >= 2 {
+                    if optimized {
+                        after.push(ms);
+                        copied_after = copied;
+                    } else {
+                        before.push(ms);
+                        copied_before = copied;
+                    }
+                }
+            }
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        eprintln!("pending_trim_bench steps={STEPS} old_copied_bytes={copied_before} new_copied_bytes={copied_after} old_ms={:.4} new_ms={:.4}",before[3],after[3]);
+        assert_eq!(copied_after, 0);
     }
 
     #[test]
