@@ -89,20 +89,50 @@ fn git_status_with_options(
     paths: &GitPathContext,
     options: &mut StatusOptions,
 ) -> Result<GitStatusResult, GitError> {
+    Ok(status_result_from_entries(git_status_entries_with_options(
+        repo, paths, options, true,
+    )?))
+}
+
+// Combined diff only needs the ordered change identities and submodule state.
+// Avoid building UI grouping trees or rendering every patch just to count its
+// lines before the same changes are rendered again.
+fn git_status_entries_with_options(
+    repo: &Repository,
+    paths: &GitPathContext,
+    options: &mut StatusOptions,
+    include_line_stats: bool,
+) -> Result<Vec<GitChangeEntry>, GitError> {
     let statuses = repo.statuses(Some(options)).map_err(GitError::from_git2)?;
     let mut entries = Vec::new();
 
     for entry in statuses.iter() {
-        if let Some(change) = status_entry_to_change(repo, paths, &entry, GitChangeArea::Staged)? {
+        if let Some(change) = status_entry_to_change(
+            repo,
+            paths,
+            &entry,
+            GitChangeArea::Staged,
+            include_line_stats,
+        )? {
             entries.push(change);
         }
-        if let Some(change) = status_entry_to_change(repo, paths, &entry, GitChangeArea::Untracked)?
-        {
+        if let Some(change) = status_entry_to_change(
+            repo,
+            paths,
+            &entry,
+            GitChangeArea::Untracked,
+            include_line_stats,
+        )? {
             entries.push(change);
             continue;
         }
-        if let Some(change) = status_entry_to_change(repo, paths, &entry, GitChangeArea::Unstaged)?
-        {
+        if let Some(change) = status_entry_to_change(
+            repo,
+            paths,
+            &entry,
+            GitChangeArea::Unstaged,
+            include_line_stats,
+        )? {
             entries.push(change);
         }
     }
@@ -112,7 +142,7 @@ fn git_status_with_options(
             .cmp(&area_sort_key(b.area))
             .then_with(|| a.path.cmp(&b.path))
     });
-    Ok(status_result_from_entries(entries))
+    Ok(entries)
 }
 
 pub(super) fn git_diff(
@@ -156,12 +186,12 @@ pub(super) fn git_diff_all_with_whitespace(
     if let Some(file_path) = file_path {
         return git_diff_all_for_file_with_whitespace(&repo, &paths, &file_path, whitespace_mode);
     }
-    let status = git_status(path.clone())?;
+    let entries = git_status_entries_with_options(&repo, &paths, &mut status_options(), false)?;
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
     let mut truncated = false;
 
-    'changes: for entry in status.entries {
+    'changes: for entry in entries {
         if let Some(submodule) = &entry.submodule {
             if submodule.commit_changed {
                 if let Some(file) = diff_file_for_area_with_whitespace(
@@ -557,6 +587,7 @@ fn status_entry_to_change(
     paths: &GitPathContext,
     entry: &StatusEntry<'_>,
     area: GitChangeArea,
+    include_line_stats: bool,
 ) -> Result<Option<GitChangeEntry>, GitError> {
     let status = entry.status();
     match area {
@@ -588,7 +619,7 @@ fn status_entry_to_change(
                 is_large: false,
                 submodule: git_submodule_impl::status_for_path(repo, &repo_path, area)?,
             };
-            if change.submodule.is_none() {
+            if include_line_stats && change.submodule.is_none() {
                 if let Some(stats) =
                     diff_line_stats_for_paths(repo, &repo_path, old_path.as_deref(), area)?
                 {
@@ -673,7 +704,7 @@ fn status_entry_to_change(
                 is_large: false,
                 submodule: git_submodule_impl::status_for_path(repo, &repo_path, area)?,
             };
-            if change.submodule.is_none() {
+            if include_line_stats && change.submodule.is_none() {
                 if let Some(stats) =
                     diff_line_stats_for_paths(repo, &repo_path, old_path.as_deref(), area)?
                 {

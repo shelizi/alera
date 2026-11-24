@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use git2::{Diff, DiffDelta, DiffFormat, DiffLineType, Oid, Repository};
@@ -104,9 +105,11 @@ pub(super) fn render_diff_for_path(
                     &mut old_encoding,
                     &mut new_encoding,
                 );
-                let mut text = String::new();
-                text.push(line.origin());
-                text.push_str(content.trim_end_matches('\n'));
+                let content = content.trim_end_matches('\n');
+                let origin = line.origin();
+                let mut text = String::with_capacity(content.len() + origin.len_utf8());
+                text.push(origin);
+                text.push_str(content);
                 (text, kind_for_line(line.origin_value()))
             }
             DiffLineType::FileHeader | DiffLineType::HunkHeader | DiffLineType::Binary => {
@@ -152,17 +155,18 @@ pub(super) fn render_diff_for_path(
     })
 }
 
-fn decode_source_line(
+fn decode_source_line<'a>(
     repo: &Repository,
     delta: &DiffDelta<'_>,
     area: Option<GitChangeArea>,
     line_type: DiffLineType,
-    bytes: &[u8],
+    bytes: &'a [u8],
     old_encoding: &mut SideEncodingCache,
     new_encoding: &mut SideEncodingCache,
-) -> String {
+) -> Cow<'a, str> {
     if bytes.is_ascii() {
-        return String::from_utf8_lossy(bytes).into_owned();
+        // Keep ASCII borrowed until the final prefixed preview row is built.
+        return String::from_utf8_lossy(bytes);
     }
 
     let primary_old_side = matches!(
@@ -178,7 +182,7 @@ fn decode_source_line(
         old_encoding,
         new_encoding,
     ) {
-        return decoded;
+        return Cow::Owned(decoded);
     }
     if matches!(
         line_type,
@@ -193,10 +197,10 @@ fn decode_source_line(
             old_encoding,
             new_encoding,
         ) {
-            return decoded;
+            return Cow::Owned(decoded);
         }
     }
-    String::from_utf8_lossy(bytes).into_owned()
+    String::from_utf8_lossy(bytes)
 }
 
 fn decode_source_line_from_side(
