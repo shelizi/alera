@@ -160,7 +160,12 @@ final class GitWorktreeMetadataWatcher {
     }
     try {
       _worktreesSub = _watchDirectory(worktreesPath, recursive: true).listen(
-        (_) => _scheduleRefresh(),
+        (eventPath) {
+          // Index writes do not change the linked-worktree catalog. Keep
+          // structural events and the authoritative fallback poll.
+          if (_isWorktreeIndexEvent(worktreesPath, eventPath)) return;
+          _scheduleRefresh();
+        },
         onError: (Object _) => _worktreesSub = null,
         onDone: () => _worktreesSub = null,
         cancelOnError: true,
@@ -311,4 +316,13 @@ bool _isWithinOrEqual(String parentPath, String candidatePath) {
   final parent = _absoluteNormalized(parentPath);
   final candidate = _absoluteNormalized(candidatePath);
   return p.equals(parent, candidate) || p.isWithin(parent, candidate);
+}
+
+bool _isWorktreeIndexEvent(String worktreesPath, String eventPath) {
+  final event = _absoluteNormalized(eventPath);
+  // Do not ignore a worktree directory literally named "index", or any
+  // unknown nested path. Only its direct administrative index files.
+  if (!p.equals(p.dirname(p.dirname(event)), worktreesPath)) return false;
+  final name = p.basename(event);
+  return name == 'index' || name == 'index.lock';
 }
