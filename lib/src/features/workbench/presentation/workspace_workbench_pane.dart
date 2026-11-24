@@ -8,7 +8,7 @@ class const _WorkbenchPane({
   required final String groupId,
   required final TerminalRuntime terminalRuntime,
   required final WorkbenchMobileDriverPresence? mobileDriverPresence,
-  required final Map<String, AgentStatusEntry> agentStatuses,
+  required final Map<String, AgentStatusEntry>? agentStatuses,
   required final CreateTerminalTabCallback onCreateTab,
   final CreateUntitledTabCallback? onCreateUntitledTab,
   required final CreateAgentTabCallback onCreateAgentTab,

@@ -8,7 +8,7 @@ class const _WorkspaceTabStrip({
   required final String? activeTabId,
   required final bool canCloseSplit,
   required final TerminalRuntime terminalRuntime,
-  required final Map<String, AgentStatusEntry> agentStatuses,
+  required final Map<String, AgentStatusEntry>? agentStatuses,
   required final ValueChanged<String> onSelectTab,
   required final ValueChanged<String> onCloseTab,
   required final ValueChanged<List<String>> onCloseTabs,
@@ -293,34 +293,50 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
     }
   }
 
-  void _syncCompletionAcknowledgement() {
+  String? _activeSessionId() {
     final activeTabId = widget.activeTabId;
-    if (activeTabId == null) {
-      return;
-    }
-    WorkspaceTabRecord? activeTab;
     for (final tab in widget.tabs) {
-      if (tab.id == activeTabId) {
-        activeTab = tab;
-        break;
+      if (tab.id == activeTabId && tab.kind == WorkspaceTabKind.terminal) {
+        return tab.terminalSessionId;
       }
     }
-    if (activeTab == null) {
+    return null;
+  }
+
+  AgentStatusEntry? _statusForSession(String sessionId) {
+    final snapshot = widget.agentStatuses;
+    return snapshot == null
+        ? ref.read(agentStatusControllerProvider)[sessionId]
+        : snapshot[sessionId];
+  }
+
+  void _syncCompletionAcknowledgement() {
+    final sessionId = _activeSessionId();
+    if (sessionId == null) return;
+    final status = _statusForSession(sessionId);
+    if (status == null || status.state != AgentStatusState.done) return;
+    final epoch = status.stateStartedAt;
+    if (ref.read(
+          workbenchTabCompletionAcknowledgementsControllerProvider,
+        )[sessionId] ==
+        epoch) {
       return;
     }
-    final sessionId = activeTab.terminalSessionId;
-    // Provider mutations are not allowed inside widget life-cycles, so the
-    // acknowledgement lands after this frame instead of directly here.
+    // The active session or completion may change before this frame finishes.
+    // Never acknowledge a different, now-background, completion.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
+      if (!mounted || _activeSessionId() != sessionId) return;
+      final latest = _statusForSession(sessionId);
+      if (latest?.state != AgentStatusState.done ||
+          latest?.stateStartedAt != epoch)
         return;
-      }
       ref
           .read(
             workbenchTabCompletionAcknowledgementsControllerProvider.notifier,
           )
-          .acknowledge(widget.agentStatuses[sessionId]);
+          .acknowledge(latest);
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   int? _resolvedDropIndex(_WorkspaceTabDragData data, int gapIndex) {
@@ -390,9 +406,22 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
         (settings) => settings.editor.twoRowTabs,
       ),
     );
-    final acknowledgedCompletions = ref.watch(
-      workbenchTabCompletionAcknowledgementsControllerProvider,
-    );
+    final activeSessionId = _activeSessionId();
+    if (widget.agentStatuses == null && activeSessionId != null) {
+      // Listen only to the active session's completion epoch, without
+      // rebuilding this strip when transcript/tool/progress fields change.
+      ref.listen(
+        agentStatusControllerProvider.select((statuses) {
+          final status = statuses[activeSessionId];
+          return status?.state == AgentStatusState.done
+              ? status?.stateStartedAt
+              : null;
+        }),
+        (_, next) {
+          if (next != null) _syncCompletionAcknowledgement();
+        },
+      );
+    }
     final addButton = KeyedSubtree(
       key: _addButtonKey,
       child: _NewTabButton(
@@ -435,11 +464,10 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
             tab: tab,
             active: tab.id == widget.activeTabId,
             terminalRuntime: widget.terminalRuntime,
-            status: widget.agentStatuses[tab.terminalSessionId],
-            completionAcknowledged: isCompletionAcknowledged(
-              acknowledgedCompletions,
-              widget.agentStatuses[tab.terminalSessionId],
-            ),
+            status: widget.agentStatuses?[tab.terminalSessionId],
+            liveStatus:
+                widget.agentStatuses == null &&
+                tab.kind == WorkspaceTabKind.terminal,
             groupTabs: visualTabs,
             onSelect: () {
               ref
@@ -447,7 +475,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                     workbenchTabCompletionAcknowledgementsControllerProvider
                         .notifier,
                   )
-                  .acknowledge(widget.agentStatuses[tab.terminalSessionId]);
+                  .acknowledge(_statusForSession(tab.terminalSessionId));
               widget.onSelectTab(tab.id);
               _scheduleTabReveal(tab.id);
               _maybeKeepPreviewTab(tab);

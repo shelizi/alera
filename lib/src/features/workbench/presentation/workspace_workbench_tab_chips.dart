@@ -8,7 +8,7 @@ class const _DraggableWorkspaceTabChip({
   required final bool active,
   required final TerminalRuntime terminalRuntime,
   required final AgentStatusEntry? status,
-  required final bool completionAcknowledged,
+  required final bool liveStatus,
   required final List<WorkspaceTabRecord> groupTabs,
   required final VoidCallback onSelect,
   required final VoidCallback onClose,
@@ -152,7 +152,7 @@ class const _DraggableWorkspaceTabChip({
             tab: tab,
             terminalSession: session,
             status: status,
-            completionAcknowledged: completionAcknowledged,
+            liveStatus: liveStatus,
             active: active,
             groupTabs: groupTabs,
             onTap: selectAndFocus,
@@ -169,7 +169,7 @@ class const _DraggableWorkspaceTabChip({
           tab: tab,
           terminalSession: session,
           status: status,
-          completionAcknowledged: completionAcknowledged,
+          liveStatus: liveStatus,
           active: active,
           groupTabs: groupTabs,
           onTap: selectAndFocus,
@@ -190,7 +190,7 @@ class const _WorkspaceTabChip({
   required final WorkspaceTabRecord tab,
   required final TerminalSessionHandle? terminalSession,
   required final AgentStatusEntry? status,
-  required final bool completionAcknowledged,
+  required final bool liveStatus,
   required final bool active,
   required final List<WorkspaceTabRecord> groupTabs,
   required final VoidCallback onTap,
@@ -249,28 +249,10 @@ class const _WorkspaceTabChip({
                       : AleraTokens.foregroundMuted,
                 ),
                 const SizedBox(width: AleraTokens.space4),
-                SizedBox.square(
-                  dimension: 6,
-                  child: () {
-                    final entry = status;
-                    if (entry == null) {
-                      return const SizedBox.shrink();
-                    }
-                    return Tooltip(
-                      message: workbenchTabAttentionTooltip(
-                        status: entry,
-                        completionAcknowledged: completionAcknowledged,
-                      ),
-                      child: AleraStatusDot(
-                        active: true,
-                        size: 6,
-                        color: workbenchTabAttentionDotColor(
-                          status: entry,
-                          completionAcknowledged: completionAcknowledged,
-                        ),
-                      ),
-                    );
-                  }(),
+                _WorkspaceTabAttentionDot(
+                  sessionId: tab.terminalSessionId,
+                  snapshot: status,
+                  liveStatus: liveStatus,
                 ),
                 const SizedBox(width: AleraTokens.space4),
                 ConstrainedBox(
@@ -344,6 +326,75 @@ class const _WorkspaceTabChip({
           ),
         ),
       ),
+    );
+  }
+}
+
+typedef _TabAttentionVisual = ({String? tooltip, Color? color});
+
+_TabAttentionVisual _tabAttentionVisual(
+  AgentStatusEntry? status,
+  DateTime? acknowledgedAt,
+) {
+  if (status == null) return (tooltip: null, color: null);
+  final acknowledged =
+      status.state == AgentStatusState.done &&
+      acknowledgedAt == status.stateStartedAt;
+  return (
+    tooltip: workbenchTabAttentionTooltip(
+      status: status,
+      completionAcknowledged: acknowledged,
+    ),
+    color: workbenchTabAttentionDotColor(
+      status: status,
+      completionAcknowledged: acknowledged,
+    ),
+  );
+}
+
+// Equality of the small record suppresses tool-only and transcript-only
+// changes even when the controller publishes a new AgentStatusEntry.
+final _liveTabAttentionProvider = Provider.autoDispose
+    .family<_TabAttentionVisual, String>((ref, sessionId) {
+      final status = ref.watch(
+        agentStatusControllerProvider.select((statuses) => statuses[sessionId]),
+      );
+      final acknowledgedAt = status?.state == AgentStatusState.done
+          ? ref.watch(
+              workbenchTabCompletionAcknowledgementsControllerProvider.select(
+                (acknowledged) => acknowledged[sessionId],
+              ),
+            )
+          : null;
+      return _tabAttentionVisual(status, acknowledgedAt);
+    });
+
+class const _WorkspaceTabAttentionDot({
+  required final String sessionId,
+  required final AgentStatusEntry? snapshot,
+  required final bool liveStatus,
+}) extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final visual = liveStatus
+        ? ref.watch(_liveTabAttentionProvider(sessionId))
+        : _tabAttentionVisual(
+            snapshot,
+            snapshot?.state == AgentStatusState.done
+                ? ref.watch(
+                    workbenchTabCompletionAcknowledgementsControllerProvider
+                        .select((acknowledged) => acknowledged[sessionId]),
+                  )
+                : null,
+          );
+    return SizedBox.square(
+      dimension: 6,
+      child: visual.tooltip == null
+          ? const SizedBox.shrink()
+          : Tooltip(
+              message: visual.tooltip!,
+              child: AleraStatusDot(active: true, size: 6, color: visual.color),
+            ),
     );
   }
 }

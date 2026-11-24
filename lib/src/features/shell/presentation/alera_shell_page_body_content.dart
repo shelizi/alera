@@ -36,22 +36,8 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
     final terminalRuntime = ref.read(terminalRuntimeProvider);
     return Consumer(
       builder: (context, ref, _) {
-        // Watch only the statuses of this workspace's sessions, so an agent
-        // transition in another workspace does not rebuild the whole
-        // workbench tree. Unchanged sessions keep their entry instance, which
-        // is what makes the per-session select cheap.
-        final agentStatuses = <String, AgentStatusEntry>{};
-        for (final tab in tabs) {
-          final sessionId = tab.terminalSessionId;
-          final entry = ref.watch(
-            agentStatusControllerProvider.select(
-              (statuses) => statuses[sessionId],
-            ),
-          );
-          if (entry != null) {
-            agentStatuses[sessionId] = entry;
-          }
-        }
+        // Agent attention is subscribed to by individual tab dots.
+        // Never rebuild the editor, terminal or layout for a hook event.
         final mobileDrivers = ref.watch(
           terminalDriverPresenceControllerProvider,
         );
@@ -71,7 +57,6 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
                 unawaited(driverPresence.reclaim(sessionId)),
             onReclaimAll: () => unawaited(driverPresence.reclaimAll()),
           ),
-          agentStatuses: agentStatuses,
           onCreateTab: ({targetGroupId}) async {
             final tab = await controller.createTerminalTab(
               workspace,
