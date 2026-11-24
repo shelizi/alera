@@ -228,15 +228,10 @@ async fn run_tui_command(
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let settled = match completion {
                         TuiCompletion::Agy => {
-                            // The optional Argon pool may render after the old
-                            // four quotas; give four-only accounts settle time.
-                            let output = String::from_utf8_lossy(&output);
-                            let settle_time = if agy_has_argon_quota(&output) {
-                                Duration::from_millis(300)
-                            } else {
-                                Duration::from_secs(2)
-                            };
-                            last_data.elapsed() > settle_time && agy_usage_complete(&output)
+                            // The separate Argon pool was retired. Wait only
+                            // for the four current quotas and their reset text.
+                            last_data.elapsed() > Duration::from_millis(900)
+                                && agy_usage_complete(&String::from_utf8_lossy(&output))
                         }
                         TuiCompletion::Generic => {
                             started.elapsed() > Duration::from_secs(4)
@@ -326,29 +321,6 @@ fn agy_usage_complete(output: &str) -> bool {
         && BASE_BUCKETS.iter().all(|expected| {
             snapshot.buckets.iter().any(|bucket| bucket.name == *expected)
         })
-        // Argon is a separate weekly pool on eligible plans only. If its
-        // heading has appeared, wait for the percentage before completing.
-        && (!agy_argon_heading_visible(output)
-            || snapshot
-                .buckets
-                .iter()
-                .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly"))
-}
-
-fn agy_has_argon_quota(output: &str) -> bool {
-    parse_tui_snapshot("agy", "default", "Antigravity", output)
-        .buckets
-        .iter()
-        .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
-}
-
-fn agy_argon_heading_visible(output: &str) -> bool {
-    strip_terminal_sequences(output).lines().any(|line| {
-        agy_group_name(line).as_deref() == Some("Gemini 4 Argon")
-            || line
-                .to_ascii_lowercase()
-                .contains("gemini 4 argon weekly limit")
-    })
 }
 
 fn parse_tui_snapshot(
@@ -504,7 +476,7 @@ fn parse_agy_tui_snapshot(account_id: &str, display_name: &str, clean: &str) -> 
     let mut buckets: Vec<QuotaBucket> = Vec::new();
 
     for (index, token) in tokens.iter().enumerate() {
-        let word = token.as_str().to_ascii_lowercase();
+        let word = token.as_str().split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
         if word == "gemini models" {
             group = Some("Gemini Models");
             continue;
@@ -513,17 +485,14 @@ fn parse_agy_tui_snapshot(account_id: &str, display_name: &str, clean: &str) -> 
             group = Some("Claude And GPT Models");
             continue;
         }
-        if word == "gemini 4 argon" {
-            group = Some("Gemini 4 Argon");
+        // Recognize legacy headings only as token boundaries, so their
+        // percentages cannot overwrite the preceding supported pool.
+        if word.starts_with("gemini 4 argon") {
+            group = None;
             continue;
         }
 
-        let quota_group = if word.starts_with("gemini 4 argon") {
-            Some("Gemini 4 Argon")
-        } else {
-            group
-        };
-        let Some(quota_group) = quota_group else {
+        let Some(quota_group) = group else {
             continue;
         };
         let quota_window = if word.contains("weekly") {

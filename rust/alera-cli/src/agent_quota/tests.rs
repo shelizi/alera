@@ -483,7 +483,7 @@ fn detects_complete_agy_usage_without_fixed_delay() {
 }
 
 #[test]
-fn parses_fifth_agy_argon_weekly_quota() {
+fn ignores_removed_agy_argon_weekly_quota() {
     let output = [
         "│ GEMINI MODELS │",
         "│ Weekly Limit │",
@@ -504,23 +504,15 @@ fn parses_fifth_agy_argon_weekly_quota() {
 
     let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
     assert!(agy_usage_complete(&output));
-    assert!(agy_has_argon_quota(&output));
-    assert_eq!(snapshot.buckets.len(), 5);
-    let argon = snapshot
-        .buckets
-        .iter()
-        .find(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
-        .expect("Argon separate weekly quota");
-    assert_eq!(argon.used_percent, 18.5);
-    assert_eq!(argon.window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+    assert_eq!(snapshot.buckets.len(), 4);
     assert_eq!(
-        argon.reset_description.as_deref(),
-        Some("Refreshes in 5d 7h │")
+        snapshot.buckets.iter().find(|b| b.name == "Claude And GPT Models - 5 Hour").unwrap().used_percent,
+        40.0
     );
 }
 
 #[test]
-fn agy_waits_for_argon_percentage_once_fifth_pool_is_visible() {
+fn agy_does_not_wait_for_removed_argon_pool() {
     let four = [
         "Gemini Models",
         "Weekly limit",
@@ -535,20 +527,20 @@ fn agy_waits_for_argon_percentage_once_fifth_pool_is_visible() {
     ]
     .join("\n");
 
-    // Plans without an Argon pool still provide the original four quotas.
     assert!(agy_usage_complete(&four));
-    assert!(!agy_has_argon_quota(&four));
-    assert!(!agy_usage_complete(&format!("{four}\nGemini 4 Argon")));
-    assert!(!agy_usage_complete(&format!(
-        "{four}\nGemini 4 Argon\nWeekly Limit"
-    )));
-    assert!(agy_usage_complete(&format!(
-        "{four}\nGemini 4 Argon\nWeekly Limit\n80% remaining"
-    )));
+    for suffix in [
+        "Gemini 4 Argon",
+        "Gemini 4 Argon\nWeekly Limit",
+        "Gemini 4 Argon\nWeekly Limit\n80% remaining",
+    ] {
+        let output = format!("{four}\n{suffix}");
+        assert!(agy_usage_complete(&output));
+        assert_eq!(parse_tui_snapshot("agy", "default", "Antigravity", &output).buckets.len(), 4);
+    }
 }
 
 #[test]
-fn agy_parses_argon_quota_when_heading_and_percent_share_a_line() {
+fn agy_ignores_inline_removed_argon_quota() {
     let output = [
         "Gemini Models",
         "Weekly limit",
@@ -566,18 +558,15 @@ fn agy_parses_argon_quota_when_heading_and_percent_share_a_line() {
 
     let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
     assert!(agy_usage_complete(&output));
-    assert_eq!(snapshot.buckets.len(), 5);
-    let argon = snapshot
-        .buckets
-        .iter()
-        .find(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
-        .expect("inline Argon weekly quota");
-    assert_eq!(argon.used_percent, 56.0);
-    assert_eq!(argon.window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+    assert_eq!(snapshot.buckets.len(), 4);
+    assert_eq!(
+        snapshot.buckets.iter().find(|b| b.name == "Claude And GPT Models - 5 Hour").unwrap().used_percent,
+        20.0
+    );
 }
 
 #[test]
-fn parses_five_agy_quotas_from_real_pty_redraw_with_fused_lines() {
+fn parses_four_agy_quotas_from_real_pty_redraw_with_fused_lines() {
     // Matches the field layout observed from AGY 1.5.0 on Windows: quotas
     // on one line, percentages touching reset text, and the next group
     // heading glued to "Quota available" by terminal screen redraws.
@@ -593,13 +582,12 @@ fn parses_five_agy_quotas_from_real_pty_redraw_with_fused_lines() {
 
     let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
     assert!(agy_usage_complete(&output));
-    assert_eq!(snapshot.buckets.len(), 5, "{:?}", snapshot.buckets);
+    assert_eq!(snapshot.buckets.len(), 4, "{:?}", snapshot.buckets);
     for (name, used) in [
         ("Gemini Models - Weekly", 10.71),
         ("Gemini Models - 5 Hour", 0.0),
         ("Claude And GPT Models - Weekly", 79.11),
         ("Claude And GPT Models - 5 Hour", 0.0),
-        ("Gemini 4 Argon - Weekly", 16.23),
     ] {
         let quota = snapshot.buckets.iter().find(|value| value.name == name);
         assert!(quota.is_some(), "missing {name}: {:?}", snapshot.buckets);

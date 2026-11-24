@@ -200,11 +200,7 @@ String _bucketReadingLabel(
     return 'Fable';
   }
   if (provider == AgentQuotaProviderId.agy) {
-    final group = lower.contains('argon')
-        ? 'Ar'
-        : lower.contains('gemini')
-        ? 'G'
-        : 'C/G';
+    final group = lower.contains('gemini') ? 'G' : 'C/G';
     return '$group·${_shortWindowLabel(bucket.name)}';
   }
   if (provider == AgentQuotaProviderId.zai) {
@@ -275,11 +271,7 @@ int _readingOrder(AgentQuotaProviderId provider, String label) {
     }
   }
   if (provider == AgentQuotaProviderId.agy) {
-    final group = lower.contains('argon')
-        ? 20
-        : lower.contains('gemini')
-        ? 0
-        : 10;
+    final group = lower.contains('gemini') ? 0 : 10;
     final window = lower.contains('5 hour') || lower.contains('5h') ? 0 : 1;
     return group + window;
   }
