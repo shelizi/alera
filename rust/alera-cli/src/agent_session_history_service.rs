@@ -4,15 +4,17 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use alera_core::global_agent_search::{
-    search_agent_sessions, AgentSessionSearchHit, AgentSessionSearchQuery,
+    search_agent_sessions, AgentSessionSearchHit, AgentSessionSearchQuery, AgentSessionSearchRecord,
 };
 use anyhow::{bail, Result};
 
 use crate::agent_session_history_fts::{
-    AgentSessionHistoryIndex, HistoryIndexWriteStats, HISTORY_INDEX_FILE,
+    AgentSessionHistoryIndex, HistoryIndexWriteStats, PreparedHistoryBatch, HISTORY_INDEX_FILE,
 };
 use crate::agent_session_history_scan::{
     discover_history_cached, HistoryPreviewCache, HistoryScanPolicy, ProviderHistoryRoot,
@@ -64,6 +66,17 @@ impl HistorySearchCache {
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct SearchPhaseTimings {
+    scan: Duration,
+    index_open_or_validate: Duration,
+    prepare_keys: Duration,
+    upsert: Duration,
+    fts: Duration,
+    rank: Duration,
+}
+
 #[derive(Debug)]
 pub(crate) struct HistorySearchResponse {
     pub hits: Vec<AgentSessionSearchHit>,
@@ -73,6 +86,31 @@ pub(crate) struct HistorySearchResponse {
     pub index_reused: bool,
     pub scan_truncated: bool,
     pub writes: HistoryIndexWriteStats,
+    #[cfg(test)]
+    timings: SearchPhaseTimings,
+}
+
+/// Identity of a currently observed historical record. Borrow the fields from
+/// the scan instead of allocating a second owned copy for post-FTS validation.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ObservedHistoryKey<'a> {
+    runtime: &'a str,
+    project: &'a str,
+    workspace: &'a str,
+    provider: &'a str,
+    account: Option<&'a str>,
+    native: &'a str,
+}
+
+fn observed_history_key(record: &AgentSessionSearchRecord) -> Option<ObservedHistoryKey<'_>> {
+    Some(ObservedHistoryKey {
+        runtime: &record.runtime_instance_id,
+        project: &record.project_id,
+        workspace: &record.workspace_id,
+        provider: &record.provider,
+        account: record.provider_account_id.as_deref(),
+        native: record.provider_session_id.as_deref()?,
+    })
 }
 
 /// Never run at boot or as a background timer. The caller explicitly opts
@@ -96,10 +134,14 @@ pub(crate) async fn search_history_on_demand(
         index_reused: false,
         scan_truncated: false,
         writes: HistoryIndexWriteStats::default(),
+        #[cfg(test)]
+        timings: SearchPhaseTimings::default(),
     };
     if query.text.trim().is_empty() {
         return Ok(empty);
     }
+    #[cfg(test)]
+    let scan_started = Instant::now();
     let roots = roots.to_vec();
     let registered = registered_workspaces.to_vec();
     // Hold the owned guard through indexing, so an explicit clear cannot race
@@ -119,6 +161,10 @@ pub(crate) async fn search_history_on_demand(
         (scan, guard)
     })
     .await?;
+    #[cfg(test)]
+    {
+        empty.timings.scan = scan_started.elapsed();
+    }
     empty.visited_files = scan.visited_files;
     empty.parsed_files = scan.parsed_files;
     empty.reused_files = scan.reused_files;
@@ -127,21 +173,49 @@ pub(crate) async fn search_history_on_demand(
         return Ok(empty);
     }
 
+    #[cfg(test)]
+    let index_started = Instant::now();
     empty.index_reused = guard.ensure_index(runtime_cache_dir).await?;
+    #[cfg(test)]
+    {
+        empty.timings.index_open_or_validate = index_started.elapsed();
+    }
     let candidates = async {
         let index = guard.index.as_ref().expect("index opened above");
         // No partial, unverified or out-of-scope rows may become resumable solely
         // because they were present in a previous local SQLite index generation.
-        for chunk in scan.records.chunks(256) {
-            let write = index.upsert_batch(chunk).await?;
-            empty.writes.added += write.added;
-            empty.writes.updated += write.updated;
-            empty.writes.unchanged += write.unchanged;
-            empty.writes.trimmed += write.trimmed;
+        // The native scanner already caps this request at 256 files.
+        // Prepare identity JSON exactly once for both SQLite operations.
+        #[cfg(test)]
+        let prepare_started = Instant::now();
+        let batch = PreparedHistoryBatch::new(&scan.records)?;
+        #[cfg(test)]
+        {
+            empty.timings.prepare_keys = prepare_started.elapsed();
+        }
+        #[cfg(test)]
+        let upsert_started = Instant::now();
+        // Reused native previews make a fully unchanged SQLite batch likely,
+        // but never prove that the persistent index still has the same rows.
+        empty.writes = if scan.reused_files >= scan.records.len() {
+            index.upsert_warm_prepared(&batch).await?
+        } else {
+            index.upsert_prepared(&batch).await?
+        };
+        #[cfg(test)]
+        {
+            empty.timings.upsert = upsert_started.elapsed();
         }
         // Scope and current-file identity constrain FTS before top-N limiting;
         // otherwise other accounts can hide relevant rows from a filtered query.
-        index.search_scoped(query, &scan.records).await
+        #[cfg(test)]
+        let fts_started = Instant::now();
+        let result = index.search_prepared(query, &batch).await;
+        #[cfg(test)]
+        {
+            empty.timings.fts = fts_started.elapsed();
+        }
+        result
     }
     .await;
     let candidates = match candidates {
@@ -152,31 +226,21 @@ pub(crate) async fn search_history_on_demand(
             return Err(error);
         }
     };
+    #[cfg(test)]
+    let rank_started = Instant::now();
     let observed = scan
         .records
         .iter()
-        .filter_map(|record| {
-            Some((
-                record.runtime_instance_id.clone(),
-                record.project_id.clone(),
-                record.workspace_id.clone(),
-                record.provider.clone(),
-                record.provider_account_id.clone(),
-                record.provider_session_id.clone()?,
-            ))
-        })
+        .filter_map(observed_history_key)
         .collect::<HashSet<_>>();
-    let candidates = candidates.into_iter().filter(|record| {
-        observed.contains(&(
-            record.runtime_instance_id.clone(),
-            record.project_id.clone(),
-            record.workspace_id.clone(),
-            record.provider.clone(),
-            record.provider_account_id.clone(),
-            record.provider_session_id.clone().unwrap_or_default(),
-        ))
-    });
+    let candidates = candidates
+        .into_iter()
+        .filter(|record| observed_history_key(record).is_some_and(|key| observed.contains(&key)));
     empty.hits = search_agent_sessions(candidates, query);
+    #[cfg(test)]
+    {
+        empty.timings.rank = rank_started.elapsed();
+    }
     Ok(empty)
 }
 
@@ -211,6 +275,10 @@ pub(crate) async fn clear_history_search_cache(
     guard.close_index().await;
     result
 }
+
+#[cfg(test)]
+#[path = "agent_session_history_benchmarks.rs"]
+mod benchmarks;
 
 #[cfg(test)]
 mod tests {
@@ -273,12 +341,30 @@ mod tests {
         assert_eq!(first.parsed_files, 2);
         assert_eq!(first.reused_files, 0);
         assert_eq!(first.hits[0].session.workspace_id, "ws");
+        let record = &first.hits[0].session;
+        let key = observed_history_key(record).unwrap();
+        assert_eq!(
+            key.native.as_ptr(),
+            record.provider_session_id.as_ref().unwrap().as_ptr()
+        );
+        assert_eq!(key.project.as_ptr(), record.project_id.as_ptr());
+        let observed = HashSet::from([key]);
+        let mut foreign = record.clone();
+        foreign.provider_account_id = Some("other".to_owned());
+        assert!(!observed.contains(&observed_history_key(&foreign).unwrap()));
+        foreign.provider_account_id = record.provider_account_id.clone();
+        foreign.workspace_id = "another".to_owned();
+        assert!(!observed.contains(&observed_history_key(&foreign).unwrap()));
+        foreign.provider_session_id = None;
+        assert!(observed_history_key(&foreign).is_none());
         let second =
             search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
                 .await
                 .unwrap();
         assert_eq!(second.hits.len(), 1);
         assert_eq!(second.writes.unchanged, 1);
+        assert_eq!(second.writes.warm_check_hits, 1);
+        assert_eq!(second.writes.existing_rows_loaded, 0);
         assert!(second.index_reused);
         assert_eq!(
             second.parsed_files, 1,

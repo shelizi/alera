@@ -3,18 +3,22 @@
 //! A provider transcript is evidence of a conversation, NOT authority to
 //! resume it. All results are PreviewOnly until the Host separately verifies
 //! provider account, registered checkout and session identity.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use alera_core::global_agent_search::AgentSessionSearchRecord;
 use serde_json::Value;
 use uuid::Uuid;
 
+mod directory_scan;
 mod preview_cache;
-use preview_cache::PreviewScan;
+use directory_scan::read_descending_prefix;
+use preview_cache::{
+    open_canonical_preview_file, open_regular_preview_candidate, CandidateMetadata,
+    OpenedPreviewFile, PreviewScan,
+};
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
 const MAX_FILES: usize = 256;
@@ -71,6 +75,16 @@ pub(crate) struct HistoryScanReport {
     directories_read: usize,
     #[cfg(test)]
     metadata_probes: usize,
+    #[cfg(test)]
+    cwd_canonicalizations: usize,
+    #[cfg(test)]
+    reused_candidate_handles: usize,
+    #[cfg(test)]
+    handle_metadata_reuses: usize,
+    #[cfg(test)]
+    directory_entries_retained_peak: usize,
+    #[cfg(test)]
+    path_materializations: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +121,19 @@ struct CanonicalWorkspace {
     project: String,
     workspace: String,
     path: PathBuf,
+}
+
+fn resolve_workspace_index(
+    cwd: &Path,
+    known: &[CanonicalWorkspace],
+    _report: &mut HistoryScanReport,
+) -> Option<usize> {
+    #[cfg(test)]
+    {
+        _report.cwd_canonicalizations += 1;
+    }
+    let verified_cwd = fs::canonicalize(cwd).ok()?;
+    known.iter().position(|w| w.path == verified_cwd)
 }
 
 /// Scan only caller-provided provider roots, strictly match a canonical CWD
@@ -186,6 +213,10 @@ fn discover_history_with_exact_id(
     if known.is_empty() {
         return report;
     }
+    // Preview search uses a request-local Workspace snapshot. Resolve each
+    // distinct raw CWD once, including misses. Never retain this mapping
+    // across searches or use it for exact native verification.
+    let mut preview_cwds: HashMap<PathBuf, Option<usize>> = HashMap::new();
     let mut seen_files = HashSet::new();
     let mut walked = 0_usize;
     // Every configured account must have a chance to contribute results.
@@ -240,12 +271,23 @@ fn discover_history_with_exact_id(
             {
                 report.directories_read += 1;
             }
-            let Ok(entries) = fs::read_dir(&directory) else {
+            // Keep one extra entry at the per-root boundary so the loop can
+            // distinguish an exhausted directory from a truncated root. The
+            // global boundary already stops before processing its last entry.
+            let mut entry_limit = MAX_ENTRIES - walked;
+            if exact_id.is_none() {
+                entry_limit = entry_limit.min(root_entry_budget - (walked - root_entry_start) + 1);
+            }
+            let Ok(entries) = read_descending_prefix(&directory, entry_limit) else {
                 continue;
             };
-            let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_cached_key(|entry| entry.file_name());
-            for entry in entries.into_iter().rev() {
+            #[cfg(test)]
+            {
+                report.directory_entries_retained_peak =
+                    report.directory_entries_retained_peak.max(entries.len());
+            }
+            for named in entries {
+                let entry = named.entry;
                 if exact_id.is_none()
                     && (report.visited_files - root_file_start >= root_file_budget
                         || walked - root_entry_start >= root_entry_budget)
@@ -260,22 +302,24 @@ fn discover_history_with_exact_id(
                 }
                 // DirEntry already has the file type on Windows and most Unix filesystems.
                 // Filter irrelevant names before an additional metadata probe, but recheck
-                // candidates with symlink_metadata before descending or opening them.
+                // candidates before descending or reading them; Windows ordinary files
+                // can validate metadata directly on a no-follow handle.
                 let Ok(kind) = entry.file_type() else {
                     continue;
                 };
-                let path = entry.path();
                 if kind.is_dir() {
                     if depth < MAX_DEPTH
                         && !matches!(
-                            entry.file_name().to_str(),
+                            named.name.to_str(),
                             Some("subagents" | ".git" | "node_modules")
                         )
                     {
                         #[cfg(test)]
                         {
                             report.metadata_probes += 1;
+                            report.path_materializations += 1;
                         }
+                        let path = entry.path();
                         if fs::symlink_metadata(&path)
                             .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
                         {
@@ -284,31 +328,70 @@ fn discover_history_with_exact_id(
                     }
                     continue;
                 }
-                if !kind.is_file() || !is_provider_filename(root.provider, &path) {
+                let name = Path::new(&named.name);
+                if !kind.is_file() || !is_provider_filename(root.provider, name) {
                     continue;
                 }
                 if exact_id
-                    .is_some_and(|native| !filename_matches_native_id(root.provider, &path, native))
+                    .is_some_and(|native| !filename_matches_native_id(root.provider, name, native))
                 {
                     continue;
                 }
                 #[cfg(test)]
                 {
-                    report.metadata_probes += 1;
+                    report.path_materializations += 1;
                 }
-                let Ok(meta) = fs::symlink_metadata(&path) else {
-                    continue;
-                };
-                if !meta.is_file() || meta.file_type().is_symlink() {
-                    continue;
-                }
+                let path = entry.path();
                 if report.visited_files >= cap {
                     report.truncated = true;
                     return report;
                 }
-                let Ok(canonical_file) = fs::canonicalize(&path) else {
-                    continue;
-                };
+                let regular = preview_scan
+                    .is_some()
+                    .then(|| open_regular_preview_candidate(&path))
+                    .flatten();
+                let (canonical_file, opened, meta) =
+                    if let Some((canonical, meta, opened)) = regular {
+                        #[cfg(test)]
+                        {
+                            report.handle_metadata_reuses += 1;
+                        }
+                        (canonical, Some(opened), meta)
+                    } else {
+                        // Preserve compatibility and exact UUID verification.
+                        #[cfg(test)]
+                        {
+                            report.metadata_probes += 1;
+                        }
+                        let Ok(meta) = fs::symlink_metadata(&path) else {
+                            continue;
+                        };
+                        if !meta.is_file() || meta.file_type().is_symlink() {
+                            continue;
+                        }
+                        let (canonical, opened) = match preview_scan
+                            .is_some()
+                            .then(|| {
+                                if skip_oversized_file(meta.len(), exact_id) {
+                                    None
+                                } else {
+                                    open_canonical_preview_file(&path)
+                                }
+                            })
+                            .flatten()
+                        {
+                            Some((canonical, file)) => {
+                                (canonical, Some(OpenedPreviewFile::from_file(file)))
+                            }
+                            None => {
+                                let Ok(canonical) = fs::canonicalize(&path) else {
+                                    continue;
+                                };
+                                (canonical, None)
+                            }
+                        };
+                        (canonical, opened, CandidateMetadata::from_metadata(&meta))
+                    };
                 if !canonical_file.starts_with(&canonical_root)
                     || !seen_files.insert((
                         root.provider,
@@ -322,18 +405,33 @@ fn discover_history_with_exact_id(
                 // General indexing skips huge transcripts. Exact UUID
                 // verification remains bounded by MAX_READ_BYTES/MAX_LINES
                 // and may safely inspect the beginning of a large session.
-                if skip_oversized_file(meta.len(), exact_id) {
+                if skip_oversized_file(meta.len, exact_id) {
                     report.skipped_files += 1;
                     continue;
                 }
-                let mut cached_read = None;
-                let parsed = if let Some(scan) = preview_scan.as_deref_mut() {
-                    cached_read = scan.read(root, &canonical_file);
-                    cached_read.as_ref().map(|read| read.value.clone())
+                let (cached_read, uncached_read) = if let Some(scan) = preview_scan.as_deref_mut() {
+                    #[cfg(test)]
+                    if opened.is_some() {
+                        report.reused_candidate_handles += 1;
+                    }
+                    (scan.read(root, &canonical_file, opened), None)
                 } else {
-                    read_provider_metadata(root.provider, &canonical_file, policy.index_user_text)
+                    (
+                        None,
+                        read_provider_metadata(
+                            root.provider,
+                            &canonical_file,
+                            policy.index_user_text,
+                        ),
+                    )
                 };
-                let Some((native_id, cwd, preview)) = parsed else {
+                // Borrow the CWD while checking scope. Rejected previews never
+                // need to duplicate their ID, path or user text.
+                let Some((_, cwd, _)) = cached_read
+                    .as_ref()
+                    .map(|read| &read.value)
+                    .or(uncached_read.as_ref())
+                else {
                     report.skipped_files += 1;
                     continue;
                 };
@@ -343,29 +441,37 @@ fn discover_history_with_exact_id(
                 } else {
                     report.parsed_files += 1;
                 }
-                let Ok(verified_cwd) = fs::canonicalize(cwd) else {
-                    continue;
+                let workspace_index = if preview_scan.is_some() {
+                    if let Some(index) = preview_cwds.get(cwd) {
+                        *index
+                    } else {
+                        let index = resolve_workspace_index(cwd, &known, &mut report);
+                        preview_cwds.insert(cwd.clone(), index);
+                        index
+                    }
+                } else {
+                    resolve_workspace_index(cwd, &known, &mut report)
                 };
-                let Some(workspace) = known.iter().find(|w| w.path == verified_cwd) else {
+                let Some(workspace) = workspace_index.map(|index| &known[index]) else {
                     // Never attribute a transcript from an unregistered folder.
                     continue;
                 };
-                if let (Some(scan), Some(read)) =
-                    (preview_scan.as_deref_mut(), cached_read.as_ref())
-                {
-                    scan.remember(read);
-                }
-                let updated_at_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
-                    .unwrap_or(0);
-                let display = format!("{} {}", root.provider, &native_id[..8]);
+                let (native_id, preview) = if let Some(read) = cached_read {
+                    preview_scan
+                        .as_deref_mut()
+                        .expect("cached read requires preview scan")
+                        .remember(read)
+                } else {
+                    let Some((native_id, _, preview)) = uncached_read else {
+                        continue;
+                    };
+                    (native_id, preview)
+                };
+                let updated_at_ms = meta.updated_at_ms;
                 let title = preview
                     .as_deref()
                     .map(|p| p.chars().take(96).collect())
-                    .unwrap_or(display);
+                    .unwrap_or_else(|| format!("{} {}", root.provider, &native_id[..8]));
                 // A cached search preview is never proof for a resume operation.
                 if !reused {
                     report.source_proofs.push(HistorySourceProof {
@@ -873,12 +979,15 @@ mod tests {
         assert_eq!(report.records.len(), 2);
         assert_eq!(report.directories_read, 1);
         assert_eq!(report.metadata_probes, 2);
+        assert_eq!(report.path_materializations, 2);
+        assert_eq!(report.directory_entries_retained_peak, 103);
 
         let exact =
             discover_exact_native_history(&[first.clone(), duplicate.clone()], &known, policy, id);
         assert_eq!(exact.records.len(), 1);
         assert_eq!(exact.directories_read, 1);
         assert_eq!(exact.metadata_probes, 1);
+        assert_eq!(exact.path_materializations, 1);
 
         // Separate configured accounts may share a physical home but must
         // remain separate search scopes.
@@ -960,6 +1069,253 @@ mod tests {
         let replaced = discover_history_cached(&roots, &known, policy, &mut cache);
         assert_eq!(replaced.reused_files, 0);
         assert!(replaced.records.is_empty());
+    }
+
+    #[test]
+    fn cached_preview_search_resolves_each_cwd_once_per_request() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        for index in 0..64 {
+            let id = format!("550e8400-e29b-41d4-a716-{index:012}");
+            let cwd = if index < 48 {
+                work.path()
+            } else {
+                other.path()
+            };
+            fs::write(
+                home.path().join(format!("rollout-day-{id}.jsonl")),
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}})
+                ),
+            )
+            .unwrap();
+        }
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            max_files: 128,
+        };
+        let uncached = discover_history(&roots, &known, policy);
+        assert_eq!(uncached.cwd_canonicalizations, 64);
+        let mut cache = HistoryPreviewCache::default();
+        let first = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(first.cwd_canonicalizations, 2);
+        #[cfg(windows)]
+        assert_eq!(first.reused_candidate_handles, 64);
+        #[cfg(windows)]
+        {
+            assert_eq!(first.handle_metadata_reuses, 64);
+            assert_eq!(first.metadata_probes, 0);
+        }
+        assert_eq!(first.records.len(), 48);
+        assert_eq!(
+            serde_json::to_value(&first.records).unwrap(),
+            serde_json::to_value(&uncached.records).unwrap()
+        );
+        let second = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(second.cwd_canonicalizations, 2);
+        #[cfg(windows)]
+        assert_eq!(second.reused_candidate_handles, 64);
+        #[cfg(windows)]
+        {
+            assert_eq!(second.handle_metadata_reuses, 64);
+            assert_eq!(second.metadata_probes, 0);
+        }
+        assert_eq!(second.reused_files, 48);
+        assert_eq!(second.parsed_files, 16);
+        // Refresh both positive and negative path decisions when the
+        // registered Workspace set changes; never carry a scope decision.
+        let changed =
+            discover_history_cached(&roots, &[workspace(other.path())], policy, &mut cache);
+        assert_eq!(changed.cwd_canonicalizations, 2);
+        assert_eq!(changed.records.len(), 16);
+        let uncached_other = discover_history(&roots, &[workspace(other.path())], policy);
+        assert_eq!(
+            serde_json::to_value(&changed.records).unwrap(),
+            serde_json::to_value(&uncached_other.records).unwrap()
+        );
+        let exact = discover_exact_native_history(
+            &roots,
+            &known,
+            policy,
+            "550e8400-e29b-41d4-a716-000000000000",
+        );
+        assert_eq!(exact.cwd_canonicalizations, 1);
+        assert_eq!(exact.reused_candidate_handles, 0);
+        assert_eq!(exact.handle_metadata_reuses, 0);
+        assert_eq!(exact.metadata_probes, 1);
+        assert_eq!(exact.source_proofs.len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preview_handle_resolves_long_unicode_path_and_matches_legacy_scan() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let part = format!("{}{}", "a".repeat(105), "\u{6b77}\u{53f2}");
+        let folder = (0..5).fold(home.path().to_owned(), |path, _| path.join(&part));
+        fs::create_dir_all(&folder).unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let path = folder.join(format!("rollout-day-{id}.jsonl"));
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+            ),
+        )
+        .unwrap();
+        let expected = fs::canonicalize(&path).unwrap();
+        let (actual, _file) = open_canonical_preview_file(&path).unwrap();
+        assert_eq!(actual, expected);
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let legacy = discover_history(&roots, &known, policy);
+        let mut cache = HistoryPreviewCache::default();
+        let report = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(report.reused_candidate_handles, 1);
+        assert_eq!(report.handle_metadata_reuses, 1);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&report.records).unwrap(),
+            serde_json::to_value(&legacy.records).unwrap()
+        );
+        assert_eq!(report.source_proofs[0].canonical_file, expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_metadata_keeps_oversized_budget_and_exact_verification() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let path = home.path().join(format!("rollout-day-{id}.jsonl"));
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+            ),
+        )
+        .unwrap();
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        drop(file);
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let legacy = discover_history(&roots, &known, policy);
+        let mut cache = HistoryPreviewCache::default();
+        let report = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(report.visited_files, legacy.visited_files);
+        assert_eq!(report.skipped_files, legacy.skipped_files);
+        assert_eq!(report.visited_files, 1);
+        assert_eq!(report.skipped_files, 1);
+        assert_eq!(report.parsed_files, 0);
+        assert!(report.records.is_empty());
+        assert_eq!(report.handle_metadata_reuses, 1);
+        // Metadata-only exact verification intentionally has no size rejection.
+        let exact = discover_exact_native_history(&roots, &known, HistoryScanPolicy::default(), id);
+        assert_eq!(exact.records.len(), 1);
+        assert_eq!(exact.source_proofs.len(), 1);
+        assert_eq!(exact.handle_metadata_reuses, 0);
+    }
+
+    #[test]
+    fn wide_directory_keeps_global_and_account_entry_budgets_and_freshness() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let primary_dir = home.path().join("primary");
+        let secondary_dir = home.path().join("secondary");
+        fs::create_dir_all(&primary_dir).unwrap();
+        fs::create_dir_all(&secondary_dir).unwrap();
+        for i in 0..MAX_ENTRIES + 8 {
+            File::create(primary_dir.join(format!("rollout-middle-{i:04}.txt"))).unwrap();
+        }
+        let high_id = "550e8400-e29b-41d4-a716-446655440001";
+        let low_id = "550e8400-e29b-41d4-a716-446655440002";
+        let new_id = "550e8400-e29b-41d4-a716-446655440003";
+        let later_id = "550e8400-e29b-41d4-a716-446655440004";
+        let write_session = |directory: &Path, name: &str, id: &str| {
+            let path = directory.join(format!("rollout-{name}-{id}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+                ),
+            )
+            .unwrap();
+            path
+        };
+        let high = write_session(&primary_dir, "z", high_id);
+        write_session(&primary_dir, "a", low_id);
+        write_session(&secondary_dir, "z", later_id);
+        let primary = root("codex", &primary_dir);
+        let mut secondary = root("codex", &secondary_dir);
+        secondary.account_id = "secondary".into();
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let mut cache = HistoryPreviewCache::default();
+        let report =
+            discover_history_cached(std::slice::from_ref(&primary), &known, policy, &mut cache);
+        assert!(report.truncated);
+        assert_eq!(report.directory_entries_retained_peak, MAX_ENTRIES);
+        assert_eq!(report.path_materializations, 1);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(
+            report.records[0].provider_session_id.as_deref(),
+            Some(high_id)
+        );
+
+        let accounts = [primary, secondary];
+        let split = discover_history_cached(&accounts, &known, policy, &mut cache);
+        assert!(split.truncated);
+        assert_eq!(split.directory_entries_retained_peak, MAX_ENTRIES / 2 + 1);
+        assert_eq!(split.directories_read, 2);
+        assert_eq!(split.path_materializations, 2);
+        assert_eq!(split.records.len(), 2);
+        assert_eq!(
+            split.records[0].provider_session_id.as_deref(),
+            Some(high_id)
+        );
+        assert_eq!(
+            split.records[1].provider_session_id.as_deref(),
+            Some(later_id)
+        );
+        assert_eq!(
+            split.records[1].provider_account_id.as_deref(),
+            Some("secondary")
+        );
+
+        // Listing is deliberately not cached across searches.
+        fs::remove_file(high).unwrap();
+        write_session(&primary_dir, "y", new_id);
+        let fresh = discover_history_cached(&accounts, &known, policy, &mut cache);
+        assert_eq!(fresh.records.len(), 2);
+        assert_eq!(
+            fresh.records[0].provider_session_id.as_deref(),
+            Some(new_id)
+        );
+        assert_eq!(
+            fresh.records[1].provider_session_id.as_deref(),
+            Some(later_id)
+        );
+        assert_eq!(fresh.parsed_files, 1);
+        assert_eq!(fresh.reused_files, 1);
     }
 
     #[test]
