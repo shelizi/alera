@@ -66,6 +66,7 @@ impl Session {
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
+            last_queued_checkpoint: None,
             output_batch: Vec::new(),
             output_batch_gen: 0,
             output_batch_armed: false,

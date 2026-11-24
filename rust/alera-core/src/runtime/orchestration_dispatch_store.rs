@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use sqlx::sqlite::SqliteRow;
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row, Sqlite};
+use std::collections::HashSet;
 
 use super::orchestration_message_store::orchestration_id;
 use super::orchestration_task_store::{
@@ -209,6 +210,41 @@ impl RuntimeStore {
         .fetch_optional(self.pool())
         .await?;
         row.map(dispatch_from_row).transpose()
+    }
+
+    /// PTY output only needs the latest active dispatch's ID, and only
+    /// dispatched (accepted) contexts can refresh activity. Read bounded
+    /// groups of handles together instead of decoding every context field
+    /// and opening an individual SELECT for each ordinary Terminal.
+    pub async fn orchestration_output_activity_dispatch_ids(
+        &self,
+        handles: &[String],
+    ) -> Result<Vec<String>> {
+        const HANDLES_PER_QUERY: usize = 128;
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for chunk in handles.chunks(HANDLES_PER_QUERY) {
+            let mut query = QueryBuilder::<Sqlite>::new(
+                "SELECT id, assignee_handle, status FROM orchestrationDispatchContexts \
+                 WHERE status IN ('pending','dispatched','awaiting_acceptance','stalled') \
+                 AND assignee_handle IN (",
+            );
+            let mut binds = query.separated(", ");
+            for handle in chunk {
+                binds.push_bind(handle.as_str());
+            }
+            binds.push_unseparated(") ORDER BY rowid DESC");
+            for row in query.build().fetch_all(self.pool()).await? {
+                let handle: String = row.try_get("assignee_handle")?;
+                // Choose the newest active context before testing its status,
+                // matching active_orchestration_dispatch_for_handle even for
+                // legacy data with more than one active context.
+                if seen.insert(handle) && row.try_get::<String, _>("status")? == "dispatched" {
+                    ids.push(row.try_get("id")?);
+                }
+            }
+        }
+        Ok(ids)
     }
 
     pub async fn latest_orchestration_dispatch_for_handle(

@@ -48,7 +48,7 @@ async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         coordinators: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         pending_dispatch_installs: HashMap::new(),
@@ -63,6 +63,7 @@ async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
         next_client_id: Arc::new(AtomicU64::new(2)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 

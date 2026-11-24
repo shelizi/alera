@@ -28,6 +28,9 @@ impl ServerActor {
     }
 
     async fn handle_pty_output(&mut self, session_id: String, data: Vec<u8>) {
+        if data.is_empty() {
+            return;
+        }
         #[cfg(windows)]
         let cursor_response_error = self.sessions.get_mut(&session_id).and_then(|session| {
             if !session.take_initial_conpty_cursor_query(&data) {
@@ -87,17 +90,17 @@ impl ServerActor {
             self.broadcast_authenticated_mobile(title_event);
         }
         self.record_orchestration_output_activity(&session_id);
-        if let Some(generation) = output_generation {
-            self.spawn_output_batch_timer(session_id.clone(), generation);
-        }
-        if let Some(generation) = durable_generation {
-            self.spawn_durable_output_batch_timer(session_id.clone(), generation);
-        }
+        // A batch already at its size boundary flushes now. Do not spawn
+        // a timer whose generation would be invalidated immediately.
         if output_len >= OUTPUT_BATCH_MAX_BYTES {
             self.flush_output_batch(&session_id);
+        } else if let Some(generation) = output_generation {
+            self.spawn_output_batch_timer(session_id.clone(), generation);
         }
         if durable_len >= OUTPUT_BATCH_MAX_BYTES {
             self.flush_durable_output_batch(&session_id);
+        } else if let Some(generation) = durable_generation {
+            self.spawn_durable_output_batch_timer(session_id.clone(), generation);
         }
         if let Some(generation) = checkpoint {
             self.spawn_checkpoint_timer(session_id, generation);
@@ -105,45 +108,11 @@ impl ServerActor {
     }
 
     fn record_orchestration_output_activity(&mut self, session_id: &str) {
-        if self
-            .orchestration_activity_last_recorded
-            .get(session_id)
-            .is_some_and(|last| last.elapsed() < ORCHESTRATION_ACTIVITY_WRITE_INTERVAL)
-        {
-            return;
-        }
-        self.orchestration_activity_last_recorded
-            .insert(session_id.to_string(), Instant::now());
-
-        let runtime_store = self.runtime_store.clone();
-        let task_session_id = session_id.to_string();
-        let log_session_id = task_session_id.clone();
-        let task = async move {
-            let dispatch = match runtime_store
-                .active_orchestration_dispatch_for_handle(&task_session_id)
-                .await
-            {
-                Ok(dispatch) => dispatch,
-                Err(_) => return,
-            };
-            if let Some(dispatch) = dispatch {
-                let _ = runtime_store
-                    .record_orchestration_activity(&dispatch.id)
-                    .await;
-            }
-        };
-        if let Err(error) = self.deferred_admission.schedule(
-            super::deferred_admission::DeferredRequestClass::Maintenance,
-            "terminal.orchestrationActivity.persist",
-            None,
-            task,
-        ) {
-            tracing::debug!(
-                session_id = %log_session_id,
-                "terminal orchestration activity persistence deferred: {}",
-                error.wire_message()
-            );
-        }
+        self.orchestration_output_activity.record(
+            session_id,
+            &self.runtime_store,
+            &self.deferred_admission,
+        );
     }
 
     async fn handle_pty_input_written(

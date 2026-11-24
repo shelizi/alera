@@ -15,6 +15,42 @@ use super::{
 #[cfg(test)]
 mod tests;
 
+/// Own the one idle-shutdown task instead of leaving superseded sleeps in
+/// Tokio's timer wheel until their original (possibly long) deadline.
+/// The actor's generation still rejects a tick that raced cancellation and
+/// was already queued on its mailbox.
+#[derive(Default)]
+pub(super) struct ShutdownTimer {
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ShutdownTimer {
+    fn arm(
+        &mut self,
+        delay: Duration,
+        generation: u64,
+        inbox: tokio::sync::mpsc::UnboundedSender<ServerCommand>,
+    ) {
+        self.cancel();
+        self.task = Some(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            let _ = inbox.send(ServerCommand::ShutdownTick { generation });
+        }));
+    }
+
+    fn cancel(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for ShutdownTimer {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 impl ServerActor {
     pub(super) fn promote_persistent(&mut self) -> HostResult<Value> {
         if !self.config.persistent {
@@ -81,12 +117,11 @@ impl ServerActor {
             self.config.empty_shutdown_delay_seconds
         };
         self.shutdown_gen += 1;
-        let generation = self.shutdown_gen;
-        let inbox = self.inbox.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(seconds)).await;
-            let _ = inbox.send(ServerCommand::ShutdownTick { generation });
-        });
+        self.shutdown_timer.arm(
+            Duration::from_secs(seconds),
+            self.shutdown_gen,
+            self.inbox.clone(),
+        );
     }
 
     pub(super) fn spawn_output_batch_timer(&self, session_id: String, generation: u64) {
@@ -124,11 +159,15 @@ impl ServerActor {
 
     pub(super) fn cancel_shutdown_timer(&mut self) {
         self.shutdown_gen += 1;
+        self.shutdown_timer.cancel();
     }
 
     pub(super) async fn handle_shutdown_tick(&mut self, generation: u64) {
-        if generation == self.shutdown_gen
-            && !self.disposed
+        if generation != self.shutdown_gen {
+            return;
+        }
+        self.shutdown_timer.cancel();
+        if !self.disposed
             && !self.has_authenticated_clients()
             && self.mutation_queue.pending_workspace_shutdowns.is_empty()
         {

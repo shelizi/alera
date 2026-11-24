@@ -74,6 +74,9 @@ impl PeerWriter {
             (ClientFrame::Output { session_id, data }, true) => {
                 encode_output_payload(session_id, data).into()
             }
+            (ClientFrame::Output { session_id, data }, false) => {
+                crate::terminal_host::frame_codec::encode_output_json_payload(session_id, data)?
+            }
             (ClientFrame::SharedOutput(shared), true) => shared.binary_payload(),
             (ClientFrame::SharedOutput(shared), false) => shared.json_payload()?,
             (ClientFrame::SharedJson(shared), _) => shared.json_payload()?,

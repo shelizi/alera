@@ -45,7 +45,7 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         coordinators: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         pending_dispatch_installs: HashMap::new(),
@@ -60,6 +60,7 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -142,7 +143,7 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         coordinators: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         pending_dispatch_installs: HashMap::new(),
@@ -157,6 +158,7 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -261,7 +263,7 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         coordinators: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         pending_dispatch_installs: HashMap::new(),
@@ -276,6 +278,7 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -353,7 +356,7 @@ async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         coordinators: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         pending_dispatch_installs: HashMap::new(),
@@ -368,6 +371,7 @@ async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
         next_client_id: Arc::new(AtomicU64::new(2)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
     let response = actor

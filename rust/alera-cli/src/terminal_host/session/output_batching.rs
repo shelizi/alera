@@ -2,10 +2,11 @@ use super::{DurableOutputBatch, OutputBatch, Session};
 
 /// Coalescing PTY output into batches, on two independent tracks.
 ///
-/// The delivery batch is what clients receive and the durable batch is what
-/// reaches the history store. They carry the same bytes but drain on their own
-/// generations, so a slow writer cannot hold up delivery and a paused client
-/// cannot hold up persistence.
+/// The delivery batch is what active clients receive and the durable batch is
+/// what reaches the history store. They drain on their own generations, so a
+/// slow writer cannot hold up delivery and a paused client cannot hold up
+/// persistence. If nobody is consuming live output, the ring is the source
+/// for a later attach/resume and no delivery batch is necessary.
 impl Session {
     /// Seed either empty batch with the reader's own allocation instead of
     /// allocating and copying into both. Prefer the longer-lived durable
@@ -17,6 +18,29 @@ impl Session {
         }
         // Avoid retaining an oversized reader allocation for a tiny payload.
         let can_move = data.capacity() <= len.saturating_mul(2);
+        // Attach/resume flush existing live output before changing the
+        // recipient set, then replay the missing bytes from the ring.
+        // Backpressured and explicitly paused clients therefore do not need
+        // a second copy of bytes that cannot be sent to them.
+        let has_live_recipient = self.clients.len() > self.output_paused_clients.len()
+            || self
+                .clients
+                .iter()
+                .any(|id| !self.output_paused_clients.contains(id));
+        if !has_live_recipient {
+            // Defensively discard any older delivery batch after the last
+            // recipient disappears, invalidating its pending generation.
+            drop(self.flush_output_batch());
+            if can_move
+                && self.durable_output_batch.is_empty()
+                && self.durable_output_batch.capacity() < len
+            {
+                self.durable_output_batch = data;
+            } else {
+                self.durable_output_batch.extend_from_slice(&data);
+            }
+            return;
+        }
         if can_move
             && self.durable_output_batch.is_empty()
             && self.durable_output_batch.capacity() < len

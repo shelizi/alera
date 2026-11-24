@@ -374,7 +374,7 @@ mod tests {
             orchestration_waiters: MessageWaiterRegistry::default(),
             orchestration_delivery_in_flight: HashSet::new(),
             orchestration_delivery_backpressured: HashSet::new(),
-            orchestration_activity_last_recorded: HashMap::new(),
+            orchestration_output_activity: Default::default(),
             pending_dispatch_installs: HashMap::new(),
             pending_drift_probes: HashSet::new(),
             coordinators: HashMap::new(),
@@ -391,6 +391,7 @@ mod tests {
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,
             shutdown_gen: 0,
+            shutdown_timer: Default::default(),
             disposed: false,
         };
 

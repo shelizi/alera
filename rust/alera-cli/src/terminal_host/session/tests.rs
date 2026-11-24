@@ -95,6 +95,7 @@ fn test_session() -> Session {
         terminated: false,
         checkpoint_gen: 0,
         checkpoint_armed: false,
+        last_queued_checkpoint: None,
         output_batch: Vec::new(),
         output_batch_gen: 0,
         output_batch_armed: false,
@@ -120,6 +121,7 @@ fn conpty_startup_cursor_query_is_detected_once_across_output_chunks() {
 #[test]
 fn output_batch_coalesces_until_flush() {
     let mut session = test_session();
+    session.attach(1);
     assert_eq!(session.append_output(b"ab"), (Some(0), Some(0), None));
     assert_eq!(session.append_output(b"cd"), (None, None, None));
     assert!(session.output_batch_due(0));
@@ -137,6 +139,7 @@ fn output_batch_coalesces_until_flush() {
 #[test]
 fn owned_output_reuses_reader_allocation_across_independent_flushes() {
     let mut session = test_session();
+    session.attach(1);
     let first = vec![0xff; 16 * 1024];
     let first_ptr = first.as_ptr();
     assert_eq!(session.append_owned_output(first), (Some(0), Some(0), None));
@@ -174,6 +177,7 @@ fn owned_output_reuses_reader_allocation_across_independent_flushes() {
 #[test]
 fn owned_output_does_not_retain_disproportionate_reader_capacity() {
     let mut session = test_session();
+    session.attach(1);
     let mut data = Vec::with_capacity(1024 * 1024);
     data.extend_from_slice(b"tiny");
     let original = data.as_ptr();
@@ -236,6 +240,7 @@ fn output_backpressure_pauses_only_the_slow_client_until_resumed() {
 #[test]
 fn output_batch_empty_flush_disarms_timer() {
     let mut session = test_session();
+    session.attach(1);
     assert_eq!(session.append_output(b"a"), (Some(0), Some(0), None));
     assert!(session.flush_output_batch().is_some());
     assert!(session.flush_output_batch().is_none());
@@ -457,4 +462,282 @@ fn a_spawned_shell_is_sealed_with_its_start_time() {
 fn sealing_an_absent_pid_yields_nothing() {
     // Better unmeasured than measured against a guess.
     assert_eq!(seal_shell_process(u32::MAX), None);
+}
+
+async fn drain_checkpoint_writes(history: &TerminalHostHistoryRepository) {
+    assert!(
+        history
+            .flush_pending(std::time::Duration::from_secs(5))
+            .await
+    );
+}
+
+fn queue_session_checkpoint(
+    session: &mut Session,
+    history: &TerminalHostHistoryRepository,
+    max_bytes: usize,
+) {
+    if let Some(batch) = session.flush_durable_output_batch() {
+        history.queue_output_at_cursor(
+            session.id.clone(),
+            batch.sequence,
+            batch.data,
+            max_bytes,
+            batch.end_cursor,
+        );
+    }
+    session.queue_live_checkpoint(history, max_bytes);
+}
+
+#[tokio::test]
+async fn unchanged_checkpoints_do_not_rewrite_sqlite_after_worker_retirement() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let dir = tempfile::tempdir().unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
+    let audit = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new().filename(dir.path().join("terminal_history.sqlite")),
+        )
+        .await
+        .unwrap();
+    for statement in [
+        "CREATE TABLE checkpoint_write_audit (kind TEXT NOT NULL)",
+        "CREATE TRIGGER audit_checkpoint_insert AFTER INSERT ON checkpoints BEGIN INSERT INTO checkpoint_write_audit VALUES ('insert'); END",
+        "CREATE TRIGGER audit_checkpoint_update AFTER UPDATE ON checkpoints BEGIN INSERT INTO checkpoint_write_audit VALUES ('update'); END",
+    ] {
+        sqlx::query(statement).execute(&audit).await.unwrap();
+    }
+    let mut session = test_session();
+    session.set_max_bytes(4096);
+    session.append_output(b"first output");
+    queue_session_checkpoint(&mut session, &history, 4096);
+
+    // The first checkpoint is already queued, but the worker has not run.
+    for _ in 0..128 {
+        queue_session_checkpoint(&mut session, &history, 4096);
+    }
+    drain_checkpoint_writes(&history).await;
+    let first = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.buffer, b"first output");
+    assert_eq!(first.output_stream_bytes, 12);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_write_audit")
+        .fetch_one(&audit)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // No second worker, trim transaction, or checkpoint is necessary even
+    // after the original worker has acknowledged and retired its state.
+    for _ in 0..128 {
+        queue_session_checkpoint(&mut session, &history, 4096);
+        assert!(history.flush_pending(std::time::Duration::ZERO).await);
+    }
+    let unchanged = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged, first);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_write_audit")
+        .fetch_one(&audit)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // Workspace transfer is a real metadata change even without PTY output.
+    session.workspace_id = "moved-workspace".into();
+    queue_session_checkpoint(&mut session, &history, 4096);
+    drain_checkpoint_writes(&history).await;
+    let moved = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(moved.workspace_id, "moved-workspace");
+    assert_eq!(moved.buffer, first.buffer);
+
+    // A cap reduction must still persist and trim the durable tail.
+    session.set_max_bytes(5);
+    queue_session_checkpoint(&mut session, &history, 5);
+    drain_checkpoint_writes(&history).await;
+    let trimmed = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trimmed.buffer, b"utput");
+    assert_eq!(trimmed.output_stream_bytes, 12);
+
+    // The ring length remains five, but the absolute cursor has advanced.
+    session.append_output(b"12345");
+    queue_session_checkpoint(&mut session, &history, 5);
+    drain_checkpoint_writes(&history).await;
+    let changed = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.buffer, b"12345");
+    assert_eq!(changed.output_stream_bytes, 17);
+
+    assert!(session.handle_exit(7).is_some());
+    queue_session_checkpoint(&mut session, &history, 5);
+    drain_checkpoint_writes(&history).await;
+    let exited = history
+        .read(&session.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(exited.buffer, b"12345");
+    assert!(!exited.running);
+    assert_eq!(exited.exit_code, Some(7));
+    assert!(exited.ended_at.is_some());
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM checkpoint_write_audit")
+        .fetch_one(&audit)
+        .await
+        .unwrap();
+    assert_eq!(count, 5);
+    audit.close().await;
+}
+
+#[tokio::test]
+async fn restored_running_checkpoint_is_repaired_before_noop_suppression() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
+    let mut original = test_session();
+    original.append_output(b"crashed session");
+    queue_session_checkpoint(&mut original, &history, 1024);
+    drain_checkpoint_writes(&history).await;
+
+    let mut restored = Session::restore_exited(
+        original.id.clone(),
+        original.workspace_id.clone(),
+        original.tab_id.clone(),
+        &history,
+        1024,
+    )
+    .await
+    .unwrap();
+    assert!(restored.last_queued_checkpoint.is_none());
+    queue_session_checkpoint(&mut restored, &history, 1024);
+    drain_checkpoint_writes(&history).await;
+    let repaired = history
+        .read(&restored.id, usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(repaired.buffer, b"crashed session");
+    assert!(!repaired.running);
+    assert_eq!(repaired.exit_code, Some(-1));
+
+    queue_session_checkpoint(&mut restored, &history, 1024);
+    assert!(history.flush_pending(std::time::Duration::ZERO).await);
+}
+
+#[test]
+fn checkpoint_stamp_does_not_treat_saturated_cursor_as_unchanged() {
+    let mut session = test_session();
+    session.output_stream_bytes = u64::MAX;
+    session.remember_queued_checkpoint(1024);
+    assert!(!session
+        .last_queued_checkpoint
+        .as_ref()
+        .unwrap()
+        .matches(&session, 1024));
+}
+
+#[test]
+fn unobserved_output_keeps_durable_bytes_without_allocating_live_batches() {
+    let mut session = test_session();
+    const CHUNK: usize = 16 * 1024;
+    const CHUNKS: usize = 64;
+    session.set_max_bytes(CHUNK * CHUNKS);
+    let mut durable_bytes = Vec::new();
+    let mut live_timers = 0;
+    let mut durable_timers = 0;
+    for index in 0..CHUNKS {
+        let data = vec![index as u8; CHUNK];
+        let original = data.as_ptr();
+        let (live, durable, _) = session.append_owned_output(data);
+        live_timers += usize::from(live.is_some());
+        durable_timers += usize::from(durable.is_some());
+        assert_eq!(session.output_batch.capacity(), 0);
+        assert_eq!(session.output_batch_len(), 0);
+        assert!(session.flush_output_batch().is_none());
+        if index % 4 == 0 {
+            assert_eq!(session.durable_output_batch.as_ptr(), original);
+        }
+        if index % 4 == 3 {
+            let batch = session.flush_durable_output_batch().unwrap();
+            assert_eq!(batch.sequence, (index / 4) as i64);
+            assert_eq!(batch.end_cursor, ((index + 1) * CHUNK) as u64);
+            durable_bytes.extend_from_slice(&batch.data);
+        }
+    }
+    assert_eq!(live_timers, 0);
+    assert_eq!(durable_timers, CHUNKS / 4);
+    assert_eq!(durable_bytes.len(), CHUNK * CHUNKS);
+    assert_eq!(session.buffer.to_bytes(), durable_bytes);
+    assert_eq!(session.output_stream_range(), (0, (CHUNK * CHUNKS) as u64));
+    for (index, chunk) in durable_bytes.chunks_exact(CHUNK).enumerate() {
+        assert!(chunk.iter().all(|byte| *byte == index as u8));
+    }
+}
+
+#[test]
+fn live_batch_tracks_active_recipients_and_invalidates_an_abandoned_generation() {
+    let mut session = test_session();
+    session.attach(1);
+    session.attach(2);
+    session.set_output_paused(1, true);
+    // Non-attached requests can leave stale pause entries. They must not
+    // suppress the other viewer even when the set lengths happen to match.
+    session.set_output_paused(99, true);
+    let (first, _, _) = session.append_output(b"first");
+    assert_eq!(first, Some(0));
+    assert_eq!(session.output_clients(), vec![2]);
+    assert_eq!(session.output_batch_len(), 5);
+
+    session.set_output_paused(2, true);
+    let (live, _, title) = session.append_output(b"\x1b]2;Background\x07");
+    assert_eq!(live, None);
+    assert_eq!(title.as_deref(), Some("Background"));
+    assert_eq!(session.output_batch.capacity(), 0);
+    assert!(!session.output_batch_due(first.unwrap()));
+    assert_eq!(session.delivered_output_cursor(2), Some(0));
+    assert!(session.output_clients().is_empty());
+
+    // Real attach/resume first catches the recipient up from the ring.
+    session.attach(2);
+    let end = session.output_stream_range().1;
+    let (next, _, _) = session.append_output(b"next");
+    assert_eq!(next, Some(1));
+    assert_eq!(session.delivered_output_cursor(2), Some(end));
+    assert_eq!(session.flush_output_batch().unwrap().data, b"next");
+    let durable = session.flush_durable_output_batch().unwrap();
+    assert_eq!(durable.data, b"first\x1b]2;Background\x07next");
+    assert_eq!(durable.end_cursor, end + 4);
+}
+
+#[test]
+fn empty_output_does_not_arm_either_batch() {
+    let mut session = test_session();
+    session.attach(1);
+    assert_eq!(session.append_owned_output(Vec::new()), (None, None, None));
+    assert_eq!(session.output_batch.capacity(), 0);
+    assert_eq!(session.durable_output_batch.capacity(), 0);
+    assert!(!session.output_batch_due(0));
+    assert!(!session.durable_output_batch_due(0));
+    assert_eq!(session.output_stream_range(), (0, 0));
 }
