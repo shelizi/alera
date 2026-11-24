@@ -16,33 +16,20 @@ String? _readLastTextFromTranscript(
     return null;
   }
   try {
-    final file = File(transcriptPath);
-    final length = file.lengthSync();
-    if (length <= 0) {
-      return null;
-    }
-    final start = length > _transcriptMaxScanBytes
-        ? length - _transcriptMaxScanBytes
-        : 0;
-    final bytes = file.openSync()..setPositionSync(start);
+    final handle = File(transcriptPath).openSync();
     try {
-      final text = utf8.decode(
-        bytes.readSync(length - start),
-        allowMalformed: true,
+      final result = readLastMatchingJsonlLine(
+        length: handle.lengthSync(),
+        maxScanBytes: _transcriptMaxScanBytes,
+        readAt: (offset, count) {
+          handle.setPositionSync(offset);
+          return handle.readSync(count);
+        },
+        extract: extract,
       );
-      final lines = text.split('\n');
-      for (var index = lines.length - 1; index >= 0; index--) {
-        final line = lines[index].trim();
-        if (line.isEmpty) {
-          continue;
-        }
-        final extracted = extract(line);
-        if (extracted != null) {
-          return _normalizeMultiline(extracted, 8000);
-        }
-      }
+      return result == null ? null : _normalizeMultiline(result, 8000);
     } finally {
-      bytes.closeSync();
+      handle.closeSync();
     }
   } catch (_) {}
   return null;

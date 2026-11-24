@@ -327,6 +327,140 @@ void main() {
       expect(event.payload['last_assistant_message'], 'Done.');
     });
 
+    test(
+      'preserves multibyte JSONL records split across file appends',
+      () async {
+        transcript.writeAsStringSync('');
+        watcher.observeHookEvent(
+          _event(
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{
+              'turn_id': 'turn-1',
+              'transcript_path': transcript.path,
+            },
+          ),
+        );
+        await watcher.scanNowForTesting('session-1');
+        const message = '已完成驗證😀';
+        final line =
+            jsonEncode({
+              'type': 'event_msg',
+              'payload': {
+                'type': 'task_complete',
+                'turn_id': 'turn-1',
+                'last_agent_message': message,
+              },
+            }) +
+            '\n';
+        final encoded = utf8.encode(line);
+        final split = encoded.indexOf(utf8.encode('已').first) + 1;
+        transcript.writeAsBytesSync(encoded.sublist(0, split), mode: .append);
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, isEmpty);
+        transcript.writeAsBytesSync(encoded.sublist(split), mode: .append);
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, hasLength(1));
+        expect(sink.events.single.hookEventName, 'Stop');
+        expect(sink.events.single.payload['last_assistant_message'], message);
+      },
+    );
+
+    test(
+      'reads large incremental batches without splitting Unicode records',
+      () async {
+        transcript.writeAsStringSync('');
+        watcher.observeHookEvent(
+          _event(
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{
+              'turn_id': 'turn-1',
+              'transcript_path': transcript.path,
+            },
+          ),
+        );
+        await watcher.scanNowForTesting('session-1');
+        final message = '測試😀' * 24000;
+        transcript.writeAsStringSync(
+          jsonEncode({
+                'type': 'event_msg',
+                'payload': {
+                  'type': 'task_complete',
+                  'turn_id': 'turn-1',
+                  'last_agent_message': message,
+                },
+              }) +
+              '\n',
+          mode: .append,
+        );
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, hasLength(1));
+        expect(sink.events.single.payload['last_assistant_message'], message);
+      },
+    );
+
+    test(
+      'rewinds a truncated transcript and discards stale partial bytes',
+      () async {
+        transcript.writeAsStringSync('');
+        watcher.observeHookEvent(
+          _event(
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{
+              'turn_id': 'turn-1',
+              'transcript_path': transcript.path,
+            },
+          ),
+        );
+        await watcher.scanNowForTesting('session-1');
+        transcript.writeAsStringSync(
+          '{"unfinished":"${'x' * 70000}',
+          mode: .append,
+        );
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, isEmpty);
+        transcript.writeAsStringSync('');
+        await watcher.scanNowForTesting('session-1');
+        transcript.writeAsStringSync(
+          '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"recovered"}}\n',
+          mode: .append,
+        );
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, hasLength(1));
+        expect(
+          sink.events.single.payload['last_assistant_message'],
+          'recovered',
+        );
+      },
+    );
+
+    test(
+      'without a turn id, truncation does not replay an old completion',
+      () async {
+        transcript.writeAsStringSync(
+          '{"type":"ignored","padding":"${'x' * 10000}"}\n',
+        );
+        watcher.observeHookEvent(
+          _event(
+            hookEventName: 'UserPromptSubmit',
+            payload: <String, Object?>{'transcript_path': transcript.path},
+          ),
+        );
+        await watcher.scanNowForTesting('session-1');
+        transcript.writeAsStringSync(
+          '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"older-turn","last_agent_message":"old"}}\n',
+        );
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, isEmpty);
+        transcript.writeAsStringSync(
+          '{"type":"event_msg","payload":{"type":"task_complete","turn_id":"new-turn","last_agent_message":"new"}}\n',
+          mode: .append,
+        );
+        await watcher.scanNowForTesting('session-1');
+        expect(sink.events, hasLength(1));
+        expect(sink.events.single.payload['last_assistant_message'], 'new');
+      },
+    );
+
     test('clearTerminal drops the watch for a closed terminal', () async {
       transcript.writeAsStringSync('');
       watcher.observeHookEvent(

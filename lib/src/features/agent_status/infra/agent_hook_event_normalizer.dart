@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
+import 'jsonl_tail_reader.dart';
+
 part 'normalizers/agent_hook_adapter.dart';
 part 'normalizers/agy_agent_hook_normalizer.dart';
 part 'normalizers/amp_agent_hook_normalizer.dart';

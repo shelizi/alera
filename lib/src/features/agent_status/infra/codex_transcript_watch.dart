@@ -21,8 +21,8 @@ class _CodexTranscriptWatch({
   /// background, so returning restores the same one rather than upgrading a
   /// degraded watch back to a file-event watch that already failed.
   var _polling = false;
-  var _offset = 0;
-  var _partialLine = '';
+  int? _offset;
+  final _partialLine = BytesBuilder(copy: false);
   var _armed = false;
   var _initialScan = true;
   var _disposed = false;
@@ -34,8 +34,8 @@ class _CodexTranscriptWatch({
     _foregroundSubscription = appForeground.changes.listen(_applyForeground);
     final file = File(transcriptPath);
     try {
-      final length = file.existsSync() ? file.lengthSync() : 0;
-      _offset = math.max(0, length - _initialTranscriptScanBytes);
+      // The first async scan determines the initial tail window. Avoid
+      // synchronous file existence and size probes on the Hook/UI path.
       _subscription = file
           .watch(
             events:
@@ -56,7 +56,6 @@ class _CodexTranscriptWatch({
       // coverage:ignore-start
       // File watch setup can fail on platform/filesystem races; scan polling
       // still handles the transcript and is covered by watcher tests.
-      _offset = 0;
       _enablePolling();
       // coverage:ignore-end
     }
@@ -89,6 +88,7 @@ class _CodexTranscriptWatch({
 
   void dispose() {
     _disposed = true;
+    _partialLine.clear();
     unawaited(_subscription?.cancel());
     unawaited(_foregroundSubscription?.cancel());
     _watchdogTimer?.cancel();
@@ -171,7 +171,24 @@ class _CodexTranscriptWatch({
     } catch (_) {
       return;
     }
-    if (length <= _offset) {
+    if (_disposed) return;
+
+    var offset = _offset ?? math.max(0, length - _initialTranscriptScanBytes);
+    if (length < offset) {
+      // A truncated transcript invalidates the byte cursor and any unfinished
+      // line. Keep call IDs for deduplication within this observed turn.
+      offset = 0;
+      _partialLine.clear();
+      if (turnId == null) {
+        // Without an explicit turn identity, replaying rewritten historical
+        // records could falsely complete the current turn. Re-arm only after
+        // reading this replacement snapshot, as on the initial scan.
+        _armed = false;
+        _initialScan = true;
+      }
+    }
+    _offset = offset;
+    if (length == offset) {
       _finishInitialScanIfNeeded();
       return;
     }
@@ -179,24 +196,49 @@ class _CodexTranscriptWatch({
     RandomAccessFile? handle;
     try {
       handle = await file.open();
-      await handle.setPosition(_offset);
-      final bytes = await handle.read(length - _offset);
-      _offset = length;
-      final text = _partialLine + utf8.decode(bytes, allowMalformed: true);
-      final lines = text.split('\n');
-      _partialLine = text.endsWith('\n') ? '' : lines.removeLast();
-      for (final rawLine in lines) {
-        final line = rawLine.trim();
-        if (line.isEmpty) {
-          continue;
-        }
-        _processLine(line);
+      if (_disposed) return;
+      await handle.setPosition(offset);
+      while (offset < length && !_disposed) {
+        final bytes = await handle.read(
+          math.min(length - offset, _transcriptReadBlockBytes),
+        );
+        if (_disposed || bytes.isEmpty) break;
+        // Only advance for bytes actually received. A short read can occur
+        // if the provider truncates or replaces the file during the scan.
+        offset += bytes.length;
+        _offset = offset;
+        _processBytes(bytes);
       }
     } catch (_) {
       return;
     } finally {
-      await handle?.close();
+      try {
+        await handle?.close();
+      } catch (_) {
+        // The provider may have removed the file during the read.
+      }
       _finishInitialScanIfNeeded();
+    }
+  }
+
+  void _processBytes(Uint8List bytes) {
+    var start = 0;
+    for (var index = 0; index < bytes.length && !_disposed; index++) {
+      if (bytes[index] != 0x0a) continue;
+      final segment = Uint8List.sublistView(bytes, start, index);
+      Uint8List lineBytes;
+      if (_partialLine.isEmpty) {
+        lineBytes = segment;
+      } else {
+        _partialLine.add(segment);
+        lineBytes = _partialLine.takeBytes();
+      }
+      final line = utf8.decode(lineBytes, allowMalformed: true).trim();
+      if (line.isNotEmpty) _processLine(line);
+      start = index + 1;
+    }
+    if (!_disposed && start < bytes.length) {
+      _partialLine.add(Uint8List.sublistView(bytes, start));
     }
   }
 
@@ -459,3 +501,4 @@ bool _isCodexTranscriptWaitingTool(String? toolName) {
 }
 
 const int _initialTranscriptScanBytes = 256 * 1024;
+const int _transcriptReadBlockBytes = 64 * 1024;

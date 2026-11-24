@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
