@@ -22,6 +22,11 @@ pub(super) struct AgentTitleState {
     pub eligible: bool,
     pub attempted: bool,
     pub closed: bool,
+    /// Raw, bounded report checkpoint for this exact provider conversation.
+    /// Private tab state, never serialized through the public tab projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_overview:
+        Option<crate::terminal_host::orchestration::agent_context::AgentContextOverview>,
 }
 
 impl AgentTitleState {
@@ -38,6 +43,7 @@ impl AgentTitleState {
             eligible,
             attempted: false,
             closed: false,
+            context_overview: None,
         }
     }
 

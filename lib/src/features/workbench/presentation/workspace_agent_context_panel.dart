@@ -2,6 +2,9 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_context_overview.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/workbench/application/agent_context_recovery.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -30,7 +33,10 @@ class const WorkspaceAgentContextPanel({
             : matchingAgentStatusForTab(tab: tab, agentStatuses: statuses);
       }),
     );
-    if (status == null) {
+    final provider = tab == null ? null : agentContextProviderForTab(tab);
+    if (tab == null ||
+        tab.kind != WorkspaceTabKind.terminal ||
+        (status == null && provider == null)) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(20),
@@ -42,17 +48,96 @@ class const WorkspaceAgentContextPanel({
       );
     }
 
-    final overview = AgentContextOverview.fromRaw(status.contextOverview);
+    final overview = AgentContextOverview.fromRaw(status?.contextOverview);
+    final identity = (
+      workspaceId: tab.workspaceId,
+      tabId: tab.id,
+      sessionId: tab.terminalSessionId,
+      conversationId: tab.payload['agentTitleConversationId']?.toString() ?? '',
+      provider: status?.agentType.key ?? provider ?? '',
+    );
+    // Only the visible selected tab can request its exact verified history.
+    // Live Hook reports take precedence. A separate checkpoint can survive a
+    // Host restart or SessionEnd without making the Agent appear idle.
+    final needsRecovery =
+        overview.goal.isEmpty ||
+        overview.displayProgress.isEmpty ||
+        overview.timeline.isEmpty;
+    // Invalidate the saved view when presence disappears, including a Host
+    // restart and SessionEnd. A previously cached empty result must not hide
+    // a more recent durable report. Selection changes use a different key.
+    ref.listen(
+      agentStatusControllerProvider.select(
+        (statuses) =>
+            matchingAgentStatusForTab(tab: tab, agentStatuses: statuses),
+      ),
+      (previous, next) {
+        if (previous != null && next == null) {
+          ref.invalidate(agentContextRecoveryProvider(identity));
+        }
+      },
+    );
+    final recovered = needsRecovery
+        ? ref.watch(agentContextRecoveryProvider(identity))
+        : null;
+    return AgentContextReportView(
+      key: ValueKey(identity),
+      sessionId: tab.terminalSessionId,
+      live: status,
+      recovery: recovered?.asData?.value,
+      loading: recovered?.isLoading ?? false,
+      refresh: needsRecovery
+          ? () => ref.invalidate(agentContextRecoveryProvider(identity))
+          : null,
+    );
+  }
+}
+
+/// Actual right-hand panel body. Kept separate from selection/transport so
+/// report visibility, empty states and recovery precedence can be exercised
+/// by a real widget test without starting a Terminal.
+class AgentContextReportView extends StatelessWidget {
+  const AgentContextReportView({
+    super.key,
+    required this.sessionId,
+    required this.live,
+    this.recovery,
+    this.loading = false,
+    this.refresh,
+  });
+  final String sessionId;
+  final AgentStatusEntry? live;
+  final AgentContextRecovery? recovery;
+  final bool loading;
+  final VoidCallback? refresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final overview = AgentContextOverview.fromRaw(live?.contextOverview);
+    final stored = recovery?.overview ?? const AgentContextOverview();
     final goal = overview.goal.isNotEmpty
         ? overview.goal
-        : status.prompt.trim();
+        : (live?.prompt.trim().isNotEmpty ?? false)
+        ? live!.prompt.trim()
+        : stored.goal;
+    final raw =
+        live?.state == AgentStatusState.done && live?.interrupted != true
+        ? (live?.lastAssistantMessage?.trim() ?? '')
+        : '';
+    final usesStored = overview.displayProgress.isEmpty && raw.isEmpty;
     final progress = overview.displayProgress.isNotEmpty
         ? overview.displayProgress
-        : (status.lastAssistantMessage?.trim() ?? '');
+        : raw.isNotEmpty
+        ? raw
+        : stored.progress;
     final textStyle = Theme.of(context).textTheme.bodySmall;
-    final timeline = overview.timeline;
+    // Keep recovered earlier milestones as well as the new live ones.
+    final timeline = mergeAgentContextTimelines(
+      overview.timeline,
+      stored.timeline,
+    );
     return ListView(
-      key: ValueKey<String>('agent-context-${status.terminalSessionId}'),
+      key: ValueKey<String>('agent-context-$sessionId'),
       padding: const EdgeInsets.all(14),
       children: <Widget>[
         Row(
@@ -63,6 +148,13 @@ class const WorkspaceAgentContextPanel({
               'Agent Context',
               style: Theme.of(context).textTheme.titleSmall,
             ),
+            const Spacer(),
+            if (refresh != null)
+              IconButton(
+                tooltip: '重新讀取工作回報',
+                icon: const Icon(Icons.refresh, size: 16),
+                onPressed: loading ? null : refresh,
+              ),
           ],
         ),
         const SizedBox(height: 8),
@@ -79,8 +171,16 @@ class const WorkspaceAgentContextPanel({
         _ContextSection(
           title: overview.reportSummary.isNotEmpty
               ? '最新工作回報（AI 摘要）'
+              : usesStored && progress.isNotEmpty
+              ? (recovery?.fromHistory == true
+                    ? '最新工作回報（原生歷史回覆）'
+                    : '最新工作回報（已保存的 Agent 回覆）')
               : '最新工作回報（Agent 回覆）',
-          content: progress.isNotEmpty ? progress : '等待 Agent 提供工作進度。',
+          content: progress.isNotEmpty
+              ? progress
+              : loading
+              ? '正在讀取原生工作回報…'
+              : '尚未取得原始 Agent 回覆。完成事件可能不包含回覆內容；可重新讀取，或等待下一次工作回報。',
         ),
         const SizedBox(height: 18),
         Text('進度時間線（最新在前）', style: Theme.of(context).textTheme.titleSmall),

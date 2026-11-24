@@ -64,6 +64,13 @@ pub fn normalize_hook_event(
         ],
     )
     .or_else(|| {
+        // AGY's documented common Hook fields contain the latest actual user
+        // input; its Stop event otherwise carries no final assistant reply.
+        (event.agent_type == "agy")
+            .then(|| first_string(&event.payload, &["lastUserInput", "last_user_input"]))
+            .flatten()
+    })
+    .or_else(|| {
         user_message_part
             .then(|| first_string(&event.payload, &["text"]))
             .flatten()
