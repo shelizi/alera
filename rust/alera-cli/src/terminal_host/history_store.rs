@@ -64,6 +64,7 @@ pub struct TerminalHostCheckpoint {
 #[derive(Clone)]
 pub struct TerminalHostHistoryStore {
     pool: SqlitePool,
+    blob_concat_safe: bool,
 }
 
 impl TerminalHostHistoryStore {
@@ -96,7 +97,17 @@ impl TerminalHostHistoryStore {
             .execute(&pool)
             .await?;
         harden_sqlite_files(&path)?;
-        Ok(TerminalHostHistoryStore { pool })
+        // SQLite concatenation temporarily treats its result as text.
+        // UTF-16 databases can discard an odd trailing byte, so only use
+        // the direct BLOB append in UTF-8 databases. Encoding is fixed
+        // once the database has a schema.
+        let encoding: String = sqlx::query_scalar("PRAGMA encoding")
+            .fetch_one(&pool)
+            .await?;
+        Ok(TerminalHostHistoryStore {
+            pool,
+            blob_concat_safe: encoding.eq_ignore_ascii_case("UTF-8"),
+        })
     }
 
     pub async fn read(
@@ -231,7 +242,14 @@ impl TerminalHostHistoryStore {
         }
 
         let mut transaction = self.begin_write().await?;
-        persist_session_rows(&mut transaction, session_id, checkpoint, outputs).await?;
+        persist_session_rows(
+            &mut transaction,
+            session_id,
+            checkpoint,
+            outputs,
+            self.blob_concat_safe,
+        )
+        .await?;
         if let Some(limit) = max_bytes {
             if let Err(trim_error) = trim_output_rows(&mut transaction, session_id, limit).await {
                 // Preserve the previous durability contract on maintenance
@@ -241,7 +259,14 @@ impl TerminalHostHistoryStore {
                 // that later retry idempotent.
                 transaction.rollback().await?;
                 let mut transaction = self.begin_write().await?;
-                persist_session_rows(&mut transaction, session_id, checkpoint, outputs).await?;
+                persist_session_rows(
+                    &mut transaction,
+                    session_id,
+                    checkpoint,
+                    outputs,
+                    self.blob_concat_safe,
+                )
+                .await?;
                 transaction.commit().await?;
                 return Err(trim_error.context("terminal history trim failed after saving output"));
             }
@@ -402,6 +427,7 @@ async fn persist_session_rows(
     session_id: &str,
     checkpoint: Option<&TerminalHostCheckpoint>,
     outputs: &[(i64, impl AsRef<[u8]>)],
+    blob_concat_safe: bool,
 ) -> Result<()> {
     if let Some(checkpoint) = checkpoint {
         sqlx::query(
@@ -437,7 +463,7 @@ async fn persist_session_rows(
     }
 
     if outputs.iter().any(|(_, data)| !data.as_ref().is_empty()) {
-        append_output_rows(transaction, session_id, outputs).await?;
+        append_output_rows(transaction, session_id, outputs, blob_concat_safe).await?;
     }
     Ok(())
 }
@@ -610,6 +636,7 @@ async fn append_output_rows(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session_id: &str,
     outputs: &[(i64, impl AsRef<[u8]>)],
+    blob_concat_safe: bool,
 ) -> Result<()> {
     let has_checkpoint = sqlx::query("SELECT 1 FROM checkpoints WHERE sessionId = ?")
         .bind(session_id)
@@ -619,59 +646,63 @@ async fn append_output_rows(
     if !has_checkpoint {
         return Ok(());
     }
-    let newest = sqlx::query(
-        "SELECT id, sequence, CASE WHEN length(data) < ? THEN data END AS appendableData \
-         FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC LIMIT 1",
+
+    // Read only the row identity and its byte length. Even a small append
+    // or a replayed flush previously decoded the entire appendable BLOB.
+    let newest: Option<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, sequence, length(data) FROM outputChunks \
+         WHERE sessionId = ? ORDER BY sequence DESC, id DESC LIMIT 1",
     )
-    .bind(OUTPUT_CHUNK_TARGET_BYTES as i64)
     .bind(session_id)
     .fetch_optional(&mut **transaction)
     .await?;
+    let persisted_sequence = newest.map(|(_, sequence, _)| sequence);
+    let appendable = newest.and_then(|(id, _, len)| {
+        let capacity = OUTPUT_CHUNK_TARGET_BYTES.checked_sub(usize::try_from(len).ok()?)?;
+        (capacity > 0).then_some((id, capacity))
+    });
+    // The extension contains only new bytes, never the existing BLOB.
+    let mut extension: Option<PendingOutputRow<'_>> = None;
     let mut rows: Vec<PendingOutputRow<'_>> = Vec::new();
-    let mut persisted_sequence = None;
-    if let Some(row) = newest {
-        let sequence: i64 = row.try_get("sequence")?;
-        persisted_sequence = Some(sequence);
-        // A full or oversized newest row cannot be extended. Do not decode
-        // or transfer its BLOB to Rust just to discard it.
-        let data: Option<Vec<u8>> = row.try_get("appendableData")?;
-        if let Some(data) = data {
-            rows.push(PendingOutputRow {
-                existing_id: Some(row.try_get("id")?),
-                sequence,
-                data: Cow::Owned(data),
-                dirty: false,
-            });
-        }
-    }
-
     for (sequence, data) in outputs {
         let data = data.as_ref();
         if data.is_empty() || persisted_sequence.is_some_and(|newest| *sequence <= newest) {
             continue;
         }
-        match rows.last_mut() {
-            Some(row) if row.data.len() + data.len() <= OUTPUT_CHUNK_TARGET_BYTES => {
-                row.data.to_mut().extend_from_slice(data);
-                row.sequence = *sequence;
-                row.dirty = true;
+        if rows.is_empty() {
+            if let Some((_, capacity)) = appendable {
+                let appended = extension.as_ref().map_or(0, |row| row.data.len());
+                if data.len() <= capacity - appended {
+                    if let Some(row) = extension.as_mut() {
+                        row.append(*sequence, data);
+                    } else {
+                        extension = Some(PendingOutputRow::new(*sequence, data));
+                    }
+                    continue;
+                }
             }
-            _ => rows.push(PendingOutputRow {
-                existing_id: None,
-                sequence: *sequence,
-                data: Cow::Borrowed(data),
-                dirty: true,
-            }),
+        }
+        // Once a new row has started, never move later smaller chunks back
+        // into the previous row, even when its unused capacity would fit.
+        match rows.last_mut() {
+            Some(row) if row.data.len().saturating_add(data.len()) <= OUTPUT_CHUNK_TARGET_BYTES => {
+                row.append(*sequence, data);
+            }
+            _ => rows.push(PendingOutputRow::new(*sequence, data)),
         }
     }
-
+    if extension.is_none() && rows.is_empty() {
+        return Ok(());
+    }
     let created_at = format_timestamp(Utc::now());
-    // At most the first planned row extends an existing row. Preserve its
-    // update-before-inserts order and leave the single-row hot path cheap.
-    if let Some(row) = rows.first().filter(|row| row.dirty) {
-        if let Some(id) = row.existing_id {
+    if let (Some((id, _)), Some(row)) = (appendable, extension) {
+        if blob_concat_safe {
+            // Both operands are BLOBs. CAST prevents SQLite's intermediate
+            // text result from becoming stored text (length/substr would
+            // otherwise interpret NUL and non-UTF-8 bytes incorrectly).
             sqlx::query(
-                "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
+                "UPDATE outputChunks SET sequence = ?, createdAt = ?, \
+                 data = CAST(data || ? AS BLOB) WHERE id = ?",
             )
             .bind(row.sequence)
             .bind(&created_at)
@@ -679,12 +710,27 @@ async fn append_output_rows(
             .bind(id)
             .execute(&mut **transaction)
             .await?;
+        } else {
+            // Preserve raw bytes even in an externally created UTF-16 DB.
+            // Only fetch the prefix when we actually extend that row.
+            let mut data: Vec<u8> =
+                sqlx::query_scalar("SELECT data FROM outputChunks WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&mut **transaction)
+                    .await?;
+            data.extend_from_slice(row.data.as_ref());
+            sqlx::query(
+                "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
+            )
+            .bind(row.sequence)
+            .bind(&created_at)
+            .bind(&data)
+            .bind(id)
+            .execute(&mut **transaction)
+            .await?;
         }
     }
-    // The optional existing row is always first; all following rows are
-    // new inserts. Avoid a descriptor allocation for ordinary single rows.
-    let first_new = usize::from(rows.first().is_some_and(|row| row.existing_id.is_some()));
-    match &rows[first_new..] {
+    match rows.as_slice() {
         [] => {}
         [row] => {
             insert_output_rows(
@@ -761,10 +807,22 @@ async fn insert_output_rows(
 }
 
 struct PendingOutputRow<'a> {
-    existing_id: Option<i64>,
     sequence: i64,
     data: Cow<'a, [u8]>,
-    dirty: bool,
+}
+
+impl<'a> PendingOutputRow<'a> {
+    fn new(sequence: i64, data: &'a [u8]) -> Self {
+        Self {
+            sequence,
+            data: Cow::Borrowed(data),
+        }
+    }
+
+    fn append(&mut self, sequence: i64, data: &[u8]) {
+        self.data.to_mut().extend_from_slice(data);
+        self.sequence = sequence;
+    }
 }
 
 /// Rewrites a session's retained tail as [`OUTPUT_CHUNK_TARGET_BYTES`] rows,

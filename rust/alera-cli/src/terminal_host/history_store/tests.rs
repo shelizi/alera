@@ -1186,6 +1186,263 @@ async fn benchmark_batched_history_insert() {
 }
 
 #[tokio::test]
+async fn sqlite_blob_append_preserves_binary_values_boundaries_and_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    assert!(store.blob_concat_safe);
+    let seed: Vec<u8> = (0..OUTPUT_CHUNK_TARGET_BYTES - 5)
+        .map(|i| i as u8)
+        .collect();
+    store
+        .persist_session("s1", Some(&sample("s1")), &[(0, seed.clone())])
+        .await
+        .unwrap();
+    let outputs = [
+        (0, b"replayed seed".to_vec()),
+        (1, Vec::new()),
+        (2, vec![0xff, 0, 0x80]),
+        (3, vec![0xfe]),
+        // This no longer fits in the first row. Subsequent smaller
+        // output must stay with the new row, not jump backwards.
+        (4, vec![0, 0xfd, b'x', 0xfc]),
+        (5, vec![0]),
+        (6, vec![0x81; OUTPUT_CHUNK_TARGET_BYTES + 3]),
+        (7, vec![0xff]),
+    ];
+    store.persist_session("s1", None, &outputs).await.unwrap();
+    let mut expected_rows = vec![seed, Vec::new(), outputs[6].1.clone(), outputs[7].1.clone()];
+    expected_rows[0].extend_from_slice(&outputs[2].1);
+    expected_rows[0].extend_from_slice(&outputs[3].1);
+    expected_rows[1].extend_from_slice(&outputs[4].1);
+    expected_rows[1].extend_from_slice(&outputs[5].1);
+    let rows: Vec<(i64, String, i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT sequence, typeof(data), length(data), data FROM outputChunks
+         WHERE sessionId = 's1' ORDER BY sequence, id",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), expected_rows.len());
+    for ((sequence, storage_class, len, data), (expected_sequence, expected)) in rows
+        .iter()
+        .zip([3, 5, 6, 7].into_iter().zip(&expected_rows))
+    {
+        assert_eq!(*sequence, expected_sequence);
+        assert_eq!(storage_class, "blob");
+        assert_eq!(*len, expected.len() as i64);
+        assert_eq!(data, expected);
+    }
+    sqlx::query(
+        "CREATE TRIGGER reject_replay_update BEFORE UPDATE ON outputChunks
+                 BEGIN SELECT RAISE(ABORT, 'replay must not update'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_replay_insert BEFORE INSERT ON outputChunks
+                 BEGIN SELECT RAISE(ABORT, 'replay must not insert'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    store.persist_session("s1", None, &outputs).await.unwrap();
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 8);
+    assert_eq!(
+        store.read_buffer("s1", usize::MAX).await.unwrap(),
+        expected_rows.concat()
+    );
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn sqlite_blob_append_preserves_odd_byte_lengths_in_legacy_utf16_databases() {
+    for pragma in [
+        "PRAGMA encoding = 'UTF-16le'",
+        "PRAGMA encoding = 'UTF-16be'",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(dir.path().join(HISTORY_DATABASE_FILE_NAME))
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(pragma).execute(&pool).await.unwrap();
+        // Freeze the encoding before the history store creates its tables.
+        sqlx::query("CREATE TABLE encoding_fixture (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        assert!(!store.blob_concat_safe);
+        let encoding: String = sqlx::query_scalar("PRAGMA encoding")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert!(encoding.starts_with("UTF-16"));
+        store
+            .persist_session("s1", Some(&sample("s1")), &[(0, &[0xff, 0][..])])
+            .await
+            .unwrap();
+        // The old prefix plus the new bytes has odd length. The legacy
+        // fallback must not allow SQLite concat to truncate the last byte.
+        store
+            .persist_session("s1", None, &[(1, &[0x80][..])])
+            .await
+            .unwrap();
+        store
+            .persist_session("s1", None, &[(2, &[0, 0xfe][..])])
+            .await
+            .unwrap();
+        let row: (String, i64, Vec<u8>) = sqlx::query_as(
+            "SELECT typeof(data), length(data), data FROM outputChunks WHERE sessionId = 's1'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(row, ("blob".to_string(), 5, vec![0xff, 0, 0x80, 0, 0xfe]));
+        assert_eq!(store.next_output_sequence("s1").await.unwrap(), 3);
+        store.trim_session("s1", 3).await.unwrap();
+        assert_eq!(
+            store.read_buffer("s1", usize::MAX).await.unwrap(),
+            vec![0x80, 0, 0xfe]
+        );
+        store.close_for_test().await;
+    }
+}
+
+/// Benchmark the previous actual SELECT/decode/extend/UPDATE against
+/// production append_output_rows. Both execute inside the same rolled-back
+/// transactions; WAL commits and fsync are deliberately outside timing.
+#[tokio::test]
+#[ignore = "manual BLOB append microbenchmark"]
+async fn benchmark_sqlite_blob_append() {
+    use std::time::Instant;
+
+    async fn legacy_append(
+        transaction: &mut sqlx::Transaction<'_, Sqlite>,
+        sequence: i64,
+        suffix: &[u8],
+    ) -> (usize, usize) {
+        let has_checkpoint = sqlx::query("SELECT 1 FROM checkpoints WHERE sessionId = ?")
+            .bind("s1")
+            .fetch_optional(&mut **transaction)
+            .await
+            .unwrap()
+            .is_some();
+        assert!(has_checkpoint);
+        let row = sqlx::query(
+            "SELECT id, sequence, CASE WHEN length(data) < ? THEN data END AS appendableData \
+             FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC LIMIT 1",
+        )
+        .bind(OUTPUT_CHUNK_TARGET_BYTES as i64)
+        .bind("s1")
+        .fetch_one(&mut **transaction)
+        .await
+        .unwrap();
+        let newest: i64 = row.try_get("sequence").unwrap();
+        let mut data: Vec<u8> = row
+            .try_get::<Option<Vec<u8>>, _>("appendableData")
+            .unwrap()
+            .unwrap();
+        let read_bytes = data.len();
+        let mut write_bytes = 0;
+        let created_at = format_timestamp(Utc::now());
+        if sequence > newest {
+            assert!(data.len() + suffix.len() <= OUTPUT_CHUNK_TARGET_BYTES);
+            data.extend_from_slice(suffix);
+            write_bytes = data.len();
+            sqlx::query(
+                "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
+            )
+            .bind(sequence)
+            .bind(&created_at)
+            .bind(&data)
+            .bind(row.try_get::<i64, _>("id").unwrap())
+            .execute(&mut **transaction)
+            .await
+            .unwrap();
+        }
+        (read_bytes, write_bytes)
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    assert!(store.blob_concat_safe);
+    let seed: Vec<u8> = (0..8192).map(|i| i as u8).collect();
+    let suffix: Vec<u8> = (0..32).map(|i| (255 - i) as u8).collect();
+    store
+        .persist_session("s1", Some(&sample("s1")), &[(0, &seed)])
+        .await
+        .unwrap();
+    const CALLS: usize = 128;
+    for replay in [false, true] {
+        let mut expected = seed.clone();
+        if !replay {
+            for _ in 0..CALLS {
+                expected.extend_from_slice(&suffix);
+            }
+        }
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut old_read = 0;
+        let mut old_write = 0;
+        for round in 0..9 {
+            for optimized in [round % 2 != 0, round % 2 == 0] {
+                let mut transaction = store.begin_write().await.unwrap();
+                let started = Instant::now();
+                let mut read_bytes = 0;
+                let mut write_bytes = 0;
+                for index in 0..CALLS {
+                    let sequence = if replay { 0 } else { index as i64 + 1 };
+                    if optimized {
+                        append_output_rows(
+                            &mut transaction,
+                            "s1",
+                            &[(sequence, suffix.as_slice())],
+                            store.blob_concat_safe,
+                        )
+                        .await
+                        .unwrap();
+                    } else {
+                        let (read, written) =
+                            legacy_append(&mut transaction, sequence, &suffix).await;
+                        read_bytes += read;
+                        write_bytes += written;
+                    }
+                }
+                let ms = started.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(
+                    read_buffer_from(&mut *transaction, "s1", usize::MAX)
+                        .await
+                        .unwrap(),
+                    expected
+                );
+                transaction.rollback().await.unwrap();
+                if round >= 2 {
+                    if optimized {
+                        after.push(ms);
+                    } else {
+                        before.push(ms);
+                        old_read = read_bytes;
+                        old_write = write_bytes;
+                    }
+                }
+            }
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        let new_write = if replay { 0 } else { CALLS * suffix.len() };
+        eprintln!("blob_append_bench replay={replay} calls={CALLS} old_read_bytes={old_read} old_bound_bytes={old_write} new_read_bytes=0 new_bound_bytes={new_write} old_ms={:.4} new_ms={:.4}", before[3], after[3]);
+    }
+    store.close_for_test().await;
+}
+
+#[tokio::test]
 async fn persist_session_coalesces_small_outputs_into_one_row() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
