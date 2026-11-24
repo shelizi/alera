@@ -31,6 +31,10 @@ use super::{read_frame_bounded, write_frame, MAX_WRITE_BYTES};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::resources::seal_shell_process;
 
+#[path = "pty_worker_recovery_listener.rs"]
+mod listener;
+use listener::RecoveryAcceptLoop;
+
 #[cfg(windows)]
 #[path = "pty_worker_acl.rs"]
 mod acl;
@@ -378,7 +382,7 @@ impl RecoveryOutput {
 
 pub(super) struct WorkerRecoveryServer {
     tail: Arc<Mutex<OutputTail>>,
-    stop: Arc<AtomicBool>,
+    accept_loop: RecoveryAcceptLoop,
     initial_host_attached: Arc<AtomicBool>,
     registry: PathBuf,
     worker_pid: u32,
@@ -402,7 +406,6 @@ impl WorkerRecoveryServer {
             anyhow::bail!("PTY worker recovery identity is incomplete");
         }
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        listener.set_nonblocking(true)?;
         let worker_pid = std::process::id();
         let worker_start_time = seal_shell_process(worker_pid)
             .ok_or_else(|| anyhow::anyhow!("cannot seal PTY worker process identity"))?
@@ -454,60 +457,47 @@ impl WorkerRecoveryServer {
             socket: None,
             generation: 0,
         }));
-        let stop = Arc::new(AtomicBool::new(false));
         let initial_host_attached = Arc::new(AtomicBool::new(false));
         let thread_tail = Arc::clone(&tail);
-        let thread_stop = Arc::clone(&stop);
         let thread_attached = Arc::clone(&initial_host_attached);
         let thread_record = record.clone();
         let client_slots = Arc::new(ClientSlots::default());
-        let thread_result = thread::Builder::new()
-            .name("alera-pty-worker-reconnect".to_string())
-            .spawn(move || {
-                while !thread_stop.load(Ordering::Acquire) {
-                    match listener.accept() {
-                        Ok((stream, addr)) if addr.ip().is_loopback() => {
-                            let Some(permit) = client_slots.try_acquire() else {
-                                // Drop the socket without spawning another OS
-                                // thread. The active Host is unaffected.
-                                continue;
-                            };
-                            let stream_tail = Arc::clone(&thread_tail);
-                            let stream_writer = Arc::clone(&writer);
-                            let stream_master = Arc::clone(&master);
-                            let current_record = thread_record.clone();
-                            let attached = Arc::clone(&thread_attached);
-                            let _ = thread::Builder::new()
-                                .name("alera-pty-worker-client".to_string())
-                                .spawn(move || {
-                                    // Dropped on any path out of serve_client,
-                                    // including failed auth or disconnected Host.
-                                    let _permit = permit;
-                                    serve_client(
-                                        stream,
-                                        current_record,
-                                        stream_tail,
-                                        stream_writer,
-                                        stream_master,
-                                        attached,
-                                    );
-                                });
-                        }
-                        Ok(_) => {}
-                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(25));
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-        if let Err(error) = thread_result {
-            let _ = std::fs::remove_file(&registry);
-            return Err(error.into());
-        }
+        let accept_loop = match RecoveryAcceptLoop::start(listener, move |stream, _| {
+            let Some(permit) = client_slots.try_acquire() else {
+                // Drop the socket without spawning another OS thread.
+                // The active Host is unaffected.
+                return;
+            };
+            let stream_tail = Arc::clone(&thread_tail);
+            let stream_writer = Arc::clone(&writer);
+            let stream_master = Arc::clone(&master);
+            let current_record = thread_record.clone();
+            let attached = Arc::clone(&thread_attached);
+            let _ = thread::Builder::new()
+                .name("alera-pty-worker-client".to_string())
+                .spawn(move || {
+                    // Dropped on any path out of serve_client,
+                    // including failed auth or disconnected Host.
+                    let _permit = permit;
+                    serve_client(
+                        stream,
+                        current_record,
+                        stream_tail,
+                        stream_writer,
+                        stream_master,
+                        attached,
+                    );
+                });
+        }) {
+            Ok(accept_loop) => accept_loop,
+            Err(error) => {
+                let _ = std::fs::remove_file(&registry);
+                return Err(error.into());
+            }
+        };
         Ok(Self {
             tail,
-            stop,
+            accept_loop,
             initial_host_attached,
             registry,
             worker_pid,
@@ -531,7 +521,7 @@ impl WorkerRecoveryServer {
 
 impl Drop for WorkerRecoveryServer {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        self.accept_loop.stop();
         // Prevent an older worker from removing a newer generation's record.
         if let Ok(Some(record)) = read_record(&self.registry) {
             if record.worker_pid == self.worker_pid {
