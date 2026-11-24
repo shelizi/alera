@@ -13,7 +13,9 @@ use alera_core::global_agent_search::AgentSessionSearchRecord;
 use serde_json::Value;
 use uuid::Uuid;
 
+mod directory_scan;
 mod preview_cache;
+use directory_scan::read_descending_prefix;
 use preview_cache::{open_canonical_preview_file, PreviewScan};
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
@@ -75,6 +77,10 @@ pub(crate) struct HistoryScanReport {
     cwd_canonicalizations: usize,
     #[cfg(test)]
     reused_candidate_handles: usize,
+    #[cfg(test)]
+    directory_entries_retained_peak: usize,
+    #[cfg(test)]
+    path_materializations: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -261,12 +267,23 @@ fn discover_history_with_exact_id(
             {
                 report.directories_read += 1;
             }
-            let Ok(entries) = fs::read_dir(&directory) else {
+            // Keep one extra entry at the per-root boundary so the loop can
+            // distinguish an exhausted directory from a truncated root. The
+            // global boundary already stops before processing its last entry.
+            let mut entry_limit = MAX_ENTRIES - walked;
+            if exact_id.is_none() {
+                entry_limit = entry_limit.min(root_entry_budget - (walked - root_entry_start) + 1);
+            }
+            let Ok(entries) = read_descending_prefix(&directory, entry_limit) else {
                 continue;
             };
-            let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_cached_key(|entry| entry.file_name());
-            for entry in entries.into_iter().rev() {
+            #[cfg(test)]
+            {
+                report.directory_entries_retained_peak =
+                    report.directory_entries_retained_peak.max(entries.len());
+            }
+            for named in entries {
+                let entry = named.entry;
                 if exact_id.is_none()
                     && (report.visited_files - root_file_start >= root_file_budget
                         || walked - root_entry_start >= root_entry_budget)
@@ -285,18 +302,19 @@ fn discover_history_with_exact_id(
                 let Ok(kind) = entry.file_type() else {
                     continue;
                 };
-                let path = entry.path();
                 if kind.is_dir() {
                     if depth < MAX_DEPTH
                         && !matches!(
-                            entry.file_name().to_str(),
+                            named.name.to_str(),
                             Some("subagents" | ".git" | "node_modules")
                         )
                     {
                         #[cfg(test)]
                         {
                             report.metadata_probes += 1;
+                            report.path_materializations += 1;
                         }
+                        let path = entry.path();
                         if fs::symlink_metadata(&path)
                             .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
                         {
@@ -305,18 +323,21 @@ fn discover_history_with_exact_id(
                     }
                     continue;
                 }
-                if !kind.is_file() || !is_provider_filename(root.provider, &path) {
+                let name = Path::new(&named.name);
+                if !kind.is_file() || !is_provider_filename(root.provider, name) {
                     continue;
                 }
                 if exact_id
-                    .is_some_and(|native| !filename_matches_native_id(root.provider, &path, native))
+                    .is_some_and(|native| !filename_matches_native_id(root.provider, name, native))
                 {
                     continue;
                 }
                 #[cfg(test)]
                 {
                     report.metadata_probes += 1;
+                    report.path_materializations += 1;
                 }
+                let path = entry.path();
                 let Ok(meta) = fs::symlink_metadata(&path) else {
                     continue;
                 };
@@ -922,12 +943,15 @@ mod tests {
         assert_eq!(report.records.len(), 2);
         assert_eq!(report.directories_read, 1);
         assert_eq!(report.metadata_probes, 2);
+        assert_eq!(report.path_materializations, 2);
+        assert_eq!(report.directory_entries_retained_peak, 103);
 
         let exact =
             discover_exact_native_history(&[first.clone(), duplicate.clone()], &known, policy, id);
         assert_eq!(exact.records.len(), 1);
         assert_eq!(exact.directories_read, 1);
         assert_eq!(exact.metadata_probes, 1);
+        assert_eq!(exact.path_materializations, 1);
 
         // Separate configured accounts may share a physical home but must
         // remain separate search scopes.
@@ -1115,6 +1139,93 @@ mod tests {
             serde_json::to_value(&legacy.records).unwrap()
         );
         assert_eq!(report.source_proofs[0].canonical_file, expected);
+    }
+
+    #[test]
+    fn wide_directory_keeps_global_and_account_entry_budgets_and_freshness() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let primary_dir = home.path().join("primary");
+        let secondary_dir = home.path().join("secondary");
+        fs::create_dir_all(&primary_dir).unwrap();
+        fs::create_dir_all(&secondary_dir).unwrap();
+        for i in 0..MAX_ENTRIES + 8 {
+            File::create(primary_dir.join(format!("rollout-middle-{i:04}.txt"))).unwrap();
+        }
+        let high_id = "550e8400-e29b-41d4-a716-446655440001";
+        let low_id = "550e8400-e29b-41d4-a716-446655440002";
+        let new_id = "550e8400-e29b-41d4-a716-446655440003";
+        let later_id = "550e8400-e29b-41d4-a716-446655440004";
+        let write_session = |directory: &Path, name: &str, id: &str| {
+            let path = directory.join(format!("rollout-{name}-{id}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+                ),
+            )
+            .unwrap();
+            path
+        };
+        let high = write_session(&primary_dir, "z", high_id);
+        write_session(&primary_dir, "a", low_id);
+        write_session(&secondary_dir, "z", later_id);
+        let primary = root("codex", &primary_dir);
+        let mut secondary = root("codex", &secondary_dir);
+        secondary.account_id = "secondary".into();
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let mut cache = HistoryPreviewCache::default();
+        let report =
+            discover_history_cached(std::slice::from_ref(&primary), &known, policy, &mut cache);
+        assert!(report.truncated);
+        assert_eq!(report.directory_entries_retained_peak, MAX_ENTRIES);
+        assert_eq!(report.path_materializations, 1);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(
+            report.records[0].provider_session_id.as_deref(),
+            Some(high_id)
+        );
+
+        let accounts = [primary, secondary];
+        let split = discover_history_cached(&accounts, &known, policy, &mut cache);
+        assert!(split.truncated);
+        assert_eq!(split.directory_entries_retained_peak, MAX_ENTRIES / 2 + 1);
+        assert_eq!(split.directories_read, 2);
+        assert_eq!(split.path_materializations, 2);
+        assert_eq!(split.records.len(), 2);
+        assert_eq!(
+            split.records[0].provider_session_id.as_deref(),
+            Some(high_id)
+        );
+        assert_eq!(
+            split.records[1].provider_session_id.as_deref(),
+            Some(later_id)
+        );
+        assert_eq!(
+            split.records[1].provider_account_id.as_deref(),
+            Some("secondary")
+        );
+
+        // Listing is deliberately not cached across searches.
+        fs::remove_file(high).unwrap();
+        write_session(&primary_dir, "y", new_id);
+        let fresh = discover_history_cached(&accounts, &known, policy, &mut cache);
+        assert_eq!(fresh.records.len(), 2);
+        assert_eq!(
+            fresh.records[0].provider_session_id.as_deref(),
+            Some(new_id)
+        );
+        assert_eq!(
+            fresh.records[1].provider_session_id.as_deref(),
+            Some(later_id)
+        );
+        assert_eq!(fresh.parsed_files, 1);
+        assert_eq!(fresh.reused_files, 1);
     }
 
     #[test]
