@@ -369,28 +369,86 @@ impl TerminalHostHistoryStore {
         )
         .bind(session_id)
         .fetch(&self.pool);
-        let mut remaining = max_bytes;
-        let mut reverse_chunks = Vec::new();
-        while remaining > 0 {
+        let mut tail = HistoryReadTail::new(max_bytes);
+        while tail.remaining() > 0 {
             let Some(row) = rows.try_next().await? else {
                 break;
             };
-            let data: Vec<u8> = row.try_get("data")?;
-            if data.len() > remaining {
-                reverse_chunks.push(data[data.len() - remaining..].to_vec());
-                remaining = 0;
-            } else {
-                remaining -= data.len();
-                reverse_chunks.push(data);
-            }
+            // Borrow the row's BLOB instead of allocating a Vec for each row.
+            // Only the retained suffix is copied into the growing tail.
+            let data: &[u8] = row.try_get("data")?;
+            tail.prepend(data);
         }
-        reverse_chunks.reverse();
-        let total_len = reverse_chunks.iter().map(Vec::len).sum();
-        let mut buffer = Vec::with_capacity(total_len);
-        for chunk in reverse_chunks {
-            buffer.extend_from_slice(&chunk);
+        drop(rows);
+        Ok(tail.finish())
+    }
+}
+
+/// Builds a chronological tail from rows arriving newest first.
+///
+/// Keep the retained bytes in one allocation, right-aligned so each older row
+/// can be copied into the unused prefix. Grow geometrically from actual bytes
+/// read rather than allocating the requested limit (which can be usize::MAX).
+/// No per-row owned BLOBs or final concatenation allocation are needed.
+struct HistoryReadTail {
+    max_bytes: usize,
+    buffer: Vec<u8>,
+    start: usize,
+}
+
+impl HistoryReadTail {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            buffer: Vec::new(),
+            start: 0,
         }
-        Ok(buffer)
+    }
+
+    fn len(&self) -> usize {
+        self.buffer.len() - self.start
+    }
+
+    fn remaining(&self) -> usize {
+        self.max_bytes - self.len()
+    }
+
+    fn prepend(&mut self, data: &[u8]) {
+        let retained = &data[data.len().saturating_sub(self.remaining())..];
+        if retained.is_empty() {
+            return;
+        }
+        if self.start >= retained.len() {
+            self.start -= retained.len();
+            self.buffer[self.start..self.start + retained.len()].copy_from_slice(retained);
+            return;
+        }
+
+        let required = self.len() + retained.len();
+        let capacity = self
+            .buffer
+            .len()
+            .saturating_mul(2)
+            .max(required)
+            .min(self.max_bytes);
+        let start = capacity - required;
+        let mut grown = Vec::with_capacity(capacity);
+        // Initialize only the unused prefix. The real bytes are copied
+        // directly into their final positions, without zeroing them first.
+        grown.resize(start, 0);
+        grown.extend_from_slice(retained);
+        grown.extend_from_slice(&self.buffer[self.start..]);
+        self.buffer = grown;
+        self.start = start;
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.start > 0 {
+            let len = self.len();
+            self.buffer.copy_within(self.start.., 0);
+            self.buffer.truncate(len);
+        }
+        self.buffer
     }
 }
 
@@ -526,10 +584,10 @@ async fn compact_output_rows(
         .bind(session_id)
         .execute(&mut *transaction)
         .await?;
-    let chunks: Vec<&[u8]> = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES).collect();
+    let chunks = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES);
     let first_sequence = newest.saturating_sub(chunks.len() as i64 - 1);
     let created_at = format_timestamp(Utc::now());
-    for (index, chunk) in chunks.into_iter().enumerate() {
+    for (index, chunk) in chunks.enumerate() {
         sqlx::query(
             "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES (?, ?, ?, ?)",
         )
