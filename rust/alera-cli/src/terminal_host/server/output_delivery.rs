@@ -19,15 +19,30 @@ impl ServerActor {
                 return;
             }
             let data = bytes::Bytes::from(data);
-            for client_id in clients {
+            // Keep the common single-client path allocation-free beyond its
+            // raw frame. Only broadcasts need the shared wire caches.
+            if clients.len() == 1 {
                 self.send_terminal_output(
                     session_id,
-                    client_id,
+                    clients[0],
                     ClientFrame::Output {
                         session_id: session_id.to_string(),
-                        data: data.clone(),
+                        data,
                     },
                 );
+            } else {
+                let frame =
+                    std::sync::Arc::new(crate::terminal_host::frame_codec::SharedOutputFrame::new(
+                        session_id.to_string(),
+                        data,
+                    ));
+                for client_id in clients {
+                    self.send_terminal_output(
+                        session_id,
+                        client_id,
+                        ClientFrame::SharedOutput(frame.clone()),
+                    );
+                }
             }
         }
     }
@@ -43,6 +58,7 @@ impl ServerActor {
     ) -> bool {
         let bytes = match &frame {
             ClientFrame::Output { data, .. } => data.len(),
+            ClientFrame::SharedOutput(frame) => frame.data().len(),
             _ => 0,
         };
         let result = self

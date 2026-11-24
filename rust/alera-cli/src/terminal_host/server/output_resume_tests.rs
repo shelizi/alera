@@ -52,15 +52,20 @@ async fn output_batch_shares_raw_bytes_and_keeps_per_client_cursors() {
     actor.flush_output_batch("s1");
     let unwrap = |frame: ClientFrame| match frame {
         ClientFrame::SequencedTerminal { frame, .. } => match *frame {
-            ClientFrame::Output { data, .. } => data,
-            _ => panic!("expected output"),
+            ClientFrame::SharedOutput(shared) => shared,
+            _ => panic!("expected shared output"),
         },
         _ => panic!("missing terminal ordering envelope"),
     };
     let a = unwrap(ar.try_recv().unwrap());
     let b = unwrap(br.try_recv().unwrap());
-    assert_eq!(a.as_ref(), data.as_slice());
-    assert_eq!(a.as_ptr(), b.as_ptr());
+    assert_eq!(a.data().as_ref(), data.as_slice());
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    assert_eq!(a.binary_frame().as_ptr(), b.binary_frame().as_ptr());
+    assert_eq!(
+        a.json_payload().unwrap().as_ptr(),
+        b.json_payload().unwrap().as_ptr()
+    );
     assert_eq!(
         actor.sessions["s1"].delivered_output_cursor(1),
         Some(data.len() as u64)
@@ -69,6 +74,76 @@ async fn output_batch_shares_raw_bytes_and_keeps_per_client_cursors() {
         actor.sessions["s1"].delivered_output_cursor(2),
         Some(data.len() as u64)
     );
+}
+
+#[tokio::test]
+async fn shared_output_backpressure_does_not_block_other_clients() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, mut ar) = ClientHandle::test_terminal_channels();
+    let (b, mut br) = ClientHandle::test_terminal_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.attach(1);
+    session.attach(2);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(a)), (2, local_client(b))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    for _ in 0..CLIENT_TERMINAL_OUT_QUEUE_CAPACITY {
+        actor.sessions.get_mut("s1").unwrap().append_output(b"ab");
+        actor.flush_output_batch("s1");
+        let _ = ar.try_recv().unwrap();
+    }
+    let before = CLIENT_TERMINAL_OUT_QUEUE_CAPACITY as u64 * 2;
+    actor.sessions.get_mut("s1").unwrap().append_output(b"cd");
+    actor.flush_output_batch("s1");
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(1),
+        Some(before + 2)
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(before)
+    );
+    let fast = ar.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(
+        decode_bytes(fast["payload"].get("dataBase64")).unwrap(),
+        b"cd"
+    );
+    for _ in 0..CLIENT_TERMINAL_OUT_QUEUE_CAPACITY {
+        let _ = br.try_recv().unwrap();
+    }
+    let resumed = actor.resume_output_for_client("s1", 2);
+    assert_eq!(resumed["resumed"], true);
+    let missed = br.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(
+        decode_bytes(missed["payload"].get("dataBase64")).unwrap(),
+        b"cd"
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(before + 2)
+    );
+}
+
+#[tokio::test]
+async fn single_recipient_output_does_not_allocate_a_shared_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();
+    let mut actor = actor_with_client(&dir, handle, 1024).await;
+    actor
+        .sessions
+        .get_mut("s1")
+        .unwrap()
+        .append_output(b"single");
+    actor.flush_output_batch("s1");
+    assert!(matches!(
+        terminal_rx.try_recv().unwrap(),
+        ClientFrame::SequencedTerminal { frame, .. }
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b"single")
+    ));
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(6));
 }
 
 #[tokio::test]
