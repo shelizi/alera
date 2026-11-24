@@ -56,6 +56,25 @@ class WorkspaceActivityController extends _$WorkspaceActivityController
     _scheduleFlush();
   }
 
+  /// Publishes one activity update for a batch of Agent transitions.
+  /// Each workspace keeps its newest timestamp, regardless of event order.
+  void recordActivities(Iterable<(String, DateTime)> activities) {
+    Map<String, DateTime>? next;
+    for (final (workspaceId, at) in activities) {
+      final current = (next ?? state)[workspaceId];
+      if (current != null && !at.isAfter(current)) {
+        continue;
+      }
+      (next ??= <String, DateTime>{...state})[workspaceId] = at;
+      _dirty[workspaceId] = at;
+    }
+    if (next == null) {
+      return;
+    }
+    state = next;
+    _scheduleFlush();
+  }
+
   void removeWorkspace(String workspaceId) {
     if (!state.containsKey(workspaceId)) {
       return;
@@ -101,18 +120,29 @@ void workspaceActivityCoordinator(Ref ref) {
     previous,
     next,
   ) {
-    final controller = ref.read(workspaceActivityControllerProvider.notifier);
-    for (final entry in next.entries) {
-      final before = previous?[entry.key];
-      final after = entry.value;
-      final transitioned =
-          before == null ||
-          before.state != after.state ||
-          before.stateStartedAt != after.stateStartedAt ||
-          before.interrupted != after.interrupted;
-      if (transitioned) {
-        controller.recordActivity(after.workspaceId, after.stateStartedAt);
-      }
-    }
+    ref
+        .read(workspaceActivityControllerProvider.notifier)
+        .recordActivities(_activityTransitions(previous, next));
   });
+}
+
+Iterable<(String, DateTime)> _activityTransitions(
+  Map<String, AgentStatusEntry>? previous,
+  Map<String, AgentStatusEntry> next,
+) sync* {
+  for (final entry in next.entries) {
+    final before = previous?[entry.key];
+    final after = entry.value;
+    if (identical(before, after)) {
+      continue;
+    }
+    final transitioned =
+        before == null ||
+        before.state != after.state ||
+        before.stateStartedAt != after.stateStartedAt ||
+        before.interrupted != after.interrupted;
+    if (transitioned) {
+      yield (after.workspaceId, after.stateStartedAt);
+    }
+  }
 }

@@ -56,7 +56,7 @@ final class WorkspaceActivityControllerProvider
 }
 
 String _$workspaceActivityControllerHash() =>
-    r'eb6e673fad1abb873f95971a162227deac3c95cc';
+    r'0a03f4ce334618a823c8f3ab3189959d38e49b64';
 
 /// Tracks the last discrete activity timestamp per workspace (opening it,
 /// terminal input, agent state transitions, terminal lifecycle) and persists
@@ -134,4 +134,4 @@ final class WorkspaceActivityCoordinatorProvider
 }
 
 String _$workspaceActivityCoordinatorHash() =>
-    r'dc943e73259eb13cd704e5e552c2fbb6b6a6f867';
+    r'b107b920d259aa46eed6c1537d47fe8f90c976ad';
