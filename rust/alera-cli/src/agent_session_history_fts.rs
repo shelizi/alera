@@ -32,19 +32,19 @@ pub(crate) struct AgentSessionHistoryIndex {
     file_stamp: Option<HistoryFileStamp>,
 }
 
-struct IndexedDocument {
+struct IndexedDocument<'a> {
     id: i64,
-    record_json: String,
-    title: String,
-    goal: String,
+    record_json: &'a str,
+    title: &'a str,
+    goal: &'a str,
 }
 
 struct PendingDocument<'a> {
-    key: String,
+    key: &'a str,
     scope: String,
     record_json: String,
     record: &'a AgentSessionSearchRecord,
-    previous: Option<IndexedDocument>,
+    previous: Option<IndexedDocument<'a>>,
 }
 
 impl PendingDocument<'_> {
@@ -65,6 +65,33 @@ fn document_key(record: &AgentSessionSearchRecord) -> serde_json::Result<String>
         &record.profile_id,
         &record.provider_session_id,
     ))
+}
+
+/// Immutable, bounded per-request identity keys shared by the write and
+/// scoped search. Borrowing the records prevents a caller from mutating their
+/// identities while the serialized keys are in use.
+pub(crate) struct PreparedHistoryBatch<'a> {
+    records: &'a [AgentSessionSearchRecord],
+    keys: Vec<String>,
+}
+
+impl<'a> PreparedHistoryBatch<'a> {
+    pub(crate) fn new(records: &'a [AgentSessionSearchRecord]) -> Result<Self> {
+        if records.len() > MAX_BATCH {
+            bail!("history index batch exceeds bounded limit");
+        }
+        let keys = records
+            .iter()
+            .map(document_key)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        Ok(Self { records, keys })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&AgentSessionSearchRecord, &str)> {
+        self.records
+            .iter()
+            .zip(self.keys.iter().map(String::as_str))
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -173,46 +200,53 @@ impl AgentSessionHistoryIndex {
 
     /// Incremental upsert. Unchanged serialized records cause no disk update.
     /// A partial/truncated provider scan MUST NOT delete older indexed items.
-    pub(crate) async fn upsert_batch(
+    #[cfg(test)]
+    async fn upsert_batch(
         &self,
         records: &[AgentSessionSearchRecord],
     ) -> Result<HistoryIndexWriteStats> {
-        if records.len() > MAX_BATCH {
-            bail!("history index batch exceeds bounded limit");
-        }
+        self.upsert_prepared(&PreparedHistoryBatch::new(records)?)
+            .await
+    }
+
+    pub(crate) async fn upsert_prepared(
+        &self,
+        batch: &PreparedHistoryBatch<'_>,
+    ) -> Result<HistoryIndexWriteStats> {
         let mut stats = HistoryIndexWriteStats::default();
-        let keys = records
-            .iter()
-            .map(document_key)
-            .collect::<serde_json::Result<Vec<_>>>()?;
         let mut tx = self.pool.begin().await?;
-        let mut existing = HashMap::with_capacity(keys.len());
-        if !keys.is_empty() {
+        let rows = if !batch.keys.is_empty() {
             let mut sql = QueryBuilder::<Sqlite>::new(
                 "SELECT document_key, id, record_json, title, goal FROM history_search_docs WHERE document_key IN (",
             );
             {
                 let mut values = sql.separated(", ");
-                for key in &keys {
-                    values.push_bind(key);
+                for key in &batch.keys {
+                    values.push_bind(key.as_str());
                 }
             }
             sql.push(")");
-            for row in sql.build().fetch_all(&mut *tx).await? {
-                existing.insert(
-                    row.try_get::<String, _>("document_key")?,
-                    IndexedDocument {
-                        id: row.try_get("id")?,
-                        record_json: row.try_get("record_json")?,
-                        title: row.try_get("title")?,
-                        goal: row.try_get("goal")?,
-                    },
-                );
-            }
+            sql.build().fetch_all(&mut *tx).await?
+        } else {
+            Vec::new()
+        };
+        // SQLite rows already own the returned text. Borrow it until the
+        // transaction finishes instead of copying four strings per document.
+        let mut existing = HashMap::with_capacity(rows.len());
+        for row in &rows {
+            existing.insert(
+                row.try_get::<&str, _>("document_key")?,
+                IndexedDocument {
+                    id: row.try_get("id")?,
+                    record_json: row.try_get("record_json")?,
+                    title: row.try_get("title")?,
+                    goal: row.try_get("goal")?,
+                },
+            );
         }
         let mut pending: Vec<PendingDocument<'_>> = Vec::new();
-        let mut pending_by_key: HashMap<String, usize> = HashMap::new();
-        for (record, key) in records.iter().zip(keys) {
+        let mut pending_by_key: HashMap<&str, usize> = HashMap::new();
+        for (record, key) in batch.iter() {
             if record.running
                 || record.provider_identity_verified
                 || !record.source_exists
@@ -239,7 +273,7 @@ impl AgentSessionHistoryIndex {
             // Preserve the logical sequential statistics and last record
             // for duplicate UUIDs, without materializing intermediate SQL
             // writes that are invisible outside this transaction.
-            if let Some(&position) = pending_by_key.get(&key) {
+            if let Some(&position) = pending_by_key.get(key) {
                 let planned = &mut pending[position];
                 if planned.record_json == record_json {
                     stats.unchanged += 1;
@@ -251,13 +285,13 @@ impl AgentSessionHistoryIndex {
                 continue;
             }
             if existing
-                .get(&key)
+                .get(key)
                 .is_some_and(|previous| previous.record_json == record_json)
             {
                 stats.unchanged += 1;
                 continue;
             }
-            let previous = existing.remove(&key);
+            let previous = existing.remove(key);
             if previous.is_some() {
                 stats.updated += 1;
             } else {
@@ -270,7 +304,7 @@ impl AgentSessionHistoryIndex {
                 &record.provider,
                 &record.provider_account_id,
             ))?;
-            pending_by_key.insert(key.clone(), pending.len());
+            pending_by_key.insert(key, pending.len());
             pending.push(PendingDocument {
                 key,
                 scope,
@@ -295,7 +329,7 @@ impl AgentSessionHistoryIndex {
             );
             sql.push_values(batch, |mut values, planned| {
                 values
-                    .push_bind(&planned.key)
+                    .push_bind(planned.key)
                     .push_bind(&planned.scope)
                     .push_bind(&planned.record_json)
                     .push_bind(&planned.record.title)
@@ -324,7 +358,7 @@ impl AgentSessionHistoryIndex {
             let mut write_fts = Vec::new();
             for planned in batch {
                 let id = returned_ids
-                    .remove(&planned.key)
+                    .remove(planned.key)
                     .context("history upsert did not return document ID")?;
                 if let Some(previous) = &planned.previous {
                     if previous.id != id {
@@ -394,8 +428,8 @@ impl AgentSessionHistoryIndex {
         .await?;
         rows.into_iter()
             .map(|row| {
-                let raw: String = row.try_get("record_json")?;
-                serde_json::from_str(&raw).map_err(Into::into)
+                let raw: &str = row.try_get("record_json")?;
+                serde_json::from_str(raw).map_err(Into::into)
             })
             .collect()
     }
@@ -403,17 +437,27 @@ impl AgentSessionHistoryIndex {
     /// Scope FTS BEFORE applying the global result limit. Without this,
     /// unrelated account/project hits can crowd out all authorized matches.
     /// Keys come exclusively from the bounded, currently observed native scan.
-    pub(crate) async fn search_scoped(
+    #[cfg(test)]
+    async fn search_scoped(
         &self,
         query: &AgentSessionSearchQuery,
         observed: &[AgentSessionSearchRecord],
     ) -> Result<Vec<AgentSessionSearchRecord>> {
+        self.search_prepared(query, &PreparedHistoryBatch::new(observed)?)
+            .await
+    }
+
+    pub(crate) async fn search_prepared(
+        &self,
+        query: &AgentSessionSearchQuery,
+        batch: &PreparedHistoryBatch<'_>,
+    ) -> Result<Vec<AgentSessionSearchRecord>> {
         let Some(fts) = query_terms(&query.text) else {
             return Ok(Vec::new());
         };
-        let keys = observed
+        let keys = batch
             .iter()
-            .filter(|record| {
+            .filter(|(record, _)| {
                 query
                     .project_id
                     .as_ref()
@@ -431,9 +475,8 @@ impl AgentSessionHistoryIndex {
                         .as_ref()
                         .is_none_or(|id| record.provider_account_id.as_ref() == Some(id))
             })
-            .take(MAX_BATCH)
-            .map(|record| document_key(record).map_err(Into::into))
-            .collect::<Result<Vec<String>>>()?;
+            .map(|(_, key)| key)
+            .collect::<Vec<_>>();
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -455,8 +498,8 @@ impl AgentSessionHistoryIndex {
         let rows = sql.build().fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {
-                let raw: String = row.try_get("record_json")?;
-                serde_json::from_str(&raw).map_err(Into::into)
+                let raw: &str = row.try_get("record_json")?;
+                serde_json::from_str(raw).map_err(Into::into)
             })
             .collect()
     }
@@ -750,6 +793,67 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepared_batch_reuses_keys_and_preserves_scoped_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let mut first = record(
+            "550e8400-e29b-41d4-a716-446655440001",
+            "keyboard first",
+            "keyboard",
+        );
+        first.project_id = "project\\with\"quotes".to_owned();
+        first.profile_id = Some("profile-a".to_owned());
+        let mut second = first.clone();
+        second.profile_id = Some("profile-b".to_owned());
+        second.title = "keyboard second".to_owned();
+        let mut other = first.clone();
+        other.provider_account_id = Some("secondary".to_owned());
+        let records = vec![first, second, other];
+        let batch = PreparedHistoryBatch::new(&records).unwrap();
+        let key_ptrs = batch
+            .keys
+            .iter()
+            .map(|key| key.as_ptr())
+            .collect::<Vec<_>>();
+        assert_ne!(batch.keys[0], batch.keys[1]);
+        assert_ne!(batch.keys[0], batch.keys[2]);
+        for (i, (record, key)) in batch.iter().enumerate() {
+            assert!(std::ptr::eq(record, &records[i]));
+            assert_eq!(key.as_ptr(), key_ptrs[i]);
+            assert_eq!(key, document_key(record).unwrap());
+        }
+        assert_eq!(index.upsert_prepared(&batch).await.unwrap().added, 3);
+        let warm = index.upsert_prepared(&batch).await.unwrap();
+        assert_eq!(warm.unchanged, 3);
+        assert_eq!(warm.write_statements, 0);
+        let query = AgentSessionSearchQuery {
+            text: "keyboard".to_owned(),
+            project_id: Some(records[0].project_id.clone()),
+            provider_account_id: Some("primary".to_owned()),
+            max_results: 10,
+            ..Default::default()
+        };
+        let hits = index.search_prepared(&query, &batch).await.unwrap();
+        assert_eq!(hits.len(), 2);
+        assert!(hits.contains(&records[0]));
+        assert!(hits.contains(&records[1]));
+        assert!(!hits.contains(&records[2]));
+        assert_eq!(
+            key_ptrs,
+            batch
+                .keys
+                .iter()
+                .map(|key| key.as_ptr())
+                .collect::<Vec<_>>()
+        );
+        let subset = PreparedHistoryBatch::new(&records[1..2]).unwrap();
+        assert_eq!(
+            index.search_prepared(&query, &subset).await.unwrap(),
+            vec![records[1].clone()]
+        );
     }
 
     #[tokio::test]

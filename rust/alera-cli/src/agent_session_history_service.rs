@@ -12,7 +12,7 @@ use alera_core::global_agent_search::{
 use anyhow::{bail, Result};
 
 use crate::agent_session_history_fts::{
-    AgentSessionHistoryIndex, HistoryIndexWriteStats, HISTORY_INDEX_FILE,
+    AgentSessionHistoryIndex, HistoryIndexWriteStats, PreparedHistoryBatch, HISTORY_INDEX_FILE,
 };
 use crate::agent_session_history_scan::{
     discover_history_cached, HistoryPreviewCache, HistoryScanPolicy, ProviderHistoryRoot,
@@ -155,16 +155,13 @@ pub(crate) async fn search_history_on_demand(
         let index = guard.index.as_ref().expect("index opened above");
         // No partial, unverified or out-of-scope rows may become resumable solely
         // because they were present in a previous local SQLite index generation.
-        for chunk in scan.records.chunks(256) {
-            let write = index.upsert_batch(chunk).await?;
-            empty.writes.added += write.added;
-            empty.writes.updated += write.updated;
-            empty.writes.unchanged += write.unchanged;
-            empty.writes.trimmed += write.trimmed;
-        }
+        // The native scanner already caps this request at 256 files.
+        // Prepare identity JSON exactly once for both SQLite operations.
+        let batch = PreparedHistoryBatch::new(&scan.records)?;
+        empty.writes = index.upsert_prepared(&batch).await?;
         // Scope and current-file identity constrain FTS before top-N limiting;
         // otherwise other accounts can hide relevant rows from a filtered query.
-        index.search_scoped(query, &scan.records).await
+        index.search_prepared(query, &batch).await
     }
     .await;
     let candidates = match candidates {
