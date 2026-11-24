@@ -39,6 +39,17 @@ xterm.TerminalTheme resolveXtermThemeForTesting(TerminalSettings settings) {
   return _resolveXtermTheme(settings);
 }
 
+/// Counts completed viewport code-copy scans, excluding terminal repaints.
+/// Used to verify that streaming output does not force an expensive scan
+/// for every output notification.
+@visibleForTesting
+int terminalCodeCopyViewportScansForTesting(BuildContext terminalViewContext) {
+  return terminalViewContext
+          .findAncestorStateOfType<_InteractiveTerminalViewState>()
+          ?._visibleCodeCopyScanCount ??
+      0;
+}
+
 @visibleForTesting
 void feedTerminalInputForTesting(TerminalSessionHandle session, String data) {
   (session as _XtermTerminalSessionHandle)._handleTerminalInput(data);

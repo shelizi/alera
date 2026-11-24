@@ -1,6 +1,57 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceCodeCopyTests() {
+  testWidgets('streaming terminal output batches optional copy-overlay scans', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(),
+        shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await _pumpTerminalSurface(tester, session);
+
+      final viewContext = tester.element(find.byType(xterm.TerminalView));
+      int scans() => terminalCodeCopyViewportScansForTesting(viewContext);
+      final initialScans = scans();
+      expect(initialScans, greaterThan(0));
+
+      // Keep the first output update immediate after an idle terminal.
+      writeTerminalOutputForTesting(session, 'first-output\r\n');
+      await tester.pump();
+      final firstOutputScans = scans();
+      expect(firstOutputScans, initialScans + 1);
+
+      // Every chunk changes the terminal, but optional code-block discovery
+      // should not rescan the visible buffer on each render frame.
+      for (var i = 0; i < 60; i++) {
+        writeTerminalOutputForTesting(session, 'line-$i\r\n');
+        await tester.pump(const Duration(milliseconds: 1));
+      }
+      expect(scans(), firstOutputScans);
+
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pump();
+      expect(scans(), firstOutputScans + 1);
+
+      writeTerminalOutputForTesting(session, 'after-batch\r\n');
+      await tester.pump(const Duration(milliseconds: 5));
+      expect(scans(), firstOutputScans + 1);
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pump();
+      expect(scans(), firstOutputScans + 2);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets(
     'manual Claude transcript makes two source copy buttons available',
     (tester) async {

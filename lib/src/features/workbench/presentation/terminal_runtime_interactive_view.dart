@@ -19,6 +19,16 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   List<_VisibleCodeCopyTarget> _visibleCodeBlocks = const [];
   xterm.Terminal? _observedTerminal;
   bool _copyRefreshScheduled = false;
+  // Terminal output may change 20-60 times per second. The copy overlay scans
+  // visible code blocks, so keep that optional work below the render cadence.
+  static const Duration _outputCopyRefreshInterval = Duration(
+    milliseconds: 100,
+  );
+  Timer? _outputCopyRefreshTimer;
+  // Only output-triggered refreshes start the cadence window. Initial/explicit
+  // scans must never delay the first new code block after an idle terminal.
+  DateTime? _lastCopyRefreshAt;
+  int _visibleCodeCopyScanCount = 0;
   String? _primaryCopyBlockId;
   String? _copiedCodeBlockId;
   double? _lastCopyViewportTop;
@@ -49,7 +59,8 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     widget.session._claudeCodeMessageStore?.removeListener(
       _onClaudeSourceUpdate,
     );
-    _observedTerminal?.removeListener(_scheduleCopyButtonsRefresh);
+    _observedTerminal?.removeListener(_scheduleOutputCopyButtonsRefresh);
+    _outputCopyRefreshTimer?.cancel();
     _copyFeedbackTimer?.cancel();
     _copyDismissTimer?.cancel();
     _transcriptReadGeneration++;
@@ -67,6 +78,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       _pointerOverCopyButton = false;
       _visibleCodeBlocks = const [];
       _lastCopyViewportTop = null;
+      _lastCopyRefreshAt = null;
       _primaryCopyBlockId = null;
       _copiedCodeBlockId = null;
       _lastHoverOffset = null;
@@ -98,14 +110,44 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
 
   void _observeTerminal(xterm.Terminal terminal) {
     if (identical(terminal, _observedTerminal)) return;
-    _observedTerminal?.removeListener(_scheduleCopyButtonsRefresh);
+    _observedTerminal?.removeListener(_scheduleOutputCopyButtonsRefresh);
+    _outputCopyRefreshTimer?.cancel();
+    _outputCopyRefreshTimer = null;
     _observedTerminal = terminal;
-    terminal.addListener(_scheduleCopyButtonsRefresh);
+    terminal.addListener(_scheduleOutputCopyButtonsRefresh);
     _visibleCodeBlocks = const [];
     _lastCopyViewportTop = null;
+    _lastCopyRefreshAt = null;
+  }
+
+  void _scheduleOutputCopyButtonsRefresh() {
+    if (!mounted ||
+        !widget.showCodeBlockCopyButton ||
+        _copyRefreshScheduled ||
+        _outputCopyRefreshTimer != null) {
+      return;
+    }
+    final last = _lastCopyRefreshAt;
+    if (last != null) {
+      final wait = _outputCopyRefreshInterval - DateTime.now().difference(last);
+      if (wait > Duration.zero) {
+        _outputCopyRefreshTimer = Timer(wait, () {
+          _outputCopyRefreshTimer = null;
+          _lastCopyRefreshAt = DateTime.now();
+          _scheduleCopyButtonsRefresh();
+        });
+        return;
+      }
+    }
+    _lastCopyRefreshAt = DateTime.now();
+    _scheduleCopyButtonsRefresh();
   }
 
   void _scheduleCopyButtonsRefresh() {
+    // Explicit scrolls, source updates, and session switches must remain
+    // immediate even when a background-output refresh has been deferred.
+    _outputCopyRefreshTimer?.cancel();
+    _outputCopyRefreshTimer = null;
     if (!mounted || !widget.showCodeBlockCopyButton || _copyRefreshScheduled) {
       return;
     }
@@ -128,6 +170,16 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     if (!renderer.attached || !renderer.hasSize) return;
     final lines = widget.session._terminal.buffer.lines;
     if (lines.length == 0) return;
+    _visibleCodeCopyScanCount++;
+    // Hook data is stable for this refresh. Fetch it once instead of cloning
+    // every message's source blocks separately for each visible row.
+    final store = widget.session._claudeCodeMessageStore;
+    final sourceBlocks = store == null
+        ? null
+        : <ClaudeSourceCodeBlock>[
+            ...store.blocksForTerminal(widget.session.terminalSessionId),
+            ..._transcriptCodeBlocks,
+          ];
     final firstRow = renderer.getCellOffset(Offset.zero).y;
     final bottomY = renderer.size.height > 1 ? renderer.size.height - 1 : 0.0;
     final lastRow = renderer.getCellOffset(Offset(0, bottomY)).y;
@@ -135,7 +187,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     final visible = <_VisibleCodeCopyTarget>[];
     for (var row = firstRow; row <= lastRow && visible.length < 24; row++) {
       if (lines[row].getText().trim().isEmpty) continue;
-      final block = _resolveCodeBlockAt(xterm.CellOffset(0, row));
+      final block = _resolveCodeBlockAt(
+        xterm.CellOffset(0, row),
+        sourceBlocks: sourceBlocks,
+      );
       if (block == null || !block.containsRow(row)) continue;
       visible.add(_VisibleCodeCopyTarget(block: block, witnessRow: row));
       // Long source blocks need only one button after their last line.
@@ -368,14 +423,18 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     }
   }
 
-  TerminalCodeBlock? _resolveCodeBlockAt(xterm.CellOffset offset) {
+  TerminalCodeBlock? _resolveCodeBlockAt(
+    xterm.CellOffset offset, {
+    List<ClaudeSourceCodeBlock>? sourceBlocks,
+  }) {
     final store = widget.session._claudeCodeMessageStore;
     if (store != null) {
-      final id = widget.session.terminalSessionId;
-      final originals = <ClaudeSourceCodeBlock>[
-        ...store.blocksForTerminal(id),
-        ..._transcriptCodeBlocks,
-      ];
+      final originals =
+          sourceBlocks ??
+          <ClaudeSourceCodeBlock>[
+            ...store.blocksForTerminal(widget.session.terminalSessionId),
+            ..._transcriptCodeBlocks,
+          ];
       if (originals.isNotEmpty) {
         final match = resolveClaudeSourceCodeBlockAt(
           terminal: widget.session._terminal,
