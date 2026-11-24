@@ -58,7 +58,19 @@ fn observe_checkpoint(
         return false;
     }
     let incoming = if event.agent_type == "codex" {
-        super::codex_resume_identity::from_hook(&event.payload).map(|proof| proof.id)
+        super::codex_resume_identity::from_hook(&event.payload)
+            .filter(|proof| {
+                title
+                    .codex_transcript_path
+                    .as_deref()
+                    .is_none_or(|expected| {
+                        super::codex_resume_identity::same_rollout_source(
+                            expected,
+                            proof.transcript_path,
+                        )
+                    })
+            })
+            .map(|proof| proof.id)
     } else {
         super::agent_title_events::conversation_id(&event.payload)
     };

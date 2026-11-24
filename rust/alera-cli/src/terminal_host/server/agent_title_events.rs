@@ -7,6 +7,7 @@ use crate::terminal_host::orchestration::agent_context::AgentContextOverview;
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
 
 use super::agent_title_state::AgentTitleState;
+use super::codex_resume_identity::same_rollout_source;
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
 
@@ -254,9 +255,8 @@ impl ServerActor {
             if state.closed
                 || state.agent.as_deref() != Some(agent)
                 || native_id != state.native_id.as_deref()
-                || (state.codex_transcript_path.is_some()
-                    && activity.codex_transcript_path.is_some()
-                    && state.codex_transcript_path != activity.codex_transcript_path)
+                || matches!((state.codex_transcript_path.as_deref(), activity.codex_transcript_path.as_deref()),
+                    (Some(expected), Some(incoming)) if !same_rollout_source(expected, incoming))
             {
                 return HookContextBinding::Ignore;
             }
@@ -292,8 +292,8 @@ impl ServerActor {
                     return HookContextBinding::Ignore;
                 }
                 if existing == incoming
-                    && state.codex_transcript_path.is_some()
-                    && state.codex_transcript_path != activity.codex_transcript_path
+                    && matches!((state.codex_transcript_path.as_deref(), activity.codex_transcript_path.as_deref()),
+                        (Some(expected), Some(incoming)) if !same_rollout_source(expected, incoming))
                 {
                     return HookContextBinding::Ignore;
                 }
@@ -301,7 +301,9 @@ impl ServerActor {
             if let Some(incoming) = native_id {
                 let key = format!("{agent}:{incoming}");
                 if let Some(archived) = state.retired_contexts.get(&key) {
-                    if archived.codex_transcript_path != activity.codex_transcript_path {
+                    if !matches!((archived.codex_transcript_path.as_deref(), activity.codex_transcript_path.as_deref()),
+                        (Some(expected), Some(incoming)) if same_rollout_source(expected, incoming))
+                    {
                         return HookContextBinding::Ignore;
                     }
                 }
@@ -447,10 +449,8 @@ impl ServerActor {
         if state.closed
             || (event.agent_type == "codex"
                 && state.codex_transcript_path.is_some()
-                && codex_identity
-                    .as_ref()
-                    .map(|identity| identity.transcript_path)
-                    != state.codex_transcript_path.as_deref())
+                && !matches!((state.codex_transcript_path.as_deref(), codex_identity.as_ref()),
+                    (Some(expected), Some(identity)) if same_rollout_source(expected, identity.transcript_path)))
             || state.agent.as_deref() != Some(event.agent_type.as_str())
             || (state.native_id.is_some() && native_id != state.native_id.as_deref())
         {

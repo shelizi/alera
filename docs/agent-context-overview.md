@@ -224,3 +224,26 @@ Tabs, historical backfill of every provider, or GPUI's checkpoint-only view
 when no live Hook presence exists. Native GPUI receives the same Host live
 projection. Production acceptance still requires real provider session
 switch/resume verification; no live Host or Terminal is restarted by tests.
+
+### Native CLI acceptance and Windows rollout aliases
+
+The disposable CLI acceptance is `tool/testing/agent_context_native_cli_e2e.py`.
+Run the test with `--cli <freshly-built-alera.exe> --provider claude` or
+`--provider codex` on Windows. It starts a private Host and one registered
+Terminal per run; uses actual native Hook payloads and the Rust relay; makes
+two independent conversations and resumes the first by its exact UUID; verifies
+the current raw report, original goal, both A reports in the restored timeline,
+stale activation rejection, and private Host shutdown. Claude uses the
+normally authenticated CLI with a bounded budget and no tools, creating new
+test-only native history. Codex uses the installed native CLI, an isolated
+CODEX_HOME and a deterministic local Responses fixture; no real Codex account
+configuration, authentication, or model quota is used. Successive CLI invocations
+target the same registered Terminal, not an interactive TUI slash-command test.
+
+Codex 0.171.0 exposed a native Windows behavior that the first synthetic
+regression did not exercise: startup emitted an ordinary absolute rollout path,
+while resume emitted the extended-length spelling of the same physical file.
+The exact-string source guard incorrectly rejected the resumed conversation.
+Compare canonical filesystem paths only when the raw strings differ, retaining
+the native UUID, rollout metadata, workspace and source guards. A different
+file with the same UUID and filename is still rejected.

@@ -83,6 +83,22 @@ pub(super) fn verified_transcript(
     }
 }
 
+/// Codex 0.171 on Windows emits a normal path on startup, then the
+/// extended-length \\?\ path on resume. Both point to the same rollout.
+/// Never equate two different physical sources solely by UUID or basename.
+pub(super) fn same_rollout_source(expected: &str, incoming: &str) -> bool {
+    if expected == incoming {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(expected),
+        std::fs::canonicalize(incoming),
+    ) {
+        (Ok(expected), Ok(incoming)) => expected == incoming,
+        _ => false,
+    }
+}
+
 fn same_working_directory(a: &str, b: &str) -> bool {
     if cfg!(windows) {
         a.replace('/', "\\")
@@ -115,6 +131,8 @@ mod tests {
         )
         .unwrap();
         let path = path.to_str().unwrap();
+        let canonical = std::fs::canonicalize(path).unwrap();
+        assert!(same_rollout_source(path, canonical.to_str().unwrap()));
         let payload = json!({
             "session_id": native,
             "transcript_path": path,
@@ -148,6 +166,7 @@ mod tests {
             mismatch.to_str().unwrap(),
             None
         ));
+        assert!(!same_rollout_source(path, mismatch.to_str().unwrap()));
         std::fs::remove_file(path).unwrap();
         assert!(!verified_transcript(native, path, None));
     }

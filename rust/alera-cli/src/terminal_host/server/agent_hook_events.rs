@@ -515,6 +515,202 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_verified_rollout_context_follows_native_thread_switch_and_resume() {
+        use super::super::agent_title_state::AgentTitleState;
+        use alera_core::runtime::WorkspaceTabRecord;
+
+        let dir = tempfile::tempdir().unwrap();
+        let a = "550e8400-e29b-41d4-a716-446655440077";
+        let b = "550e8400-e29b-41d4-a716-446655440088";
+        let foreign = "550e8400-e29b-41d4-a716-446655440099";
+        let sessions = dir.path().join("sessions/2026/11/24");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let event = |name: &str, id: &str, prompt: &str, report: &str| {
+            let path = sessions.join(format!("rollout-2026-11-24T10-00-00-{id}.jsonl"));
+            if !path.exists() {
+                std::fs::write(&path, format!("{}\n", json!({
+                    "type":"session_meta","payload":{"id":id,"session_id":id,"cwd":dir.path()}
+                }))).unwrap();
+            }
+            let mut hook = native_hook(name);
+            hook.agent_type = "codex".into();
+            hook.payload["session_id"] = json!(id);
+            hook.payload["transcript_path"] = json!(path);
+            hook.payload["cwd"] = json!(dir.path());
+            hook.payload["thread_id"] = json!(foreign);
+            hook.payload["turn_id"] = json!(foreign);
+            if !prompt.is_empty() {
+                hook.payload["prompt"] = json!(prompt);
+            }
+            if !report.is_empty() {
+                hook.payload["last_agent_message"] = json!(report);
+            }
+            hook
+        };
+        let new_actor = || async {
+            test_actor(
+                &dir,
+                HashMap::new(),
+                HashMap::from([(
+                    "recipient".into(),
+                    Session::driver_test_stub("recipient", 80, 24),
+                )]),
+            )
+            .await
+        };
+        let mut actor = new_actor().await;
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"codex":true}"#)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        let mut tab = WorkspaceTabRecord {
+            id: "tab-recipient".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Codex".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"agentType":"codex","terminalSessionId":"recipient"}),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "");
+        actor.runtime_store.upsert_workspace_tab(tab).await.unwrap();
+
+        actor
+            .handle_agent_hook_event(event("SessionStart", a, "", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("UserPromptSubmit", a, "Codex A objective", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("Stop", a, "", "Codex A completed"))
+            .await;
+        let original = actor.agent_presence.get("recipient").unwrap().clone();
+        let token = original.conversation_id.clone().unwrap();
+        assert_eq!(original.context.progress, "Codex A completed");
+
+        actor
+            .handle_agent_hook_event(event("SessionStart", b, "", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("UserPromptSubmit", b, "Codex B objective", ""))
+            .await;
+        let active = actor.agent_presence.get("recipient").unwrap().clone();
+        assert_ne!(active.conversation_id.as_deref(), Some(token.as_str()));
+        assert_eq!(active.context.goal, "Codex B objective");
+        assert!(active.context.progress.is_empty());
+        for late in [
+            event("Stop", a, "", "Codex A late report"),
+            event("SessionEnd", a, "", ""),
+            event("UserPromptSubmit", a, "Codex A late input", ""),
+            event("PreToolUse", a, "", ""),
+            event("Stop", foreign, "", "Unknown report"),
+        ] {
+            actor.handle_agent_hook_event(late).await;
+        }
+        let current = actor.agent_presence.get("recipient").unwrap();
+        assert_eq!(current.context, active.context);
+        assert_eq!(current.conversation_id, active.conversation_id);
+        assert!(!actor.agent_presence.is_injection_ready("recipient"));
+
+        actor
+            .handle_agent_hook_event(event("Stop", b, "", "Codex B completed"))
+            .await;
+        actor
+            .handle_agent_hook_event(event("SessionEnd", b, "", ""))
+            .await;
+        assert!(actor.agent_presence.get("recipient").is_none());
+        drop(actor);
+
+        let mut actor = new_actor().await;
+        let saved = actor
+            .runtime_store
+            .find_workspace_tab("tab-recipient")
+            .await
+            .unwrap()
+            .unwrap();
+        let state = AgentTitleState::read(&saved).unwrap();
+        assert_eq!(state.native_id.as_deref(), Some(b));
+        assert_eq!(
+            state.context_overview.as_ref().unwrap().progress,
+            "Codex B completed"
+        );
+        assert_eq!(
+            state.retired_contexts[&format!("codex:{a}")]
+                .overview
+                .progress,
+            "Codex A completed"
+        );
+        // A matching ID with a different transcript source is not a resume.
+        let wrong_root = dir.path().join("foreign/sessions");
+        std::fs::create_dir_all(&wrong_root).unwrap();
+        let wrong_path = wrong_root.join(format!("rollout-2026-11-24T10-00-00-{a}.jsonl"));
+        std::fs::write(
+            &wrong_path,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":a,"cwd":dir.path()}})
+            ),
+        )
+        .unwrap();
+        let mut wrong = event("SessionStart", a, "", "");
+        wrong.payload["transcript_path"] = json!(wrong_path);
+        actor.handle_agent_hook_event(wrong).await;
+        let saved = actor
+            .runtime_store
+            .find_workspace_tab("tab-recipient")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            AgentTitleState::read(&saved).unwrap().native_id.as_deref(),
+            Some(b)
+        );
+
+        // Real Codex 0.171 uses a regular Windows path on startup but
+        // the extended-length path of the SAME physical rollout on resume.
+        let mut start = event("SessionStart", a, "", "");
+        let canonical =
+            std::fs::canonicalize(start.payload["transcript_path"].as_str().unwrap()).unwrap();
+        start.payload["transcript_path"] = json!(canonical);
+        start.payload["source"] = json!("resume");
+        actor.handle_agent_hook_event(start).await;
+        let mut prompt = event("UserPromptSubmit", a, "Continue Codex A", "");
+        prompt.payload["transcript_path"] = json!(canonical);
+        actor.handle_agent_hook_event(prompt).await;
+        let resumed = actor.agent_presence.get("recipient").unwrap();
+        assert_ne!(resumed.conversation_id.as_deref(), Some(token.as_str()));
+        assert_eq!(resumed.context.progress, "Codex A completed");
+        assert!(resumed.context.goal.contains("Codex A objective"));
+        assert!(!resumed.context.goal.contains("Codex B objective"));
+        assert!(resumed
+            .context
+            .timeline
+            .iter()
+            .all(|entry| !entry.text.contains("Codex B")));
+        assert!(!actor.agent_presence.is_injection_ready("recipient"));
+        let mut stop = event("Stop", a, "", "Codex A resumed report");
+        // A later event may use either equivalent spelling.
+        stop.payload["transcript_path"] = json!(canonical);
+        actor.handle_agent_hook_event(stop).await;
+        let saved = actor
+            .runtime_store
+            .find_workspace_tab("tab-recipient")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            AgentTitleState::read(&saved)
+                .unwrap()
+                .context_overview
+                .unwrap()
+                .progress,
+            "Codex A resumed report"
+        );
+    }
+
+    #[tokio::test]
     async fn native_hook_updates_host_presence_only_when_enabled_and_scoped() {
         let dir = tempfile::tempdir().unwrap();
         let mut actor = test_actor(
