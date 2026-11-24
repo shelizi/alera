@@ -331,6 +331,268 @@ async fn trim_preserves_binary_suffix_and_other_sessions_without_extra_updates()
     );
 }
 
+const LEGACY_TRIM_BOUNDARY_SQL: &str = "SELECT id, sequence, byteLen, running FROM ( \
+       SELECT id, sequence, length(data) AS byteLen, \
+              SUM(length(data)) OVER (ORDER BY sequence DESC, id DESC) AS running \
+       FROM outputChunks WHERE sessionId = ? \
+     ) WHERE running > ? ORDER BY sequence DESC, id DESC LIMIT 1";
+
+#[tokio::test]
+async fn indexed_trim_boundary_matches_legacy_for_ties_empty_rows_and_binary_suffixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.upsert(sample("other")).await.unwrap();
+    store.append_output("other", 0, b"keep me").await.unwrap();
+
+    // Deliberately insert sequences out of order, include ties and empty
+    // rows that cannot be produced by a modern PTY but may exist on disk.
+    let chunks: &[(i64, &[u8])] = &[
+        (5, &[0xff, 0, 0x80, b'x']),
+        (2, b""),
+        (1, b"ab"),
+        (5, b""),
+        (3, &[0, 0xfe]),
+        (5, b"last"),
+        (0, b""),
+        (6, b""),
+        (3, b"c"),
+        (6, b""),
+        (-1, b"first"),
+    ];
+    for (sequence, data) in chunks {
+        sqlx::query("INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES ('s1', ?, '', ?)")
+            .bind(sequence)
+            .bind(data)
+            .execute(&store.pool)
+            .await.unwrap();
+    }
+    let expected = store.read_buffer("s1", usize::MAX).await.unwrap();
+    let mut transaction = store.begin_write().await.unwrap();
+    for cap in 0..expected.len() {
+        let row = sqlx::query(LEGACY_TRIM_BOUNDARY_SQL)
+            .bind("s1")
+            .bind(cap as i64)
+            .fetch_one(&mut *transaction)
+            .await
+            .unwrap();
+        let len: i64 = row.try_get("byteLen").unwrap();
+        let running: i64 = row.try_get("running").unwrap();
+        let excess_bytes = match trim_action(&mut *transaction, "s1", cap).await.unwrap() {
+            TrimAction::Cut { excess_bytes } => excess_bytes,
+            other => panic!("unexpected trim action: {other:?}"),
+        };
+        let boundary = find_trim_boundary(&mut transaction, "s1", excess_bytes, cap)
+            .await
+            .unwrap();
+        assert_eq!(
+            boundary.id,
+            row.try_get::<i64, _>("id").unwrap(),
+            "cap={cap}"
+        );
+        assert_eq!(
+            boundary.sequence,
+            row.try_get::<i64, _>("sequence").unwrap(),
+            "cap={cap}"
+        );
+        assert_eq!(
+            boundary.retained_bytes,
+            cap as i64 - (running - len),
+            "cap={cap}"
+        );
+    }
+    assert_eq!(
+        trim_action(&mut *transaction, "s1", expected.len())
+            .await
+            .unwrap(),
+        TrimAction::None
+    );
+    assert_eq!(
+        trim_action(&mut *transaction, "s1", usize::MAX)
+            .await
+            .unwrap(),
+        TrimAction::None
+    );
+    transaction.rollback().await.unwrap();
+
+    // Exercise real range deletes at every smaller cap, including zero.
+    for cap in (0..expected.len()).rev() {
+        store.trim_session("s1", cap).await.unwrap();
+        assert_eq!(
+            store.read_buffer("s1", usize::MAX).await.unwrap(),
+            expected[expected.len() - cap..],
+            "cap={cap}"
+        );
+        assert_eq!(
+            store.read_buffer("other", usize::MAX).await.unwrap(),
+            b"keep me"
+        );
+    }
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn trim_uses_existing_index_and_visits_only_small_expired_or_retained_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let count = OUTPUT_COMPACTION_ROW_THRESHOLD;
+    let data = vec![b'x'; 256];
+    let mut transaction = store.begin_write().await.unwrap();
+    for sequence in 0..count {
+        sqlx::query("INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES ('s1', ?, '', ?)")
+            .bind(sequence).bind(&data).execute(&mut *transaction).await.unwrap();
+    }
+    let total = count as usize * data.len();
+    let action = trim_action(&mut *transaction, "s1", total - 17)
+        .await
+        .unwrap();
+    assert_eq!(action, TrimAction::Cut { excess_bytes: 17 });
+    let boundary = find_trim_boundary(&mut transaction, "s1", 17, total - 17)
+        .await
+        .unwrap();
+    assert_eq!(boundary.sequence, 0);
+    assert_eq!(boundary.retained_bytes, 239);
+    assert_eq!(boundary.visited_rows, 1);
+    let boundary = find_trim_boundary(&mut transaction, "s1", (total - 17) as i64, 17)
+        .await
+        .unwrap();
+    assert_eq!(boundary.sequence, count - 1);
+    assert_eq!(boundary.retained_bytes, 17);
+    assert_eq!(boundary.visited_rows, 1);
+
+    for sql in [
+        "EXPLAIN QUERY PLAN SELECT id, sequence, length(data) AS byteLen FROM outputChunks WHERE sessionId = ? ORDER BY sequence ASC, id ASC",
+        "EXPLAIN QUERY PLAN SELECT id, sequence, length(data) AS byteLen FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
+    ] {
+        let rows = sqlx::query(sql)
+            .bind("s1")
+            .fetch_all(&mut *transaction)
+            .await
+            .unwrap();
+        let plan = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>("detail").unwrap())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(plan.contains("outputChunksSessionIdSequenceIdx"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+    }
+    sqlx::query(
+        "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES ('s1', ?, '', ?)",
+    )
+    .bind(count)
+    .bind(&data)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    // Even if the byte total is below the requested cap, the row count
+    // threshold still schedules compaction.
+    assert_eq!(
+        trim_action(&mut *transaction, "s1", usize::MAX)
+            .await
+            .unwrap(),
+        TrimAction::Compact
+    );
+    transaction.commit().await.unwrap();
+    store.trim_session("s1", 17).await.unwrap();
+    assert_eq!(
+        store.read_buffer("s1", usize::MAX).await.unwrap(),
+        vec![b'x'; 17]
+    );
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), count + 1);
+    store.close_for_test().await;
+}
+
+/// Repeat the actual old window query and new indexed cut on the same
+/// populated SQLite database. No writes are timed: this isolates the cost
+/// of finding the retention boundary, not end-to-end persistence.
+#[tokio::test]
+#[ignore = "manual retention scan microbenchmark"]
+async fn benchmark_indexed_retention_boundary() {
+    use std::time::Instant;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let count = OUTPUT_COMPACTION_ROW_THRESHOLD;
+    let data = vec![b'x'; 4096];
+    let mut transaction = store.begin_write().await.unwrap();
+    for sequence in 0..count {
+        sqlx::query("INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES ('s1', ?, '', ?)")
+            .bind(sequence).bind(&data).execute(&mut *transaction).await.unwrap();
+    }
+    let total = count as usize * data.len();
+    async fn legacy(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, cap: usize) -> (i64, i64, i64) {
+        let row = sqlx::query(LEGACY_TRIM_BOUNDARY_SQL)
+            .bind("s1")
+            .bind(cap as i64)
+            .fetch_one(&mut **tx)
+            .await
+            .unwrap();
+        let running: i64 = row.try_get("running").unwrap();
+        let len: i64 = row.try_get("byteLen").unwrap();
+        (
+            row.try_get("id").unwrap(),
+            row.try_get("sequence").unwrap(),
+            cap as i64 - (running - len),
+        )
+    }
+    async fn indexed(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        total: usize,
+        cap: usize,
+    ) -> (i64, i64, i64) {
+        let b = find_trim_boundary(tx, "s1", (total - cap) as i64, cap)
+            .await
+            .unwrap();
+        (b.id, b.sequence, b.retained_bytes)
+    }
+    for (label, cap) in [
+        ("steady_trim", total - 17),
+        ("shrink_to_17", 17),
+        ("shrink_half", total / 2),
+    ] {
+        let expected = legacy(&mut transaction, cap).await;
+        assert_eq!(indexed(&mut transaction, total, cap).await, expected);
+        for _ in 0..3 {
+            assert_eq!(legacy(&mut transaction, cap).await, expected);
+            assert_eq!(indexed(&mut transaction, total, cap).await, expected);
+        }
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        const CALLS: usize = 30;
+        for round in 0..7 {
+            for new in [round % 2 != 0, round % 2 == 0] {
+                let started = Instant::now();
+                for _ in 0..CALLS {
+                    let result = if new {
+                        indexed(&mut transaction, total, cap).await
+                    } else {
+                        legacy(&mut transaction, cap).await
+                    };
+                    assert_eq!(result, expected);
+                }
+                let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                if new {
+                    after.push(elapsed_ms);
+                } else {
+                    before.push(elapsed_ms);
+                }
+            }
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        let boundary = find_trim_boundary(&mut transaction, "s1", (total - cap) as i64, cap)
+            .await
+            .unwrap();
+        eprintln!("retention_bench {label} rows={count} visited={} calls={CALLS} old_ms={:.4} new_ms={:.4}",
+            boundary.visited_rows,before[3],after[3]);
+    }
+    transaction.rollback().await.unwrap();
+    store.close_for_test().await;
+}
+
 #[tokio::test]
 async fn shrinking_session_limit_trims_existing_chunks() {
     let dir = tempfile::tempdir().unwrap();

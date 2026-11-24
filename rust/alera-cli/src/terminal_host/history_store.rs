@@ -438,36 +438,111 @@ async fn persist_session_rows(
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TrimAction {
     None,
-    Cut,
+    Cut { excess_bytes: i64 },
     Compact,
 }
 
-/// An aggregate is much cheaper than the ordered running sum when there is
-/// no excess history. Keep that common no-op path free of mutations.
+/// Only histories at or below the compaction threshold need an exact byte
+/// total. The bounded subquery stops visiting legacy tiny rows as soon as
+/// compaction is inevitable, rather than summing their entire history.
+const TRIM_STATS_SQL: &str =
+    "SELECT COUNT(*) AS rowCount, COALESCE(SUM(byteLen), 0) AS totalBytes \
+     FROM (SELECT length(data) AS byteLen FROM outputChunks \
+           WHERE sessionId = ? LIMIT ?)";
+
 async fn trim_action<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     session_id: &'e str,
     max_bytes: usize,
 ) -> Result<TrimAction> {
-    let row = sqlx::query(
-        "SELECT COUNT(*) AS rowCount, COALESCE(SUM(length(data)), 0) AS totalBytes \
-         FROM outputChunks WHERE sessionId = ?",
-    )
-    .bind(session_id)
-    .fetch_one(executor)
-    .await?;
+    let row = sqlx::query(TRIM_STATS_SQL)
+        .bind(session_id)
+        .bind(OUTPUT_COMPACTION_ROW_THRESHOLD + 1)
+        .fetch_one(executor)
+        .await?;
     let row_count: i64 = row.try_get("rowCount")?;
     let total_bytes: i64 = row.try_get("totalBytes")?;
+    let limit = i64::try_from(max_bytes).unwrap_or(i64::MAX);
     if row_count > OUTPUT_COMPACTION_ROW_THRESHOLD {
         Ok(TrimAction::Compact)
-    } else if total_bytes > i64::try_from(max_bytes).unwrap_or(i64::MAX) {
-        Ok(TrimAction::Cut)
+    } else if total_bytes > limit {
+        Ok(TrimAction::Cut {
+            excess_bytes: total_bytes - limit,
+        })
     } else {
         Ok(TrimAction::None)
     }
+}
+
+const TRIM_OLDEST_SQL: &str = "SELECT id, sequence, length(data) AS byteLen FROM outputChunks \
+     WHERE sessionId = ? ORDER BY sequence ASC, id ASC";
+const TRIM_NEWEST_SQL: &str = "SELECT id, sequence, length(data) AS byteLen FROM outputChunks \
+     WHERE sessionId = ? ORDER BY sequence DESC, id DESC";
+
+#[derive(Debug, PartialEq, Eq)]
+struct TrimBoundary {
+    id: i64,
+    sequence: i64,
+    retained_bytes: i64,
+    #[cfg(test)]
+    visited_rows: usize,
+}
+
+/// Find the boundary using the existing (sessionId, sequence, id) index.
+/// A normal incremental trim walks only the small expired prefix; a large
+/// shrink walks the retained suffix instead. Neither path needs a window
+/// function, a temporary sort, or to transfer the row's BLOB. The row stream
+/// is dropped before the caller mutates the transaction.
+async fn find_trim_boundary(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session_id: &str,
+    excess_bytes: i64,
+    max_bytes: usize,
+) -> Result<TrimBoundary> {
+    let limit = i64::try_from(max_bytes).unwrap_or(i64::MAX);
+    let oldest_first = excess_bytes <= limit;
+    let mut remaining = if oldest_first { excess_bytes } else { limit };
+    let sql = if oldest_first {
+        TRIM_OLDEST_SQL
+    } else {
+        TRIM_NEWEST_SQL
+    };
+    let mut rows = sqlx::query(sql).bind(session_id).fetch(&mut **transaction);
+    #[cfg(test)]
+    let mut visited_rows = 0;
+    while let Some(row) = rows.try_next().await? {
+        #[cfg(test)]
+        {
+            visited_rows += 1;
+        }
+        let byte_len: i64 = row.try_get("byteLen")?;
+        // At an exact row boundary, the oldest traversal stops at the
+        // last fully discarded nonempty row. The newest traversal skips
+        // any empty rows on the retained side before reaching that row.
+        let reached = if oldest_first {
+            byte_len >= remaining
+        } else {
+            byte_len > remaining
+        };
+        if reached {
+            return Ok(TrimBoundary {
+                id: row.try_get("id")?,
+                sequence: row.try_get("sequence")?,
+                retained_bytes: if oldest_first {
+                    byte_len - remaining
+                } else {
+                    remaining
+                },
+                #[cfg(test)]
+                visited_rows,
+            });
+        }
+        remaining -= byte_len;
+    }
+    anyhow::bail!("terminal history changed while locating retention boundary")
 }
 
 /// Determine and apply the cut using the same transaction as the append.
@@ -477,66 +552,42 @@ async fn trim_output_rows(
     session_id: &str,
     max_bytes: usize,
 ) -> Result<()> {
-    match trim_action(&mut **transaction, session_id, max_bytes).await? {
+    let excess_bytes = match trim_action(&mut **transaction, session_id, max_bytes).await? {
         TrimAction::None => return Ok(()),
         TrimAction::Compact => {
             return compact_output_rows(transaction, session_id, max_bytes).await
         }
-        TrimAction::Cut => {}
-    }
-    let max_bytes_i64 = i64::try_from(max_bytes).unwrap_or(i64::MAX);
-    let row = sqlx::query(
-        "SELECT id, sequence, byteLen, running FROM ( \
-           SELECT id, sequence, length(data) AS byteLen, \
-                  SUM(length(data)) OVER ( \
-                    ORDER BY sequence DESC, id DESC \
-                  ) AS running \
-           FROM outputChunks WHERE sessionId = ? \
-         ) WHERE running > ? ORDER BY sequence DESC, id DESC LIMIT 1",
-    )
-    .bind(session_id)
-    .bind(max_bytes_i64)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    if let Some(row) = row {
-        let id: i64 = row.try_get("id")?;
-        let sequence: i64 = row.try_get("sequence")?;
-        let byte_len: i64 = row.try_get("byteLen")?;
-        let running: i64 = row.try_get("running")?;
-        // Everything newer than this row, which is what stays whole.
-        let kept = running.saturating_sub(byte_len).max(0) as usize;
-        let remaining = max_bytes.saturating_sub(kept);
-        if remaining > 0 {
-            // SQLite substr operates on BLOB bytes, not Unicode characters.
-            // Keep the boundary data in SQLite instead of round-tripping
-            // the full chunk and copying its retained suffix through Rust.
-            sqlx::query("UPDATE outputChunks SET data = substr(data, -?) WHERE id = ?")
-                .bind(i64::try_from(remaining).unwrap_or(i64::MAX))
-                .bind(id)
-                .execute(&mut **transaction)
-                .await?;
-            sqlx::query(
-                "DELETE FROM outputChunks \
-                 WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id < ?))",
-            )
-            .bind(session_id)
-            .bind(sequence)
-            .bind(sequence)
-            .bind(id)
+        TrimAction::Cut { excess_bytes } => excess_bytes,
+    };
+    let boundary = find_trim_boundary(transaction, session_id, excess_bytes, max_bytes).await?;
+    if boundary.retained_bytes > 0 {
+        // SQLite substr operates on BLOB bytes, not Unicode characters.
+        // Keep the boundary data in SQLite instead of round-tripping
+        // the full chunk and copying its retained suffix through Rust.
+        sqlx::query("UPDATE outputChunks SET data = substr(data, -?) WHERE id = ?")
+            .bind(boundary.retained_bytes)
+            .bind(boundary.id)
             .execute(&mut **transaction)
             .await?;
-        } else {
-            sqlx::query(
-                "DELETE FROM outputChunks \
-                 WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id <= ?))",
-            )
-            .bind(session_id)
-            .bind(sequence)
-            .bind(sequence)
-            .bind(id)
-            .execute(&mut **transaction)
-            .await?;
-        }
+        sqlx::query(
+            "DELETE FROM outputChunks \
+             WHERE sessionId = ? AND (sequence, id) < (?, ?)",
+        )
+        .bind(session_id)
+        .bind(boundary.sequence)
+        .bind(boundary.id)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM outputChunks \
+             WHERE sessionId = ? AND (sequence, id) <= (?, ?)",
+        )
+        .bind(session_id)
+        .bind(boundary.sequence)
+        .bind(boundary.id)
+        .execute(&mut **transaction)
+        .await?;
     }
     Ok(())
 }
@@ -651,8 +702,7 @@ struct PendingOutputRow<'a> {
 /// ending at the newest sequence so later appends still order after it.
 ///
 /// Histories written before rows were coalesced can hold six figures of tiny
-/// rows, and the trim's running sum over them took seconds on every
-/// maintenance pass.
+/// rows. Compact them once so subsequent maintenance visits fewer rows.
 async fn compact_output_rows(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session_id: &str,
