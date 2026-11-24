@@ -139,6 +139,11 @@ pub enum ServerCommand {
         id: String,
         result: HostResult<String>,
     },
+    AgentReportFinished {
+        handle: String,
+        id: String,
+        result: HostResult<String>,
+    },
     AiAssistFinished {
         client_id: u64,
         request_id: i64,

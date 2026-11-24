@@ -136,8 +136,8 @@ List<GlobalAgentLiveRow> projectGlobalAgentLiveRows(
             tab: tab,
             status: status,
             goal: overview.goal.isNotEmpty ? overview.goal : status.prompt,
-            progress: overview.progress.isNotEmpty
-                ? overview.progress
+            progress: overview.displayProgress.isNotEmpty
+                ? overview.displayProgress
                 : (status.lastAssistantMessage ?? ''),
             timeline: overview.timeline,
           ),

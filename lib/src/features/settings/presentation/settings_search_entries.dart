@@ -452,6 +452,19 @@ const List<SettingsSearchEntry> aiAssistSearchEntries = <SettingsSearchEntry>[
     ],
     groupId: 'agentTitle',
   ),
+  SettingsSearchEntry(
+    title: 'AI Assist Agent Work Reports',
+    description: 'Configure automatic work report summaries, provider, model and instructions.',
+    keywords: <String>[
+      'summary',
+      'progress',
+      'report',
+      'agent',
+      'model',
+      'automatic',
+    ],
+    groupId: 'agentWorkReport',
+  ),
   ...readingDiffSearchEntries,
   SettingsSearchEntry(
     title: 'AI Assist Workspace Identity',

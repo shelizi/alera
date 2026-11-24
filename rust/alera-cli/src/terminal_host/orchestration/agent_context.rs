@@ -22,6 +22,9 @@ pub struct AgentContextMilestone {
 pub struct AgentContextOverview {
     pub goal: String,
     pub progress: String,
+    /// Optional AI summary of the current raw report; never replaces the source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_summary: Option<String>,
     /// Task anchor retained across turns, even if the recent focus changes.
     pub initial_goal: String,
     /// Most recent substantive user change; never a mere 'continue' request.
@@ -183,6 +186,7 @@ impl AgentContextOverview {
                 // A delayed Hook must not replace the newest progress report.
                 if newest_report.is_none_or(|previous| at >= previous) {
                     next.progress = report.clone();
+                    next.report_summary = None;
                 }
                 next.record("report", report_excerpt(message, EVENT_LIMIT), at);
             }

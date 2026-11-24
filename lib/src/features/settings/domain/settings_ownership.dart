@@ -57,6 +57,7 @@ Map<String, Object?> runtimeAiAssistSettings(AiAssistSettings settings) {
   return <String, Object?>{
     'enabled': settings.enabled,
     'autoGenerateAgentTitles': settings.autoGenerateAgentTitles,
+    'autoSummarizeAgentReports': settings.autoSummarizeAgentReports,
     'agent': settings.agent,
     'selectedModelByAgent': <String, String>{
       for (final entry in settings.selectedModelByAgent.entries)

@@ -36,6 +36,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         AiAssistOperation.readingDiff,
         AiAssistOperation.workspaceIdentity,
         AiAssistOperation.agentTitle,
+        AiAssistOperation.agentWorkReport,
         AiAssistOperation.speechMessage,
       ];
 
@@ -192,6 +193,16 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
               title: operation.label,
               description: 'Configure the agent, model, reasoning and instructions for this prompt.',
               children: <Widget>[
+                if (operation == AiAssistOperation.agentWorkReport)
+                  SettingsSwitchRow(
+                    title: 'Auto-Summarize Agent Work Reports',
+                    description: 'Send completed model replies to Codex, Claude or Pi. Off by default; original replies remain available.',
+                    value: settings.autoSummarizeAgentReports,
+                    onChanged: (value) => widget.onChanged(
+                      (settings) =>
+                          settings.copyWith(autoSummarizeAgentReports: value),
+                    ),
+                  ),
                 ..._promptOverrideRows(settings, operation),
                 ..._thinkingRows(settings, operation),
                 _instructionRow(settings, operation),
@@ -318,11 +329,14 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
             ? const AiAssistAgentChoice.custom()
             : AiAssistAgentChoice.agent(settings.agentType!),
         value: promptChoice,
-        allowedAgentTypes: isReadingDiff ? diffOnlyAiAssistAgentTypes : null,
+        allowedAgentTypes: operation == AiAssistOperation.agentWorkReport
+            ? const <AgentType>[AgentType.codex, AgentType.claude, AgentType.pi]
+            : (isReadingDiff ? diffOnlyAiAssistAgentTypes : null),
         allowGlobal: !isReadingDiff || globalSupported,
         allowCustom:
             operation != AiAssistOperation.speechMessage &&
-            operation != AiAssistOperation.mergeConflicts,
+            operation != AiAssistOperation.mergeConflicts &&
+            operation != AiAssistOperation.agentWorkReport,
         onChanged: (choice) =>
             unawaited(_selectAgent(choice, operation: operation)),
       ),

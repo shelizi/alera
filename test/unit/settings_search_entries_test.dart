@@ -32,7 +32,7 @@ void main() {
       _catalogFingerprint(catalogs),
       // Audited Settings search metadata/order including merge-conflict
       // resolution and other entries from the integrated main branch.
-      '52d836336660949cfa1dfd54c2480757614da1d2b671d22c2cf3aaac0f107ce1',
+      'd607972cd19daf151a7cbed61dfb30e1b0f56024c9bbd83f20664754261bda54',
     );
   });
 

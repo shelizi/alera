@@ -54,7 +54,7 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 
 | Field | Tiers |
 | --- | --- |
-| `enabled`, `autoGenerateAgentTitles`, `agent`, `selectedModelByAgent`, `selectedThinkingByModel`, `selectedThinkingByOperation`, `customCommand`, `instructionsByOperation`, `promptSettingsByOperation`, `timeoutSeconds` | runtime + portable |
+| `enabled`, `autoGenerateAgentTitles`, `autoSummarizeAgentReports`, `agent`, `selectedModelByAgent`, `selectedThinkingByModel`, `selectedThinkingByOperation`, `customCommand`, `instructionsByOperation`, `promptSettingsByOperation`, `timeoutSeconds` | runtime + portable |
 | `discoveredModelsByAgent`, `discoveredDefaultModelByAgent` | local-only (stripped from the runtime payload and merged back on load). `defaultThinkingLevel` is a property of each discovered model, not a top-level `AiAssistSettings` field. |
 
 ### `aiDictation`

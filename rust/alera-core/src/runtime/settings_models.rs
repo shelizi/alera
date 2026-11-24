@@ -118,6 +118,9 @@ impl Default for RuntimeMobilePushSettings {
 pub struct RuntimeAiAssistSettings {
     #[serde(default = "default_true")]
     pub auto_generate_agent_titles: bool,
+    /// Opt-in background generation of completed Agent work reports.
+    #[serde(default)]
+    pub auto_summarize_agent_reports: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_ai_assist_agent")]
@@ -203,6 +206,7 @@ impl Default for RuntimeAiAssistSettings {
     fn default() -> Self {
         Self {
             auto_generate_agent_titles: true,
+            auto_summarize_agent_reports: false,
             enabled: true,
             agent: default_ai_assist_agent(),
             selected_model_by_agent: HashMap::new(),

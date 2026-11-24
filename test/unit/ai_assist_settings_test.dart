@@ -5,6 +5,20 @@ import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Agent work report is opt-in and keeps its own model override', () {
+    expect(AiAssistSettings.fromJson(<String, Object?>{}).autoSummarizeAgentReports, isFalse);
+    final settings = AiAssistSettings.defaults.copyWith(
+      autoSummarizeAgentReports: true,
+      promptSettingsByOperation: <AiAssistOperation, AiAssistPromptSettings>{
+        AiAssistOperation.agentWorkReport: const AiAssistPromptSettings(agent: 'claude', model: 'haiku'),
+      },
+    );
+    final decoded = AiAssistSettings.fromJson(settings.toMap());
+    expect(decoded.autoSummarizeAgentReports, isTrue);
+    expect(decoded.agentTypeFor(AiAssistOperation.agentWorkReport), AgentType.claude);
+    expect(decoded.modelForOperation(AiAssistOperation.agentWorkReport), 'haiku');
+    expect(decoded.agentTypeFor(AiAssistOperation.agentTitle), AgentType.codex);
+  });
   test('exposes every operation label and agent mapping', () {
     expect(
       AiAssistOperation.values.map((operation) => operation.label),
@@ -16,6 +30,7 @@ void main() {
         'Reading Diffs',
         'Workspace Identity',
         'Agent Titles',
+        'Agent Work Reports',
         'Speech Messages',
       ],
     );

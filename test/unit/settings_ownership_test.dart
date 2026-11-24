@@ -145,6 +145,7 @@ const _runtimeOperationalKeys = <String>{
 const _runtimeAiAssistKeys = <String>{
   'enabled',
   'autoGenerateAgentTitles',
+  'autoSummarizeAgentReports',
   'agent',
   'selectedModelByAgent',
   'selectedThinkingByModel',
@@ -184,6 +185,7 @@ const _classifiedFieldPaths = <String>{
   'agents.quotas',
   'aiTextGeneration.enabled',
   'aiTextGeneration.autoGenerateAgentTitles',
+  'aiTextGeneration.autoSummarizeAgentReports',
   'aiTextGeneration.agent',
   'aiTextGeneration.selectedModelByAgent',
   'aiTextGeneration.selectedThinkingByModel',

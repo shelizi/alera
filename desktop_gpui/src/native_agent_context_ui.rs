@@ -24,7 +24,7 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
                     .child("Agent Context"),
             )
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Overall goal follows task changes. Agent replies are excerpts, not independently verified results.",
+                "Overall goal follows task changes. Reports are Agent excerpts or AI summaries, not independently verified results.",
             ));
 
     let Some(context) = context else {
