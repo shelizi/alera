@@ -702,7 +702,12 @@ impl ServerActor {
             ServerCommand::ResourceSampleReady { snapshot } => {
                 self.handle_resource_sample_ready(snapshot)
             }
-            ServerCommand::AutomationTick => self.handle_automation_tick().await,
+            ServerCommand::AutomationTick { completed } => {
+                self.handle_automation_tick().await;
+                // Acknowledge even when dispatch returned early (for example
+                // while a workspace mutation owns the runtime).
+                let _ = completed.send(());
+            }
             ServerCommand::CodexMessage { .. } => {}
             ServerCommand::CodexMalformed { reason } => {
                 tracing::warn!(reason, "Codex app-server returned malformed JSON");
