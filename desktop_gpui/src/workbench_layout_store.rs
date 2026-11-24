@@ -35,7 +35,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 const MAX_LAYOUT_BYTES: u64 = 64 * 1024;
-const MAX_SAVED_HOST_PANE_TABS: usize = 64;
+const MAX_SAVED_HOST_PANE_TABS: usize = crate::terminal::MAX_OPEN_TABS;
 const MAX_SAVED_HOST_ID_BYTES: usize = 256;
 
 /// Reserved opaque Editor key for a locally recovered, unsaved scratch draft.

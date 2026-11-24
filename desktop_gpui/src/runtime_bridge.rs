@@ -537,6 +537,17 @@ impl RuntimeCliBridge {
             (Some("create"), false) => is_create_terminal_args(args),
             (Some("create-agent"), false) => is_create_agent_terminal_args(args),
             (Some("resize"), false) => is_resize_terminal_args(args),
+            (Some("close-verified"), false) => {
+                args.len() == 5
+                    && ["--handle=", "--expected-workspace-id=", "--expected-tab-id="]
+                        .iter().enumerate().all(|(i, prefix)| {
+                            args[i + 1].to_str().and_then(|s| s.strip_prefix(prefix))
+                                .is_some_and(|s| !s.is_empty() && s.len() <= 128
+                                    && s.bytes().all(|b| b.is_ascii_alphanumeric()
+                                        || matches!(b, b'-' | b'_' | b'.' | b':')))
+                        })
+                    && args[4] == OsString::from("--confirm-close")
+            },
             _ => false,
         };
         if !allowed {

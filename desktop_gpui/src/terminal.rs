@@ -19,7 +19,7 @@ pub const MAX_TERMINALS: usize = 128;
 /// The Host session list is global. It is not a view of the open workspace.
 pub const HOST_SESSION_LIST_SCOPE: &str =
     "Existing Host sessions · all workspaces · input only to selected session";
-const MAX_OPEN_TABS: usize = 8;
+pub const MAX_OPEN_TABS: usize = MAX_TERMINALS;
 const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
 const MAX_HOST_WORKSPACES: usize = 256;
 const MAX_HOST_PATH_BYTES: usize = 4096;
@@ -641,6 +641,20 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
+    /// Close the exact Host-owned tab; never use a local detach as a close.
+    pub fn close_verified_terminal(&self, target: &TerminalTabContextTarget) -> io::Result<()> {
+        let args =
+            verified_terminal_close_verb(&target.handle, target.workspace_id(), target.tab_id())?;
+        let result = self.terminal_json(&args)?;
+        if result.get("closed").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host close was not confirmed",
+            ));
+        }
+        Ok(())
+    }
+
     /// List workspaces already registered with the running Host. Uses
     /// --no-start only; a missing Host is an error, never an implicit start.
     pub fn list_registered_workspaces(&self) -> io::Result<Vec<RegisteredHostWorkspace>> {
@@ -784,6 +798,26 @@ pub fn verified_agent_prompt_verb(
 }
 
 /// Fixed action and exact Host IDs. Never assemble arbitrary process args.
+pub fn verified_terminal_close_verb(
+    handle: &str,
+    workspace_id: &str,
+    tab_id: &str,
+) -> io::Result<Vec<OsString>> {
+    if ![handle, workspace_id, tab_id].into_iter().all(valid_handle) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Host tab identity",
+        ));
+    }
+    Ok(vec![
+        OsString::from("close-verified"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from(format!("--expected-workspace-id={workspace_id}")),
+        OsString::from(format!("--expected-tab-id={tab_id}")),
+        OsString::from("--confirm-close"),
+    ])
+}
+
 pub fn verified_agent_control_verb(
     handle: &str,
     workspace_id: &str,
@@ -3232,6 +3266,79 @@ impl TerminalDock {
         true
     }
 
+    /// Reflect the authoritative current Workspace inventory without creating
+    /// PTYs, replaying existing views, or stealing the selected tab.
+    pub fn reconcile_workspace_sessions(&mut self, workspace_id: &str) -> bool {
+        if self.session_list_stale {
+            return false;
+        }
+        let before = self.tabs.len();
+        let old_active = self.active().map(|tab| {
+            (
+                tab.handle.clone(),
+                tab.workspace_id.clone(),
+                tab.tab_id.clone(),
+            )
+        });
+        let missing = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tab)| {
+                (!self.sessions.iter().any(|session| {
+                    session.handle == tab.handle
+                        && session.workspace_id == tab.workspace_id
+                        && session.tab_id == tab.tab_id
+                }))
+                .then_some(i)
+            })
+            .collect::<Vec<_>>();
+        let removed = !missing.is_empty();
+        for i in missing.into_iter().rev() {
+            self.close(i);
+        }
+        let wanted = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                session.running
+                    && session.workspace_id == workspace_id
+                    && !self.tabs.iter().any(|tab| {
+                        tab.handle == session.handle
+                            && tab.workspace_id == session.workspace_id
+                            && tab.tab_id == session.tab_id
+                    })
+            })
+            .map(|session| session.handle.clone())
+            .collect::<Vec<_>>();
+        let mut added = false;
+        let old_index = self.active_tab;
+        for handle in wanted {
+            added |= self.open(&handle);
+        }
+        self.active_tab = old_active
+            .and_then(|(handle, workspace, tab_id)| {
+                self.tabs.iter().position(|tab| {
+                    tab.handle == handle && tab.workspace_id == workspace && tab.tab_id == tab_id
+                })
+            })
+            .or(old_index.filter(|i| *i < self.tabs.len()))
+            .or_else(|| (!self.tabs.is_empty()).then_some(0));
+        removed || added || before != self.tabs.len()
+    }
+
+    /// Only a confirmed explicit close may remove a matching Host identity.
+    pub fn confirm_workspace_session_closed(&mut self, target: &TerminalTabContextTarget) {
+        self.sessions.retain(|session| {
+            !(session.handle == target.handle
+                && session.workspace_id == target.workspace_id
+                && session.tab_id == target.tab_id)
+        });
+        if let Some(index) = self.index_for_context(target) {
+            self.close(index);
+        }
+    }
+
     pub fn active(&self) -> Option<&TerminalTab> {
         self.active_tab.and_then(|index| self.tabs.get(index))
     }
@@ -3563,6 +3670,7 @@ mod tests {
     #[test]
     fn auto_resize_coalesces_visible_host_identity_and_new_dimensions() {
         let start = std::time::Instant::now();
+
         let tab = TerminalTabContextTarget {
             handle: "term-a".into(),
             workspace_id: "ws".into(),
@@ -3669,7 +3777,6 @@ mod tests {
             vec![second]
         );
     }
-
 
     #[test]
     fn manual_resize_invalidates_inflight_auto_reply_until_geometry_changes() {
@@ -5784,6 +5891,81 @@ mod tests {
         dock.close(0);
         assert!(!dock.activate_next());
         assert!(!dock.activate_previous());
+    }
+
+    #[test]
+    fn workspace_reconciliation_mirrors_host_sessions_without_stealing_focus() {
+        let mut dock = TerminalDock::default();
+        let first = session("first");
+        let mut shell = session("shell");
+        shell.agent_type = None;
+        let mut foreign = session("foreign");
+        foreign.workspace_id = "workspace-2".into();
+        dock.update_sessions(vec![first.clone(), shell.clone(), foreign.clone()]);
+        assert!(dock.open("first"));
+        assert!(dock.apply_chunk(chunk("first", 0, 5, "hello")));
+        let original = dock.context_target_at(0).unwrap();
+        assert!(dock.reconcile_workspace_sessions("workspace-1"));
+        assert_eq!(dock.tabs.len(), 2);
+        assert_eq!(dock.active().unwrap().handle, "first");
+        assert_eq!(dock.active().unwrap().output, "hello");
+        assert_eq!(dock.context_target_at(0), Some(original));
+        assert!(!dock.reconcile_workspace_sessions("workspace-1"));
+        assert!(!dock.tabs.iter().any(|tab| tab.handle == "foreign"));
+        dock.update_sessions(vec![shell, foreign]);
+        assert!(dock.reconcile_workspace_sessions("workspace-1"));
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.active().unwrap().handle, "shell");
+    }
+
+    #[test]
+    fn confirmed_close_removes_only_the_exact_host_session() {
+        let mut dock = TerminalDock::default();
+        let first = session("first");
+        let second = session("second");
+        dock.update_sessions(vec![first.clone(), second.clone()]);
+        assert!(dock.reconcile_workspace_sessions("workspace-1"));
+        let target = dock.context_target_at(0).unwrap();
+        dock.confirm_workspace_session_closed(&target);
+        assert_eq!(dock.sessions, vec![second.clone()]);
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.active().unwrap().handle, "second");
+        assert!(!dock.reconcile_workspace_sessions("workspace-1"));
+
+        // A late ACK cannot remove a different Workspace/Tab using the
+        // same opaque handle.
+        let mut recycled = first;
+        recycled.workspace_id = "workspace-2".into();
+        recycled.tab_id = "recycled-tab".into();
+        dock.update_sessions(vec![second, recycled.clone()]);
+        dock.confirm_workspace_session_closed(&target);
+        assert!(dock.sessions.iter().any(|value| value == &recycled));
+    }
+
+    #[test]
+    fn workspace_session_tabs_are_not_limited_to_eight_previews() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions((0..12).map(|i| session(&format!("term-{i}"))).collect());
+        assert!(dock.reconcile_workspace_sessions("workspace-1"));
+        assert_eq!(dock.tabs.len(), 12);
+    }
+
+    #[test]
+    fn verified_close_verb_requires_all_three_exact_ids_and_confirmation() {
+        let args = verified_terminal_close_verb("session-1", "workspace-2", "tab-3").unwrap();
+        assert_eq!(
+            args,
+            [
+                "close-verified",
+                "--handle=session-1",
+                "--expected-workspace-id=workspace-2",
+                "--expected-tab-id=tab-3",
+                "--confirm-close"
+            ]
+            .map(OsString::from)
+        );
+        assert!(verified_terminal_close_verb("session-1", "", "tab-3").is_err());
+        assert!(verified_terminal_close_verb("session-1", "workspace-2", "../tab").is_err());
     }
 
     #[test]

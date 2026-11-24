@@ -50,7 +50,7 @@ impl Workbench {
     }
 
     /// Match Classic's New Tab popup: New File, New Terminal, then installed
-    /// Agent CLIs, with recovery actions shown only for a pending create.
+    /// Agent CLIs, with recovery actions shown only when needed.
     pub(super) fn kit_new_tab_menu(
         owner: gpui::WeakEntity<Self>,
         target: Option<PaneAttachGuard>,
@@ -125,8 +125,7 @@ impl Workbench {
                     },
                 ));
             }
-            // Recovery actions must be reachable even when an Editor hides
-            // the Runtime session panel. Keep the durable no-duplicate guard.
+            // Keep recovery in the relevant New Tab menu, not a separate sidebar panel.
             let pending = owner.upgrade().map(|entity| {
                 let view = entity.read(cx);
                 view.terminal_create_flow.is_active()
@@ -149,6 +148,19 @@ impl Workbench {
                                 view.cancel_host_terminal_confirmation(cx);
                                 view.model.set_status(view.terminals.status.clone());
                             });
+                        }));
+            }
+            let saved = owner.upgrade().map(|entity| {
+                let view = entity.read(cx);
+                view.terminal_layout_restore.as_ref().is_some_and(|layout| !layout.tabs.is_empty())
+                    && (view.terminals.session_list_is_stale() || view.terminals.sessions.is_empty())
+            }).unwrap_or(false);
+            if saved {
+                let restore_owner = owner.clone();
+                menu = menu.separator()
+                    .item(PopupMenuItem::new(tr(locale, "Restore saved Agent / Terminal tabs"))
+                        .on_click(move |_, _, cx| {
+                            let _ = restore_owner.update(cx, |view, cx| view.restore_saved_host_tabs(cx));
                         }));
             }
             menu.scrollable(true)

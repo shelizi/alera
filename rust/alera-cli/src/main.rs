@@ -197,6 +197,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::CreateAgent(_)
             | TerminalAction::Resize(_)
             | TerminalAction::ControlAgentVerified(_)
+            | TerminalAction::CloseVerified(_)
             | TerminalAction::HistorySearch(_)
             | TerminalAction::HistoryResume(_)
             | TerminalAction::HistoryLocate(_)
@@ -438,6 +439,31 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             })).await {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Agent lifecycle control accepted by Host");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::CloseVerified(args) => {
+            let valid = |s: &str| {
+                !s.is_empty() && s.len() <= 128 && s.bytes().all(|b|
+                    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+            };
+            if !args.confirm_close || !valid(&args.handle)
+                || !valid(&args.expected_workspace_id) || !valid(&args.expected_tab_id)
+            {
+                eprintln!("Verified close requires exact Session, Workspace and Tab IDs and --confirm-close");
+                return USAGE_EXIT_CODE;
+            }
+            // The existing Host terminate contract verifies ownership and
+            // rejects transferred tabs without their original receipt/lease.
+            match client.request_value("terminate", &json!({
+                "sessionId": args.handle,
+                "expectedWorkspaceId": args.expected_workspace_id,
+                "expectedTabId": args.expected_tab_id,
+            })).await {
+                Ok(_) => {
+                    print_value(&json!({"closed": true}), command.output.json, "Host tab closed");
                     0
                 }
                 Err(error) => print_error(error),

@@ -119,6 +119,43 @@ fn global_agent_guarded_write_requires_both_host_owner_ids() {
 }
 
 #[test]
+fn verified_terminal_close_parses_exact_identity_and_explicit_ack() {
+    let args = [
+        "alera",
+        "terminal",
+        "--no-start",
+        "close-verified",
+        "--handle=session-1",
+        "--expected-workspace-id=workspace-2",
+        "--expected-tab-id=tab-3",
+        "--confirm-close",
+    ];
+    let parsed = Cli::try_parse_from(args).unwrap();
+    match parsed.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::CloseVerified(close),
+            ..
+        }) => {
+            assert_eq!(close.handle, "session-1");
+            assert_eq!(close.expected_workspace_id, "workspace-2");
+            assert_eq!(close.expected_tab_id, "tab-3");
+            assert!(close.confirm_close);
+        }
+        _ => panic!("wrong explicit close command"),
+    }
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "close-verified",
+        "--handle=session-1",
+        "--expected-workspace-id=workspace-2"
+    ])
+    .is_err());
+}
+
+#[test]
 fn global_agent_control_parses_fixed_action_and_explicit_host_identity() {
     for action in ["interrupt", "terminate"] {
         let parsed = Cli::try_parse_from([
