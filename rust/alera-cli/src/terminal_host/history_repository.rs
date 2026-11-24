@@ -37,7 +37,8 @@ struct SessionPersistenceState {
     verified_tail: Option<VerifiedTail>,
     max_bytes: usize,
     delete_revision: Option<u64>,
-    trim_revision: Option<u64>,
+    trim_request: Option<TrimRequest>,
+    last_output_revision: u64,
     next_revision: u64,
     worker_running: bool,
     last_error: Option<String>,
@@ -47,6 +48,13 @@ struct SessionPersistenceState {
 struct VerifiedTail {
     end: u64,
     len: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TrimRequest {
+    revision: u64,
+    max_bytes: usize,
+    output_revision: u64,
 }
 
 #[derive(Clone)]
@@ -63,8 +71,7 @@ enum FlushSnapshot {
     Persist {
         checkpoint: Option<(u64, Box<TerminalHostCheckpoint>)>,
         outputs: Vec<(i64, u64, Bytes)>,
-        trim_revision: Option<u64>,
-        max_bytes: usize,
+        trim_request: Option<TrimRequest>,
     },
 }
 
@@ -106,7 +113,7 @@ impl SessionPersistenceState {
         self.checkpoint = Some(checkpoint);
         self.checkpoint_revision = Some(self.next_revision());
         self.trim_pending_outputs();
-        self.trim_revision = Some(self.next_revision());
+        self.request_trim();
     }
 
     fn next_revision(&mut self) -> u64 {
@@ -114,14 +121,34 @@ impl SessionPersistenceState {
         self.next_revision
     }
 
+    fn request_trim(&mut self) {
+        if self.trim_request.is_some_and(|request| {
+            request.max_bytes == self.max_bytes
+                && request.output_revision == self.last_output_revision
+        }) {
+            // An identical trim is already queued or running. Keep its
+            // revision so that its acknowledgement can clear this request.
+            return;
+        }
+        self.trim_request = Some(TrimRequest {
+            revision: self.next_revision(),
+            max_bytes: self.max_bytes,
+            output_revision: self.last_output_revision,
+        });
+    }
+
+    fn has_pending(&self) -> bool {
+        self.delete_revision.is_some()
+            || self.checkpoint_revision.is_some()
+            || !self.outputs.is_empty()
+            || self.trim_request.is_some()
+    }
+
     fn snapshot(&self) -> Option<FlushSnapshot> {
         if let Some(revision) = self.delete_revision {
             return Some(FlushSnapshot::Delete { revision });
         }
-        if self.checkpoint_revision.is_none()
-            && self.outputs.is_empty()
-            && self.trim_revision.is_none()
-        {
+        if !self.has_pending() {
             return None;
         }
         Some(FlushSnapshot::Persist {
@@ -136,13 +163,13 @@ impl SessionPersistenceState {
                 .iter()
                 .map(|(sequence, output)| (*sequence, output.revision, output.data.clone()))
                 .collect(),
-            trim_revision: self.trim_revision,
-            max_bytes: self.max_bytes,
+            trim_request: self.trim_request,
         })
     }
 
     fn insert_pending_output(&mut self, sequence: i64, output: PendingOutput) {
         let len = output.data.len();
+        self.last_output_revision = output.revision;
         if let Some(previous) = self.outputs.insert(sequence, output) {
             self.pending_bytes -= previous.data.len();
         }
@@ -296,6 +323,14 @@ impl TerminalHostHistoryRepository {
                     },
                 );
                 state.trim_pending_outputs();
+                // If configuration changed while a trim was in flight,
+                // its old cap must not acknowledge the new cap.
+                if state
+                    .trim_request
+                    .is_some_and(|request| request.max_bytes != max_bytes)
+                {
+                    state.request_trim();
+                }
                 queued = true;
             }
         }
@@ -321,8 +356,7 @@ impl TerminalHostHistoryRepository {
                 retain_tail(&mut checkpoint.buffer, max_bytes);
             }
             state.trim_pending_outputs();
-            let revision = state.next_revision();
-            state.trim_revision = Some(revision);
+            state.request_trim();
         }
         self.ensure_worker(session_id);
     }
@@ -338,7 +372,7 @@ impl TerminalHostHistoryRepository {
             state.checkpoint_revision = None;
             state.outputs.clear();
             state.pending_bytes = 0;
-            state.trim_revision = None;
+            state.trim_request = None;
             state.memory_tail = VecDeque::new();
             state.verified_tail = None;
             state.last_error = None;
@@ -455,21 +489,34 @@ impl TerminalHostHistoryRepository {
 
     async fn flush_worker(&self, session_id: String) {
         loop {
-            let Some(snapshot) = self.next_snapshot_or_stop(&session_id) else {
+            // Release an idle session immediately, without waiting for a
+            // slot held by another session. Waiting workers must not retain
+            // snapshots of output that can be superseded or trimmed.
+            if !self.has_pending_or_stop(&session_id) {
                 return;
-            };
+            }
             let permit = match self.inner.flush_slots.acquire().await {
                 Ok(permit) => permit,
                 Err(_) => return,
             };
-            let result = self.persist_snapshot(&session_id, &snapshot).await;
-            drop(permit);
+            let Some(snapshot) = self.next_snapshot_or_stop(&session_id) else {
+                return;
+            };
 
-            match result {
+            match self.persist_snapshot(&session_id, &snapshot).await {
                 Ok(()) => {
-                    self.ack_snapshot(&session_id, &snapshot);
+                    let keep_running = self.ack_snapshot(&session_id, &snapshot);
+                    drop(snapshot);
+                    drop(permit);
+                    if !keep_running {
+                        return;
+                    }
                 }
                 Err(error) => {
+                    // Keep only the current write-behind state during
+                    // backoff, not the failed attempt's older payloads.
+                    drop(snapshot);
+                    drop(permit);
                     let message = error.to_string();
                     {
                         let mut sessions = self.lock_sessions();
@@ -492,13 +539,9 @@ impl TerminalHostHistoryRepository {
             loop {
                 let idle = {
                     let sessions = self.lock_sessions();
-                    sessions.values().all(|state| {
-                        !state.worker_running
-                            && state.checkpoint_revision.is_none()
-                            && state.outputs.is_empty()
-                            && state.trim_revision.is_none()
-                            && state.delete_revision.is_none()
-                    })
+                    sessions
+                        .values()
+                        .all(|state| !state.worker_running && !state.has_pending())
                 };
                 if idle {
                     return;
@@ -508,6 +551,18 @@ impl TerminalHostHistoryRepository {
         })
         .await
         .is_ok()
+    }
+
+    fn has_pending_or_stop(&self, session_id: &str) -> bool {
+        let mut sessions = self.lock_sessions();
+        if sessions
+            .get(session_id)
+            .is_some_and(SessionPersistenceState::has_pending)
+        {
+            return true;
+        }
+        sessions.remove(session_id);
+        false
     }
 
     fn next_snapshot_or_stop(&self, session_id: &str) -> Option<FlushSnapshot> {
@@ -528,54 +583,47 @@ impl TerminalHostHistoryRepository {
             FlushSnapshot::Persist {
                 checkpoint,
                 outputs,
-                trim_revision,
-                max_bytes,
+                trim_request,
             } => {
                 let output_rows = outputs
                     .iter()
                     .map(|(sequence, _, data)| (*sequence, data.as_ref()))
                     .collect::<Vec<_>>();
+                // Output-only batches stay free of retention scans. At the
+                // maintenance cadence, append and trim share one transaction.
                 self.inner
                     .store
-                    .persist_session(
+                    .persist_session_with_trim(
                         session_id,
                         checkpoint
                             .as_ref()
                             .map(|(_, checkpoint)| checkpoint.as_ref()),
                         &output_rows,
+                        trim_request.map(|request| request.max_bytes),
                     )
-                    .await?;
-                // Output batches are frequent (currently ~100 ms). Persist them
-                // without running the expensive window-function trim each time;
-                // checkpoint/configuration events request trim at the slower
-                // maintenance cadence instead.
-                if trim_revision.is_some() {
-                    self.inner
-                        .store
-                        .trim_session(session_id, *max_bytes)
-                        .await?;
-                }
-                Ok(())
+                    .await
             }
         }
     }
 
-    fn ack_snapshot(&self, session_id: &str, snapshot: &FlushSnapshot) {
+    /// Return false when this worker's state is gone. A replacement
+    /// session can then start its own worker without racing the old loop.
+    fn ack_snapshot(&self, session_id: &str, snapshot: &FlushSnapshot) -> bool {
         let mut sessions = self.lock_sessions();
         let Some(state) = sessions.get_mut(session_id) else {
-            return;
+            return false;
         };
         match snapshot {
             FlushSnapshot::Delete { revision } => {
                 if state.delete_revision == Some(*revision) {
                     sessions.remove(session_id);
+                    return false;
                 }
             }
             FlushSnapshot::Persist {
                 checkpoint,
                 outputs,
-                trim_revision,
-                ..
+                trim_request,
             } => {
                 if let Some((revision, _)) = checkpoint {
                     if state.checkpoint_revision == Some(*revision) {
@@ -591,14 +639,13 @@ impl TerminalHostHistoryRepository {
                         state.remove_pending_output(*sequence);
                     }
                 }
-                if let Some(revision) = trim_revision {
-                    if state.trim_revision == Some(*revision) {
-                        state.trim_revision = None;
-                    }
+                if trim_request.is_some() && state.trim_request == *trim_request {
+                    state.trim_request = None;
                 }
                 state.last_error = None;
             }
         }
+        true
     }
 
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, SessionPersistenceState>> {
@@ -614,13 +661,9 @@ impl TerminalHostHistoryRepository {
             loop {
                 let idle = {
                     let sessions = self.lock_sessions();
-                    sessions.get(session_id).is_none_or(|state| {
-                        !state.worker_running
-                            && state.checkpoint_revision.is_none()
-                            && state.outputs.is_empty()
-                            && state.trim_revision.is_none()
-                            && state.delete_revision.is_none()
-                    })
+                    sessions
+                        .get(session_id)
+                        .is_none_or(|state| !state.worker_running && !state.has_pending())
                 };
                 if idle {
                     return;
@@ -660,6 +703,197 @@ mod tests {
             updated_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             buffer: buffer.to_vec(),
         }
+    }
+
+    #[tokio::test]
+    async fn waiting_workers_do_not_hold_or_persist_superseded_output_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+
+        // Each waiting session initially has a large payload. None of them
+        // may create a second owner before a flush slot is available.
+        let cap = 512 * 1024;
+        for index in 0..8 {
+            let id = format!("s{index}");
+            repository.queue_checkpoint(checkpoint(&id, b""), cap);
+            repository.queue_output(id, 0, vec![b'x'; cap], cap);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        {
+            let sessions = repository.lock_sessions();
+            assert_eq!(sessions.len(), 8);
+            for state in sessions.values() {
+                assert!(state.worker_running);
+                assert!(
+                    state.outputs[&0].data.is_unique(),
+                    "a waiting worker must not pin its old payload"
+                );
+            }
+        }
+
+        // Install a trigger that rejects any superseded large write. The
+        // first transaction after admission must see the newly bounded tail.
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(
+                dir.path()
+                    .join(super::super::history_store::HISTORY_DATABASE_FILE_NAME),
+            ),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER reject_stale_output BEFORE INSERT ON outputChunks
+                     WHEN length(NEW.data) > 4 BEGIN
+                     SELECT RAISE(ABORT, 'superseded snapshot'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for index in 0..8 {
+            let id = format!("s{index}");
+            repository.queue_output(id.clone(), 1, b"tail".to_vec(), 4);
+            repository.queue_trim(id, 4);
+        }
+        drop(slots);
+        assert!(repository.flush_pending(Duration::from_secs(5)).await);
+        assert!(repository.lock_sessions().is_empty());
+        for index in 0..8 {
+            let persisted = repository
+                .inner
+                .store
+                .read(&format!("s{index}"), cap)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(persisted.buffer, b"tail");
+        }
+        pool.close().await;
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn retry_backoff_releases_failed_snapshot_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        repository.inner.store.close_for_test().await;
+        repository.queue_checkpoint(checkpoint("s1", b""), 64 * 1024);
+        repository.queue_output("s1".into(), 0, vec![b'x'; 64 * 1024], 64 * 1024);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                {
+                    let sessions = repository.lock_sessions();
+                    let state = &sessions["s1"];
+                    if state.last_error.is_some() {
+                        assert!(
+                            state.outputs[&0].data.is_unique(),
+                            "the failed flush must not retain a payload during backoff"
+                        );
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        repository.queue_output("s1".into(), 1, b"new".to_vec(), 3);
+        let sessions = repository.lock_sessions();
+        assert_eq!(sessions["s1"].pending_bytes, 3);
+        assert_eq!(sessions["s1"].outputs[&1].data.as_ref(), b"new");
+    }
+
+    #[tokio::test]
+    async fn repeated_trim_coalesces_but_new_output_and_cap_require_fresh_acknowledgement() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        let mut state = SessionPersistenceState {
+            max_bytes: 128,
+            worker_running: true,
+            ..Default::default()
+        };
+        state.request_trim();
+        let initial_request = state.trim_request.unwrap();
+        let initial_snapshot = state.snapshot().unwrap();
+        for _ in 0..1000 {
+            state.request_trim();
+            assert_eq!(state.trim_request, Some(initial_request));
+        }
+        let revision = state.next_revision();
+        state.insert_pending_output(
+            0,
+            PendingOutput {
+                revision,
+                data: Bytes::from_static(b"later"),
+            },
+        );
+        state.request_trim();
+        let output_request = state.trim_request.unwrap();
+        assert_ne!(initial_request.revision, output_request.revision);
+        let output_snapshot = state.snapshot().unwrap();
+        state.max_bytes = 4;
+        state.trim_pending_outputs();
+        state.request_trim();
+        let smaller_request = state.trim_request.unwrap();
+        assert_eq!(smaller_request.max_bytes, 4);
+        assert_ne!(smaller_request.revision, output_request.revision);
+        let latest_snapshot = state.snapshot().unwrap();
+        repository.lock_sessions().insert("s1".into(), state);
+
+        assert!(repository.ack_snapshot("s1", &initial_snapshot));
+        assert_eq!(
+            repository.lock_sessions()["s1"].trim_request,
+            Some(smaller_request)
+        );
+        assert!(repository.ack_snapshot("s1", &output_snapshot));
+        assert_eq!(
+            repository.lock_sessions()["s1"].trim_request,
+            Some(smaller_request)
+        );
+        assert!(repository.ack_snapshot("s1", &latest_snapshot));
+        assert!(repository.lock_sessions()["s1"].trim_request.is_none());
+        assert!(!repository.has_pending_or_stop("s1"));
+        assert!(repository.lock_sessions().is_empty());
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn completed_delete_stops_old_worker_but_superseded_delete_keeps_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        let mut state = SessionPersistenceState {
+            worker_running: true,
+            ..Default::default()
+        };
+        state.delete_revision = Some(state.next_revision());
+        let obsolete = state.snapshot().unwrap();
+        state.record_checkpoint(checkpoint("s1", b""), 64);
+        let current = state.snapshot().unwrap();
+        repository.lock_sessions().insert("s1".into(), state);
+        assert!(repository.ack_snapshot("s1", &obsolete));
+        assert!(repository.ack_snapshot("s1", &current));
+        let final_delete = {
+            let mut sessions = repository.lock_sessions();
+            let state = sessions.get_mut("s1").unwrap();
+            state.delete_revision = Some(state.next_revision());
+            state.snapshot().unwrap()
+        };
+        assert!(!repository.ack_snapshot("s1", &final_delete));
+        assert!(repository.lock_sessions().is_empty());
+        repository.inner.store.close_for_test().await;
     }
 
     #[tokio::test]
