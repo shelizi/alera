@@ -23,6 +23,7 @@ void main() {
           'updatedAt': '2026-09-09T13:00:01Z',
           'prompt': 'Need input',
           'contextOverview': <String, Object?>{
+            'conversationId': 'activation-b',
             'goal': '將 Agent 的整體任務進度同步到側邊欄',
             'progress': '完成 Hook 整合',
             'timeline': <Object?>[
@@ -45,6 +46,10 @@ void main() {
     expect(
       delta.upserts.single.contextOverview?['goal'],
       '將 Agent 的整體任務進度同步到側邊欄',
+    );
+    expect(
+      delta.upserts.single.contextOverview?['conversationId'],
+      'activation-b',
     );
     final timeline = delta.upserts.single.contextOverview?['timeline'] as List;
     expect(timeline, hasLength(1));

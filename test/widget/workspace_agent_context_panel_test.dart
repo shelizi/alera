@@ -225,6 +225,34 @@ void main() {
       expect(find.text('Latest persisted A'), findsOneWidget);
       expect(find.text('Saved A'), findsNothing);
       expect(find.text('Saved B'), findsNothing);
+      // Same Tab/PTY, different native conversation activation. Even if
+      // the old presence delta still exists, it must not leak into C.
+      final oldLive = live.copyWith(
+        contextOverview: {
+          ...live.contextOverview!,
+          'conversationId': 'conversation-a',
+        },
+      );
+      status.replace({'terminal': oldLive});
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Native raw report without AI summary'),
+        findsNWidgets(2),
+      );
+      host.saved[a.id] = const AgentContextOverview(
+        goal: 'Task C',
+        progress: 'Saved C',
+      );
+      workbench.replaceTab(
+        a.copyWith(
+          payload: {...a.payload, 'agentTitleConversationId': 'conversation-c'},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Saved C'), findsOneWidget);
+      expect(find.text('Native raw report without AI summary'), findsNothing);
+      expect(host.requests.last.$2['conversationId'], 'conversation-c');
+      expect(host.requests.last.$2['sessionId'], 'terminal');
       expect(tester.takeException(), isNull);
     },
   );
@@ -237,6 +265,18 @@ class _SelectedTabController extends WorkbenchController {
   WorkbenchState build() => initial;
   void select(String id) {
     state = state.copyWith(activeTabIdByWorkspace: {'workspace': id});
+  }
+
+  void replaceTab(WorkspaceTabRecord updated) {
+    state = state.copyWith(
+      tabsByWorkspace: {
+        ...state.tabsByWorkspace,
+        updated.workspaceId: [
+          for (final tab in state.tabsByWorkspace[updated.workspaceId]!)
+            if (tab.id == updated.id) updated else tab,
+        ],
+      },
+    );
   }
 }
 

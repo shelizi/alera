@@ -118,6 +118,27 @@ void main() {
     expect(entries.single['terminalSessionId'], 's2');
   });
 
+  test(
+    'native Host activation cancels pending legacy echo and is not replayed',
+    () async {
+      final legacy = _entry('s1', state: .done);
+      final native = _entry(
+        's1',
+        state: .working,
+      ).copyWith(contextOverview: {'conversationId': 'activation-b'});
+      forwarder.onStatusChanged({}, {'s1': legacy});
+      forwarder.onStatusChanged({'s1': legacy}, {'s1': native});
+      await pumpDebounce();
+      expect(client.requests, isEmpty);
+      client.emitRuntimeHostConnected();
+      await pumpDebounce();
+      expect(client.requests, isEmpty);
+      forwarder.onStatusChanged({'s1': native}, {});
+      await pumpDebounce();
+      expect(client.requests, isEmpty);
+    },
+  );
+
   test('replays current presence snapshot after host reconnect', () async {
     forwarder.onStatusChanged(const <String, AgentStatusEntry>{}, {
       's1': _entry('s1', state: .waiting),

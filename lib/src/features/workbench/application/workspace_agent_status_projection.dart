@@ -71,6 +71,17 @@ AgentStatusEntry? matchingAgentStatusForTab({
       entry.terminalSessionId != tab.terminalSessionId) {
     return null;
   }
+  // The opaque Host activation token follows the native conversation, not
+  // the PTY. Ignore an old presence snapshot during a tab/session switch.
+  final contextConversation = entry.contextOverview?['conversationId'];
+  final tabConversation = tab.payload['agentTitleConversationId'];
+  if (contextConversation is String &&
+      contextConversation.isNotEmpty &&
+      tabConversation is String &&
+      tabConversation.isNotEmpty &&
+      contextConversation != tabConversation) {
+    return null;
+  }
   return entry;
 }
 

@@ -64,7 +64,7 @@ impl ServerActor {
                     "toolName": presence.and_then(|entry| entry.tool_name.clone()),
                     "toolInput": presence.and_then(|entry| entry.tool_input.clone()),
                     "lastAssistantMessage": presence.and_then(|entry| entry.last_assistant_message.clone()),
-                    "contextOverview": presence.map(|entry| &entry.context),
+                    "contextOverview": presence.map(|entry| entry.context_payload()),
                     "interrupted": presence.and_then(|entry| entry.interrupted),
                 })
             })

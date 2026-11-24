@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
 use super::agent_context::AgentContextOverview;
+use chrono::{DateTime, Utc};
 
 /// Agent state as reported by the Flutter app's agent-status hooks.
 /// `Waiting` includes approval and user-input prompts, so it is not safe for
@@ -55,6 +55,18 @@ pub struct AgentPresence {
     pub last_assistant_message: Option<String>,
     pub interrupted: Option<bool>,
     pub context: AgentContextOverview,
+    /// Host-issued activation token; different even when resuming the same native ID.
+    pub conversation_id: Option<String>,
+}
+
+impl AgentPresence {
+    pub fn context_payload(&self) -> serde_json::Value {
+        let mut context = serde_json::to_value(&self.context).expect("serializable Context");
+        if let Some(id) = &self.conversation_id {
+            context["conversationId"] = serde_json::Value::String(id.clone());
+        }
+        context
+    }
 }
 
 /// Last known agent presence per terminal handle, fed by the Flutter app's
@@ -99,6 +111,7 @@ impl AgentPresenceRegistry {
                 last_assistant_message: None,
                 interrupted: None,
                 context: AgentContextOverview::default(),
+                conversation_id: None,
             },
         );
         state.accepts_injection() && !was_ready

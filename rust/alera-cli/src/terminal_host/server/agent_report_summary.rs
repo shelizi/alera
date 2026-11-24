@@ -244,6 +244,12 @@ impl ServerActor {
         }
     }
 
+    pub(super) fn cancel_agent_report_for_handle(&mut self, handle: &str) {
+        if let Some(job) = self.agent_report_jobs.remove(handle) {
+            let _ = job.cancel.send(());
+        }
+    }
+
     pub(super) fn cancel_agent_reports(&mut self) {
         for (_, job) in self.agent_report_jobs.drain() {
             let _ = job.cancel.send(());

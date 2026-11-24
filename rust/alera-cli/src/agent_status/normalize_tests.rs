@@ -77,6 +77,7 @@ fn a_stop_message_is_not_mistaken_for_a_new_user_objective() {
         last_assistant_message: None,
         interrupted: None,
         context: Default::default(),
+        conversation_id: None,
     };
     let stop = normalize_hook_event(
         &event(
@@ -177,6 +178,7 @@ fn new_turn_clears_stale_tool_details() {
         last_assistant_message: None,
         interrupted: None,
         context: Default::default(),
+        conversation_id: None,
     };
     let status = normalize_hook_event(
         &event("codex", "UserPromptSubmit", json!({"prompt": "New prompt"})),
@@ -373,6 +375,7 @@ fn payload_sensitive_custom_handlers_keep_their_irregular_behavior() {
         last_assistant_message: None,
         interrupted: None,
         context: Default::default(),
+        conversation_id: None,
     };
     let cursor = normalize_hook_event(
         &event("cursor", "afterAgentResponse", json!({})),

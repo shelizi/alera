@@ -176,16 +176,13 @@ fn completed_stop(payload: &Value) -> bool {
             .is_none_or(|error| error.trim().is_empty())
 }
 
-fn verified_hook_report(
+fn verified_hook_source(
     roots: &[PathBuf],
     native: &str,
     path: &Path,
     workspace: &Path,
     payload: &Value,
-) -> Option<AgyReport> {
-    if !completed_stop(payload) {
-        return None;
-    }
+) -> Option<PathBuf> {
     let workspace = std::fs::canonicalize(workspace).ok()?;
     let mounted = payload["workspacePaths"]
         .as_array()
@@ -198,7 +195,74 @@ fn verified_hook_report(
     }) {
         return None;
     }
-    latest_report(&exact_transcript(roots, native, Some(path))?)
+    exact_transcript(roots, native, Some(path))
+}
+
+fn verified_hook_report(
+    roots: &[PathBuf],
+    native: &str,
+    path: &Path,
+    workspace: &Path,
+    payload: &Value,
+) -> Option<AgyReport> {
+    if !completed_stop(payload) {
+        return None;
+    }
+    latest_report(&verified_hook_source(
+        roots, native, path, workspace, payload,
+    )?)
+}
+
+/// PreInvocation is AGY's user-turn activation hook (it has no SessionStart).
+/// Verify the exact transcript and mounted workspace, including the actual
+/// portable/account root, before a retired UUID is allowed to resume.
+pub(super) async fn verified_agy_activation_source(
+    store: &RuntimeStore,
+    event: &AgentHookEvent,
+) -> Option<String> {
+    if event.agent_type != "agy" {
+        return None;
+    }
+    let native = event.payload["conversationId"]
+        .as_str()
+        .or_else(|| event.payload["conversation_id"].as_str())?;
+    let path = event.payload["transcriptPath"]
+        .as_str()
+        .or_else(|| event.payload["transcript_path"].as_str())?;
+    if path.is_empty() || path.len() > 4096 || Uuid::parse_str(native).ok()?.to_string() != native {
+        return None;
+    }
+    let tab = store.find_workspace_tab(&event.tab_id).await.ok()??;
+    if tab.workspace_id != event.workspace_id
+        || tab.kind != "terminal"
+        || tab.payload["automationOwned"] == true
+        || super::requests::terminal_session_id_from_tab(&tab).unwrap_or_else(|| tab.id.clone())
+            != event.terminal_session_id
+        || super::terminal_startup_commands::tab_agent_type(&tab) != Some("agy")
+    {
+        return None;
+    }
+    let workspace = store.find_workspace(&event.workspace_id).await.ok()??;
+    if workspace.status != WorkspaceStatus::Active {
+        return None;
+    }
+    let native = native.to_owned();
+    let path = PathBuf::from(path);
+    let workspace = PathBuf::from(workspace.path);
+    let payload = event.payload.clone();
+    tokio::task::spawn_blocking(move || {
+        verified_hook_source(
+            &agy_cli_history_roots(),
+            &native,
+            &path,
+            &workspace,
+            &payload,
+        )
+        .and_then(|path| path.to_str().map(str::to_owned))
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 pub(super) async fn completed_agy_report(
@@ -242,7 +306,13 @@ pub(super) async fn completed_agy_report(
     let path = PathBuf::from(path);
     let workspace = PathBuf::from(workspace.path);
     let payload = event.payload.clone();
+    let active_source = title.agy_transcript_path;
     tokio::task::spawn_blocking(move || {
+        if let Some(expected) = active_source {
+            if std::fs::canonicalize(&path).ok().as_deref() != Some(Path::new(&expected)) {
+                return None;
+            }
+        }
         verified_hook_report(
             &agy_cli_history_roots(),
             &native,
@@ -259,13 +329,21 @@ pub(super) async fn completed_agy_report(
 
 /// Called only after the local UI has supplied the exact registered tab
 /// identity and its Host-pinned native AGY UUID. No arbitrary path or scan.
-pub(super) async fn recover_saved_agy_report(native: Option<&str>) -> Option<AgyReport> {
+pub(super) async fn recover_saved_agy_report(
+    native: Option<&str>,
+    source: Option<&str>,
+) -> Option<AgyReport> {
     let native = native?.to_owned();
+    let source = source.map(PathBuf::from);
     if Uuid::parse_str(&native).ok()?.to_string() != native {
         return None;
     }
     tokio::task::spawn_blocking(move || {
-        latest_report(&exact_transcript(&agy_cli_history_roots(), &native, None)?)
+        latest_report(&exact_transcript(
+            &agy_cli_history_roots(),
+            &native,
+            source.as_deref(),
+        )?)
     })
     .await
     .ok()
@@ -345,8 +423,24 @@ mod tests {
         payload["workspacePaths"] = json!([dir.path()]);
         assert!(verified_hook_report(&roots, NATIVE, &file, &workspace, &payload).is_none());
         let mirrored = dir.path().join("other-account");
-        fixture(&mirrored, NATIVE, &[user(), final_reply("Other account")]);
-        assert!(exact_transcript(&[root, mirrored], NATIVE, None).is_none());
+        let other = fixture(&mirrored, NATIVE, &[user(), final_reply("Other account")]);
+        let roots = [root, mirrored];
+        assert!(exact_transcript(&roots, NATIVE, None).is_none());
+        // An activation hook must disambiguate the account by exact source and
+        // workspace, even when both local accounts contain the same UUID.
+        payload["workspacePaths"] = json!([workspace]);
+        assert_eq!(
+            verified_hook_source(&roots, NATIVE, &file, &workspace, &payload),
+            std::fs::canonicalize(&file).ok()
+        );
+        assert_eq!(
+            verified_hook_source(&roots, NATIVE, &other, &workspace, &payload),
+            std::fs::canonicalize(&other).ok()
+        );
+        assert_ne!(
+            verified_hook_source(&roots, NATIVE, &file, &workspace, &payload),
+            verified_hook_source(&roots, NATIVE, &other, &workspace, &payload)
+        );
     }
 
     #[test]

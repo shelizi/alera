@@ -145,6 +145,10 @@ AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
   final stateStartedAt =
       DateTime.tryParse(json['stateStartedAt'] as String? ?? '')?.toUtc() ??
       updatedAt;
+  final rawContext = json['contextOverview'];
+  final conversationId = rawContext is Map
+      ? rawContext['conversationId']
+      : null;
   return AgentStatusEntry(
     terminalSessionId: sessionId,
     workspaceId: workspaceId,
@@ -158,8 +162,14 @@ AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
     toolInput: json['toolInput'] as String?,
     lastAssistantMessage: json['lastAssistantMessage'] as String?,
     interrupted: json['interrupted'] as bool?,
-    contextOverview: json['contextOverview'] is Map
-        ? AgentContextOverview.fromRaw(json['contextOverview']).toJson()
+    contextOverview: rawContext is Map
+        ? <String, Object?>{
+            ...AgentContextOverview.fromRaw(rawContext).toJson(),
+            if (conversationId is String &&
+                conversationId.isNotEmpty &&
+                conversationId.length <= 128)
+              'conversationId': conversationId,
+          }
         : null,
   );
 }

@@ -6,6 +6,7 @@ use crate::agent_status::{
 };
 use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
 
+use super::agent_title_events::HookContextBinding;
 use super::{agent_hook_settings::AgentHookSettingsQuery, ServerActor};
 
 impl ServerActor {
@@ -62,7 +63,33 @@ impl ServerActor {
         // Conversation IDs are provider history pointers, not live status.
         // Persist them even when presence notifications are disabled; only
         // the exact authenticated Host session/workspace/tab reaches here.
-        self.observe_hook_title(&event).await;
+        let binding = self.observe_hook_title(&event).await;
+        let (conversation_id, switched, seed) = match &binding {
+            HookContextBinding::Ignore => return,
+            HookContextBinding::Legacy => (None, false, None),
+            HookContextBinding::Active {
+                conversation_id,
+                switched,
+                seed,
+            } => (Some(conversation_id.as_str()), *switched, seed.as_ref()),
+        };
+        // A native conversation transition is not a terminal close. Clear
+        // the old live presence without revoking the still-running PTY.
+        if switched
+            || conversation_id.is_some_and(|id| {
+                self.agent_presence
+                    .get(&event.terminal_session_id)
+                    .is_some_and(|old| old.conversation_id.as_deref() != Some(id))
+            })
+        {
+            self.cancel_agent_report_for_handle(&event.terminal_session_id);
+            if self.agent_presence.remove(&event.terminal_session_id) {
+                self.broadcast_agent_presence_changes(vec![json!({
+                    "terminalSessionId": event.terminal_session_id,
+                    "removed": true,
+                })]);
+            }
+        }
         let Ok(settings) = AgentHookSettingsQuery::new(&self.runtime_store)
             .load()
             .await
@@ -75,21 +102,13 @@ impl ServerActor {
         }
         let now = chrono::Utc::now();
         if hook_event_resets_session(&event) {
-            if self
-                .agent_presence
-                .get(&event.terminal_session_id)
-                .is_none()
-            {
-                return;
+            self.cancel_agent_report_for_handle(&event.terminal_session_id);
+            if self.agent_presence.remove(&event.terminal_session_id) {
+                self.broadcast_agent_presence_changes(vec![json!({
+                    "terminalSessionId": event.terminal_session_id,
+                    "removed": true,
+                })]);
             }
-            let _ = self
-                .orchestration_agent_status(&json!({
-                    "entries": [{
-                        "terminalSessionId": event.terminal_session_id,
-                        "removed": true,
-                    }],
-                }))
-                .await;
             return;
         }
         if hook_event_closes_session(&event) {
@@ -105,12 +124,16 @@ impl ServerActor {
                 return;
             }
             let _ = self
-                .orchestration_agent_status(&json!({
-                    "entries": [{
-                        "terminalSessionId": event.terminal_session_id,
-                        "removed": true,
-                    }],
-                }))
+                .orchestration_agent_status_bound(
+                    &json!({
+                        "entries": [{
+                            "terminalSessionId": event.terminal_session_id,
+                            "removed": true,
+                        }],
+                    }),
+                    conversation_id,
+                    seed,
+                )
                 .await;
             return;
         }
@@ -185,22 +208,26 @@ impl ServerActor {
             && normalized.state == AgentPresenceState::Done
             && normalized.interrupted != Some(true);
         let _ = self
-            .orchestration_agent_status(&json!({
-                "entries": [{
-                    "terminalSessionId": event.terminal_session_id,
-                    "workspaceId": event.workspace_id,
-                    "tabId": event.tab_id,
-                    "agentType": identity.effective_agent_type,
-                    "state": normalized.state.as_str(),
-                    "stateStartedAt": state_started_at,
-                    "updatedAt": now,
-                    "prompt": normalized.prompt,
-                    "toolName": normalized.tool_name,
-                    "toolInput": normalized.tool_input,
-                    "lastAssistantMessage": normalized.last_assistant_message,
-                    "interrupted": normalized.interrupted,
-                }],
-            }))
+            .orchestration_agent_status_bound(
+                &json!({
+                    "entries": [{
+                        "terminalSessionId": event.terminal_session_id,
+                        "workspaceId": event.workspace_id,
+                        "tabId": event.tab_id,
+                        "agentType": identity.effective_agent_type,
+                        "state": normalized.state.as_str(),
+                        "stateStartedAt": state_started_at,
+                        "updatedAt": now,
+                        "prompt": normalized.prompt,
+                        "toolName": normalized.tool_name,
+                        "toolInput": normalized.tool_input,
+                        "lastAssistantMessage": normalized.last_assistant_message,
+                        "interrupted": normalized.interrupted,
+                    }],
+                }),
+                conversation_id,
+                seed,
+            )
             .await;
         // Retain raw work reports even when presence is cleared on SessionEnd
         // or the Host restarts. Never checkpoint an inherited or interrupted reply.
@@ -332,6 +359,159 @@ mod tests {
             saved,
             "duplicate Stop with no reply must not invent another report"
         );
+    }
+
+    #[tokio::test]
+    async fn native_context_follows_same_terminal_session_switch_and_resume() {
+        use super::super::agent_title_state::AgentTitleState;
+        use alera_core::runtime::WorkspaceTabRecord;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([(
+                "recipient".into(),
+                Session::driver_test_stub("recipient", 80, 24),
+            )]),
+        )
+        .await;
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"claude":true}"#)
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        let mut tab = WorkspaceTabRecord {
+            id: "tab-recipient".into(),
+            workspace_id: "workspace".into(),
+            kind: "terminal".into(),
+            title: "Agent".into(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"agentType":"claude","terminalSessionId":"recipient"}),
+        };
+        super::super::agent_title_state::initialize(&mut tab, "");
+        actor.runtime_store.upsert_workspace_tab(tab).await.unwrap();
+
+        fn event(name: &str, id: &str, prompt: &str, report: &str) -> AgentHookEvent {
+            let mut event = native_hook(name);
+            event.payload["session_id"] = json!(id);
+            if !prompt.is_empty() {
+                event.payload["prompt"] = json!(prompt);
+            }
+            if !report.is_empty() {
+                event.payload["last_assistant_message"] = json!(report);
+            }
+            event
+        }
+
+        actor
+            .handle_agent_hook_event(event("SessionStart", "A", "", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("UserPromptSubmit", "A", "Original A task", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("Stop", "A", "", "A completed report"))
+            .await;
+        let original_a = actor.agent_presence.get("recipient").unwrap().clone();
+        assert_eq!(original_a.context.progress, "A completed report");
+        let token_a = original_a.conversation_id.clone().unwrap();
+
+        actor
+            .handle_agent_hook_event(event("SessionStart", "B", "", ""))
+            .await;
+        actor
+            .handle_agent_hook_event(event("UserPromptSubmit", "B", "Independent B task", ""))
+            .await;
+        let b = actor.agent_presence.get("recipient").unwrap().clone();
+        assert_ne!(b.conversation_id.as_deref(), Some(token_a.as_str()));
+        assert_eq!(b.context.goal, "Independent B task");
+        assert!(b.context.progress.is_empty());
+        assert!(b.last_assistant_message.is_none());
+        assert!(!actor.agent_presence.is_injection_ready("recipient"));
+
+        // Retired Stop, SessionEnd and user prompts cannot change B's state,
+        // Context or injection readiness. An unseen child/late Stop cannot
+        // silently activate a different UUID either.
+        for late in [
+            event("Stop", "A", "", "Delayed A report"),
+            event("SessionEnd", "A", "", ""),
+            event("UserPromptSubmit", "A", "Delayed A prompt", ""),
+            event("Stop", "unknown", "", "Unknown report"),
+        ] {
+            actor.handle_agent_hook_event(late).await;
+        }
+        // An old Classic debounce/forwarder snapshot cannot recreate A or
+        // remove B after the Host has accepted the new native identity.
+        actor
+            .orchestration_agent_status(&json!({"entries":[{
+                "terminalSessionId":"recipient", "agentType":"claude", "state":"done",
+                "prompt":"stale Classic A"
+            }]}))
+            .await
+            .unwrap();
+        actor
+            .orchestration_agent_status(&json!({"entries":[{
+                "terminalSessionId":"recipient", "removed":true
+            }]}))
+            .await
+            .unwrap();
+        let current = actor.agent_presence.get("recipient").unwrap();
+        assert_eq!(current.context, b.context);
+        assert_eq!(current.conversation_id, b.conversation_id);
+        assert!(!actor.agent_presence.is_injection_ready("recipient"));
+        actor
+            .handle_agent_hook_event(event("Stop", "B", "", "B completed report"))
+            .await;
+
+        // The archive is on disk, not only in the presence registry.
+        drop(actor);
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([(
+                "recipient".into(),
+                Session::driver_test_stub("recipient", 80, 24),
+            )]),
+        )
+        .await;
+        let saved = actor
+            .runtime_store
+            .find_workspace_tab("tab-recipient")
+            .await
+            .unwrap()
+            .unwrap();
+        let state = AgentTitleState::read(&saved).unwrap();
+        assert_eq!(
+            state.context_overview.as_ref().unwrap().progress,
+            "B completed report"
+        );
+        assert_eq!(
+            state.retired_contexts["claude:A"].overview.progress,
+            "A completed report"
+        );
+
+        actor
+            .handle_agent_hook_event(event("SessionStart", "A", "", ""))
+            .await;
+        // A fresh real turn, rather than restoring Done from the archive,
+        // seeds the current A presence with its own historical Context.
+        actor
+            .handle_agent_hook_event(event("UserPromptSubmit", "A", "Continue A task", ""))
+            .await;
+        let resumed = actor.agent_presence.get("recipient").unwrap();
+        assert_ne!(resumed.conversation_id.as_deref(), Some(token_a.as_str()));
+        assert_eq!(resumed.context.progress, "A completed report");
+        assert!(resumed.context.goal.contains("Original A task"));
+        assert!(!resumed.context.goal.contains("Independent B task"));
+        assert!(resumed
+            .context
+            .timeline
+            .iter()
+            .all(|milestone| !milestone.text.contains("B completed")));
+        assert!(!actor.agent_presence.is_injection_ready("recipient"));
     }
 
     #[tokio::test]

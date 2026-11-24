@@ -123,6 +123,50 @@ impl ServerActor {
         let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
             return Err(HostError::format("entries must be an array."));
         };
+        let mut legacy_entries = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(handle) = entry["terminalSessionId"].as_str() else {
+                continue;
+            };
+            if self
+                .agent_presence
+                .get(handle)
+                .is_some_and(|old| old.conversation_id.is_some())
+            {
+                continue;
+            }
+            // A debounced Classic echo may arrive after the old presence has
+            // been removed but before the new native Hook publishes status.
+            // The persisted owner, not that stale client, controls readiness.
+            if let Some(session) = self.sessions.get(handle) {
+                if self
+                    .runtime_store
+                    .find_workspace_tab(&session.tab_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|tab| super::agent_title_state::AgentTitleState::read(&tab))
+                    .is_some_and(|title| title.native_id.is_some())
+                {
+                    continue;
+                }
+            }
+            legacy_entries.push(entry.clone());
+        }
+        self.orchestration_agent_status_bound(&json!({"entries": legacy_entries}), None, None)
+            .await
+    }
+
+    // Native binding and seed are internal actor inputs, not client RPC fields.
+    pub(super) async fn orchestration_agent_status_bound(
+        &mut self,
+        payload: &Value,
+        conversation_id: Option<&str>,
+        context_seed: Option<&AgentContextOverview>,
+    ) -> HostResult<Value> {
+        let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
+            return Err(HostError::format("entries must be an array."));
+        };
         let mut became_ready = Vec::new();
         let mut presence_changes = Vec::new();
         for entry in entries {
@@ -155,7 +199,9 @@ impl ServerActor {
                 .unwrap_or("unknown")
                 .to_string();
             let started_at = self.agent_presence_timestamp(entry);
-            let previous = self.agent_presence.get(handle);
+            let previous = self.agent_presence.get(handle).filter(|old| {
+                conversation_id.is_none_or(|id| old.conversation_id.as_deref() == Some(id))
+            });
             let changed = previous.is_none_or(|previous| {
                 previous.state != state || previous.state_started_at != started_at
             });
@@ -187,12 +233,17 @@ impl ServerActor {
                     previous.and_then(|value| value.interrupted),
                 ),
                 context: Default::default(),
+                conversation_id: conversation_id
+                    .map(str::to_owned)
+                    .or_else(|| previous.and_then(|old| old.conversation_id.clone())),
             };
             // A recycled terminal handle can switch Agent adapters. Never
             // inherit an unrelated Agent's goal or progress in that case.
             let context_previous = previous.filter(|value| value.agent_type == agent_type);
             presence.context = AgentContextOverview::observe(
-                context_previous.map(|value| &value.context),
+                context_previous
+                    .map(|value| &value.context)
+                    .or(context_seed),
                 context_previous.map(|value| value.prompt.as_str()),
                 context_previous.and_then(|value| value.last_assistant_message.as_deref()),
                 &presence.prompt,
@@ -223,7 +274,7 @@ impl ServerActor {
                     "toolName": presence.tool_name.as_deref(),
                     "toolInput": presence.tool_input.as_deref(),
                     "lastAssistantMessage": presence.last_assistant_message.as_deref(),
-                    "contextOverview": &presence.context,
+                    "contextOverview": presence.context_payload(),
                     "contextChanged": context_changed,
                     "interrupted": presence.interrupted,
                 })

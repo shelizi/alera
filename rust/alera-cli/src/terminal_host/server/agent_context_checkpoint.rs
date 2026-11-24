@@ -168,8 +168,11 @@ impl ServerActor {
             && title.agent.as_deref() == Some("agy")
             && super::terminal_startup_commands::tab_agent_type(&tab) == Some("agy")
         {
-            if let Some(report) =
-                super::agent_context_agy::recover_saved_agy_report(title.native_id.as_deref()).await
+            if let Some(report) = super::agent_context_agy::recover_saved_agy_report(
+                title.native_id.as_deref(),
+                title.agy_transcript_path.as_deref(),
+            )
+            .await
             {
                 if let Some(at) = report.at {
                     context = AgentContextOverview::observe(

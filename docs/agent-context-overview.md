@@ -186,3 +186,41 @@ receives a Hook, stores the report in SQLite, clears presence at
 SessionEnd, reopens the database, and refuses stale or foreign owners.
 Focused Dart static analysis reported no issues. These automated tests
 do not replace a live desktop/provider acceptance test.
+
+## 2026-11-24 native conversation activation and same-Tab recovery
+
+A Terminal handle is not a provider conversation. The Host tracks a private
+provider/native ID and an opaque activation token (the public
+`agentTitleConversationId`). An authenticated lifecycle event activates the
+conversation; new activation tokens invalidate old report jobs and live
+presence, without terminating or recreating the PTY. The locally authenticated
+presence projection carries the activation token inside its bounded Context.
+Classic refuses mismatched snapshots and does not echo Host-owned native
+presence back as Terminal-only status. A resumed checkpoint seeds Context
+only after a real Hook reports presence; recovery never fabricates Done.
+
+Each exact owning Tab now stores up to 16 retired raw Context checkpoints
+(plus the active checkpoint). The private state is backward compatible with
+older records and is redacted from public tab payloads. Confirmed resume
+restores the original goal, raw report and timeline, without copying the
+previous active conversation's tool state or AI-summary job. Late retired
+Stop, SessionEnd and ordinary prompt events cannot retire the current
+conversation or make it injection-ready. An explicit activation signal is
+needed to resume a retired conversation. Unknown events without reliable
+native identity retain legacy limitations; a provider's delayed duplicate
+activation cannot be distinguished without additional provider sequencing.
+
+Codex continues to require a verified rollout identity for a native switch,
+and refuses a different archived transcript source. AGY has no SessionStart;
+a PreInvocation can reactivate a retired UUID only with a verified exact local
+transcript, mounted workspace and owning Tab. Its account/source path is
+private. An older archive lacking AGY source proof is discarded on resume
+rather than shared across accounts, with exact history recovery as fallback.
+Missing or ambiguous proof never authorizes a guessed cross-account restore.
+
+Scope: this phase is same owning Tab/Terminal, including Host restart. It
+does not yet implement a global account-scoped archive across different
+Tabs, historical backfill of every provider, or GPUI's checkpoint-only view
+when no live Hook presence exists. Native GPUI receives the same Host live
+projection. Production acceptance still requires real provider session
+switch/resume verification; no live Host or Terminal is restarted by tests.

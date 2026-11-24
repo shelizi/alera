@@ -54,6 +54,12 @@ class AgentStatusHostForwarder({
     }
     final before = previous ?? _lastSeen;
     for (final entry in next.values) {
+      // Host-owned native status must never be echoed back as a legacy
+      // Terminal-only update; it could arrive after a Session switch.
+      if (_isNativeHostStatus(entry)) {
+        _pending.remove(entry.terminalSessionId);
+        continue;
+      }
       final prior = before[entry.terminalSessionId];
       if (prior != null &&
           prior.state == entry.state &&
@@ -71,6 +77,10 @@ class AgentStatusHostForwarder({
     }
     for (final sessionId in before.keys) {
       if (!next.containsKey(sessionId)) {
+        if (_isNativeHostStatus(before[sessionId]!)) {
+          _pending.remove(sessionId);
+          continue;
+        }
         _pending[sessionId] = <String, Object?>{
           'terminalSessionId': sessionId,
           'removed': true,
@@ -89,6 +99,7 @@ class AgentStatusHostForwarder({
       return;
     }
     for (final entry in _lastSeen.values) {
+      if (_isNativeHostStatus(entry)) continue;
       _pending[entry.terminalSessionId] = <String, Object?>{
         'terminalSessionId': entry.terminalSessionId,
         'workspaceId': entry.workspaceId,
@@ -146,7 +157,7 @@ class AgentStatusHostForwarder({
     if (entry['removed'] == true) {
       return current == null;
     }
-    if (current == null) {
+    if (current == null || _isNativeHostStatus(current)) {
       return false;
     }
     return entry['state'] == current.state.key &&
@@ -168,6 +179,11 @@ class AgentStatusHostForwarder({
     _timer = null;
     _pending.clear();
   }
+}
+
+bool _isNativeHostStatus(AgentStatusEntry entry) {
+  final token = entry.contextOverview?['conversationId'];
+  return token is String && token.isNotEmpty;
 }
 
 bool _isPermanentOrchestrationCapabilityError(Object error) {

@@ -57,6 +57,7 @@ mod tests {
             last_assistant_message: None,
             interrupted: None,
             context: Default::default(),
+            conversation_id: None,
         }
     }
 
