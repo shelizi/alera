@@ -101,9 +101,9 @@ pub(crate) struct HistoryIndexWriteStats {
     pub unchanged: usize,
     pub trimmed: usize,
     #[cfg(test)]
-    write_statements: usize,
+    pub(crate) write_statements: usize,
     #[cfg(test)]
-    json_buffer_starts: usize,
+    pub(crate) json_buffer_starts: usize,
     #[cfg(test)]
     retention_queries: usize,
     #[cfg(test)]

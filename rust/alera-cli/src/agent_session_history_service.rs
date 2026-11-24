@@ -4,6 +4,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use alera_core::global_agent_search::{
@@ -64,6 +66,17 @@ impl HistorySearchCache {
     }
 }
 
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct SearchPhaseTimings {
+    scan: Duration,
+    index_open_or_validate: Duration,
+    prepare_keys: Duration,
+    upsert: Duration,
+    fts: Duration,
+    rank: Duration,
+}
+
 #[derive(Debug)]
 pub(crate) struct HistorySearchResponse {
     pub hits: Vec<AgentSessionSearchHit>,
@@ -73,6 +86,8 @@ pub(crate) struct HistorySearchResponse {
     pub index_reused: bool,
     pub scan_truncated: bool,
     pub writes: HistoryIndexWriteStats,
+    #[cfg(test)]
+    timings: SearchPhaseTimings,
 }
 
 /// Identity of a currently observed historical record. Borrow the fields from
@@ -119,10 +134,14 @@ pub(crate) async fn search_history_on_demand(
         index_reused: false,
         scan_truncated: false,
         writes: HistoryIndexWriteStats::default(),
+        #[cfg(test)]
+        timings: SearchPhaseTimings::default(),
     };
     if query.text.trim().is_empty() {
         return Ok(empty);
     }
+    #[cfg(test)]
+    let scan_started = Instant::now();
     let roots = roots.to_vec();
     let registered = registered_workspaces.to_vec();
     // Hold the owned guard through indexing, so an explicit clear cannot race
@@ -142,6 +161,10 @@ pub(crate) async fn search_history_on_demand(
         (scan, guard)
     })
     .await?;
+    #[cfg(test)]
+    {
+        empty.timings.scan = scan_started.elapsed();
+    }
     empty.visited_files = scan.visited_files;
     empty.parsed_files = scan.parsed_files;
     empty.reused_files = scan.reused_files;
@@ -150,18 +173,43 @@ pub(crate) async fn search_history_on_demand(
         return Ok(empty);
     }
 
+    #[cfg(test)]
+    let index_started = Instant::now();
     empty.index_reused = guard.ensure_index(runtime_cache_dir).await?;
+    #[cfg(test)]
+    {
+        empty.timings.index_open_or_validate = index_started.elapsed();
+    }
     let candidates = async {
         let index = guard.index.as_ref().expect("index opened above");
         // No partial, unverified or out-of-scope rows may become resumable solely
         // because they were present in a previous local SQLite index generation.
         // The native scanner already caps this request at 256 files.
         // Prepare identity JSON exactly once for both SQLite operations.
+        #[cfg(test)]
+        let prepare_started = Instant::now();
         let batch = PreparedHistoryBatch::new(&scan.records)?;
+        #[cfg(test)]
+        {
+            empty.timings.prepare_keys = prepare_started.elapsed();
+        }
+        #[cfg(test)]
+        let upsert_started = Instant::now();
         empty.writes = index.upsert_prepared(&batch).await?;
+        #[cfg(test)]
+        {
+            empty.timings.upsert = upsert_started.elapsed();
+        }
         // Scope and current-file identity constrain FTS before top-N limiting;
         // otherwise other accounts can hide relevant rows from a filtered query.
-        index.search_prepared(query, &batch).await
+        #[cfg(test)]
+        let fts_started = Instant::now();
+        let result = index.search_prepared(query, &batch).await;
+        #[cfg(test)]
+        {
+            empty.timings.fts = fts_started.elapsed();
+        }
+        result
     }
     .await;
     let candidates = match candidates {
@@ -172,6 +220,8 @@ pub(crate) async fn search_history_on_demand(
             return Err(error);
         }
     };
+    #[cfg(test)]
+    let rank_started = Instant::now();
     let observed = scan
         .records
         .iter()
@@ -181,6 +231,10 @@ pub(crate) async fn search_history_on_demand(
         .into_iter()
         .filter(|record| observed_history_key(record).is_some_and(|key| observed.contains(&key)));
     empty.hits = search_agent_sessions(candidates, query);
+    #[cfg(test)]
+    {
+        empty.timings.rank = rank_started.elapsed();
+    }
     Ok(empty)
 }
 
@@ -215,6 +269,10 @@ pub(crate) async fn clear_history_search_cache(
     guard.close_index().await;
     result
 }
+
+#[cfg(test)]
+#[path = "agent_session_history_benchmarks.rs"]
+mod benchmarks;
 
 #[cfg(test)]
 mod tests {
