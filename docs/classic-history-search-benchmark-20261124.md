@@ -70,3 +70,30 @@ The per-request median process other-I/O counts are identical across all three r
 This is four fewer counted other-I/O operations per candidate, or 23.59% fewer for warm search. These are Windows process counters, not a direct count of individual system calls or physical disk transfers. Warm search still has zero counted read/write operations and zero SQL writes. The repeated elapsed timings are noisy (the initial before run was unusually fast in warm search); do not interpret their differences as guaranteed release performance. No independent Release or RSS measurement was performed.
 
 Validation: 31 history regressions (one benchmark ignored in the normal test run), 10 exact resume tests, 2 Agent Context tests passed; the Windows symlink fixture was actually created and rejected. Both versions passed three benchmark runs each (252 measured requests overall). New tests confirm regular-handle metadata/mtime/stamp equivalence and oversized file accounting; existing tests exercise changed, deleted, replaced and same-length rewritten files with restored mtime, plus long Unicode paths. The 64-file scan regression confirms 64 handle metadata reuses and zero path metadata probes for normal files, with exact verification still taking the compatibility path.
+
+## Direct Windows candidate snapshot
+
+Replace the ordinary preview path's broad `std::fs::File::metadata()` call with three documented Win32 information classes: FileStandardInfo (EOF, directory/delete-pending), FileBasicInfo (attributes and timestamps) and FileIdInfo (volume serial and full 128-bit identity). These queries share one already-open no-follow handle. The scanner retains only length and millisecond update time; the cache stamp retains all original identity and change-time fields. Use EOF, not allocation size, and preserve the pre-Unix-epoch clamp and millisecond truncation. Unsupported information classes or invalid values fall back to the original compatibility path. The private SQLite index and post-parse stamp check still use the original FileStamp::read path.
+
+Interleaved Debug benchmark runs on the same shared host, using the prior no-follow implementation at `61eea04ff` as baseline (before/after/after/before/before/after). Both binaries passed all 42 measured requests per run, 252 requests overall. Each cell lists the three run p50 values for that version in chronological order; the summary is the median of these three medians, not a pooled percentile.
+
+| Scenario | Before run p50 (ms) | After run p50 (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold total | 62.085, 88.627, 83.068 | 110.870, 72.270, 65.203 | 83.068 | 72.270 |
+| Warm total | 65.653, 71.779, 66.266 | 64.157, 63.126, 64.035 | 66.266 | 64.035 |
+| Index reopen total | 82.472, 94.429, 72.434 | 64.836, 65.600, 71.102 | 82.472 | 65.600 |
+| One file changed total | 91.629, 75.388, 76.283 | 78.393, 81.761, 74.610 | 76.283 | 78.393 |
+| Warm scan | 40.775, 45.220, 42.841 | 41.170, 39.642, 40.309 | 42.841 | 40.309 |
+
+Process other-I/O median counts are identical across all three runs per version:
+
+| Scenario | Before | After | Reduction |
+|---|---:|---:|---:|
+| Cold | 4120 | 3608 | 512 |
+| Warm | 3316 | 2804 | 512 |
+| Index reopen | 3336 | 2824 | 512 |
+| One file changed | 3319 | 2807 | 512 |
+
+Warm search has 15.44% fewer counted other-I/O operations than the previous implementation and 35.39% fewer than the initial 4340 baseline. All process read/write operation counts and SQL write counts remain unchanged. This is two fewer counted other-I/O operations per ordinary file, not a direct syscall or physical disk transfer count. Wall-clock changes are not uniformly positive: single-file-change median increased by about 2.8%, and one after run had a cold scan tail near 2 seconds. The repeatable I/O reduction justifies retaining this scoped fast path; do not claim guaranteed elapsed-time improvements. No release-profile, full suite or RSS measurement was performed.
+
+Validation: 32 history regressions passed (one benchmark ignored in the normal run), 10 exact resume tests and 2 Agent Context tests passed. The actual Windows symlink fixture was created and rejected. The new direct-snapshot test verified exact EOF for an 8193-byte file, pre-epoch and submillisecond timestamps against legacy std metadata, and identical cache stamp fields. Existing freshness and scope regressions remain green.

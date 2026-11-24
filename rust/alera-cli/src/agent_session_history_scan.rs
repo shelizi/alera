@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use alera_core::global_agent_search::AgentSessionSearchRecord;
 use serde_json::Value;
@@ -17,7 +16,8 @@ mod directory_scan;
 mod preview_cache;
 use directory_scan::read_descending_prefix;
 use preview_cache::{
-    open_canonical_preview_file, open_regular_preview_candidate, OpenedPreviewFile, PreviewScan,
+    open_canonical_preview_file, open_regular_preview_candidate, CandidateMetadata,
+    OpenedPreviewFile, PreviewScan,
 };
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
@@ -390,7 +390,7 @@ fn discover_history_with_exact_id(
                                 (canonical, None)
                             }
                         };
-                        (canonical, opened, meta)
+                        (canonical, opened, CandidateMetadata::from_metadata(&meta))
                     };
                 if !canonical_file.starts_with(&canonical_root)
                     || !seen_files.insert((
@@ -405,7 +405,7 @@ fn discover_history_with_exact_id(
                 // General indexing skips huge transcripts. Exact UUID
                 // verification remains bounded by MAX_READ_BYTES/MAX_LINES
                 // and may safely inspect the beginning of a large session.
-                if skip_oversized_file(meta.len(), exact_id) {
+                if skip_oversized_file(meta.len, exact_id) {
                     report.skipped_files += 1;
                     continue;
                 }
@@ -467,12 +467,7 @@ fn discover_history_with_exact_id(
                     };
                     (native_id, preview)
                 };
-                let updated_at_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
-                    .unwrap_or(0);
+                let updated_at_ms = meta.updated_at_ms;
                 let title = preview
                     .as_deref()
                     .map(|p| p.chars().take(96).collect())

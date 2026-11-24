@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::fs::{File, Metadata};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::{read_provider_metadata_from_file, ProviderHistoryRoot};
 
@@ -73,15 +73,91 @@ impl OpenedPreviewFile {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct CandidateMetadata {
+    pub(super) len: u64,
+    pub(super) updated_at_ms: u64,
+}
+
+impl CandidateMetadata {
+    pub(super) fn from_metadata(meta: &Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            updated_at_ms: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+                .unwrap_or(0),
+        }
+    }
+}
+
 #[cfg(windows)]
-fn ordinary_windows_file(meta: &Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
+fn ordinary_windows_attributes(attributes: u32) -> bool {
     use windows::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     };
-    meta.is_file()
-        && meta.file_attributes() & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0)
-            == 0
+    attributes & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0) == 0
+}
+
+/// Read only the required fields. GetFileInformationByHandle (used by
+/// std::fs::File::metadata) also retrieves volume/link/index information
+/// that this preview path does not need; FileIdInfo supplies the full ID.
+#[cfg(windows)]
+fn read_regular_snapshot(file: &File) -> Option<(CandidateMetadata, FileStamp)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        FileBasicInfo, FileIdInfo, FileStandardInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO,
+        FILE_ID_INFO, FILE_STANDARD_INFO,
+    };
+
+    let handle = HANDLE(file.as_raw_handle());
+    let mut standard = FILE_STANDARD_INFO::default();
+    let mut basic = FILE_BASIC_INFO::default();
+    let mut id = FILE_ID_INFO::default();
+    // Each information class has the matching initialized output structure.
+    unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileStandardInfo,
+            (&mut standard as *mut FILE_STANDARD_INFO).cast(),
+            std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+        )
+        .ok()?;
+        GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            (&mut basic as *mut FILE_BASIC_INFO).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+        .ok()?;
+        if standard.Directory
+            || standard.DeletePending
+            || !ordinary_windows_attributes(basic.FileAttributes)
+        {
+            return None;
+        }
+        GetFileInformationByHandleEx(
+            handle,
+            FileIdInfo,
+            (&mut id as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+        .ok()?;
+    }
+    let len = u64::try_from(standard.EndOfFile).ok()?;
+    // FILETIME is 100 ns ticks since 1601. Preserve the scanner's
+    // pre-Unix-epoch clamp and millisecond truncation. Unsupported signed
+    // values fall back to the std metadata conversion.
+    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+    let updated_at_ms = u64::try_from(basic.LastWriteTime)
+        .ok()?
+        .saturating_sub(UNIX_EPOCH_FILETIME)
+        / 10_000;
+    let stamp = FileStamp::from_windows_parts(len, &basic, &id)?;
+    Some((CandidateMetadata { len, updated_at_ms }, stamp))
 }
 
 /// Avoid the separate path-based metadata open for ordinary files. Opening
@@ -91,7 +167,7 @@ fn ordinary_windows_file(meta: &Metadata) -> bool {
 #[cfg(windows)]
 pub(super) fn open_regular_preview_candidate(
     path: &Path,
-) -> Option<(PathBuf, Metadata, OpenedPreviewFile)> {
+) -> Option<(PathBuf, CandidateMetadata, OpenedPreviewFile)> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 
@@ -100,14 +176,8 @@ pub(super) fn open_regular_preview_candidate(
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
         .open(path)
         .ok()?;
-    let meta = file.metadata().ok()?;
-    if !ordinary_windows_file(&meta) {
-        return None;
-    }
+    let (meta, stamp) = read_regular_snapshot(&file)?;
     let canonical = canonical_path_from_handle(&file)?;
-    // Use the same metadata for size/time and cache validation, then check the
-    // native change-time and 128-bit file ID just as in the compatibility path.
-    let stamp = FileStamp::read_with_metadata(&file, &meta)?;
     Some((
         canonical,
         meta,
@@ -121,7 +191,7 @@ pub(super) fn open_regular_preview_candidate(
 #[cfg(not(windows))]
 pub(super) fn open_regular_preview_candidate(
     _path: &Path,
-) -> Option<(PathBuf, Metadata, OpenedPreviewFile)> {
+) -> Option<(PathBuf, CandidateMetadata, OpenedPreviewFile)> {
     None
 }
 
@@ -212,11 +282,20 @@ impl FileStamp {
             )
             .ok()?;
         }
+        Self::from_windows_parts(meta.len(), &basic, &id)
+    }
+
+    #[cfg(windows)]
+    fn from_windows_parts(
+        len: u64,
+        basic: &windows::Win32::Storage::FileSystem::FILE_BASIC_INFO,
+        id: &windows::Win32::Storage::FileSystem::FILE_ID_INFO,
+    ) -> Option<Self> {
         if basic.ChangeTime == 0 || id.FileId.Identifier == [0; 16] {
             return None;
         }
         Some(Self {
-            len: meta.len(),
+            len,
             identity: (
                 id.VolumeSerialNumber,
                 id.FileId.Identifier,
@@ -363,8 +442,7 @@ mod tests {
         let old_meta = std::fs::symlink_metadata(&path).unwrap();
         let (canonical, meta, opened) = open_regular_preview_candidate(&path).unwrap();
         assert_eq!(canonical, std::fs::canonicalize(&path).unwrap());
-        assert_eq!(meta.len(), old_meta.len());
-        assert_eq!(meta.modified().unwrap(), old_meta.modified().unwrap());
+        assert_eq!(meta, CandidateMetadata::from_metadata(&old_meta));
         assert_eq!(opened.stamp, FileStamp::read(&opened.file));
         assert!(open_regular_preview_candidate(home.path()).is_none());
         assert!(open_regular_preview_candidate(&home.path().join("missing")).is_none());
@@ -374,8 +452,9 @@ mod tests {
         let link = home.path().join("link.jsonl");
         match symlink_file(&path, &link) {
             Ok(()) => {
-                assert!(!ordinary_windows_file(
-                    &std::fs::symlink_metadata(&link).unwrap()
+                use std::os::windows::fs::MetadataExt;
+                assert!(!ordinary_windows_attributes(
+                    std::fs::symlink_metadata(&link).unwrap().file_attributes()
                 ));
                 assert!(open_regular_preview_candidate(&link).is_none());
                 println!("Windows symlink reparse rejection exercised");
@@ -387,6 +466,35 @@ mod tests {
                 println!("Windows symlink fixture unavailable: {error}");
             }
             Err(error) => panic!("unexpected symlink fixture error: {error}"),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn direct_snapshot_matches_legacy_eof_and_filetime() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("source.jsonl");
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        // EOF must not be confused with the filesystem's allocation size.
+        file.set_len(8193).unwrap();
+        for modified in [
+            UNIX_EPOCH - Duration::from_secs(86_400),
+            UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_789),
+            UNIX_EPOCH + Duration::new(1_700_000_001, 999_999_900),
+        ] {
+            file.set_modified(modified).unwrap();
+            let (meta, stamp) = read_regular_snapshot(&file).unwrap();
+            assert_eq!(meta.len, 8193);
+            assert_eq!(
+                meta,
+                CandidateMetadata::from_metadata(&file.metadata().unwrap())
+            );
+            assert_eq!(Some(stamp), FileStamp::read(&file));
         }
     }
 
