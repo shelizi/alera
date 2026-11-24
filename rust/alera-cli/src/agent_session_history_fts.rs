@@ -102,6 +102,12 @@ pub(crate) struct HistoryIndexWriteStats {
     pub trimmed: usize,
     #[cfg(test)]
     write_statements: usize,
+    #[cfg(test)]
+    json_buffer_starts: usize,
+    #[cfg(test)]
+    retention_queries: usize,
+    #[cfg(test)]
+    retention_peak_ids: usize,
 }
 
 impl AgentSessionHistoryIndex {
@@ -246,6 +252,9 @@ impl AgentSessionHistoryIndex {
         }
         let mut pending: Vec<PendingDocument<'_>> = Vec::new();
         let mut pending_by_key: HashMap<&str, usize> = HashMap::new();
+        // Most warm records are unchanged. Reuse the same serialization
+        // storage rather than allocating an owned JSON string for each one.
+        let mut json_scratch = Vec::new();
         for (record, key) in batch.iter() {
             if record.running
                 || record.provider_identity_verified
@@ -269,24 +278,33 @@ impl AgentSessionHistoryIndex {
             if record.title.chars().count() > 1024 || record.goal.chars().count() > 1024 {
                 bail!("history search metadata exceeds the field budget");
             }
-            let record_json = serde_json::to_string(record)?;
+            json_scratch.clear();
+            #[cfg(test)]
+            if json_scratch.capacity() == 0 {
+                stats.json_buffer_starts += 1;
+            }
+            serde_json::to_writer(&mut json_scratch, record)?;
             // Preserve the logical sequential statistics and last record
             // for duplicate UUIDs, without materializing intermediate SQL
             // writes that are invisible outside this transaction.
             if let Some(&position) = pending_by_key.get(key) {
                 let planned = &mut pending[position];
-                if planned.record_json == record_json {
+                if planned.record_json.as_bytes() == json_scratch.as_slice() {
                     stats.unchanged += 1;
                 } else {
                     stats.updated += 1;
-                    planned.record_json = record_json;
+                    let record_json = String::from_utf8(std::mem::take(&mut json_scratch))?;
+                    // A superseded pending record is no longer needed; reuse
+                    // its backing allocation for the next comparison.
+                    json_scratch =
+                        std::mem::replace(&mut planned.record_json, record_json).into_bytes();
                     planned.record = record;
                 }
                 continue;
             }
             if existing
                 .get(key)
-                .is_some_and(|previous| previous.record_json == record_json)
+                .is_some_and(|previous| previous.record_json.as_bytes() == json_scratch.as_slice())
             {
                 stats.unchanged += 1;
                 continue;
@@ -304,6 +322,7 @@ impl AgentSessionHistoryIndex {
                 &record.provider,
                 &record.provider_account_id,
             ))?;
+            let record_json = String::from_utf8(std::mem::take(&mut json_scratch))?;
             pending_by_key.insert(key, pending.len());
             pending.push(PendingDocument {
                 key,
@@ -549,16 +568,27 @@ async fn trim_index(
     limit: i64,
     stats: &mut HistoryIndexWriteStats,
 ) -> Result<()> {
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM history_search_docs")
-        .fetch_one(&mut **tx)
-        .await?;
-    if count > limit {
+    debug_assert!(limit >= 0);
+    loop {
+        // Count and select in one statement, with a sentinel to detect more
+        // work. Normally a batch can add at most MAX_BATCH rows, so a healthy
+        // index needs just one query even when retention removes old rows.
+        // An unexpectedly oversized index never allocates all expired IDs.
         let ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT id FROM history_search_docs ORDER BY updated_ms ASC, id ASC LIMIT ?",
+            "SELECT id FROM history_search_docs ORDER BY updated_ms ASC, id ASC
+             LIMIT MIN(?, MAX(0, (SELECT count(*) FROM history_search_docs) - ?))",
         )
-        .bind(count - limit)
+        .bind((MAX_BATCH + 1) as i64)
+        .bind(limit)
         .fetch_all(&mut **tx)
         .await?;
+        #[cfg(test)]
+        {
+            stats.retention_queries += 1;
+            stats.retention_peak_ids = stats.retention_peak_ids.max(ids.len());
+        }
+        let has_more = ids.len() > MAX_BATCH;
+        let ids = &ids[..ids.len().min(MAX_BATCH)];
         for batch in ids.chunks(SQL_WRITE_BATCH) {
             delete_index_rows(tx, "DELETE FROM history_search_fts WHERE rowid IN (", batch).await?;
             delete_index_rows(tx, "DELETE FROM history_search_docs WHERE id IN (", batch).await?;
@@ -568,8 +598,10 @@ async fn trim_index(
                 stats.write_statements += 2;
             }
         }
+        if !has_more {
+            return Ok(());
+        }
     }
-    Ok(())
 }
 
 fn query_terms(text: &str) -> Option<String> {
@@ -871,6 +903,8 @@ mod tests {
             .collect::<Vec<_>>();
         let first = index.upsert_batch(&records).await.unwrap();
         assert_eq!(first.added, MAX_BATCH);
+        assert_eq!(first.json_buffer_starts, MAX_BATCH);
+        assert_eq!(first.retention_queries, 1);
         assert_eq!(
             first.write_statements, 4,
             "two document batches and two FTS batches"
@@ -878,6 +912,9 @@ mod tests {
         let repeated = index.upsert_batch(&records).await.unwrap();
         assert_eq!(repeated.unchanged, MAX_BATCH);
         assert_eq!(repeated.write_statements, 0);
+        assert_eq!(repeated.json_buffer_starts, 1);
+        assert_eq!(repeated.retention_queries, 1);
+        assert_eq!(repeated.retention_peak_ids, 0);
         for record in &mut records {
             record.updated_at_ms += 1;
         }
@@ -920,6 +957,7 @@ mod tests {
             .unwrap();
         assert_eq!(stats.updated, 2);
         assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.json_buffer_starts, 2);
         assert_eq!(stats.write_statements, 0);
         assert!(index.search("temporary", 30).await.unwrap().is_empty());
         assert_eq!(index.search("original", 30).await.unwrap().len(), 1);
@@ -945,6 +983,8 @@ mod tests {
         tx.commit().await.unwrap();
         assert_eq!(stats.trimmed, MAX_BATCH - 4);
         assert_eq!(stats.write_statements, 4);
+        assert_eq!(stats.retention_queries, 1);
+        assert_eq!(stats.retention_peak_ids, MAX_BATCH - 4);
         let remaining: Vec<String> =
             sqlx::query_scalar("SELECT document_key FROM history_search_docs ORDER BY id ASC")
                 .fetch_all(&index.pool)
@@ -953,6 +993,109 @@ mod tests {
         assert_eq!(
             remaining,
             rows[MAX_BATCH - 4..]
+                .iter()
+                .map(|row| document_key(row).unwrap())
+                .collect::<Vec<_>>()
+        );
+        let fts_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM history_search_fts WHERE history_search_fts MATCH 'retention'",
+        )
+        .fetch_one(&index.pool)
+        .await
+        .unwrap();
+        assert_eq!(fts_count, 4);
+    }
+
+    #[tokio::test]
+    async fn warm_json_comparison_preserves_exact_bytes_and_repairs_noncanonical_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let mut first = record(
+            "550e8400-e29b-41d4-a716-446655440000",
+            "keyboard \"quoted\" \\ path",
+            "line one\n\u{6b77}\u{53f2}\tline two",
+        );
+        first.milestones = vec!["\\\"\u{1f680}".to_owned()];
+        index
+            .upsert_batch(std::slice::from_ref(&first))
+            .await
+            .unwrap();
+        let canonical = serde_json::to_string(&first).unwrap();
+        let key = document_key(&first).unwrap();
+        let stored: String = sqlx::query_scalar(
+            "SELECT record_json FROM history_search_docs WHERE document_key = ?",
+        )
+        .bind(&key)
+        .fetch_one(&index.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, canonical);
+        let warm = index
+            .upsert_batch(std::slice::from_ref(&first))
+            .await
+            .unwrap();
+        assert_eq!(warm.unchanged, 1);
+        assert_eq!(warm.write_statements, 0);
+
+        // Even semantically equivalent but noncanonical JSON is rewritten,
+        // exactly as before this optimization; FTS text is unchanged.
+        let pretty = serde_json::to_string_pretty(&first).unwrap();
+        assert_ne!(pretty, canonical);
+        sqlx::query("UPDATE history_search_docs SET record_json = ? WHERE document_key = ?")
+            .bind(pretty)
+            .bind(&key)
+            .execute(&index.pool)
+            .await
+            .unwrap();
+        let repaired = index
+            .upsert_batch(std::slice::from_ref(&first))
+            .await
+            .unwrap();
+        assert_eq!(repaired.updated, 1);
+        assert_eq!(repaired.write_statements, 1);
+        let stored: String = sqlx::query_scalar(
+            "SELECT record_json FROM history_search_docs WHERE document_key = ?",
+        )
+        .bind(key)
+        .fetch_one(&index.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, canonical);
+        assert_eq!(index.search("keyboard", 10).await.unwrap(), vec![first]);
+    }
+
+    #[tokio::test]
+    async fn retention_pages_bound_ids_and_keep_newest_ties() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let rows = (0..MAX_BATCH * 2)
+            .map(|i| {
+                record(
+                    &format!("550e8400-e29b-41d4-a716-{i:012}"),
+                    "retention",
+                    "keyboard",
+                )
+            })
+            .collect::<Vec<_>>();
+        for batch in rows.chunks(MAX_BATCH) {
+            index.upsert_batch(batch).await.unwrap();
+        }
+        let mut tx = index.pool.begin().await.unwrap();
+        let mut stats = HistoryIndexWriteStats::default();
+        trim_index(&mut tx, 4, &mut stats).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(stats.trimmed, MAX_BATCH * 2 - 4);
+        assert_eq!(stats.write_statements, 8);
+        assert_eq!(stats.retention_queries, 2);
+        assert_eq!(stats.retention_peak_ids, MAX_BATCH + 1);
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT document_key FROM history_search_docs ORDER BY id ASC")
+                .fetch_all(&index.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining,
+            rows[rows.len() - 4..]
                 .iter()
                 .map(|row| document_key(row).unwrap())
                 .collect::<Vec<_>>()
