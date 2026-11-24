@@ -41,6 +41,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
   int? _insertionGapIndex;
   String? _lastSelectedPreviewTabId;
   DateTime? _lastSelectedPreviewAt;
+  int _tabRevealGeneration = 0;
 
   @override
   void initState() {
@@ -132,8 +133,11 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
   }
 
   void _scheduleTabReveal(String tabId, {bool animate = true}) {
+    final generation = ++_tabRevealGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
+      // Rapid tab switching can queue multiple callbacks before the next
+      // frame. Only the newest request may scroll the strip.
+      if (mounted && generation == _tabRevealGeneration) {
         _ensureTabVisible(tabId, animate: animate);
       }
     });
@@ -399,6 +403,12 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
       ),
     );
     final visualTabs = _visualTabs(widget.tabs);
+    // Avoid a linear indexWhere for each tab when restoring large layouts.
+    // Pinned and regular tabs keep their original visual positions.
+    final visualIndexById = <String, int>{
+      for (var index = 0; index < visualTabs.length; index++)
+        visualTabs[index].id: index,
+    };
     final pinnedTabs = visualTabs
         .where((tab) => tab.isPinned)
         .toList(growable: false);
@@ -407,9 +417,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
         .toList(growable: false);
 
     Widget buildTabEntry(WorkspaceTabRecord tab) {
-      final index = visualTabs.indexWhere(
-        (candidate) => candidate.id == tab.id,
-      );
+      final index = visualIndexById[tab.id]!;
       return SizedBox(
         key: _tabKey(tab.id),
         child: _TabStripChipDropTarget(
