@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io::Read;
 use std::path::Path;
 
 use git2::{Diff, DiffDelta, DiffFormat, DiffLine, DiffLineType, Oid, Repository};
@@ -342,7 +343,14 @@ fn workdir_file_bytes(repo: &Repository, path: &Path) -> Option<Vec<u8>> {
     if !metadata.is_file() || metadata.len() > MAX_DIFF_ENCODING_SOURCE_BYTES {
         return None;
     }
-    std::fs::read(full_path).ok()
+    // Reuse the checked length, avoid a second metadata lookup inside
+    // fs::read, and cap the read if a concurrent writer grows the file.
+    let file = std::fs::File::open(full_path).ok()?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_DIFF_ENCODING_SOURCE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() as u64 <= MAX_DIFF_ENCODING_SOURCE_BYTES).then_some(bytes)
 }
 
 fn delta_matches_repo_path(delta: &git2::DiffDelta<'_>, repo_path: &str) -> bool {

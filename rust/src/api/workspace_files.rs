@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -449,6 +449,29 @@ pub fn stop_source_control_watcher(handle: SourceControlWatcherHandle) {
     source_control_watcher::stop_source_control_watcher(handle);
 }
 
+// The caller already resolved and checked the regular file and its length.
+// Reuse that length instead of fs::read's additional metadata probe. Bound
+// the actual read too, in case the file grew between stat and opening it.
+fn read_checked_text_bytes(
+    path: &Path,
+    relative_path: &str,
+    metadata: &fs::Metadata,
+) -> Result<Vec<u8>, WorkspaceFileError> {
+    let file =
+        fs::File::open(path).map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_TEXT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
+    if bytes.len() as u64 > MAX_TEXT_FILE_BYTES {
+        return Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Unsupported,
+            relative_path,
+        ));
+    }
+    Ok(bytes)
+}
+
 pub fn read_workspace_text_file(
     workspace_path: String,
     relative_path: String,
@@ -469,8 +492,7 @@ pub fn read_workspace_text_file(
             format!("{} exceeds {} bytes", relative_path, MAX_TEXT_FILE_BYTES),
         ));
     }
-    let bytes =
-        fs::read(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    let bytes = read_checked_text_bytes(&path, &relative_path, &metadata)?;
     if bytes.contains(&0) {
         return Err(WorkspaceFileError::new(
             WorkspaceFileErrorKind::Unsupported,
@@ -512,8 +534,7 @@ pub fn read_workspace_editor_text_file(
             relative_path,
         ));
     }
-    let bytes =
-        fs::read(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+    let bytes = read_checked_text_bytes(&path, &relative_path, &metadata)?;
     let decoded = decode_workspace_text_bytes_impl(&bytes, encoding)?;
     let file = WorkspaceTextFile {
         content: decoded.content,
@@ -1451,6 +1472,39 @@ mod tests {
         ));
 
         assert_eq!(kind, WorkspaceFileErrorKind::InvalidPath);
+    }
+
+    #[test]
+    fn checked_text_read_rejects_files_that_grow_after_metadata_probe() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let path = workspace.path().join("growing.txt");
+        fs::write(&path, b"old").expect("write initial file");
+        let metadata = fs::metadata(&path).expect("initial metadata");
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        file.set_len(MAX_TEXT_FILE_BYTES + 1).expect("grow file");
+        assert_eq!(
+            error_kind(read_checked_text_bytes(&path, "growing.txt", &metadata)),
+            WorkspaceFileErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn checked_text_read_accepts_exact_size_limit_and_empty_files() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let path = workspace.path().join("size.txt");
+        fs::write(&path, b"").expect("empty file");
+        let metadata = fs::metadata(&path).expect("metadata");
+        assert!(read_checked_text_bytes(&path, "size.txt", &metadata)
+            .unwrap()
+            .is_empty());
+        fs::write(&path, vec![b'a'; MAX_TEXT_FILE_BYTES as usize]).expect("limit file");
+        let metadata = fs::metadata(&path).expect("metadata");
+        let bytes = read_checked_text_bytes(&path, "size.txt", &metadata).unwrap();
+        assert_eq!(bytes.len() as u64, MAX_TEXT_FILE_BYTES);
+        assert!(bytes.iter().all(|byte| *byte == b'a'));
     }
 
     #[test]

@@ -489,3 +489,76 @@ fn rejects_non_root_and_uninitialized_submodule_requests() {
     assert_eq!(uninitialized.kind, GitErrorKind::NotARepository);
     assert!(uninitialized.context.contains("Not Initialized"));
 }
+
+#[test]
+fn batch_diff_keeps_submodule_and_similarly_named_ordinary_paths_distinct() {
+    let parent = init_repo_with_submodule();
+    let child = parent.path().join("modules/sample");
+    commit_file(&child, "README.md", "new child revision\n", "advance child");
+    std::fs::write(child.join("README.md"), "dirty child revision\n").expect("modify child");
+    std::fs::create_dir_all(parent.path().join("modules/sample-other"))
+        .expect("create ordinary sibling");
+    std::fs::write(
+        parent.path().join("modules/sample-other/plain.txt"),
+        "ordinary\n",
+    )
+    .expect("write ordinary sibling");
+    std::fs::write(parent.path().join("README.md"), "changed parent\n").expect("modify parent");
+    let root = path_str(parent.path());
+    let requested = vec![
+        "README.md".to_string(),
+        "modules/sample-other/plain.txt".to_string(),
+        "modules/sample".to_string(),
+        "modules/sample/README.md".to_string(),
+    ];
+    let signature = |file: &GitDiffFile| {
+        (
+            file.path.clone(),
+            file.area,
+            file.status,
+            file.is_gitlink,
+            diff_text(file),
+        )
+    };
+    let expected = requested
+        .iter()
+        .flat_map(|path| {
+            git_diff_all(root.clone(), Some(path.clone()))
+                .expect("single path")
+                .files
+        })
+        .map(|file| signature(&file))
+        .collect::<Vec<_>>();
+    let actual = git_diff_all_page(root.clone(), requested.clone()).expect("batch");
+    assert_eq!(
+        actual.files.iter().map(signature).collect::<Vec<_>>(),
+        expected
+    );
+    assert!(actual
+        .files
+        .iter()
+        .any(|file| file.path == "modules/sample" && file.is_gitlink));
+    assert!(actual
+        .files
+        .iter()
+        .any(|file| file.path == "modules/sample/README.md"
+            && diff_text(file).contains("+dirty child revision")));
+    assert!(actual
+        .files
+        .iter()
+        .any(|file| file.path == "modules/sample-other/plain.txt"
+            && file.area == GitChangeArea::Untracked
+            && !file.is_gitlink));
+    run_git(parent.path(), &["add", "modules/sample-other/plain.txt"]);
+    let updated = git_diff_all_page(root, requested).expect("updated batch");
+    assert!(updated
+        .files
+        .iter()
+        .any(|file| file.path == "modules/sample-other/plain.txt"
+            && file.area == GitChangeArea::Staged));
+    assert!(!updated
+        .files
+        .iter()
+        .any(|file| file.path == "modules/sample-other/plain.txt"
+            && file.area == GitChangeArea::Untracked));
+}

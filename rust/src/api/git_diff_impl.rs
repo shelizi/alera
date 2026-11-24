@@ -108,6 +108,7 @@ fn git_status_entries_with_options(
 ) -> Result<Vec<GitChangeEntry>, GitError> {
     let statuses = repo.statuses(Some(options)).map_err(GitError::from_git2)?;
     let mut entries = Vec::new();
+    let mut submodule_paths = git_submodule_impl::SubmodulePathCatalog::default();
 
     for entry in statuses.iter() {
         if let Some(change) = status_entry_to_change(
@@ -116,6 +117,7 @@ fn git_status_entries_with_options(
             &entry,
             GitChangeArea::Staged,
             include_line_stats,
+            &mut submodule_paths,
         )? {
             entries.push(change);
         }
@@ -125,6 +127,7 @@ fn git_status_entries_with_options(
             &entry,
             GitChangeArea::Untracked,
             include_line_stats,
+            &mut submodule_paths,
         )? {
             entries.push(change);
             continue;
@@ -135,6 +138,7 @@ fn git_status_entries_with_options(
             &entry,
             GitChangeArea::Unstaged,
             include_line_stats,
+            &mut submodule_paths,
         )? {
             entries.push(change);
         }
@@ -146,6 +150,24 @@ fn git_status_entries_with_options(
             .then_with(|| a.path.cmp(&b.path))
     });
     Ok(entries)
+}
+
+// Submodule diff selection only checks whether a matching change exists.
+fn has_status_entry_for_path(
+    repo: &Repository,
+    paths: &GitPathContext,
+    file_path: &str,
+    area: GitChangeArea,
+) -> Result<bool, GitError> {
+    let mut options = status_options();
+    options
+        .disable_pathspec_match(true)
+        .pathspec(paths.to_repo_path(file_path));
+    Ok(
+        git_status_entries_with_options(repo, paths, &mut options, false)?
+            .iter()
+            .any(|entry| entry.area == area && entry.path == file_path),
+    )
 }
 
 pub(super) fn git_diff(
@@ -595,6 +617,7 @@ fn status_entry_to_change(
     entry: &StatusEntry<'_>,
     area: GitChangeArea,
     include_line_stats: bool,
+    submodule_paths: &mut git_submodule_impl::SubmodulePathCatalog,
 ) -> Result<Option<GitChangeEntry>, GitError> {
     let status = entry.status();
     match area {
@@ -624,7 +647,12 @@ fn status_entry_to_change(
                 removed: None,
                 is_binary: delta.old_file().is_binary() || delta.new_file().is_binary(),
                 is_large: false,
-                submodule: git_submodule_impl::status_for_path(repo, &repo_path, area)?,
+                submodule: git_submodule_impl::status_for_path(
+                    repo,
+                    &repo_path,
+                    area,
+                    submodule_paths,
+                )?,
             };
             if include_line_stats && change.submodule.is_none() {
                 if let Some(stats) =
@@ -709,7 +737,12 @@ fn status_entry_to_change(
                 removed: None,
                 is_binary: delta.old_file().is_binary() || delta.new_file().is_binary(),
                 is_large: false,
-                submodule: git_submodule_impl::status_for_path(repo, &repo_path, area)?,
+                submodule: git_submodule_impl::status_for_path(
+                    repo,
+                    &repo_path,
+                    area,
+                    submodule_paths,
+                )?,
             };
             if include_line_stats && change.submodule.is_none() {
                 if let Some(stats) =
@@ -1195,14 +1228,19 @@ fn diff_file_for_area_with_selection_cache(
     workspace_file_path: &str,
     area: GitChangeArea,
     whitespace_mode: GitDiffWhitespaceMode,
-    selection_cache: Option<&mut DiffSelectionCache>,
+    mut selection_cache: Option<&mut DiffSelectionCache>,
 ) -> Result<Option<GitDiffFile>, GitError> {
-    match git_submodule_impl::diff_file_for_submodule(repo, paths, workspace_file_path, area)? {
-        git_submodule_impl::SubmoduleDiff::NotSubmodule => {}
-        git_submodule_impl::SubmoduleDiff::NoDiff => return Ok(None),
-        git_submodule_impl::SubmoduleDiff::File(file) => return Ok(Some(file)),
-    }
     let file_path = paths.to_repo_path(workspace_file_path);
+    let may_be_submodule = selection_cache
+        .as_deref_mut()
+        .is_none_or(|cache| cache.submodule_paths.may_contain(repo, &file_path));
+    if may_be_submodule {
+        match git_submodule_impl::diff_file_for_submodule(repo, paths, workspace_file_path, area)? {
+            git_submodule_impl::SubmoduleDiff::NotSubmodule => {}
+            git_submodule_impl::SubmoduleDiff::NoDiff => return Ok(None),
+            git_submodule_impl::SubmoduleDiff::File(file) => return Ok(Some(file)),
+        }
+    }
     match area {
         GitChangeArea::Untracked => {
             if !is_untracked_file(repo, &file_path)? {
@@ -1550,6 +1588,7 @@ struct DiffSelection {
 struct DiffSelectionCache {
     staged: Option<HashMap<String, DiffSelection>>,
     unstaged: Option<HashMap<String, DiffSelection>>,
+    submodule_paths: git_submodule_impl::SubmodulePathCatalog,
 }
 
 impl DiffSelectionCache {

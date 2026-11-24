@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use git2::{
@@ -7,7 +8,7 @@ use git2::{
 
 use super::{
     commit_change_entries, commit_diff_file_for_path, diff_file_for_area, diff_for_commit_range,
-    git_diff_render::diff_lines_from_patch, git_status, git_status_for_path,
+    git_diff_render::diff_lines_from_patch, git_status, has_status_entry_for_path,
     status_result_from_entries, GitChangeArea, GitChangeEntry, GitChangeStatus, GitDiffFile,
     GitError, GitErrorKind, GitPathContext, GitStatusResult, GitSubmoduleStatus,
 };
@@ -29,11 +30,58 @@ struct ResolvedSubmodule<'repo> {
     inner_path: String,
 }
 
+/// A request-local negative lookup for ordinary files. The original
+/// submodule lookup still runs for matching roots or when enumeration fails.
+/// Never retain this across requests or use it to cache submodule status.
+#[derive(Default)]
+pub(super) struct SubmodulePathCatalog {
+    roots: Option<HashSet<String>>,
+    attempted: bool,
+}
+
+impl SubmodulePathCatalog {
+    fn roots(&mut self, repo: &Repository) -> Option<&HashSet<String>> {
+        if !self.attempted {
+            self.attempted = true;
+            self.roots = repo.submodules().ok().map(|submodules| {
+                submodules
+                    .iter()
+                    .map(|submodule| normalize_path(submodule.path()))
+                    .collect()
+            });
+        }
+        self.roots.as_ref()
+    }
+
+    pub(super) fn may_match_exact(&mut self, repo: &Repository, path: &str) -> bool {
+        self.roots(repo).is_none_or(|roots| roots.contains(path))
+    }
+
+    pub(super) fn may_contain(&mut self, repo: &Repository, mut path: &str) -> bool {
+        let Some(roots) = self.roots(repo) else {
+            return true;
+        };
+        loop {
+            if roots.contains(path) {
+                return true;
+            }
+            let Some((parent, _)) = path.rsplit_once('/') else {
+                return false;
+            };
+            path = parent;
+        }
+    }
+}
+
 pub(super) fn status_for_path(
     repo: &Repository,
     repo_path: &str,
     area: GitChangeArea,
+    catalog: &mut SubmodulePathCatalog,
 ) -> Result<Option<GitSubmoduleStatus>, GitError> {
+    if !catalog.may_match_exact(repo, repo_path) {
+        return Ok(None);
+    }
     let Some(submodule) = exact_submodule(repo, repo_path)? else {
         return Ok(None);
     };
@@ -201,10 +249,7 @@ pub(super) fn diff_file_for_submodule(
         }
         _ => {
             let has_matching_worktree_entry =
-                git_status_for_path(child_path.clone(), resolved.inner_path.clone())?
-                    .entries
-                    .iter()
-                    .any(|entry| entry.area == area && entry.path == resolved.inner_path);
+                has_status_entry_for_path(&child, &child_paths, &resolved.inner_path, area)?;
             match range {
                 _ if has_matching_worktree_entry => {
                     diff_file_for_area(&child, &child_paths, &resolved.inner_path, area)?
