@@ -1,5 +1,12 @@
 part of 'terminal_runtime.dart';
 
+// xterm's input trace sink is disabled unless an E2E support directory is
+// explicitly supplied. Guard message construction as well: eagerly expanding
+// codeUnits on every keypress/paste allocates even when the sink drops it.
+const String _terminalInputTraceSupportDir = String.fromEnvironment(
+  'ALERA_E2E_SUPPORT_DIR',
+);
+
 /// Terminal instantiation, event routing, and clipboard attachment.
 extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
   Future<void> _pasteFromClipboard() => _pasteTerminalClipboard(this);
@@ -44,16 +51,18 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
   static const int _maxPendingTerminalInputLength = 16384;
 
   void _handleTerminalInput(String data) {
-    traceTerminalInput(
-      'pty units=${data.codeUnits} session=${_ptySession != null} pending=${_pendingTerminalInput.length}',
-    );
+    if (_terminalInputTraceSupportDir.isNotEmpty) {
+      traceTerminalInput(
+        'pty units=${data.codeUnits} session=${_ptySession != null} pending=${_pendingTerminalInput.length}',
+      );
+    }
     _pump.markInteractiveInput();
     final session = _ptySession;
     if (session == null) {
       _bufferPendingTerminalInput(data);
     } else if (data.isNotEmpty) {
       final accepted = session.writeBytes(utf8.encode(data));
-      if (!accepted) {
+      if (!accepted && _terminalInputTraceSupportDir.isNotEmpty) {
         traceTerminalInput('ptyRejected units=${data.codeUnits}');
       }
     }
@@ -84,9 +93,11 @@ extension _XtermTerminalAttachment on _XtermTerminalSessionHandle {
     _pendingTerminalInputLength = 0;
     final session = _ptySession;
     final accepted = session?.writeBytes(utf8.encode(buffered));
-    traceTerminalInput(
-      'ptyFlush units=${buffered.codeUnits} accepted=$accepted',
-    );
+    if (_terminalInputTraceSupportDir.isNotEmpty) {
+      traceTerminalInput(
+        'ptyFlush units=${buffered.codeUnits} accepted=$accepted',
+      );
+    }
   }
 
   void _handleTerminalOutput(String data) => _queueTerminalOutput(data);

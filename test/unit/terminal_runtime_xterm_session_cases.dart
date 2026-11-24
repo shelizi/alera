@@ -99,6 +99,35 @@ void _registerXtermRuntimeSessionTests() {
     },
   );
 
+  test(
+    'large Unicode input reaches PTY unchanged without E2E tracing',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final fakeSession = _FakeTerminalPtySession();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: _FakeTerminalPtySessionFactory(
+          sessions: <_FakeTerminalPtySession>[fakeSession],
+        ),
+        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+          _launch('shell', shell: '/bin/sh'),
+        ],
+      );
+      addTearDown(runtime.dispose);
+      try {
+        final session = runtime.sessionFor(
+          workspace: _workspace(),
+          tab: _tab(),
+        );
+        await session.ensureStarted();
+        final pasted = '${'漢字🙂' * 8000}\n';
+        feedTerminalInputForTesting(session, pasted);
+        expect(utf8.decode(fakeSession.writes.last), pasted);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
+
   test('defers PTY resize and input until startup finishes', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final startCompleter = Completer<void>();
