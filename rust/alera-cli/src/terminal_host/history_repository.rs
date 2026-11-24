@@ -6,6 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use tokio::sync::Semaphore;
 
+use super::buffer::{append_deque_tail as append_tail, copy_deque_tail, retain_deque_tail};
 pub use super::history_store::TerminalHostCheckpoint;
 use super::history_store::TerminalHostHistoryStore;
 
@@ -526,37 +527,6 @@ fn retain_tail(buffer: &mut Vec<u8>, max_bytes: usize) {
     }
     let start = buffer.len() - max_bytes;
     buffer.drain(..start);
-}
-
-fn retain_deque_tail(buffer: &mut VecDeque<u8>, max_bytes: usize) {
-    if buffer.len() > max_bytes {
-        buffer.drain(..buffer.len() - max_bytes);
-    }
-}
-
-fn copy_deque_tail(buffer: &VecDeque<u8>, max_bytes: usize) -> Vec<u8> {
-    buffer
-        .iter()
-        .skip(buffer.len().saturating_sub(max_bytes))
-        .copied()
-        .collect()
-}
-
-fn append_tail(buffer: &mut VecDeque<u8>, data: &[u8], max_bytes: usize) {
-    if max_bytes == 0 {
-        buffer.clear();
-        return;
-    }
-    if data.len() >= max_bytes {
-        buffer.clear();
-        buffer.extend(data[data.len() - max_bytes..].iter().copied());
-        return;
-    }
-    let required = buffer.len().saturating_add(data.len());
-    if required > max_bytes {
-        buffer.drain(..required - max_bytes);
-    }
-    buffer.extend(data.iter().copied());
 }
 
 #[cfg(test)]
