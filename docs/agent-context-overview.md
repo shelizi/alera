@@ -247,3 +247,17 @@ The exact-string source guard incorrectly rejected the resumed conversation.
 Compare canonical filesystem paths only when the raw strings differ, retaining
 the native UUID, rollout metadata, workspace and source guards. A different
 file with the same UUID and filename is still rejected.
+
+### 2026-11-25 acceptance results
+
+Windows dev Host build from `64ce64c1e` succeeded. The corrected native CLI
+acceptance passed all 11 Codex 0.171.0 checks and all 10 Claude Code 2.1.331
+checks against that same rebuilt Host. Both restored the original A goal,
+old and new reports (four timeline entries), and rejected stale activation
+requests after switching to B. The Codex trace confirmed the extended-length
+path on resume resolves to the same physical rollout. Both private Hosts
+stopped cleanly. The focused Rust regressions passed 158 distinct tests:
+5 Hook events, 1 Codex resume identity, 31 Agent Title, 13 Agent Context
+(including checkpoint tests), and 108 Agent Status. Codex used the local
+Responses fixture; Claude used an authenticated model. Interactive in-process
+TUI slash commands and cross-Tab recovery remain outside this acceptance.
