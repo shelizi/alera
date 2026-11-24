@@ -18,14 +18,23 @@ class RuntimeWorkspaceActivityRepository({
         await client.runtimeRequest('workspaceActivity.list'),
       );
       final merged = <String, DateTime>{...remote};
+      final toRemote = <String, DateTime>{};
+      final toLocal = <String, DateTime>{};
       for (final entry in local.entries) {
         final current = merged[entry.key];
         if (current == null || entry.value.isAfter(current)) {
           merged[entry.key] = entry.value;
+          toRemote[entry.key] = entry.value;
         }
       }
-      if (local.isNotEmpty) await upsertAll(local);
-      await legacyRepository.upsertAll(merged);
+      for (final entry in remote.entries) {
+        final current = local[entry.key];
+        if (current == null || entry.value.isAfter(current)) {
+          toLocal[entry.key] = entry.value;
+        }
+      }
+      if (toRemote.isNotEmpty) await _upsertRemote(toRemote);
+      if (toLocal.isNotEmpty) await legacyRepository.upsertAll(toLocal);
       return merged;
     } catch (error, stackTrace) {
       _log.warning(
@@ -39,8 +48,13 @@ class RuntimeWorkspaceActivityRepository({
 
   @override
   Future<void> upsertAll(Map<String, DateTime> entries) async {
+    if (entries.isEmpty) return;
     await legacyRepository.upsertAll(entries);
     await beforeAccess?.call();
+    await _upsertRemote(entries);
+  }
+
+  Future<void> _upsertRemote(Map<String, DateTime> entries) async {
     await client.runtimeRequest(
       'workspaceActivity.upsertAll',
       <String, Object?>{

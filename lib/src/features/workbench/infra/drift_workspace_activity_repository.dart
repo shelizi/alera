@@ -1,6 +1,6 @@
 import 'package:alera/src/features/workbench/application/workspace_activity_repository.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart';
 
 class DriftWorkspaceActivityRepository(final AleraDatabase _db)
     implements WorkspaceActivityRepository {
@@ -20,16 +20,25 @@ class DriftWorkspaceActivityRepository(final AleraDatabase _db)
       return;
     }
     await _db.batch((batch) {
-      batch.insertAllOnConflictUpdate(
-        _db.workspaceActivityTable,
-        <WorkspaceActivityTableCompanion>[
-          for (final entry in entries.entries)
-            WorkspaceActivityTableCompanion(
-              workspaceId: Value(entry.key),
-              lastActivityAt: Value(entry.value),
-            ),
-        ],
-      );
+      for (final entry in entries.entries) {
+        final row = WorkspaceActivityTableCompanion(
+          workspaceId: Value(entry.key),
+          lastActivityAt: Value(entry.value),
+        );
+        batch.insert(
+          _db.workspaceActivityTable,
+          row,
+          onConflict:
+              DoUpdate<
+                $WorkspaceActivityTableTable,
+                WorkspaceActivityTableData
+              >(
+                (_) => row,
+                where: (old) =>
+                    old.lastActivityAt.isSmallerThanValue(entry.value),
+              ),
+        );
+      }
     });
   }
 

@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart';
 
 class DriftWorkbenchViewPrefsRepository(final AleraDatabase _db)
     implements WorkbenchViewPrefsRepository {
@@ -34,12 +34,18 @@ class DriftWorkbenchViewPrefsRepository(final AleraDatabase _db)
 
   @override
   Future<void> save(WorkbenchViewPrefs prefs) async {
+    final encoded = jsonEncode(prefs.toMap());
+    final row = WorkbenchViewPrefsTableCompanion(
+      id: const Value(_rowId),
+      dataJson: Value(encoded),
+    );
     await _db
         .into(_db.workbenchViewPrefsTable)
-        .insertOnConflictUpdate(
-          WorkbenchViewPrefsTableCompanion(
-            id: const Value(_rowId),
-            dataJson: Value(jsonEncode(prefs.toMap())),
+        .insert(
+          row,
+          onConflict: DoUpdate(
+            (_) => row,
+            where: (old) => old.dataJson.equals(encoded).not(),
           ),
         );
   }
