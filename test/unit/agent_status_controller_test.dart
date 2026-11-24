@@ -132,6 +132,68 @@ void main() {
       },
     );
 
+    test('1000 tool updates reuse the same immutable Context snapshot', () {
+      final at = DateTime.utc(2026, 11, 24);
+      final burstContainer = ProviderContainer(
+        overrides: [agentStatusClockProvider.overrideWithValue(() => at)],
+      );
+      addTearDown(burstContainer.dispose);
+      final controller = burstContainer.read(
+        agentStatusControllerProvider.notifier,
+      );
+      AgentStatusEntry current() =>
+          burstContainer.read(agentStatusControllerProvider)['session-1']!;
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'UserPromptSubmit',
+          payload: {'prompt': 'Optimize context'},
+        ),
+      );
+      final snapshot = current().contextOverview;
+      final view = AgentContextOverview.fromRaw(snapshot);
+      for (var i = 0; i < 1000; i++) {
+        controller.applyHookEvent(
+          _event(
+            agentType: .codex,
+            hookEventName: 'PreToolUse',
+            payload: {
+              'tool_name': 'Bash',
+              'tool_input': {'command': 'step $i'},
+            },
+          ),
+        );
+        expect(current().contextOverview, same(snapshot));
+        expect(
+          AgentContextOverview.fromRaw(current().contextOverview),
+          same(view),
+        );
+      }
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'Stop',
+          payload: {'last_agent_message': 'Finished the context optimization'},
+        ),
+      );
+      expect(current().contextOverview, isNot(same(snapshot)));
+      expect(
+        AgentContextOverview.fromRaw(current().contextOverview).progress,
+        'Finished the context optimization',
+      );
+      expect(view.progress, isEmpty);
+
+      final completed = current().contextOverview;
+      controller.applyHookEvent(
+        _event(
+          agentType: .codex,
+          hookEventName: 'Stop',
+          payload: {'last_agent_message': 'Finished the context optimization'},
+        ),
+      );
+      expect(current().contextOverview, same(completed));
+    });
+
     test(
       'Context timeline records only completed Codex replies, not tool output',
       () {

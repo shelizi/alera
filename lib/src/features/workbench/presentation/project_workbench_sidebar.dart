@@ -29,6 +29,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_spec.d
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workbench_archive_sweep.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
+import 'package:alera/src/features/workbench/application/workbench_sidebar_view.dart';
 import 'package:alera/src/features/workbench/application/workbench_sidebar_terminal_selection_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_terminal_tab_transfer_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workspace_descendants.dart';

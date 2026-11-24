@@ -216,6 +216,55 @@ void main() {
         find.text('Native raw report without AI summary'),
         findsNWidgets(2),
       );
+      // Simulate fresh Host JSON for each update, not just the same Map
+      // reference. No visible Context field changed, so the complete report
+      // view and its scrollable retain their original widgets.
+      final reportFinder = find.byType(AgentContextReportView);
+      final listFinder = find.byKey(
+        const ValueKey<String>('agent-context-terminal'),
+      );
+      final originalReport = tester.widget(reportFinder);
+      final originalList = tester.widget(listFinder);
+      final requestCount = host.requests.length;
+      for (var i = 0; i < 100; i++) {
+        status.replace({
+          'terminal': live.copyWith(
+            state: AgentStatusState.working,
+            toolName: 'Tool $i',
+            toolInput: 'Private input $i',
+            updatedAt: now.add(Duration(seconds: i + 1)),
+            lastAssistantMessage: 'Intermediate output $i',
+            contextOverview: AgentContextOverview.fromRaw(live.contextOverview)
+                .toJson(),
+          ),
+        });
+        await tester.pump();
+        expect(tester.widget(reportFinder), same(originalReport));
+        expect(tester.widget(listFinder), same(originalList));
+      }
+      expect(host.requests.length, requestCount);
+      // A new real report must replace the old projection.
+      status.replace({
+        'terminal': live.copyWith(
+          contextOverview: AgentContextOverview.fromRaw({
+            'goal': 'Fix reports',
+            'progress': 'New real report',
+            'timeline': [
+              {
+                'kind': 'report',
+                'text': 'New real report',
+                'at': now.toIso8601String(),
+              },
+            ],
+          }).toJson(),
+          lastAssistantMessage: 'New real report',
+        ),
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('New real report'), findsNWidgets(2));
+      expect(tester.widget(reportFinder), isNot(same(originalReport)));
+      expect(find.text('Native raw report without AI summary'), findsNothing);
+
       host.saved[a.id] = AgentContextOverview.fromRaw({
         'goal': 'Task A',
         'progress': 'Latest persisted A',
@@ -225,6 +274,19 @@ void main() {
       expect(find.text('Latest persisted A'), findsOneWidget);
       expect(find.text('Saved A'), findsNothing);
       expect(find.text('Saved B'), findsNothing);
+
+      // Same Tab and terminal, but the Agent has resumed a different
+      // conversation. The recovery key must include the conversation id.
+      host.saved[a.id] = AgentContextOverview.fromRaw({
+        'goal': 'Task A second conversation',
+        'progress': 'Report for conversation C',
+      });
+      workbench.switchConversation(a.id, 'conversation-c');
+      await tester.pumpAndSettle();
+      expect(find.text('Report for conversation C'), findsOneWidget);
+      expect(find.text('Latest persisted A'), findsNothing);
+      expect(host.requests.last.$2['conversationId'], 'conversation-c');
+      expect(host.requests.last.$2['sessionId'], 'terminal');
       expect(tester.takeException(), isNull);
     },
   );
@@ -237,6 +299,26 @@ class _SelectedTabController extends WorkbenchController {
   WorkbenchState build() => initial;
   void select(String id) {
     state = state.copyWith(activeTabIdByWorkspace: {'workspace': id});
+  }
+
+  void switchConversation(String id, String conversationId) {
+    state = state.copyWith(
+      tabsByWorkspace: {
+        ...state.tabsByWorkspace,
+        'workspace': [
+          for (final tab in state.tabsFor('workspace'))
+            if (tab.id == id)
+              tab.copyWith(
+                payload: {
+                  ...tab.payload,
+                  'agentTitleConversationId': conversationId,
+                },
+              )
+            else
+              tab,
+        ],
+      },
+    );
   }
 }
 

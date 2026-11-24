@@ -15,6 +15,7 @@ import 'package:alera/src/features/runtime_host/application/runtime_host_setting
 import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
+import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
 import 'package:alera/src/features/workbench/application/workbench_terminal_tab_transfer_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -119,6 +120,12 @@ WorkbenchViewPrefsRepository workbenchViewPrefsRepository(Ref ref) {
   );
 }
 
+// Keep the projection cache across recomputations of the row-list provider.
+final _workspaceAgentRunCacheProvider =
+    Provider<WorkspaceAgentRunProjectionCache>(
+      (ref) => WorkspaceAgentRunProjectionCache(),
+    );
+
 /// The sidebar row list, recomputed once per state change instead of once per
 /// widget rebuild. Filtering and sorting stay out of widget build methods.
 @Riverpod(keepAlive: true)
@@ -145,6 +152,7 @@ List<WorkbenchSidebarRow> workbenchSidebarRows(Ref ref) {
       searchQuery: state.searchQuery,
     ),
     agentStatuses: ref.watch(agentStatusControllerProvider),
+    agentRunCache: ref.watch(_workspaceAgentRunCacheProvider),
     lastActivityByWorkspaceId: ref.watch(workspaceActivityControllerProvider),
     acknowledgedCompletions: ref.watch(
       workbenchTabCompletionAcknowledgementsControllerProvider,

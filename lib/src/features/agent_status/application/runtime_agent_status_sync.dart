@@ -159,7 +159,7 @@ AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
     lastAssistantMessage: json['lastAssistantMessage'] as String?,
     interrupted: json['interrupted'] as bool?,
     contextOverview: json['contextOverview'] is Map
-        ? AgentContextOverview.fromRaw(json['contextOverview']).toJson()
+        ? AgentContextOverview.snapshotFromRaw(json['contextOverview'])
         : null,
   );
 }

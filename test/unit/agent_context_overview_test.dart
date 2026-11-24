@@ -2,6 +2,85 @@ import 'package:alera/src/features/agent_status/domain/agent_context_overview.da
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'canonical snapshots share a typed view and isolate mutable raw input',
+    () {
+      final now = DateTime.utc(2026, 11, 24);
+      final event = <String, Object?>{
+        'kind': 'report',
+        'text': 'Original report',
+        'at': now.toIso8601String(),
+      };
+      final raw = <String, dynamic>{
+        'goal': ' Original goal ',
+        'timeline': [event],
+        'unknown': 'not part of the context',
+      };
+      final snapshot = AgentContextOverview.snapshotFromRaw(raw);
+      final overview = AgentContextOverview.fromRaw(snapshot);
+      expect(overview.goal, 'Original goal');
+      expect(AgentContextOverview.snapshotFromRaw(snapshot), same(snapshot));
+      expect(AgentContextOverview.fromRaw(snapshot), same(overview));
+      expect(snapshot, isNot(contains('unknown')));
+      expect(() => snapshot['goal'] = 'Changed', throwsUnsupportedError);
+      final timeline = snapshot['timeline'] as List;
+      expect(() => timeline.clear(), throwsUnsupportedError);
+      expect(
+        () => (timeline.single as Map)['text'] = 'Changed',
+        throwsUnsupportedError,
+      );
+      event['text'] = 'New report';
+      raw['goal'] = 'New goal';
+      expect(AgentContextOverview.fromRaw(raw).goal, 'New goal');
+      expect(
+        AgentContextOverview.fromRaw(raw).timeline.single.text,
+        'New report',
+      );
+      expect(AgentContextOverview.fromRaw(snapshot).goal, 'Original goal');
+      expect(
+        AgentContextOverview.fromRaw(snapshot).timeline.single.text,
+        'Original report',
+      );
+
+      final equivalent = AgentContextOverview.fromRaw(overview.toJson());
+      expect(equivalent, overview);
+      expect(equivalent.hashCode, overview.hashCode);
+    },
+  );
+
+  test('legacy snapshots initialize missing anchors before no-op reuse', () {
+    final now = DateTime.utc(2026, 11, 24);
+    final previous = <String, dynamic>{'goal': 'Existing goal'};
+    final next = AgentContextOverview.observeSnapshot(
+      previous: previous,
+      previousPrompt: 'Existing goal',
+      previousAssistant: null,
+      prompt: 'Existing goal',
+      assistant: null,
+      at: now,
+    );
+    expect(next['initialGoal'], 'Existing goal');
+    final unchanged = AgentContextOverview.observeSnapshot(
+      previous: next,
+      previousPrompt: 'Existing goal',
+      previousAssistant: null,
+      prompt: 'Existing goal',
+      assistant: null,
+      at: now,
+    );
+    expect(unchanged, same(next));
+    final missing = AgentContextOverview.observeSnapshot(
+      previous: const <String, dynamic>{},
+      previousPrompt: 'New task',
+      previousAssistant: null,
+      prompt: 'New task',
+      assistant: null,
+      at: now,
+    );
+    expect(missing['goal'], 'New task');
+    expect(AgentContextOverview.fromRaw(missing).timeline.single.kind, 'goal');
+  });
+
   test('records completed report even when working status already had the same text', () {
     final at = DateTime.utc(2026, 11, 24);
     final working = AgentContextOverview.observe(

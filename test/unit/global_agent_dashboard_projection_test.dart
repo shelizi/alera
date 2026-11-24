@@ -188,6 +188,164 @@ void main() {
     );
   });
 
+  test('large inventory reuses unchanged live rows across Host updates', () {
+    final tabs = [for (var i = 0; i < 1000; i++) tab('tab-$i', 'worktree')];
+    final current = WorkbenchState(
+      projects: [project('alera')],
+      workspacesByProject: {
+        'alera': [workspace('worktree', 'alera')],
+      },
+      tabsByWorkspace: {'worktree': tabs},
+    );
+    final statuses = <String, AgentStatusEntry>{
+      for (var i = 0; i < 100; i++)
+        'session-tab-$i': status('tab-$i', 'worktree'),
+    };
+    final cache = GlobalAgentLiveProjectionCache();
+    final before = cache.project(current, statuses);
+    expect(before, hasLength(100));
+    expect(before.first.tab.id, 'tab-0');
+    final untouched = {for (final row in before.skip(1)) row.identity: row};
+    for (var i = 1; i <= 1000; i++) {
+      statuses['session-tab-0'] = statuses['session-tab-0']!.copyWith(
+        updatedAt: now.add(Duration(seconds: i)),
+        toolName: 'Tool $i',
+      );
+      final after = cache.project(current, statuses);
+      expect(after.first.tab.id, 'tab-0');
+      expect(
+        after.skip(1).every((row) => identical(row, untouched[row.identity])),
+        isTrue,
+      );
+      expect(cache.project(current, Map.of(statuses)), same(after));
+    }
+    final updated = cache.project(current, statuses);
+    expect(
+      cache.project(current.copyWith(activeWorkspaceId: 'worktree'), statuses),
+      same(updated),
+    );
+    final terms = globalAgentSearchTerms('  IMM   api  WINDOWS ');
+    expect(updated.where((row) => row.matchesTerms(terms)), hasLength(100));
+    expect(updated.where((row) => row.matchesTerms(['missing'])), isEmpty);
+    expect(updated.where((row) => row.matchesTerms(['tool'])), isEmpty);
+
+    // The cached path must still handle moved/renamed/removed Tabs and
+    // stale Host identities. A new inventory invalidates the index.
+    final renamed = current.copyWith(
+      tabsByWorkspace: {
+        'worktree': [
+          tabs.first.copyWith(title: 'Renamed agent'),
+          ...tabs.skip(2),
+        ],
+      },
+    );
+    final changed = cache.project(renamed, statuses);
+    expect(changed, hasLength(99));
+    expect(changed.first.matches('renamed agent'), isTrue);
+    expect(changed.where((row) => row.tab.id == 'tab-1'), isEmpty);
+    expect(changed[1], same(untouched[changed[1].identity]));
+    statuses['session-tab-0'] = statuses['session-tab-0']!.copyWith(
+      workspaceId: 'foreign',
+    );
+    expect(cache.project(renamed, statuses), hasLength(98));
+    expect(
+      cache.project(renamed.copyWith(workspacesByProject: {}), statuses),
+      isEmpty,
+    );
+  });
+
+  test(
+    'incremental merge agrees with full sort for mixed updates and removals',
+    () {
+      final state = WorkbenchState(
+        projects: [project('alera')],
+        workspacesByProject: {
+          'alera': [workspace('worktree', 'alera')],
+        },
+        tabsByWorkspace: {
+          'worktree': [for (var i = 0; i < 40; i++) tab('tab-$i', 'worktree')],
+        },
+      );
+      final cache = GlobalAgentLiveProjectionCache();
+      final statuses = <String, AgentStatusEntry>{
+        for (var i = 0; i < 30; i++)
+          'session-tab-$i': status('tab-$i', 'worktree'),
+      };
+      var previous = cache.project(state, statuses);
+      for (var i = 0; i < 150; i++) {
+        final id = 'tab-${(i * 7) % 40}';
+        final second = 'tab-${(i * 11 + 1) % 40}';
+        final old = statuses['session-$id'];
+        statuses['session-$id'] = (old ?? status(id, 'worktree')).copyWith(
+          // Deliberately exercise equal and out-of-order timestamps.
+          updatedAt: now.add(Duration(seconds: (i * 3) % 13)),
+        );
+        if (i.isEven) {
+          statuses.remove('session-$second');
+        } else {
+          statuses['session-$second'] = status(
+            second,
+            'worktree',
+          ).copyWith(updatedAt: now.add(Duration(seconds: i % 9)));
+        }
+        final next = cache.project(state, statuses);
+        final full = projectGlobalAgentLiveRows(state, statuses);
+        expect(
+          next.map((row) => row.identity),
+          full.map((row) => row.identity),
+        );
+        final retained = {for (final row in previous) row.identity: row};
+        for (final row in next) {
+          final before = retained[row.identity];
+          if (before != null && identical(before.status, row.status)) {
+            expect(row, same(before));
+          }
+        }
+        previous = next;
+      }
+    },
+  );
+
+  test('already sorted rows keep recency order across filtered sections', () {
+    final state = WorkbenchState(
+      projects: [project('alera')],
+      workspacesByProject: {
+        'alera': [workspace('worktree', 'alera')],
+      },
+      tabsByWorkspace: {
+        'worktree': [
+          for (final id in ['a', 'b', 'c', 'd']) tab(id, 'worktree'),
+        ],
+      },
+    );
+    final statuses = {
+      'session-a': status('a', 'worktree'),
+      'session-b': status('b', 'worktree', state: AgentStatusState.waiting),
+      'session-c': status(
+        'c',
+        'worktree',
+      ).copyWith(updatedAt: now.add(const Duration(seconds: 1))),
+      'session-d': status(
+        'd',
+        'worktree',
+        state: AgentStatusState.waiting,
+      ).copyWith(updatedAt: now.add(const Duration(seconds: 2))),
+    };
+    final rows = projectGlobalAgentLiveRows(state, statuses);
+    final expected = groupGlobalAgentLiveRows(rows);
+    final reused = groupGlobalAgentLiveRows(rows, alreadySorted: true);
+    expect(
+      reused.map((section) => section.group),
+      expected.map((section) => section.group),
+    );
+    expect(
+      reused.map((section) => section.rows.map((row) => row.tab.id)),
+      expected.map((section) => section.rows.map((row) => row.tab.id)),
+    );
+    expect(reused.first.rows.map((row) => row.tab.id), ['d', 'b']);
+    expect(reused.last.rows.map((row) => row.tab.id), ['c', 'a']);
+  });
+
   test('rejects stale and foreign workspace-tab Host identity', () {
     final state = WorkbenchState(
       projects: <Project>[project('alera')],

@@ -28,6 +28,58 @@ void _registerAleraShellSidebarIdentityTests() {
     expect(identical(tester.element(find.byKey(rowKey)), before), isTrue);
   });
 
+  testWidgets('a background tool update rebuilds only its sidebar row', (
+    tester,
+  ) async {
+    // Keep enough room for both the sidebar and the active workbench.
+    await tester.binding.setSurfaceSize(const Size(1440, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final seeded = _linkedWorkbenchState(linkedExpanded: true);
+    final state = seeded.copyWith(
+      viewPrefs: seeded.viewPrefs.copyWith(
+        workspaceSort: .name,
+        projectSort: .name,
+      ),
+    );
+    final main = _agentStatusEntry(
+      terminalSessionId: 'tab-1',
+      workspaceId: 'workspace-1',
+      tabId: 'tab-1',
+      state: .waiting,
+      lastAssistantMessage: 'Main waiting',
+    );
+    AgentStatusEntry linked(String message) => _agentStatusEntry(
+      terminalSessionId: 'tab-2',
+      workspaceId: 'workspace-2',
+      tabId: 'tab-2',
+      state: .waiting,
+      lastAssistantMessage: message,
+    );
+    final harness = await _pumpShell(
+      tester,
+      state: state,
+      agentStatuses: {'tab-1': main, 'tab-2': linked('Old message')},
+    );
+    await tester.pumpAndSettle();
+    final mainRow = find.byKey(
+      const ValueKey<String>('workspace-row:regular:workspace-1'),
+    );
+    final linkedRow = find.byKey(
+      const ValueKey<String>('workspace-row:regular:workspace-2'),
+    );
+    final beforeMain = tester.widget(mainRow);
+    final beforeLinked = tester.widget(linkedRow);
+    harness.agentStatus.setEntries({
+      'tab-1': main,
+      'tab-2': linked('New message'),
+    });
+    await tester.pump();
+    expect(tester.widget(mainRow), same(beforeMain));
+    expect(tester.widget(linkedRow), isNot(same(beforeLinked)));
+    expect(find.text('New message'), findsOneWidget);
+    expect(find.text('Old message'), findsNothing);
+  });
+
   testWidgets('the status slot keeps its element when an agent starts', (
     tester,
   ) async {
