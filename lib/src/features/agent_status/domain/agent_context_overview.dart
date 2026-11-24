@@ -55,14 +55,35 @@ class AgentContextOverview {
 
   // Cache only snapshots we create and deep-freeze. Expando keys are weak:
   // a closed session or superseded snapshot cannot pin a history in memory.
-  // Arbitrary caller/Host maps remain uncached and are validated every time.
+  // Caller/Host maps are never retained; bounded scalar signatures allow
+  // exact repeat detection without reparsing a validated snapshot.
   static final _snapshotViews = Expando<AgentContextOverview>();
+  static final _snapshotInputs = Expando<_ContextSnapshotInput>();
 
-  static Map<String, dynamic> snapshotFromRaw(Object? raw) {
+  /// Reuse a prior immutable snapshot only when the relevant raw inputs
+  /// are exactly equal, or their fully validated typed views are equal.
+  /// Hosts can resend a fresh JSON map on every tool event; do not trust a
+  /// contextChanged hint (a client may have missed a prior delta).
+  static Map<String, dynamic> snapshotFromRaw(
+    Object? raw, {
+    Map<String, dynamic>? previous,
+  }) {
     if (raw is Map<String, dynamic> && _snapshotViews[raw] != null) {
       return raw;
     }
+    final previousView = previous == null ? null : _snapshotViews[previous];
+    if (previous != null &&
+        previousView != null &&
+        raw is Map &&
+        _snapshotInputs[previous]?.matches(raw) == true) {
+      return previous;
+    }
     final overview = AgentContextOverview.fromRaw(raw);
+    if (previous != null && previousView != null && overview == previousView) {
+      final input = _ContextSnapshotInput.capture(raw);
+      if (input != null) _snapshotInputs[previous] = input;
+      return previous;
+    }
     final json = overview.toJson();
     json['timeline'] = List<Map<String, Object?>>.unmodifiable(
       (json['timeline'] as List<Map<String, Object?>>).map(
@@ -71,6 +92,8 @@ class AgentContextOverview {
     );
     final snapshot = Map<String, dynamic>.unmodifiable(json);
     _snapshotViews[snapshot] = overview;
+    final input = _ContextSnapshotInput.capture(raw);
+    if (input != null) _snapshotInputs[snapshot] = input;
     return snapshot;
   }
 
@@ -342,6 +365,77 @@ class AgentContextOverview {
       for (final event in timeline) event.toJson(),
     ],
   };
+}
+
+/// Exact, bounded inputs for the normal Host shape. Store only the scalar
+/// strings read by fromRaw, never the caller's mutable maps, arbitrary keys,
+/// tool payloads or oversized malformed history. Weakly attached to the
+/// canonical snapshot, so closing a session releases the source signature.
+final class _ContextSnapshotInput {
+  _ContextSnapshotInput(this.fields, this.timeline);
+
+  static const _fieldLimits = <String, int>{
+    'goal': 1200,
+    'progress': 840,
+    'reportSummary': 840,
+    'initialGoal': 1200,
+    'currentFocus': 1200,
+    'focusUpdatedAt': 128,
+  };
+
+  final List<String?> fields;
+  final List<({String kind, String text, String at})> timeline;
+
+  static _ContextSnapshotInput? capture(Object? raw) {
+    if (raw is! Map) return null;
+    final fields = <String?>[];
+    for (final field in _fieldLimits.entries) {
+      final value = raw[field.key];
+      if (value != null && (value is! String || value.length > field.value)) {
+        return null;
+      }
+      fields.add(value as String?);
+    }
+    final rawTimeline = raw['timeline'];
+    if (rawTimeline is! List || rawTimeline.length > 16) return null;
+    final timeline = <({String kind, String text, String at})>[];
+    for (final item in rawTimeline) {
+      if (item is! Map) return null;
+      final kind = item['kind'];
+      final text = item['text'];
+      final at = item['at'];
+      if (kind is! String ||
+          kind.length > 16 ||
+          text is! String ||
+          text.length > 520 ||
+          at is! String ||
+          at.length > 128) {
+        return null;
+      }
+      timeline.add((kind: kind, text: text, at: at));
+    }
+    return _ContextSnapshotInput(fields, timeline);
+  }
+
+  bool matches(Map raw) {
+    var index = 0;
+    for (final field in _fieldLimits.keys) {
+      if (raw[field] != fields[index++]) return false;
+    }
+    final items = raw['timeline'];
+    if (items is! List || items.length != timeline.length) return false;
+    for (var i = 0; i < timeline.length; i++) {
+      final item = items[i];
+      final old = timeline[i];
+      if (item is! Map ||
+          item['kind'] != old.kind ||
+          item['text'] != old.text ||
+          item['at'] != old.at) {
+        return false;
+      }
+    }
+    return true;
+  }
 }
 
 /// String extension avoids splitting UTF-16 surrogate pairs.

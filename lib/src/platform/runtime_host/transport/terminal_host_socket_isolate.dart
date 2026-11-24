@@ -19,6 +19,7 @@ import 'package:alera/src/platform/runtime_host/transport/terminal_host_frame_co
 /// Messages the isolate sends to the main isolate.
 const String terminalHostIsolateReady = 'ready';
 const String terminalHostIsolateLine = 'line';
+const String terminalHostIsolatePresenceBatch = 'presenceBatch';
 const String terminalHostIsolateOutput = 'output';
 const String terminalHostIsolateOutputBatch = 'outputBatch';
 const String terminalHostIsolateClosed = 'closed';
@@ -135,6 +136,8 @@ final class TerminalHostSocketFrameDispatcher {
   void dispatch(List<TerminalHostFrame> frames) {
     List<Object?>? pending;
     var pendingChars = 0;
+    List<Object?>? pendingPresence;
+    var pendingPresenceChars = 0;
 
     void flush() {
       final message = pending;
@@ -144,16 +147,51 @@ final class TerminalHostSocketFrameDispatcher {
       _send(message);
     }
 
+    void flushPresence() {
+      final message = pendingPresence;
+      if (message == null) return;
+      pendingPresence = null;
+      pendingPresenceChars = 0;
+      // Keep isolated notifications on the existing single-line path.
+      _send(
+        message.length == 2
+            ? <Object?>[terminalHostIsolateLine, message[1]]
+            : message,
+      );
+    }
+
     try {
       for (final frame in frames) {
         switch (frame) {
           case TerminalHostJsonFrame(:final json):
-            // A control reply can change the meaning of subsequent PTY
-            // bytes (e.g. resync). Keep it as a separate port message and
-            // never batch output across it.
+            // Presence notifications have no PTY or RPC semantics. Share
+            // only the isolate envelope, not the logical events: completion,
+            // waiting, removal and reset transitions must all survive.
             flush();
-            _send(<Object?>[terminalHostIsolateLine, decodeHostLine(json)]);
+            final decoded = decodeHostLine(json);
+            if (decoded is Map &&
+                decoded['event'] == 'agentPresenceChanged' &&
+                !decoded.containsKey('id') &&
+                decoded['payload'] is Map &&
+                !(decoded['payload'] as Map).containsKey('sessionId')) {
+              if (pendingPresence != null &&
+                  (pendingPresence!.length >= 1 + maxBatchEvents ||
+                      pendingPresenceChars + json.length > maxBatchChars)) {
+                flushPresence();
+              }
+              (pendingPresence ??= <Object?>[
+                terminalHostIsolatePresenceBatch,
+              ]).add(decoded);
+              pendingPresenceChars += json.length;
+              if (pendingPresenceChars >= maxBatchChars) flushPresence();
+            } else {
+              // Replies, malformed lines and all other control events
+              // remain barriers, as do terminal output frames.
+              flushPresence();
+              _send(<Object?>[terminalHostIsolateLine, decoded]);
+            }
           case TerminalHostOutputFrame(:final sessionId, :final data):
+            flushPresence();
             final text = _decodeOutput(sessionId, data);
             if (text == null) continue;
             final previous = pending;
@@ -180,6 +218,7 @@ final class TerminalHostSocketFrameDispatcher {
       // Preserve already decoded output if a later frame fails, and preserve
       // the usual immediate delivery for a single interactive output frame.
       flush();
+      flushPresence();
     }
   }
 

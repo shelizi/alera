@@ -97,6 +97,76 @@ fn initial_worker_attachment_requires_authenticated_host_confirmation() {
     server.join().unwrap();
 }
 
+#[test]
+fn recovery_server_reconnects_replays_and_removes_idle_listener() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let worker = WorkerRecoveryServer::start(
+        sandbox.path(),
+        "session",
+        "workspace",
+        "tab",
+        sandbox.path().to_str().unwrap(),
+        std::process::id(),
+        100,
+        64 * 1024,
+        Arc::new(Mutex::new(None)),
+        Arc::new(Mutex::new(None)),
+    )
+    .unwrap();
+    let manifest = manifest_path(sandbox.path(), "session");
+    let record = read_record(&manifest).unwrap().unwrap();
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), record.port);
+    worker.output().forward(b"initial");
+
+    let attach = |cursor: u64| {
+        let mut client = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        write_frame(
+            &mut client,
+            b'A',
+            &serde_json::to_vec(&AuthRequest {
+                session_id: record.session_id.clone(),
+                token: record.token.clone(),
+                resume_cursor: cursor,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let mut response = [0; 13];
+        client.read_exact(&mut response).unwrap();
+        assert_eq!(response[0], b'R');
+        assert_eq!(
+            u64::from_le_bytes(response[5..].try_into().unwrap()),
+            cursor
+        );
+        client
+    };
+
+    let mut first = attach(100);
+    let mut replay = [0; 7];
+    first.read_exact(&mut replay).unwrap();
+    assert_eq!(&replay, b"initial");
+    write_frame(&mut first, b'H', &[]).unwrap();
+    worker.wait_for_initial_host_attachment();
+    assert!(worker.initial_host_attached.load(Ordering::Acquire));
+
+    first.shutdown(Shutdown::Both).unwrap();
+    worker.output().forward(b"missed");
+    let mut second = attach(107);
+    let mut replay = [0; 6];
+    second.read_exact(&mut replay).unwrap();
+    assert_eq!(&replay, b"missed");
+    second.shutdown(Shutdown::Both).unwrap();
+    drop(second);
+    drop(first);
+
+    drop(worker);
+    assert!(read_record(&manifest).unwrap().is_none());
+    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_reconnect_manifest_requires_private_owner_and_permissions() {

@@ -287,7 +287,9 @@ pub enum ServerCommand {
         snapshot: Value,
     },
     /// Wakes the durable automation scheduler to evaluate due occurrences.
-    AutomationTick,
+    AutomationTick {
+        completed: tokio::sync::oneshot::Sender<()>,
+    },
     /// A notification or server request emitted by the shared Codex process.
     CodexMessage {
         #[allow(dead_code)]

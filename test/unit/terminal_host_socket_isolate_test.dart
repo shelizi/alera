@@ -51,6 +51,29 @@ String _sentinelLine() {
 TerminalHostOutputFrame _outputFrame(String sessionId, String text) =>
     TerminalHostOutputFrame(sessionId, utf8.encode(text));
 
+TerminalHostJsonFrame _presenceFrame(int index, {String? large}) =>
+    TerminalHostJsonFrame(
+      jsonEncode({
+        'event': 'agentPresenceChanged',
+        'payload': {
+          'changes': [
+            {
+              'terminalSessionId': 'session-${index % 4}',
+              if (index % 5 == 0) 'removed': true,
+              if (index % 5 != 0) 'state': index.isEven ? 'waiting' : 'done',
+              'sequence': index,
+              if (large != null) 'prompt': large,
+            },
+          ],
+        },
+      }),
+    );
+
+List<Object?> _expandPresence(List<Object?> message) =>
+    message.first == terminalHostIsolatePresenceBatch
+    ? message.skip(1).toList()
+    : [message[1]];
+
 List<List<Object?>> _expandOutput(List<Object?> message) {
   if (message.first != terminalHostIsolateOutputBatch) return [message];
   return [
@@ -174,6 +197,105 @@ void main() {
         ]);
       },
     );
+  });
+
+  group('bounded presence notification envelopes', () {
+    test(
+      '2048 notifications need 32 port messages without losing transitions',
+      () {
+        final messages = <List<Object?>>[];
+        final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+        final frames = [for (var i = 0; i < 2048; i++) _presenceFrame(i)];
+        dispatcher.dispatch(frames);
+        expect(messages, hasLength(32));
+        expect(
+          messages.every(
+            (message) =>
+                message.first == terminalHostIsolatePresenceBatch &&
+                message.length ==
+                    1 + TerminalHostSocketFrameDispatcher.maxBatchEvents,
+          ),
+          isTrue,
+        );
+        expect(
+          messages.expand(_expandPresence),
+          frames.map((frame) => jsonDecode(frame.json)),
+        );
+      },
+    );
+
+    test('RPC, terminal output and malformed lines remain barriers', () {
+      final messages = <List<Object?>>[];
+      final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+      final first = _presenceFrame(0);
+      final second = _presenceFrame(1);
+      final third = _presenceFrame(2);
+      final fourth = _presenceFrame(3);
+      final fifth = _presenceFrame(4);
+      final sixth = _presenceFrame(5);
+      dispatcher.dispatch([
+        first,
+        second,
+        const TerminalHostJsonFrame('{"id":42,"ok":true}'),
+        third,
+        fourth,
+        _outputFrame('a', 'before'),
+        fifth,
+        sixth,
+        const TerminalHostJsonFrame('malformed JSON'),
+        const TerminalHostJsonFrame(
+          '{"event":"agentPresenceChanged","payload":{"sessionId":"a"}}',
+        ),
+      ]);
+      expect(messages, [
+        [
+          terminalHostIsolatePresenceBatch,
+          jsonDecode(first.json),
+          jsonDecode(second.json),
+        ],
+        [
+          terminalHostIsolateLine,
+          {'id': 42, 'ok': true},
+        ],
+        [
+          terminalHostIsolatePresenceBatch,
+          jsonDecode(third.json),
+          jsonDecode(fourth.json),
+        ],
+        [terminalHostIsolateOutput, 'a', 'before'],
+        [
+          terminalHostIsolatePresenceBatch,
+          jsonDecode(fifth.json),
+          jsonDecode(sixth.json),
+        ],
+        [terminalHostIsolateLine, 'malformed JSON'],
+        [
+          terminalHostIsolateLine,
+          {
+            'event': 'agentPresenceChanged',
+            'payload': {'sessionId': 'a'},
+          },
+        ],
+      ]);
+      // No waiting for another socket read.
+      dispatcher.dispatch([first]);
+      expect(messages.last, [terminalHostIsolateLine, jsonDecode(first.json)]);
+    });
+
+    test('raw JSON character budget bounds notification batches', () {
+      final messages = <List<Object?>>[];
+      final dispatcher = TerminalHostSocketFrameDispatcher(messages.add);
+      const limit = TerminalHostSocketFrameDispatcher.maxBatchChars;
+      final large = _presenceFrame(0, large: 'x' * (limit ~/ 2));
+      final other = _presenceFrame(1, large: 'x' * (limit ~/ 2));
+      final oversized = _presenceFrame(2, large: 'z' * (limit + 1));
+      final small = _presenceFrame(3);
+      dispatcher.dispatch([large, other, oversized, small]);
+      expect(messages, [
+        for (final frame in [large, other, oversized, small])
+          [terminalHostIsolateLine, jsonDecode(frame.json)],
+      ]);
+    });
   });
 
   test('loopback burst preserves every frame and control barrier', () async {

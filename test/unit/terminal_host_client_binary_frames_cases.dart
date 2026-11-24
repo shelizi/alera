@@ -54,6 +54,51 @@ void _registerTerminalHostClientBinaryFrameTests() {
     expect(runtimeHostEventNames.contains('untrustedUiCommand'), isFalse);
   });
 
+  test(
+    'framed presence bursts deliver every runtime transition in order',
+    () async {
+      final server = await _TerminalHostTestServer.start(
+        negotiateBinaryFrames: true,
+      );
+      addTearDown(server.dispose);
+      final client = await _binaryClient(server, advertiseCapability: true);
+      await client.runtimeRequest('status.get');
+
+      const count = 512;
+      final received = <Map<String, Object?>>[];
+      final done = Completer<void>();
+      final sub = client.runtimeEvents.listen((event) {
+        if (event.name != 'agentPresenceChanged') return;
+        received.add(Map<String, Object?>.from(event.payload));
+        if (received.length == count && !done.isCompleted) done.complete();
+      });
+      addTearDown(sub.cancel);
+      final payloads = <Map<String, Object?>>[
+        for (var i = 0; i < count; i++)
+          {
+            'changes': [
+              {
+                'terminalSessionId': 'session-${i % 3}',
+                'sequence': i,
+                if (i % 4 == 0) 'removed': true,
+                if (i % 4 != 0) 'state': i.isEven ? 'waiting' : 'done',
+              },
+            ],
+          },
+      ];
+      server.sendFramedBytes(<int>[
+        for (final payload in payloads)
+          ...encodeTerminalHostJsonFrame(
+            jsonEncode({'event': 'agentPresenceChanged', 'payload': payload}),
+          ),
+      ]);
+      await done.future.timeout(const Duration(seconds: 5));
+      expect(received, payloads);
+      await client.runtimeRequest('status.get');
+      expect(server.acceptedConnections, 1);
+    },
+  );
+
   test('a burst of 1500 framed outputs keeps one socket connected', () async {
     final server = await _TerminalHostTestServer.start(
       negotiateBinaryFrames: true,

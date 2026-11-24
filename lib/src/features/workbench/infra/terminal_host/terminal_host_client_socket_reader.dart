@@ -95,6 +95,13 @@ final class _TerminalHostSocketReader._(
           if (!_lines.isClosed) {
             _lines.add(message[1]);
           }
+        case terminalHostIsolatePresenceBatch:
+          // Envelope only: maintain wire order and one logical event per
+          // notification for every runtime listener.
+          for (var index = 1; index < message.length; index++) {
+            if (_lines.isClosed) break;
+            _lines.add(message[index]);
+          }
         case terminalHostIsolateOutput:
           if (!_output.isClosed) {
             _output.add(

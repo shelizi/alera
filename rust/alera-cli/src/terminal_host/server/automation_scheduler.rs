@@ -8,6 +8,9 @@ use tokio::task::JoinHandle;
 
 use super::ServerCommand;
 
+#[path = "automation_tick_loop.rs"]
+mod tick_loop;
+
 const NO_ACTIVE_AUTOMATION_SLEEP: Duration = Duration::from_secs(60);
 const MAX_AUTOMATION_SLEEP: Duration = Duration::from_secs(15 * 60);
 
@@ -16,19 +19,22 @@ pub(super) fn spawn(
     inbox: UnboundedSender<ServerCommand>,
     wake: Arc<Notify>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            let wait = next_wait(&store)
-                .await
-                .unwrap_or(NO_ACTIVE_AUTOMATION_SLEEP);
-            tokio::select! {
-                _ = tokio::time::sleep(wait) => {
-                    let _ = inbox.send(ServerCommand::AutomationTick);
-                }
-                _ = wake.notified() => {}
+    tokio::spawn(tick_loop::run(
+        wake,
+        move || {
+            let store = store.clone();
+            async move {
+                next_wait(&store)
+                    .await
+                    .unwrap_or(NO_ACTIVE_AUTOMATION_SLEEP)
             }
-        }
-    })
+        },
+        move |completed| {
+            inbox
+                .send(ServerCommand::AutomationTick { completed })
+                .is_ok()
+        },
+    ))
 }
 
 async fn next_wait(store: &RuntimeStore) -> Result<Duration, String> {
