@@ -424,16 +424,24 @@ impl ServerActor {
                     start_cursor,
                     next_cursor,
                 );
-                Ok(json!({
+                let mut result = json!({
                     "handle": session_id,
                     "running": session.running(),
                     "baseCursor": base_cursor,
                     "cursor": start_cursor,
                     "nextCursor": next_cursor,
                     "truncated": requested_cursor < base_cursor,
-                    "text": String::from_utf8_lossy(&selected),
-                    "dataBase64": crate::terminal_host::protocol::encode_bytes(&selected),
-                }))
+                });
+                result["dataBase64"] =
+                    Value::String(crate::terminal_host::protocol::encode_bytes(&selected));
+                // The selected page is already owned; retain its allocation
+                // for valid UTF-8 and preserve lossy decoding for binary data.
+                let text = match String::from_utf8(selected) {
+                    Ok(text) => text,
+                    Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+                };
+                result["text"] = Value::String(text);
+                Ok(result)
             }
             "resize" => {
                 self.require_auth(client_id)?;

@@ -8,7 +8,8 @@ use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, Unboun
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::terminal_host::frame_codec::{
-    encode_json_frame, encode_output_frame, SharedJsonFrame, SharedOutputFrame,
+    encode_json_frame, encode_output_frame, encode_output_json_line, SharedJsonFrame,
+    SharedOutputFrame,
 };
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
 use crate::terminal_host::server::{DisconnectReason, ServerCommand};
@@ -442,6 +443,11 @@ async fn write_frame(
         ClientFrame::Output { session_id, data } if *binary => {
             write_half
                 .write_all(&encode_output_frame(&session_id, &data))
+                .await
+        }
+        ClientFrame::Output { session_id, data } => {
+            write_half
+                .write_all(&encode_output_json_line(&session_id, &data)?)
                 .await
         }
         ClientFrame::OrderedControl { .. } | ClientFrame::SequencedTerminal { .. } => {

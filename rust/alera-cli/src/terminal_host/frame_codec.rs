@@ -20,6 +20,8 @@
 use std::io;
 use std::sync::OnceLock;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use bytes::Bytes;
 use serde_json::Value;
 
@@ -139,40 +141,36 @@ impl SharedOutputFrame {
     }
 }
 
-fn encode_output_json_line(session_id: &str, data: &[u8]) -> io::Result<Bytes> {
-    #[derive(serde::Serialize)]
-    struct Event<'a> {
-        event: &'static str,
-        payload: Payload<'a>,
-    }
-
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Payload<'a> {
-        data_base64: String,
-        session_id: &'a str,
-    }
-
-    // Serialize the borrowed session id and encoded data directly rather than
-    // constructing (and then cloning) a large intermediate JSON Value.
-    let event = Event {
-        event: "output",
-        payload: Payload {
-            data_base64: crate::terminal_host::protocol::encode_bytes(data),
-            session_id,
-        },
-    };
-    let mut out = Vec::with_capacity(
-        event
-            .payload
-            .data_base64
-            .len()
-            .saturating_add(session_id.len())
-            .saturating_add(64),
-    );
-    serde_json::to_writer(&mut out, &event).map_err(io::Error::other)?;
-    out.push(b'\n');
+/// Write the base64 alphabet directly into the final JSON allocation. Only
+/// the session ID is dynamic JSON text and needs serde's escaping.
+pub(crate) fn encode_output_json_line(session_id: &str, data: &[u8]) -> io::Result<Bytes> {
+    const PREFIX: &[u8] = br#"{"event":"output","payload":{"dataBase64":""#;
+    const ID_PREFIX: &[u8] = br#"","sessionId":"#;
+    let encoded_len = base64::encoded_len(data.len(), true)
+        .ok_or_else(|| io::Error::other("base64 output length overflow"))?;
+    let capacity = encoded_len
+        .checked_add(session_id.len())
+        .and_then(|len| len.checked_add(PREFIX.len() + ID_PREFIX.len() + 5))
+        .ok_or_else(|| io::Error::other("JSON output length overflow"))?;
+    let mut out = Vec::with_capacity(capacity);
+    out.extend_from_slice(PREFIX);
+    let start = out.len();
+    out.resize(start + encoded_len, 0);
+    let written = STANDARD
+        .encode_slice(data, &mut out[start..])
+        .map_err(io::Error::other)?;
+    debug_assert_eq!(written, encoded_len);
+    out.extend_from_slice(ID_PREFIX);
+    serde_json::to_writer(&mut out, session_id).map_err(io::Error::other)?;
+    out.extend_from_slice(b"}}\n");
     Ok(out.into())
+}
+
+/// WebSocket and relay carry the same JSON without the TCP line terminator.
+pub(crate) fn encode_output_json_payload(session_id: &str, data: &[u8]) -> io::Result<Bytes> {
+    let mut line = encode_output_json_line(session_id, data)?;
+    line.truncate(line.len() - 1);
+    Ok(line)
 }
 
 /// Encodes PTY output without base64, which is the whole point of the format.
@@ -253,6 +251,36 @@ mod tests {
         assert_eq!(frame.line().unwrap().last(), Some(&b'\n'));
         assert_eq!(&frame.line().unwrap()[..payload.len()], payload.as_ref());
         assert_eq!(frame.line().unwrap().as_ptr(), payload.as_ptr());
+    }
+
+    #[test]
+    fn direct_output_json_matches_legacy_for_padding_and_escaped_ids() {
+        for id in [
+            "",
+            "normal-session",
+            "\u{4e2d}\u{6587}\"\n\\\u{0000}",
+            "\u{0001}\u{001f}",
+        ] {
+            for len in [0, 1, 2, 3, 4, 5, 63, 64, 65, 65535, 65536, 65537] {
+                let data: Vec<u8> = (0..len).map(|i| (i % 256) as u8).collect();
+                let expected = crate::terminal_host::protocol::event(
+                    "output",
+                    json!({"sessionId": id, "dataBase64": crate::terminal_host::protocol::encode_bytes(&data)}),
+                );
+                let line = encode_output_json_line(id, &data).unwrap();
+                assert_eq!(line.last(), Some(&b'\n'));
+                assert_eq!(serde_json::from_slice::<Value>(&line).unwrap(), expected);
+                let payload = encode_output_json_payload(id, &data).unwrap();
+                assert_eq!(payload.as_ref(), &line[..line.len() - 1]);
+                assert_eq!(
+                    crate::terminal_host::protocol::decode_bytes(
+                        expected["payload"].get("dataBase64")
+                    )
+                    .unwrap(),
+                    data
+                );
+            }
+        }
     }
 
     #[test]

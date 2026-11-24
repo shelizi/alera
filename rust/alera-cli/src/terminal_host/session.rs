@@ -660,7 +660,7 @@ impl Session {
 
     pub fn attachment_payload(&self, created: bool, restore_bytes: usize) -> Value {
         let (cols, rows) = self.current_dims;
-        json!({
+        let mut payload = json!({
             "sessionId": self.id,
             "created": created,
             "running": self.running,
@@ -668,7 +668,6 @@ impl Session {
             "driver": self.driver.payload(),
             "delta": false,
             "outputCursor": self.output_stream_bytes,
-            "snapshotBase64": self.encode_snapshot_tail(restore_bytes),
             // The size the snapshot bytes were written at. A client whose own
             // viewport is narrower has to replay them here and then resize,
             // letting its emulator reflow wrapped lines, because re-parsing the
@@ -677,7 +676,9 @@ impl Session {
             // behaves exactly as it does today.
             "snapshotCols": cols,
             "snapshotRows": rows,
-        })
+        });
+        payload["snapshotBase64"] = Value::String(self.encode_snapshot_tail(restore_bytes));
+        payload
     }
 
     /// Attachment reply for a client whose retained emulator state is still
@@ -703,13 +704,14 @@ impl Session {
     /// not hand it more history than its emulator will keep.
     pub fn restore_payload(&self, restore_bytes: usize) -> Value {
         let (cols, rows) = self.current_dims;
-        json!({
+        let mut payload = json!({
             "sessionId": self.id,
-            "snapshotBase64": self.encode_snapshot_tail(restore_bytes),
             "resetInteractionModes": true,
             "snapshotCols": cols,
             "snapshotRows": rows,
-        })
+        });
+        payload["snapshotBase64"] = Value::String(self.encode_snapshot_tail(restore_bytes));
+        payload
     }
 
     /// Arm a debounced checkpoint timer if one is not already pending. Returns

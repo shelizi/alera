@@ -398,7 +398,13 @@ fn positive_int(value: Option<&Value>, label: &str) -> HostResult<u64> {
 /// Build a success response frame `{id, ok: true, payload}`.
 pub fn ok_response(id: i64, payload: Value) -> Value {
     trace_response_outcome(id, OutcomeClass::Ok, None);
-    json!({ "id": id, "ok": true, "payload": payload })
+    // Move the owned payload into its envelope. json! serializes borrowed
+    // expressions into fresh Values, including multi-megabyte snapshots.
+    Value::Object(Map::from_iter([
+        ("id".into(), Value::from(id)),
+        ("ok".into(), Value::Bool(true)),
+        ("payload".into(), payload),
+    ]))
 }
 
 /// Build an error response frame `{id, ok: false, error}`.
@@ -419,7 +425,10 @@ fn trace_response_outcome(id: i64, outcome_class: OutcomeClass, error_code: Opti
 
 /// Build an event frame `{event, payload}`.
 pub fn event(name: &str, payload: Value) -> Value {
-    json!({ "event": name, "payload": payload })
+    Value::Object(Map::from_iter([
+        ("event".into(), Value::from(name)),
+        ("payload".into(), payload),
+    ]))
 }
 
 #[cfg(test)]
@@ -544,6 +553,32 @@ mod tests {
         assert!(decode_bytes(Some(&Value::String(String::new())))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn response_and_event_move_owned_large_payloads_without_cloning() {
+        let snapshot = "a".repeat(1024 * 1024);
+        let pointer = snapshot.as_ptr();
+        let payload = Value::Object(Map::from_iter([(
+            "snapshotBase64".into(),
+            Value::String(snapshot),
+        )]));
+        let wrapped = ok_response(7, payload);
+        assert_eq!(wrapped["id"], 7);
+        assert_eq!(wrapped["ok"], true);
+        assert_eq!(
+            wrapped["payload"]["snapshotBase64"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+
+        let snapshot = "b".repeat(1024 * 1024);
+        let pointer = snapshot.as_ptr();
+        let wrapped = event("restore", Value::String(snapshot));
+        assert_eq!(wrapped["event"], "restore");
+        assert_eq!(wrapped["payload"].as_str().unwrap().as_ptr(), pointer);
     }
 
     #[test]
