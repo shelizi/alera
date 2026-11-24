@@ -277,6 +277,61 @@ async fn restored_session_recovers_the_latest_title_from_scrollback() {
     assert_eq!(session.runtime_title(), Some("Restored Task"));
 }
 
+#[tokio::test]
+async fn cold_restored_session_keeps_binary_history_title_and_absolute_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = TerminalHostHistoryRepository::open(dir.path())
+        .await
+        .unwrap();
+    let cap = 128 * 1024;
+    let mut payload = vec![b'x'; 48 * 1024];
+    payload.extend_from_slice(b"\x00\xff\x1b]2;Cold Restore\x07");
+    let end = 1_000_000_u64;
+    let id = "cold-offset-restore";
+    history.queue_checkpoint(
+        TerminalHostCheckpoint {
+            session_id: id.to_string(),
+            workspace_id: "workspace-1".to_string(),
+            tab_id: "tab-1".to_string(),
+            working_directory: "/repo".to_string(),
+            running: false,
+            exit_code: Some(0),
+            ended_at: Some(Utc::now()),
+            output_stream_bytes: end,
+            updated_at: Utc::now(),
+            buffer: Vec::new(),
+        },
+        cap,
+    );
+    for (sequence, chunk) in payload.chunks(16 * 1024).enumerate() {
+        history.queue_output(id.to_string(), sequence as i64, chunk.to_vec(), cap);
+    }
+    assert!(
+        history
+            .flush_pending(std::time::Duration::from_secs(5))
+            .await
+    );
+    let mut session = Session::restore_exited(
+        id.to_string(),
+        "workspace-1".to_string(),
+        "tab-1".to_string(),
+        &history,
+        cap,
+    )
+    .await
+    .unwrap();
+    assert_eq!(session.buffer.to_bytes(), payload);
+    assert_eq!(
+        session.output_stream_range(),
+        (end - payload.len() as u64, end)
+    );
+    assert_eq!(session.runtime_title(), Some("Cold Restore"));
+    session.append_output(b"!");
+    payload.push(b'!');
+    assert_eq!(session.buffer.to_bytes(), payload);
+    assert_eq!(session.output_stream_range().1, end + 1);
+}
+
 #[test]
 fn exiting_clears_the_shell() {
     let mut session = test_session();

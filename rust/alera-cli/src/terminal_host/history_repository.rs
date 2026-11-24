@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytes::Bytes;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 use super::buffer::{append_deque_tail as append_tail, copy_deque_tail, retain_deque_tail};
 pub use super::history_store::TerminalHostCheckpoint;
-use super::history_store::TerminalHostHistoryStore;
+use super::history_store::{RestoredCheckpoint, TerminalHostHistoryStore};
 
 const HISTORY_FLUSH_CONCURRENCY: usize = 2;
 const HISTORY_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -22,6 +22,7 @@ struct HistoryRepositoryInner {
     store: TerminalHostHistoryStore,
     sessions: Mutex<HashMap<String, SessionPersistenceState>>,
     flush_slots: Semaphore,
+    idle_changed: Notify,
 }
 
 #[derive(Default)]
@@ -123,6 +124,16 @@ enum FlushSnapshot {
 }
 
 impl SessionPersistenceState {
+    fn cached_checkpoint(&self, max_bytes: usize) -> Option<Option<RestoredCheckpoint>> {
+        if self.delete_revision.is_some() {
+            return Some(None);
+        }
+        let checkpoint = self.checkpoint.as_ref()?.clone();
+        Some(Some(checkpoint.map_buffer(|_| {
+            VecDeque::from(copy_deque_tail(&self.memory_tail, max_bytes))
+        })))
+    }
+
     fn can_reuse_tail(&self, end: u64, len: usize) -> bool {
         self.delete_revision.is_none()
             && (len == 0
@@ -265,6 +276,7 @@ impl TerminalHostHistoryRepository {
                 store,
                 sessions: Mutex::new(HashMap::new()),
                 flush_slots: Semaphore::new(HISTORY_FLUSH_CONCURRENCY),
+                idle_changed: Notify::new(),
             }),
         }
     }
@@ -417,11 +429,23 @@ impl TerminalHostHistoryRepository {
         self.ensure_worker(session_id);
     }
 
+    #[cfg(test)]
     pub async fn read(
         &self,
         session_id: &str,
         max_bytes: usize,
     ) -> Result<Option<TerminalHostCheckpoint>> {
+        Ok(self
+            .read_for_restore(session_id, max_bytes)
+            .await?
+            .map(|checkpoint| checkpoint.map_buffer(Vec::from)))
+    }
+
+    pub(super) async fn read_for_restore(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<RestoredCheckpoint>> {
         if let Some(cached) = self.cached_checkpoint(session_id, max_bytes) {
             return Ok(cached);
         }
@@ -429,37 +453,72 @@ impl TerminalHostHistoryRepository {
             return Ok(None);
         }
 
-        let persisted = self.inner.store.read(session_id, max_bytes).await?;
-        let Some(mut persisted) = persisted else {
+        let persisted = self
+            .inner
+            .store
+            .read_with_maintenance(session_id, max_bytes)
+            .await?;
+        let Some((persisted, maintenance_required)) = persisted else {
             return Ok(None);
         };
-        retain_tail(&mut persisted.buffer, max_bytes);
+        Ok(self.finish_cold_read(session_id, max_bytes, persisted, maintenance_required))
+    }
 
+    fn finish_cold_read(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+        mut persisted: RestoredCheckpoint,
+        maintenance_required: bool,
+    ) -> Option<RestoredCheckpoint> {
+        debug_assert!(persisted.buffer.len() <= max_bytes);
         {
-            let mut sessions = self.lock_sessions();
-            let state = sessions.entry(session_id.to_string()).or_default();
-            if state.delete_revision.is_some() {
-                return Ok(None);
+            let sessions = self.lock_sessions();
+            if let Some(state) = sessions.get(session_id) {
+                if let Some(cached) = state.cached_checkpoint(max_bytes) {
+                    return cached;
+                }
+            } else if !maintenance_required {
+                // All rows fit and no write-behind state needs reconciling.
+                // Return the owned tail without creating a temporary cache
+                // or scheduling a worker that would only confirm a no-op.
+                return Some(persisted);
             }
-            if let Some(checkpoint) = state.checkpoint.as_ref() {
-                let mut checkpoint = checkpoint.clone();
-                checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
-                return Ok(Some(checkpoint));
-            }
-            state.max_bytes = max_bytes;
-            // Cache only the checkpoint metadata; avoid cloning its full
-            // scrollback just to clear it again.
-            let buffer = std::mem::take(&mut persisted.buffer);
-            state.checkpoint = Some(persisted.clone());
-            state.memory_tail = buffer.clone().into();
-            state.verified_tail = None;
-            persisted.buffer = buffer;
         }
 
-        // Cold reads return only the bounded tail. Physical compaction is
-        // maintenance and must not delay restore/liveness-sensitive requests.
-        self.queue_trim(session_id.to_string(), max_bytes);
-        Ok(Some(persisted))
+        // Only maintenance or existing pending state needs a memory cache.
+        // Allocate and copy the potentially large tail outside the global
+        // sessions lock, then recheck for a newer checkpoint or deletion.
+        let buffer = std::mem::take(&mut persisted.buffer);
+        let metadata = persisted.clone().map_buffer(Vec::from);
+        let memory_tail = buffer.clone();
+        persisted.buffer = buffer;
+
+        let retired_tail = {
+            let mut sessions = self.lock_sessions();
+            if !maintenance_required && !sessions.contains_key(session_id) {
+                return Some(persisted);
+            }
+            let state = sessions.entry(session_id.to_string()).or_default();
+            if let Some(cached) = state.cached_checkpoint(max_bytes) {
+                return cached;
+            }
+            state.max_bytes = max_bytes;
+            state.checkpoint = Some(metadata);
+            state.verified_tail = None;
+            let retired = std::mem::replace(&mut state.memory_tail, memory_tail);
+            state.trim_pending_outputs();
+            // Publish the cache and trim request atomically. Do not queue
+            // another trim after releasing the lock, which could overwrite
+            // a concurrent producer's newer retention configuration.
+            state.request_trim();
+            retired
+        };
+        drop(retired_tail);
+
+        // Physical compaction must not delay the restore.
+        self.ensure_worker(session_id.to_string());
+        Some(persisted)
     }
 
     pub async fn next_output_sequence(&self, session_id: &str) -> Result<i64> {
@@ -483,16 +542,10 @@ impl TerminalHostHistoryRepository {
         &self,
         session_id: &str,
         max_bytes: usize,
-    ) -> Option<Option<TerminalHostCheckpoint>> {
-        let sessions = self.lock_sessions();
-        let state = sessions.get(session_id)?;
-        if state.delete_revision.is_some() {
-            return Some(None);
-        }
-        let checkpoint = state.checkpoint.as_ref()?.clone();
-        let mut checkpoint = checkpoint;
-        checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
-        Some(Some(checkpoint))
+    ) -> Option<Option<RestoredCheckpoint>> {
+        self.lock_sessions()
+            .get(session_id)?
+            .cached_checkpoint(max_bytes)
     }
 
     fn is_deleted(&self, session_id: &str) -> bool {
@@ -572,44 +625,73 @@ impl TerminalHostHistoryRepository {
     }
 
     pub async fn flush_pending(&self, timeout: Duration) -> bool {
-        tokio::time::timeout(timeout, async {
-            loop {
-                let idle = {
-                    let sessions = self.lock_sessions();
-                    sessions
-                        .values()
-                        .all(|state| !state.worker_running && !state.has_pending())
-                };
-                if idle {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        tokio::time::timeout(
+            timeout,
+            self.wait_for_idle(|sessions| {
+                sessions
+                    .values()
+                    .all(|state| !state.worker_running && !state.has_pending())
+            }),
+        )
         .await
         .is_ok()
     }
 
+    /// Wait only on a retirement event or the caller's timeout. Register
+    /// before inspecting the predicate: Notify::notify_waiters reaches a
+    /// Notified future created before the event even if not yet polled.
+    /// This closes the race between the final durable ack and waiting.
+    async fn wait_for_idle(
+        &self,
+        mut is_idle: impl FnMut(&HashMap<String, SessionPersistenceState>) -> bool,
+    ) {
+        loop {
+            let changed = self.inner.idle_changed.notified();
+            let idle = {
+                let sessions = self.lock_sessions();
+                is_idle(&sessions)
+            };
+            if idle {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    /// Remove a completed worker while still holding the state lock, then
+    /// drop the possibly large buffers and wake waiters outside that lock.
+    /// Unchanged acknowledgements and producer output never wake waiters.
+    fn retire_session(
+        &self,
+        mut sessions: MutexGuard<'_, HashMap<String, SessionPersistenceState>>,
+        session_id: &str,
+    ) {
+        let retired = sessions.remove(session_id);
+        drop(sessions);
+        if let Some(retired) = retired {
+            drop(retired);
+            self.inner.idle_changed.notify_waiters();
+        }
+    }
+
     fn has_pending_or_stop(&self, session_id: &str) -> bool {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         if sessions
             .get(session_id)
             .is_some_and(SessionPersistenceState::has_pending)
         {
             return true;
         }
-        sessions.remove(session_id);
+        self.retire_session(sessions, session_id);
         false
     }
 
     fn next_snapshot_or_stop(&self, session_id: &str) -> Option<FlushSnapshot> {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         let snapshot = sessions.get(session_id)?.snapshot();
         if snapshot.is_none() {
-            // The repository is a write-behind buffer, not a second durable
-            // cache. Once SQLite has acknowledged everything, release the
-            // session state so memory is reclaimed automatically.
-            sessions.remove(session_id);
+            // A producer can cancel pending work while admission is blocked.
+            self.retire_session(sessions, session_id);
         }
         snapshot
     }
@@ -653,7 +735,7 @@ impl TerminalHostHistoryRepository {
         match snapshot {
             FlushSnapshot::Delete { revision } => {
                 if state.delete_revision == Some(*revision) {
-                    sessions.remove(session_id);
+                    self.retire_session(sessions, session_id);
                     return false;
                 }
             }
@@ -682,6 +764,13 @@ impl TerminalHostHistoryRepository {
                 state.last_error = None;
             }
         }
+        if !state.has_pending() {
+            // The last durable acknowledgement can retire this worker
+            // immediately. No extra lock acquisition on the next loop and
+            // no producer can create a second worker until we remove it.
+            self.retire_session(sessions, session_id);
+            return false;
+        }
         true
     }
 
@@ -694,20 +783,14 @@ impl TerminalHostHistoryRepository {
 
     #[cfg(test)]
     async fn wait_until_idle(&self, session_id: &str) {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let idle = {
-                    let sessions = self.lock_sessions();
-                    sessions
-                        .get(session_id)
-                        .is_none_or(|state| !state.worker_running && !state.has_pending())
-                };
-                if idle {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            self.wait_for_idle(|sessions| {
+                sessions
+                    .get(session_id)
+                    .is_none_or(|state| !state.worker_running && !state.has_pending())
+            }),
+        )
         .await
         .expect("history repository should become idle");
     }
@@ -892,9 +975,7 @@ mod tests {
             repository.lock_sessions()["s1"].trim_request,
             Some(smaller_request)
         );
-        assert!(repository.ack_snapshot("s1", &latest_snapshot));
-        assert!(repository.lock_sessions()["s1"].trim_request.is_none());
-        assert!(!repository.has_pending_or_stop("s1"));
+        assert!(!repository.ack_snapshot("s1", &latest_snapshot));
         assert!(repository.lock_sessions().is_empty());
         repository.inner.store.close_for_test().await;
     }
@@ -915,13 +996,11 @@ mod tests {
         let current = state.snapshot().unwrap();
         repository.lock_sessions().insert("s1".into(), state);
         assert!(repository.ack_snapshot("s1", &obsolete));
+        // A delete arriving while the replacement checkpoint is in flight
+        // must keep the worker alive until that delete is durable.
+        repository.queue_delete("s1");
+        let final_delete = repository.lock_sessions()["s1"].snapshot().unwrap();
         assert!(repository.ack_snapshot("s1", &current));
-        let final_delete = {
-            let mut sessions = repository.lock_sessions();
-            let state = sessions.get_mut("s1").unwrap();
-            state.delete_revision = Some(state.next_revision());
-            state.snapshot().unwrap()
-        };
         assert!(!repository.ack_snapshot("s1", &final_delete));
         assert!(repository.lock_sessions().is_empty());
         repository.inner.store.close_for_test().await;
@@ -1113,6 +1192,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_waiters_do_not_poll_and_wake_on_retirement() {
+        use std::cell::Cell;
+        use std::future::Future;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Wake, Waker};
+
+        #[derive(Default)]
+        struct WakeCounter(AtomicUsize);
+
+        impl Wake for WakeCounter {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        // Model two workers with a completed durable operation ready to
+        // acknowledge. Neither may be retired until its matching revision.
+        let snapshot = |id: &str| {
+            let mut state = SessionPersistenceState {
+                worker_running: true,
+                ..Default::default()
+            };
+            state.record_checkpoint(checkpoint(id, b""), 64);
+            let snapshot = state.snapshot().unwrap();
+            repository.lock_sessions().insert(id.into(), state);
+            snapshot
+        };
+        let first = snapshot("s1");
+        let second = snapshot("s2");
+        let scans = Cell::new(0);
+        let all_wakes = Arc::new(WakeCounter::default());
+        let first_wakes = Arc::new(WakeCounter::default());
+        let all_waker = Waker::from(all_wakes.clone());
+        let first_waker = Waker::from(first_wakes.clone());
+        let mut all = Box::pin(repository.wait_for_idle(|sessions| {
+            scans.set(scans.get() + 1);
+            sessions.is_empty()
+        }));
+        let mut one = Box::pin(repository.wait_for_idle(|sessions| !sessions.contains_key("s1")));
+
+        assert!(all
+            .as_mut()
+            .poll(&mut Context::from_waker(&all_waker))
+            .is_pending());
+        assert!(one
+            .as_mut()
+            .poll(&mut Context::from_waker(&first_waker))
+            .is_pending());
+        // Across multiple old 10 ms polling periods, no idle timer wakes
+        // either future and no extra state-map scan is performed.
+        tokio::time::sleep(Duration::from_millis(55)).await;
+        assert_eq!(all_wakes.0.load(Ordering::Relaxed), 0);
+        assert_eq!(first_wakes.0.load(Ordering::Relaxed), 0);
+        assert_eq!(scans.get(), 1);
+
+        // A notification between future creation and its first poll must
+        // not be lost. The same retirement wakes every registered waiter.
+        let early = repository.inner.idle_changed.notified();
+        assert!(!repository.ack_snapshot("s1", &first));
+        tokio::time::timeout(Duration::from_secs(1), early)
+            .await
+            .unwrap();
+        assert_eq!(all_wakes.0.load(Ordering::Relaxed), 1);
+        assert_eq!(first_wakes.0.load(Ordering::Relaxed), 1);
+        assert!(one
+            .as_mut()
+            .poll(&mut Context::from_waker(&first_waker))
+            .is_ready());
+        assert!(all
+            .as_mut()
+            .poll(&mut Context::from_waker(&all_waker))
+            .is_pending());
+        assert_eq!(scans.get(), 2);
+
+        assert!(!repository.ack_snapshot("s2", &second));
+        assert_eq!(all_wakes.0.load(Ordering::Relaxed), 2);
+        assert!(all
+            .as_mut()
+            .poll(&mut Context::from_waker(&all_waker))
+            .is_ready());
+        assert_eq!(scans.get(), 3);
+        assert!(repository.lock_sessions().is_empty());
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn flush_waiters_timeout_or_complete_only_after_durable_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        assert!(repository.flush_pending(Duration::ZERO).await);
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+        for session in ["s1", "s2"] {
+            repository.queue_checkpoint(checkpoint(session, b""), 64);
+            repository.queue_output(session.into(), 0, b"durable".to_vec(), 64);
+        }
+
+        let first = {
+            let repository = repository.clone();
+            tokio::spawn(async move { repository.flush_pending(Duration::from_secs(5)).await })
+        };
+        let second = {
+            let repository = repository.clone();
+            tokio::spawn(async move { repository.flush_pending(Duration::from_secs(5)).await })
+        };
+        // Timing out or cancelling one waiter must not consume the shared
+        // completion event or report durability before writers are admitted.
+        assert!(!repository.flush_pending(Duration::from_millis(25)).await);
+        assert!(!first.is_finished());
+        assert!(!second.is_finished());
+        let cancelled = {
+            let repository = repository.clone();
+            tokio::spawn(async move { repository.flush_pending(Duration::from_secs(5)).await })
+        };
+        tokio::task::yield_now().await;
+        cancelled.abort();
+        assert!(cancelled.await.unwrap_err().is_cancelled());
+
+        drop(slots);
+        let (first, second) = tokio::join!(first, second);
+        assert!(first.unwrap());
+        assert!(second.unwrap());
+        assert!(repository.lock_sessions().is_empty());
+        for session in ["s1", "s2"] {
+            let persisted = repository
+                .inner
+                .store
+                .read(session, 64)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(persisted.buffer, b"durable");
+        }
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn idle_notification_covers_cancelled_pending_output_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        // Exercise both non-ack retirement paths. These can be reached
+        // when a cap change removes the last queued output before admission.
+        for before_admission in [true, false] {
+            repository.lock_sessions().insert(
+                "s1".into(),
+                SessionPersistenceState {
+                    worker_running: true,
+                    ..Default::default()
+                },
+            );
+            let changed = repository.inner.idle_changed.notified();
+            if before_admission {
+                assert!(!repository.has_pending_or_stop("s1"));
+            } else {
+                assert!(repository.next_snapshot_or_stop("s1").is_none());
+            }
+            tokio::time::timeout(Duration::from_secs(1), changed)
+                .await
+                .unwrap();
+        }
+
+        repository.queue_checkpoint(checkpoint("s1", b""), 64);
+        repository.queue_output("s1".into(), 0, b"old".to_vec(), 64);
+        assert!(repository.flush_pending(Duration::from_secs(2)).await);
+        let changed = repository.inner.idle_changed.notified();
+        repository.queue_delete("s1");
+        tokio::time::timeout(Duration::from_secs(2), changed)
+            .await
+            .unwrap();
+        assert!(repository.flush_pending(Duration::ZERO).await);
+        assert!(repository
+            .inner
+            .store
+            .read("s1", 64)
+            .await
+            .unwrap()
+            .is_none());
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
     async fn background_flush_persists_buffered_output() {
         let dir = tempfile::tempdir().unwrap();
         let repository = TerminalHostHistoryRepository::open(dir.path())
@@ -1153,6 +1429,127 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(persisted.buffer, b"hello");
+    }
+
+    #[tokio::test]
+    async fn parallel_clean_cold_reads_do_not_create_cache_or_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        let cap = 512 * 1024;
+        let payload = vec![0x9b; cap / 2];
+        let ids: Vec<_> = (0..8).map(|index| format!("cold-{index}")).collect();
+        for id in &ids {
+            store.upsert(checkpoint(id, b"")).await.unwrap();
+            store.append_output(id, 0, &payload).await.unwrap();
+        }
+        let repository = TerminalHostHistoryRepository::from_store(store);
+        // Stop background workers from retiring so a spurious cache or
+        // trim request cannot disappear before we inspect it.
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+        let reads =
+            futures_util::future::join_all(ids.iter().map(|id| repository.read(id, cap))).await;
+        for read in reads {
+            assert_eq!(read.unwrap().unwrap().buffer, payload);
+        }
+        assert!(repository.lock_sessions().is_empty());
+        assert!(repository.flush_pending(Duration::from_millis(50)).await);
+        drop(slots);
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn bounded_cold_reads_keep_cache_and_trim_until_durable_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        store.upsert(checkpoint("s1", b"")).await.unwrap();
+        store.append_output("s1", 0, b"abcdef").await.unwrap();
+        let repository = TerminalHostHistoryRepository::from_store(store);
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repository.read("s1", 3).await.unwrap().unwrap().buffer,
+            b"def"
+        );
+        {
+            let sessions = repository.lock_sessions();
+            let state = &sessions["s1"];
+            assert!(state.worker_running);
+            assert_eq!(state.trim_request.unwrap().max_bytes, 3);
+            assert_eq!(copy_deque_tail(&state.memory_tail, 100), b"def");
+            assert!(state.verified_tail.is_none());
+        }
+        // A larger read must not resurrect the already logically trimmed prefix.
+        assert_eq!(
+            repository.read("s1", 100).await.unwrap().unwrap().buffer,
+            b"def"
+        );
+        assert!(!repository.flush_pending(Duration::from_millis(20)).await);
+        drop(slots);
+        assert!(repository.flush_pending(Duration::from_secs(2)).await);
+        assert!(repository.lock_sessions().is_empty());
+        assert_eq!(
+            repository
+                .inner
+                .store
+                .read("s1", 100)
+                .await
+                .unwrap()
+                .unwrap()
+                .buffer,
+            b"def"
+        );
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn cold_read_completion_prefers_newer_pending_checkpoint_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+        repository.queue_checkpoint(checkpoint("s1", b"new"), 100);
+        for maintenance_required in [false, true] {
+            let read = repository
+                .finish_cold_read(
+                    "s1",
+                    3,
+                    checkpoint("s1", b"old").map_buffer(VecDeque::from),
+                    maintenance_required,
+                )
+                .unwrap();
+            assert_eq!(Vec::from(read.buffer), b"new");
+            assert_eq!(repository.lock_sessions()["s1"].max_bytes, 100);
+        }
+        repository.queue_delete("s1");
+        for maintenance_required in [false, true] {
+            assert!(repository
+                .finish_cold_read(
+                    "s1",
+                    3,
+                    checkpoint("s1", b"old").map_buffer(VecDeque::from),
+                    maintenance_required
+                )
+                .is_none());
+        }
+        drop(slots);
+        assert!(repository.flush_pending(Duration::from_secs(2)).await);
+        repository.inner.store.close_for_test().await;
     }
 
     #[tokio::test]

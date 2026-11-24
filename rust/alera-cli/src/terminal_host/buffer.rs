@@ -88,6 +88,14 @@ impl ScrollbackBuffer {
         buffer
     }
 
+    /// Restore an already owned chronological tail without copying it into
+    /// a second allocation. An offset ring can keep its existing head.
+    pub(super) fn from_owned(max_bytes: usize, initial: impl Into<VecDeque<u8>>) -> Self {
+        let mut bytes = initial.into();
+        retain_deque_tail(&mut bytes, max_bytes);
+        Self { bytes, max_bytes }
+    }
+
     pub fn set_max_bytes(&mut self, value: usize) {
         self.max_bytes = value;
         retain_deque_tail(&mut self.bytes, value);
@@ -197,6 +205,49 @@ mod tests {
     fn seeds_from_initial_buffer() {
         let buffer = ScrollbackBuffer::new(4, b"abcdef");
         assert_eq!(buffer.to_bytes(), b"cdef");
+    }
+
+    #[test]
+    fn owned_restore_reuses_bounded_allocation() {
+        let initial = vec![0x1b, 0, 0xff, b'a', b'b', b'c'];
+        let allocation = initial.as_ptr();
+        let mut buffer = ScrollbackBuffer::from_owned(initial.len(), initial);
+        assert_eq!(buffer.bytes.as_slices().0.as_ptr(), allocation);
+        assert_eq!(buffer.to_bytes(), [0x1b, 0, 0xff, b'a', b'b', b'c']);
+        buffer.append(b"de");
+        assert_eq!(buffer.to_bytes(), [0xff, b'a', b'b', b'c', b'd', b'e']);
+    }
+
+    #[test]
+    fn owned_restore_preserves_offset_ring_and_wraps_on_append() {
+        let mut initial = VecDeque::from(b"00abcdef".to_vec());
+        initial.drain(..2);
+        let start = initial.as_slices().0.as_ptr();
+        let mut buffer = ScrollbackBuffer::from_owned(8, initial);
+        assert_eq!(buffer.bytes.as_slices().0.as_ptr(), start);
+        assert_eq!(buffer.to_bytes(), b"abcdef");
+        buffer.append(b"ghi");
+        assert_eq!(buffer.to_bytes(), b"bcdefghi");
+        assert!(!buffer.bytes.as_slices().1.is_empty());
+        assert_eq!(buffer.slice_from(5), b"ghi");
+        buffer.set_max_bytes(4);
+        assert_eq!(buffer.to_bytes(), b"fghi");
+        assert!(buffer.bytes.capacity() <= 4);
+    }
+
+    #[test]
+    fn owned_restore_preserves_tail_and_bounds_capacity() {
+        for cap in [0, 1, 3, 6, 10, usize::MAX] {
+            let mut initial = Vec::with_capacity(1024);
+            initial.extend_from_slice(b"abcdef");
+            let mut owned = ScrollbackBuffer::from_owned(cap, initial);
+            let mut borrowed = ScrollbackBuffer::new(cap, b"abcdef");
+            assert_eq!(owned.to_bytes(), borrowed.to_bytes());
+            assert!(owned.bytes.capacity() <= cap);
+            owned.append(b"ghi");
+            borrowed.append(b"ghi");
+            assert_eq!(owned.to_bytes(), borrowed.to_bytes());
+        }
     }
 
     #[test]

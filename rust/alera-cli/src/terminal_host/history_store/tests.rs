@@ -86,6 +86,55 @@ async fn append_output_trims_oldest_bytes() {
 }
 
 #[tokio::test]
+async fn cold_read_reports_maintenance_conservatively_without_extra_blob_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.append_output("s1", 0, b"abc").await.unwrap();
+    store.append_output("s1", 1, b"def").await.unwrap();
+
+    for (cap, expected, maintenance) in [
+        (0, b"".as_slice(), true),
+        (3, b"def".as_slice(), true),
+        (5, b"bcdef".as_slice(), true),
+        (6, b"abcdef".as_slice(), true),
+        (7, b"abcdef".as_slice(), false),
+        (usize::MAX, b"abcdef".as_slice(), false),
+    ] {
+        let (checkpoint, required) = store
+            .read_with_maintenance("s1", cap)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(Vec::from(checkpoint.buffer), expected);
+        assert_eq!(required, maintenance, "cap={cap}");
+    }
+
+    // Row compaction is required even when the entire history fits.
+    let count = OUTPUT_COMPACTION_ROW_THRESHOLD + 1;
+    let mut transaction = store.begin_write().await.unwrap();
+    sqlx::query(
+        "WITH RECURSIVE nums(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM nums WHERE n < ?)
+         INSERT INTO outputChunks(sessionId, sequence, createdAt, data)
+         SELECT 's2', n, '2026-01-01', X'61' FROM nums",
+    )
+    .bind(count)
+    .execute(&mut *transaction)
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    store.upsert(sample("s2")).await.unwrap();
+    let (checkpoint, required) = store
+        .read_with_maintenance("s2", usize::MAX)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.buffer.len(), count as usize);
+    assert!(required);
+    store.close_for_test().await;
+}
+
+#[tokio::test]
 async fn bounded_read_does_not_mutate_persisted_history() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
@@ -180,6 +229,33 @@ fn history_read_tail_copies_only_requested_suffix_of_oversized_blob() {
     let result = tail.finish();
     assert_eq!(result.as_ptr(), ptr);
     assert_eq!(result, b"tiny");
+}
+
+#[test]
+fn history_read_tail_keeps_offset_allocation_without_final_relocation() {
+    let mib = 1024 * 1024;
+    let cap = 4 * mib;
+    let chunk_size = OUTPUT_CHUNK_TARGET_BYTES;
+    let chunks = 3 * mib / chunk_size;
+    let mut tail = HistoryReadTail::new(cap);
+    for i in (0..chunks).rev() {
+        tail.prepend(&vec![i as u8; chunk_size]);
+    }
+    assert_eq!(tail.len(), 3 * mib);
+    assert_eq!(tail.start, mib);
+    let payload_start = tail.buffer[tail.start..].as_ptr();
+    let mut ring = tail.finish_ring();
+    assert_eq!(ring.len(), 3 * mib);
+    assert!(ring.capacity() <= cap);
+    let (first, second) = ring.as_slices();
+    assert!(second.is_empty());
+    // Old finish copied all 3 MiB down to the allocation base.
+    // The original payload pointer survives both restoration and compaction.
+    assert_eq!(first.as_ptr(), payload_start);
+    assert_eq!(ring.make_contiguous().as_ptr(), payload_start);
+    for (i, chunk) in ring.as_slices().0.chunks(chunk_size).enumerate() {
+        assert!(chunk.iter().all(|&byte| byte == i as u8));
+    }
 }
 
 #[tokio::test]
