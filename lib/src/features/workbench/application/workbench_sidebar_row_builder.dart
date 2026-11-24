@@ -19,6 +19,14 @@ class _WorkbenchSidebarRowBuilder(
   final _agentRunsByWorkspaceId = <String, List<WorkspaceAgentRun>>{};
   final _agentGroupsByWorkspaceId = <String, List<WorkspaceAgentRunGroup>>{};
 
+  // Manual workspace order is shared by every sibling group. Build its
+  // index once per projection instead of once per project/section.
+  late final _manualWorkspacePositions = <String, int>{
+    for (var i = 0; i < prefs.workspaceOrder.length; i++)
+      prefs.workspaceOrder[i]: i,
+  };
+  List<Project>? _sortedProjects;
+
   List<WorkbenchSidebarRow> build() {
     final visibleProjects = _visibleProjects();
     final pinnedRows = <WorkbenchSidebarRow>[];
@@ -31,7 +39,7 @@ class _WorkbenchSidebarRowBuilder(
     _appendWorkspaceSections(
       rows,
       visibleProjects,
-      hasPinnedSection: pinnedRows.isNotEmpty,
+      hasPinnedSection: pinnedWorkspaceCount > 0,
     );
     return rows;
   }
@@ -67,6 +75,21 @@ class _WorkbenchSidebarRowBuilder(
     List<WorkbenchSidebarRow> rows,
     List<Project> visibleProjects,
   ) {
+    // The collapsed section only needs a filtered count for its header.
+    // Do not sort hidden workspaces or build their tree and agent rows.
+    if (prefs.pinnedSectionCollapsed) {
+      var count = 0;
+      for (final project in visibleProjects) {
+        for (final workspace in state.workspacesFor(project.id)) {
+          if (workspace.isPinned &&
+              !workspace.isArchived &&
+              _isWorkspaceVisible(project, workspace)) {
+            count++;
+          }
+        }
+      }
+      return count;
+    }
     if (prefs.groupBy == WorkbenchGroupBy.project &&
         prefs.workspaceSort != WorkbenchSortBy.activity) {
       return _appendProjectGroupedPinnedRows(rows, visibleProjects);
@@ -138,7 +161,7 @@ class _WorkbenchSidebarRowBuilder(
     List<WorkbenchSidebarRow> pinnedRows,
     int workspaceCount,
   ) {
-    if (pinnedRows.isEmpty) {
+    if (workspaceCount == 0) {
       return;
     }
     rows.add(
@@ -381,7 +404,9 @@ class _WorkbenchSidebarRowBuilder(
     return _sortSidebarWorkspaces(
       workspaces,
       sortBy: prefs.workspaceSort,
-      manualOrder: prefs.workspaceOrder,
+      manualPositions: prefs.workspaceSort == WorkbenchSortBy.manual
+          ? _manualWorkspacePositions
+          : const <String, int>{},
       pinMainOnRecent: pinMainOnRecent,
       activityOf: _activityOf,
       lastActivityOf: _lastActivityOf,
@@ -389,7 +414,8 @@ class _WorkbenchSidebarRowBuilder(
   }
 
   List<Project> _sortProjects(List<Project> projects) {
-    return _sortSidebarProjects(
+    // Both pinned and regular project groups use the same visible projects.
+    return _sortedProjects ??= _sortSidebarProjects(
       projects,
       sortBy: prefs.projectSort,
       manualOrder: prefs.projectOrder,
