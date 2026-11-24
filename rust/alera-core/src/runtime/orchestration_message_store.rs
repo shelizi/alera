@@ -98,6 +98,10 @@ pub(super) const ORCHESTRATION_SCHEMA: &[&str] = &[
     );",
     "CREATE INDEX IF NOT EXISTS orchestrationDispatchTaskIdx ON orchestrationDispatchContexts(task_id);",
     "CREATE INDEX IF NOT EXISTS orchestrationDispatchStatusIdx ON orchestrationDispatchContexts(status);",
+    // Terminal dispatch selection and lock checks only need active rows.
+    // Completed history can grow indefinitely without expanding this index.
+    "CREATE INDEX IF NOT EXISTS orchestrationDispatchActiveHandleIdx ON orchestrationDispatchContexts(assignee_handle)
+        WHERE status IN ('pending','dispatched','awaiting_acceptance','stalled');",
     "CREATE TABLE IF NOT EXISTS orchestrationDecisionGates (
         id TEXT PRIMARY KEY,
         task_id TEXT NOT NULL,

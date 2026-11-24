@@ -13,6 +13,7 @@ use super::{
 };
 
 pub const ORCHESTRATION_CIRCUIT_BREAKER_THRESHOLD: i64 = 3;
+const DISPATCH_HANDLES_PER_QUERY: usize = 128;
 
 const DISPATCH_COLUMNS: &str = "id, task_id, assignee_handle, status, failure_count, \
      last_failure, dispatched_at, completed_at, created_at, last_heartbeat_at, run_id, workspace_id, \
@@ -212,6 +213,35 @@ impl RuntimeStore {
         row.map(dispatch_from_row).transpose()
     }
 
+    /// Candidate selection needs only the set of busy handles, not entire
+    /// dispatch contexts. Keep the active-state predicate identical to the
+    /// transaction that acquires the single-active-dispatch lock.
+    pub async fn active_orchestration_dispatch_handles(
+        &self,
+        handles: &[String],
+    ) -> Result<HashSet<String>> {
+        let mut busy = HashSet::new();
+        for chunk in handles.chunks(DISPATCH_HANDLES_PER_QUERY) {
+            let mut query = QueryBuilder::<Sqlite>::new(
+                "SELECT DISTINCT assignee_handle FROM orchestrationDispatchContexts \
+                 WHERE status IN ('pending','dispatched','awaiting_acceptance','stalled') \
+                 AND assignee_handle IN (",
+            );
+            let mut binds = query.separated(", ");
+            for handle in chunk {
+                binds.push_bind(handle.as_str());
+            }
+            binds.push_unseparated(")");
+            busy.extend(
+                query
+                    .build_query_scalar::<String>()
+                    .fetch_all(self.pool())
+                    .await?,
+            );
+        }
+        Ok(busy)
+    }
+
     /// PTY output only needs the latest active dispatch's ID, and only
     /// dispatched (accepted) contexts can refresh activity. Read bounded
     /// groups of handles together instead of decoding every context field
@@ -220,10 +250,9 @@ impl RuntimeStore {
         &self,
         handles: &[String],
     ) -> Result<Vec<String>> {
-        const HANDLES_PER_QUERY: usize = 128;
         let mut seen = HashSet::new();
         let mut ids = Vec::new();
-        for chunk in handles.chunks(HANDLES_PER_QUERY) {
+        for chunk in handles.chunks(DISPATCH_HANDLES_PER_QUERY) {
             let mut query = QueryBuilder::<Sqlite>::new(
                 "SELECT id, assignee_handle, status FROM orchestrationDispatchContexts \
                  WHERE status IN ('pending','dispatched','awaiting_acceptance','stalled') \
