@@ -43,6 +43,7 @@ mod account_requests_tests;
 #[cfg(test)]
 mod actor_test_harness;
 mod agent_context_transcript;
+mod agent_report_summary;
 mod agent_history_resume;
 mod agent_history_transcript;
 mod agent_hook_events;
@@ -341,6 +342,7 @@ struct ServerActor {
     ssh_bootstrap_jobs: HashMap<String, SshBootstrapJobState>,
     project_clone_jobs: HashMap<String, tokio::sync::oneshot::Sender<()>>,
     agent_title_jobs: HashMap<String, agent_title_generation::AgentTitleJob>,
+    agent_report_jobs: HashMap<String, agent_report_summary::AgentReportJob>,
     managed_workspace_jobs: usize,
     mutation_queue: runtime_mutation_queue::RuntimeMutationQueue,
     agent_quota_cache: Option<(Instant, u64, Value)>,
@@ -508,6 +510,9 @@ impl ServerActor {
             }
             ServerCommand::AgentTitleFinished { tab_id, id, result } => {
                 self.finish_agent_title(tab_id, id, result).await
+            }
+            ServerCommand::AgentReportFinished { handle, id, result } => {
+                self.finish_agent_report(handle, id, result).await
             }
             ServerCommand::AiAssistFinished {
                 client_id,

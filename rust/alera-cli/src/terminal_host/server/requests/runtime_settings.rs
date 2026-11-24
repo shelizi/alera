@@ -51,6 +51,9 @@ impl ServerActor {
             self.account_push.active_subscriptions = 0;
         }
         if let Some(settings) = &update.ai_assist {
+            if !settings.enabled || !settings.auto_summarize_agent_reports {
+                self.cancel_agent_reports();
+            }
             let cancel_titles = self
                 .agent_title_jobs
                 .iter()

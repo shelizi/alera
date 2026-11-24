@@ -41,6 +41,8 @@ class AiAssistOperationMapper extends EnumMapper<AiAssistOperation> {
         return AiAssistOperation.workspaceIdentity;
       case r'agentTitle':
         return AiAssistOperation.agentTitle;
+      case r'agentWorkReport':
+        return AiAssistOperation.agentWorkReport;
       case r'speechMessage':
         return AiAssistOperation.speechMessage;
       default:
@@ -65,6 +67,8 @@ class AiAssistOperationMapper extends EnumMapper<AiAssistOperation> {
         return r'workspaceIdentity';
       case AiAssistOperation.agentTitle:
         return r'agentTitle';
+      case AiAssistOperation.agentWorkReport:
+        return r'agentWorkReport';
       case AiAssistOperation.speechMessage:
         return r'speechMessage';
     }
@@ -633,6 +637,14 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     opt: true,
     def: true,
   );
+  static bool _$autoSummarizeAgentReports(AiAssistSettings v) =>
+      v.autoSummarizeAgentReports;
+  static const Field<AiAssistSettings, bool> _f$autoSummarizeAgentReports = Field(
+    'autoSummarizeAgentReports',
+    _$autoSummarizeAgentReports,
+    opt: true,
+    def: false,
+  );
   static String _$agent(AiAssistSettings v) => v.agent;
   static const Field<AiAssistSettings, String> _f$agent = Field(
     'agent',
@@ -737,6 +749,7 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
   final MappableFields<AiAssistSettings> fields = const {
     #enabled: _f$enabled,
     #autoGenerateAgentTitles: _f$autoGenerateAgentTitles,
+    #autoSummarizeAgentReports: _f$autoSummarizeAgentReports,
     #agent: _f$agent,
     #selectedModelByAgent: _f$selectedModelByAgent,
     #selectedThinkingByModel: _f$selectedThinkingByModel,
@@ -753,6 +766,7 @@ class AiAssistSettingsMapper extends ClassMapperBase<AiAssistSettings> {
     return AiAssistSettings(
       enabled: data.dec(_f$enabled),
       autoGenerateAgentTitles: data.dec(_f$autoGenerateAgentTitles),
+      autoSummarizeAgentReports: data.dec(_f$autoSummarizeAgentReports),
       agent: data.dec(_f$agent),
       selectedModelByAgent: data.dec(_f$selectedModelByAgent),
       selectedThinkingByModel: data.dec(_f$selectedThinkingByModel),
@@ -868,6 +882,7 @@ abstract class AiAssistSettingsCopyWith<$R, $In extends AiAssistSettings, $Out>
   $R call({
     bool? enabled,
     bool? autoGenerateAgentTitles,
+    bool? autoSummarizeAgentReports,
     String? agent,
     Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
@@ -968,6 +983,7 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
   $R call({
     bool? enabled,
     bool? autoGenerateAgentTitles,
+    bool? autoSummarizeAgentReports,
     String? agent,
     Map<String, String>? selectedModelByAgent,
     Map<String, String>? selectedThinkingByModel,
@@ -983,6 +999,8 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
       if (enabled != null) #enabled: enabled,
       if (autoGenerateAgentTitles != null)
         #autoGenerateAgentTitles: autoGenerateAgentTitles,
+      if (autoSummarizeAgentReports != null)
+        #autoSummarizeAgentReports: autoSummarizeAgentReports,
       if (agent != null) #agent: agent,
       if (selectedModelByAgent != null)
         #selectedModelByAgent: selectedModelByAgent,
@@ -1008,6 +1026,10 @@ class _AiAssistSettingsCopyWithImpl<$R, $Out>
     autoGenerateAgentTitles: data.get(
       #autoGenerateAgentTitles,
       or: $value.autoGenerateAgentTitles,
+    ),
+    autoSummarizeAgentReports: data.get(
+      #autoSummarizeAgentReports,
+      or: $value.autoSummarizeAgentReports,
     ),
     agent: data.get(#agent, or: $value.agent),
     selectedModelByAgent: data.get(

@@ -142,6 +142,12 @@ impl ServerActor {
             .filter(|entry| entry.state == normalized.state)
             .map(|entry| entry.state_started_at)
             .unwrap_or(now);
+        let report_changed = identity.effective_agent_type == event.agent_type
+            && normalized.state == AgentPresenceState::Done
+            && normalized.interrupted != Some(true)
+            && normalized.last_assistant_message.as_deref().is_some_and(|message| {
+                !message.trim().is_empty() && previous.and_then(|entry| entry.last_assistant_message.as_deref()) != Some(message)
+            });
         let _ = self
             .orchestration_agent_status(&json!({
                 "entries": [{
@@ -160,6 +166,9 @@ impl ServerActor {
                 }],
             }))
             .await;
+        if report_changed {
+            self.queue_agent_report(&event).await;
+        }
         self.deliver_pending_agent_prompt(&event.terminal_session_id)
             .await;
     }

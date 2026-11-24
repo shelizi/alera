@@ -88,7 +88,12 @@ impl AgentContextOverview {
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         let goal = Self::text(object.get("goal"), 600);
-        let progress = Self::text(object.get("progress"), 420);
+        let summary = Self::text(object.get("reportSummary"), 420);
+        let progress = if summary.is_empty() {
+            Self::text(object.get("progress"), 420)
+        } else {
+            summary
+        };
         let timeline = object
             .get("timeline")
             .and_then(Value::as_array)

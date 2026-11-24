@@ -43,6 +43,7 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
         ssh_bootstrap_jobs: HashMap::new(),
         project_clone_jobs: HashMap::new(),
         agent_title_jobs: HashMap::new(),
+        agent_report_jobs: HashMap::new(),
         managed_workspace_jobs: 0,
         mutation_queue: Default::default(),
         agent_quota_cache: None,

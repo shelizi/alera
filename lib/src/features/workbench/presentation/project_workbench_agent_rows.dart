@@ -116,10 +116,10 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                           ),
                         ),
                         if (showTaskSummaries &&
-                            overview.progress.isNotEmpty) ...<Widget>[
+                            overview.displayProgress.isNotEmpty) ...<Widget>[
                           const SizedBox(height: 3),
                           Text(
-                            '最新回報：${overview.progress}',
+                            '最新回報：${overview.displayProgress}',
                             maxLines: _expanded ? null : 2,
                             overflow: _expanded ? null : TextOverflow.ellipsis,
                             style: theme.textTheme.labelSmall?.copyWith(
@@ -129,7 +129,7 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                         ],
                         if (showTaskSummaries &&
                             (description.length > 75 ||
-                                overview.progress.length > 55))
+                                overview.displayProgress.length > 55))
                           InkWell(
                             onTap: () => setState(() => _expanded = !_expanded),
                             child: Padding(

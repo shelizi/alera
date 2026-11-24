@@ -46,8 +46,8 @@ class const WorkspaceAgentContextPanel({
     final goal = overview.goal.isNotEmpty
         ? overview.goal
         : status.prompt.trim();
-    final progress = overview.progress.isNotEmpty
-        ? overview.progress
+    final progress = overview.displayProgress.isNotEmpty
+        ? overview.displayProgress
         : (status.lastAssistantMessage?.trim() ?? '');
     final textStyle = Theme.of(context).textTheme.bodySmall;
     final timeline = overview.timeline;
@@ -67,7 +67,7 @@ class const WorkspaceAgentContextPanel({
         ),
         const SizedBox(height: 8),
         Text(
-          '整體目標會隨任務重點更新；工作回報取自 Agent 回覆摘錄，不代表已完成驗證。',
+          '整體目標會隨任務重點更新；工作回報取自 Agent 回覆或 AI 摘要，不代表已完成驗證。',
           style: textStyle?.copyWith(color: AleraTokens.foregroundMuted),
         ),
         const SizedBox(height: 18),
@@ -77,7 +77,9 @@ class const WorkspaceAgentContextPanel({
         ),
         const SizedBox(height: 14),
         _ContextSection(
-          title: '最新工作回報（Agent 回覆）',
+          title: overview.reportSummary.isNotEmpty
+              ? '最新工作回報（AI 摘要）'
+              : '最新工作回報（Agent 回覆）',
           content: progress.isNotEmpty ? progress : '等待 Agent 提供工作進度。',
         ),
         const SizedBox(height: 18),

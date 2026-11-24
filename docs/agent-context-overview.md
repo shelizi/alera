@@ -28,6 +28,10 @@ badge as the task summary.
   truncation boundary. Tool input/output and hidden reasoning are excluded;
   native fallback reads at most 1 MiB per verified Stop event.
 
+## Optional AI Assist report summaries
+
+Classic Settings > AI Assist > Agent Work Reports configures the opt-in automatic summary, independent Agent/model/reasoning and instructions. The default is off. Automatic summaries currently support Codex, Claude Code and Pi. The Host sends only bounded completed model replies and goal excerpts to the selected provider; these may contain conversation details. It runs the existing AI Assist CLI in a separate job directory, never passes PTY output or tool arguments, strips Hook identity, and does not use a custom shell command. The raw report appears immediately, remains in the timeline and is the fallback on failure or unsupported configuration. At most four concurrent/queued session jobs are admitted; newer reports coalesce per session and stale completions cannot replace newer reports or another conversation. Classic and GPUI read the same Host summary; GPUI direct settings controls are not yet implemented. Updating or enabling the feature requires a compatible running Rust Host. This does not independently verify work claims.
+
 ## User interface
 
 - **Classic**: the **default-off** Agent Settings switch **Show Agent Task Summaries in Sidebar** opts into task summaries; otherwise the original concise single-line row (and separate Tab Titles setting) is preserved. When enabled, the left Agent row shows up to four lines of overall goal plus

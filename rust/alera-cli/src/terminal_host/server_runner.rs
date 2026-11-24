@@ -100,6 +100,7 @@ pub async fn run_terminal_host_server(
         ssh_bootstrap_jobs: HashMap::new(),
         project_clone_jobs: HashMap::new(),
         agent_title_jobs: HashMap::new(),
+        agent_report_jobs: HashMap::new(),
         managed_workspace_jobs: 0,
         mutation_queue: Default::default(),
         agent_quota_cache: None,

@@ -172,6 +172,7 @@ class CliAiAssistService({
       AiAssistOperation.readingDiff ||
       AiAssistOperation.workspaceIdentity ||
       AiAssistOperation.agentTitle ||
+      AiAssistOperation.agentWorkReport ||
       AiAssistOperation.speechMessage => throw AiAssistException(
         '${request.operation.label} generation is not wired yet.',
       ),

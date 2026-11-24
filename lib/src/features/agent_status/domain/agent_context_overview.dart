@@ -21,6 +21,7 @@ class AgentContextOverview {
   const AgentContextOverview({
     this.goal = '',
     this.progress = '',
+    this.reportSummary = '',
     this.initialGoal = '',
     this.currentFocus = '',
     this.focusUpdatedAt,
@@ -29,6 +30,9 @@ class AgentContextOverview {
 
   final String goal;
   final String progress;
+  final String reportSummary;
+  String get displayProgress =>
+      reportSummary.isNotEmpty ? reportSummary : progress;
 
   /// Keep the original task anchor while later instructions change focus.
   final String initialGoal;
@@ -125,6 +129,7 @@ class AgentContextOverview {
     return AgentContextOverview(
       goal: _clean(raw['goal'], 600),
       progress: _clean(raw['progress'], 420),
+      reportSummary: _clean(raw['reportSummary'], 420),
       initialGoal: _clean(raw['initialGoal'], 600),
       currentFocus: _clean(raw['currentFocus'], 600),
       focusUpdatedAt: DateTime.tryParse(
@@ -144,6 +149,7 @@ class AgentContextOverview {
   }) {
     var goal = previous.goal;
     var progress = previous.progress;
+    var reportSummary = previous.reportSummary;
     var initialGoal = previous.initialGoal.isEmpty
         ? previous.goal
         : previous.initialGoal;
@@ -204,12 +210,14 @@ class AgentContextOverview {
       // A delayed Hook must never replace a newer status already displayed.
       if (latest == null || !at.isBefore(latest)) {
         progress = report;
+        reportSummary = '';
       }
       record('report', _reportExcerpt(assistant, 260));
     }
     return AgentContextOverview(
       goal: goal,
       progress: progress,
+      reportSummary: reportSummary,
       initialGoal: initialGoal,
       currentFocus: focus,
       focusUpdatedAt: focusUpdatedAt,
@@ -220,6 +228,7 @@ class AgentContextOverview {
   Map<String, dynamic> toJson() => <String, dynamic>{
     'goal': goal,
     'progress': progress,
+    if (reportSummary.isNotEmpty) 'reportSummary': reportSummary,
     'initialGoal': initialGoal,
     'currentFocus': currentFocus,
     'focusUpdatedAt': focusUpdatedAt?.toUtc().toIso8601String(),

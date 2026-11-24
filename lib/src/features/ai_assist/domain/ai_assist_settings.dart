@@ -12,6 +12,7 @@ enum AiAssistOperation(this.key) {
   readingDiff('readingDiff'),
   workspaceIdentity('workspaceIdentity'),
   agentTitle('agentTitle'),
+  agentWorkReport('agentWorkReport'),
   speechMessage('speechMessage');
 
   final String key;
@@ -24,6 +25,7 @@ enum AiAssistOperation(this.key) {
     AiAssistOperation.readingDiff => 'Reading Diffs',
     AiAssistOperation.workspaceIdentity => 'Workspace Identity',
     AiAssistOperation.agentTitle => 'Agent Titles',
+    AiAssistOperation.agentWorkReport => 'Agent Work Reports',
     AiAssistOperation.speechMessage => 'Speech Messages',
   };
 }
@@ -102,6 +104,7 @@ class const AiAssistPromptSettings({this.agent, this.model})
 class const AiAssistSettings({
   this.enabled = true,
   this.autoGenerateAgentTitles = true,
+  this.autoSummarizeAgentReports = false,
   this.agent = 'codex',
   this.selectedModelByAgent = const <String, String>{},
   this.selectedThinkingByModel = const <String, String>{},
@@ -118,6 +121,7 @@ class const AiAssistSettings({
 }) with AiAssistSettingsMappable {
   final bool enabled;
   final bool autoGenerateAgentTitles;
+  final bool autoSummarizeAgentReports;
   @MappableField(hook: AiAssistAgentIdHook())
   final String agent;
   final Map<String, String> selectedModelByAgent;
