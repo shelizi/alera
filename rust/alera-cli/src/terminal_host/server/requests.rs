@@ -194,6 +194,7 @@ impl ServerActor {
                 self.runtime_store.clone(),
                 self.deferred_request_scheduler(),
                 self.runtime_dir.clone(),
+                self.history_search_state.clone(),
             )
             .execute_inline(route, payload)
             .await;
@@ -459,7 +460,10 @@ impl ServerActor {
                 }
                 // Additive response fields: older clients can ignore them,
                 // while GPUI must not resize its preview for a deferred PTY.
-                let actual = self.sessions.get(&session_id).map(|session| session.current_dims);
+                let actual = self
+                    .sessions
+                    .get(&session_id)
+                    .map(|session| session.current_dims);
                 Ok(json!({
                     "applied": applied,
                     "deferred": !applied,

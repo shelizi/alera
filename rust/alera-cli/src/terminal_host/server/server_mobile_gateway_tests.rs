@@ -67,6 +67,7 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
         codex_starting: None,
         deferred_admission: Arc::new(deferred_admission::DeferredAdmission::default()),
         workspace_sidebar_snapshots: Default::default(),
+        history_search_state: Default::default(),
         inbox,
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,

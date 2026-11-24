@@ -8,19 +8,27 @@ use serde_json::{json, Value};
 
 use crate::agent_history_sync::search_roots;
 use crate::agent_session_history_scan::RegisteredHistoryWorkspace;
-use crate::agent_session_history_service::{clear_history_search_cache, search_history_on_demand};
+use crate::agent_session_history_service::{
+    clear_history_search_cache, search_history_on_demand, HistorySearchState,
+};
 use crate::terminal_host::host_error::{HostError, HostResult};
 
 pub(super) struct AgentSessionHistoryRequestHandler {
     store: RuntimeStore,
     private_dir: PathBuf,
+    state: HistorySearchState,
 }
 
 impl AgentSessionHistoryRequestHandler {
-    pub(super) fn new(store: RuntimeStore, runtime_dir: PathBuf) -> Self {
+    pub(super) fn new(
+        store: RuntimeStore,
+        runtime_dir: PathBuf,
+        state: HistorySearchState,
+    ) -> Self {
         Self {
             store,
             private_dir: runtime_dir.join("agent-session-search"),
+            state,
         }
     }
 
@@ -72,12 +80,21 @@ impl AgentSessionHistoryRequestHandler {
                         .is_none_or(|account| root.account_id == account)
             })
             .collect::<Vec<_>>();
-        let result = search_history_on_demand(&self.private_dir, &roots, &registered, &query, true)
-            .await
-            .map_err(|err| HostError::state(err.to_string()))?;
+        let result = search_history_on_demand(
+            &self.private_dir,
+            &self.state,
+            &roots,
+            &registered,
+            &query,
+            true,
+        )
+        .await
+        .map_err(|err| HostError::state(err.to_string()))?;
         Ok(json!({
             "hits": result.hits,
             "visitedFiles": result.visited_files,
+            "parsedFiles": result.parsed_files,
+            "reusedFiles": result.reused_files,
             "scanTruncated": result.scan_truncated,
             "writes": {
                 "added": result.writes.added,
@@ -90,7 +107,7 @@ impl AgentSessionHistoryRequestHandler {
     }
 
     pub(super) async fn clear(&self) -> HostResult<Value> {
-        clear_history_search_cache(&self.private_dir)
+        clear_history_search_cache(&self.private_dir, &self.state)
             .await
             .map_err(|err| HostError::state(err.to_string()))?;
         Ok(json!({"cleared": true, "providerFilesPreserved": true}))
@@ -185,7 +202,11 @@ mod tests {
     async fn search_without_consent_does_not_scan_or_create_cache() {
         let temp = tempfile::tempdir().unwrap();
         let store = RuntimeStore::open(temp.path()).await.unwrap();
-        let handler = AgentSessionHistoryRequestHandler::new(store, temp.path().to_path_buf());
+        let handler = AgentSessionHistoryRequestHandler::new(
+            store,
+            temp.path().to_path_buf(),
+            Default::default(),
+        );
         let result = handler.search(&json!({"text":"private history"})).await;
         assert!(result.is_err());
         assert!(!temp.path().join("agent-session-search").exists());

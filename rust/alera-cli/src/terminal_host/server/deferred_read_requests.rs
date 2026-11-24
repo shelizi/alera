@@ -2,6 +2,7 @@ use alera_core::runtime::RuntimeStore;
 use serde_json::Value;
 use std::path::PathBuf;
 
+use crate::agent_session_history_service::HistorySearchState;
 use crate::project_management::list_host_directory;
 use crate::terminal_host::host_error::{HostError, HostResult};
 
@@ -16,6 +17,7 @@ pub(super) struct DeferredReadRequestHandler {
     runtime_store: RuntimeStore,
     scheduler: DeferredRequestScheduler,
     runtime_dir: PathBuf,
+    history_search_state: HistorySearchState,
 }
 
 impl DeferredReadRequestHandler {
@@ -23,11 +25,13 @@ impl DeferredReadRequestHandler {
         runtime_store: RuntimeStore,
         scheduler: DeferredRequestScheduler,
         runtime_dir: PathBuf,
+        history_search_state: HistorySearchState,
     ) -> Self {
         Self {
             runtime_store,
             scheduler,
             runtime_dir,
+            history_search_state,
         }
     }
 
@@ -44,6 +48,7 @@ impl DeferredReadRequestHandler {
                 let handler = AgentSessionHistoryRequestHandler::new(
                     self.runtime_store.clone(),
                     self.runtime_dir.clone(),
+                    self.history_search_state.clone(),
                 );
                 let search_payload = payload.clone();
                 self.scheduler
@@ -107,6 +112,7 @@ impl DeferredReadRequestHandler {
                 AgentSessionHistoryRequestHandler::new(
                     self.runtime_store.clone(),
                     self.runtime_dir.clone(),
+                    self.history_search_state.clone(),
                 )
                 .search(payload)
                 .await
@@ -115,6 +121,7 @@ impl DeferredReadRequestHandler {
                 AgentSessionHistoryRequestHandler::new(
                     self.runtime_store.clone(),
                     self.runtime_dir.clone(),
+                    self.history_search_state.clone(),
                 )
                 .clear()
                 .await

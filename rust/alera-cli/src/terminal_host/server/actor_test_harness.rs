@@ -121,6 +121,7 @@ pub(super) async fn test_actor(
         codex_starting: None,
         deferred_admission: Arc::new(super::deferred_admission::DeferredAdmission::default()),
         workspace_sidebar_snapshots: Default::default(),
+        history_search_state: Default::default(),
         inbox,
         next_client_id: Arc::new(AtomicU64::new(10)),
         mobile_gateway: None,

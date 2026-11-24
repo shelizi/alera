@@ -124,6 +124,7 @@ pub async fn run_terminal_host_server(
         codex_starting: None,
         deferred_admission: Arc::new(super::deferred_admission::DeferredAdmission::default()),
         workspace_sidebar_snapshots: Default::default(),
+        history_search_state: Default::default(),
         inbox,
         next_client_id,
         mobile_gateway: None,

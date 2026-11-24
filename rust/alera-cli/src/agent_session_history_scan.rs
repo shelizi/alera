@@ -13,6 +13,10 @@ use alera_core::global_agent_search::AgentSessionSearchRecord;
 use serde_json::Value;
 use uuid::Uuid;
 
+mod preview_cache;
+pub(crate) use preview_cache::HistoryPreviewCache;
+use preview_cache::PreviewScan;
+
 const MAX_FILES: usize = 256;
 const MAX_ENTRIES: usize = 4096;
 const MAX_DEPTH: usize = 6;
@@ -60,6 +64,8 @@ pub(crate) struct HistoryScanReport {
     pub source_proofs: Vec<HistorySourceProof>,
     pub visited_files: usize,
     pub skipped_files: usize,
+    pub parsed_files: usize,
+    pub reused_files: usize,
     pub truncated: bool,
     #[cfg(test)]
     directories_read: usize,
@@ -110,7 +116,25 @@ pub(crate) fn discover_history(
     workspaces: &[RegisteredHistoryWorkspace],
     policy: HistoryScanPolicy,
 ) -> HistoryScanReport {
-    discover_history_with_exact_id(roots, workspaces, policy, None)
+    discover_history_with_exact_id(roots, workspaces, policy, None, None)
+}
+
+/// On-demand search may reuse previously parsed, still-observed previews.
+/// Exact native verification always uses the uncached entry point below.
+pub(crate) fn discover_history_cached(
+    roots: &[ProviderHistoryRoot],
+    workspaces: &[RegisteredHistoryWorkspace],
+    policy: HistoryScanPolicy,
+    cache: &mut HistoryPreviewCache,
+) -> HistoryScanReport {
+    if !policy.index_user_text {
+        *cache = HistoryPreviewCache::default();
+        return discover_history(roots, workspaces, policy);
+    }
+    let mut scan = PreviewScan::new(std::mem::take(cache));
+    let report = discover_history_with_exact_id(roots, workspaces, policy, None, Some(&mut scan));
+    *cache = scan.finish();
+    report
 }
 
 /// Exact UUID verification cannot depend on the first-N preview scan cap.
@@ -128,7 +152,7 @@ pub(crate) fn discover_exact_native_history(
     {
         return HistoryScanReport::default();
     }
-    discover_history_with_exact_id(roots, workspaces, policy, Some(native_session_id))
+    discover_history_with_exact_id(roots, workspaces, policy, Some(native_session_id), None)
 }
 
 fn discover_history_with_exact_id(
@@ -136,6 +160,7 @@ fn discover_history_with_exact_id(
     workspaces: &[RegisteredHistoryWorkspace],
     policy: HistoryScanPolicy,
     exact_id: Option<&str>,
+    mut preview_scan: Option<&mut PreviewScan>,
 ) -> HistoryScanReport {
     let mut report = HistoryScanReport::default();
     let cap = policy.max_files.min(MAX_FILES);
@@ -301,12 +326,23 @@ fn discover_history_with_exact_id(
                     report.skipped_files += 1;
                     continue;
                 }
-                let Some((native_id, cwd, preview)) =
+                let mut cached_read = None;
+                let parsed = if let Some(scan) = preview_scan.as_deref_mut() {
+                    cached_read = scan.read(root, &canonical_file);
+                    cached_read.as_ref().map(|read| read.value.clone())
+                } else {
                     read_provider_metadata(root.provider, &canonical_file, policy.index_user_text)
-                else {
+                };
+                let Some((native_id, cwd, preview)) = parsed else {
                     report.skipped_files += 1;
                     continue;
                 };
+                let reused = cached_read.as_ref().is_some_and(|read| read.reused);
+                if reused {
+                    report.reused_files += 1;
+                } else {
+                    report.parsed_files += 1;
+                }
                 let Ok(verified_cwd) = fs::canonicalize(cwd) else {
                     continue;
                 };
@@ -314,6 +350,11 @@ fn discover_history_with_exact_id(
                     // Never attribute a transcript from an unregistered folder.
                     continue;
                 };
+                if let (Some(scan), Some(read)) =
+                    (preview_scan.as_deref_mut(), cached_read.as_ref())
+                {
+                    scan.remember(read);
+                }
                 let updated_at_ms = meta
                     .modified()
                     .ok()
@@ -325,15 +366,18 @@ fn discover_history_with_exact_id(
                     .as_deref()
                     .map(|p| p.chars().take(96).collect())
                     .unwrap_or(display);
-                report.source_proofs.push(HistorySourceProof {
-                    provider: root.provider.to_owned(),
-                    account_id: root.account_id.clone(),
-                    project_id: workspace.project.clone(),
-                    workspace_id: workspace.workspace.clone(),
-                    runtime_instance_id: workspace.runtime.clone(),
-                    native_session_id: native_id.clone(),
-                    canonical_file,
-                });
+                // A cached search preview is never proof for a resume operation.
+                if !reused {
+                    report.source_proofs.push(HistorySourceProof {
+                        provider: root.provider.to_owned(),
+                        account_id: root.account_id.clone(),
+                        project_id: workspace.project.clone(),
+                        workspace_id: workspace.workspace.clone(),
+                        runtime_instance_id: workspace.runtime.clone(),
+                        native_session_id: native_id.clone(),
+                        canonical_file,
+                    });
+                }
                 report.records.push(AgentSessionSearchRecord {
                     runtime_instance_id: workspace.runtime.clone(),
                     project_id: workspace.project.clone(),
@@ -399,6 +443,15 @@ fn read_provider_metadata(
     index_user_text: bool,
 ) -> Option<(String, PathBuf, Option<String>)> {
     let file = File::open(path).ok()?;
+    read_provider_metadata_from_file(provider, path, index_user_text, &file)
+}
+
+fn read_provider_metadata_from_file(
+    provider: &str,
+    path: &Path,
+    index_user_text: bool,
+    file: &File,
+) -> Option<(String, PathBuf, Option<String>)> {
     let mut reader = BufReader::new(file.take(MAX_READ_BYTES));
     let mut line = String::new();
     let mut id: Option<String> = None;
@@ -840,6 +893,73 @@ mod tests {
         assert_eq!(empty.directories_read, 0);
         assert_eq!(empty.metadata_probes, 0);
         assert_eq!(empty.visited_files, 0);
+    }
+
+    #[test]
+    fn cached_previews_refresh_changed_deleted_and_replaced_sources() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let path = home.path().join(format!("rollout-day-{id}.jsonl"));
+        let transcript = |cwd: &Path, message: &str| {
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":message}}),
+            )
+        };
+        fs::write(&path, transcript(work.path(), "first message")).unwrap();
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let mut cache = HistoryPreviewCache::default();
+        let first = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(first.parsed_files, 1);
+        assert_eq!(first.reused_files, 0);
+        let second = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(second.reused_files, 1);
+        assert_eq!(second.parsed_files, 0);
+        assert!(
+            second.source_proofs.is_empty(),
+            "cached preview is not a resume proof"
+        );
+        assert_eq!(second.records[0].goal, "first message");
+
+        // Same-length rewrite with a restored mtime must still invalidate the
+        // cache through the native change-time stamp.
+        let old_modified = fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let updated = transcript(work.path(), "other message");
+        assert_eq!(updated.len() as u64, fs::metadata(&path).unwrap().len());
+        fs::write(&path, updated).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old_modified)
+            .unwrap();
+        let changed = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(changed.parsed_files, 1);
+        assert_eq!(changed.reused_files, 0);
+        assert_eq!(changed.records[0].goal, "other message");
+
+        // Exact verification always opens and parses the original transcript.
+        let exact = discover_exact_native_history(&roots, &known, policy, id);
+        assert_eq!(exact.parsed_files, 1);
+        assert_eq!(exact.reused_files, 0);
+        assert_eq!(exact.source_proofs.len(), 1);
+
+        fs::remove_file(&path).unwrap();
+        let deleted = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert!(deleted.records.is_empty());
+        fs::write(&path, transcript(other.path(), "unregistered message")).unwrap();
+        let replaced = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(replaced.reused_files, 0);
+        assert!(replaced.records.is_empty());
     }
 
     #[test]

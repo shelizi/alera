@@ -3,6 +3,8 @@
 //! callers and provides trusted registered Workspace and account scopes.
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use alera_core::global_agent_search::{
     search_agent_sessions, AgentSessionSearchHit, AgentSessionSearchQuery,
@@ -11,13 +13,19 @@ use anyhow::{bail, Result};
 
 use crate::agent_session_history_fts::{AgentSessionHistoryIndex, HistoryIndexWriteStats};
 use crate::agent_session_history_scan::{
-    discover_history, HistoryScanPolicy, ProviderHistoryRoot, RegisteredHistoryWorkspace,
+    discover_history_cached, HistoryPreviewCache, HistoryScanPolicy, ProviderHistoryRoot,
+    RegisteredHistoryWorkspace,
 };
+
+/// One state per Host, shared by deferred and inline search/clear requests.
+pub(crate) type HistorySearchState = Arc<Mutex<HistoryPreviewCache>>;
 
 #[derive(Debug)]
 pub(crate) struct HistorySearchResponse {
     pub hits: Vec<AgentSessionSearchHit>,
     pub visited_files: usize,
+    pub parsed_files: usize,
+    pub reused_files: usize,
     pub scan_truncated: bool,
     pub writes: HistoryIndexWriteStats,
 }
@@ -26,6 +34,7 @@ pub(crate) struct HistorySearchResponse {
 /// into indexing the first user message, and nothing leaves the local machine.
 pub(crate) async fn search_history_on_demand(
     runtime_cache_dir: &Path,
+    state: &HistorySearchState,
     roots: &[ProviderHistoryRoot],
     registered_workspaces: &[RegisteredHistoryWorkspace],
     query: &AgentSessionSearchQuery,
@@ -37,6 +46,8 @@ pub(crate) async fn search_history_on_demand(
     let mut empty = HistorySearchResponse {
         hits: Vec::new(),
         visited_files: 0,
+        parsed_files: 0,
+        reused_files: 0,
         scan_truncated: false,
         writes: HistoryIndexWriteStats::default(),
     };
@@ -45,19 +56,29 @@ pub(crate) async fn search_history_on_demand(
     }
     let roots = roots.to_vec();
     let registered = registered_workspaces.to_vec();
-    let scan = tokio::task::spawn_blocking(move || {
-        discover_history(
+    // Hold the owned guard through indexing, so an explicit clear cannot race
+    // with a search and leave an immediately repopulated private cache.
+    let mut guard = state.clone().lock_owned().await;
+    let (scan, _guard) = tokio::task::spawn_blocking(move || {
+        let scan = discover_history_cached(
             &roots,
             &registered,
             HistoryScanPolicy {
                 index_user_text: true,
                 max_files: 256,
             },
-        )
+            &mut guard,
+        );
+        (scan, guard)
     })
     .await?;
     empty.visited_files = scan.visited_files;
+    empty.parsed_files = scan.parsed_files;
+    empty.reused_files = scan.reused_files;
     empty.scan_truncated = scan.truncated;
+    if scan.records.is_empty() {
+        return Ok(empty);
+    }
 
     let index = AgentSessionHistoryIndex::open(runtime_cache_dir).await?;
     // No partial, unverified or out-of-scope rows may become resumable solely
@@ -101,7 +122,12 @@ pub(crate) async fn search_history_on_demand(
 }
 
 /// Clearing the local search cache never modifies provider-native histories.
-pub(crate) async fn clear_history_search_cache(runtime_cache_dir: &Path) -> Result<()> {
+pub(crate) async fn clear_history_search_cache(
+    runtime_cache_dir: &Path,
+    state: &HistorySearchState,
+) -> Result<()> {
+    let mut guard = state.lock().await;
+    *guard = HistoryPreviewCache::default();
     let path = PathBuf::from(runtime_cache_dir).join("agent-session-search.sqlite");
     if !path.exists() {
         return Ok(());
@@ -121,6 +147,7 @@ mod tests {
     async fn explicit_opt_in_indexes_scoped_codex_and_clearing_preserves_provider() {
         let root = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
+        let state = HistorySearchState::default();
         let work = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let sessions = root.path().join("sessions/2026/11/21");
@@ -157,23 +184,41 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            search_history_on_demand(cache.path(), &roots, &registered, &query, false)
+            search_history_on_demand(cache.path(), &state, &roots, &registered, &query, false)
                 .await
                 .is_err()
         );
         assert!(!cache.path().join("agent-session-search.sqlite").exists());
-        let first = search_history_on_demand(cache.path(), &roots, &registered, &query, true)
-            .await
-            .unwrap();
+        let first =
+            search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
+                .await
+                .unwrap();
         assert_eq!(first.hits.len(), 1);
         assert_eq!(first.writes.added, 1);
+        assert_eq!(first.parsed_files, 2);
+        assert_eq!(first.reused_files, 0);
         assert_eq!(first.hits[0].session.workspace_id, "ws");
-        let second = search_history_on_demand(cache.path(), &roots, &registered, &query, true)
-            .await
-            .unwrap();
+        let second =
+            search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
+                .await
+                .unwrap();
         assert_eq!(second.hits.len(), 1);
         assert_eq!(second.writes.unchanged, 1);
-        clear_history_search_cache(cache.path()).await.unwrap();
+        assert_eq!(
+            second.parsed_files, 1,
+            "unregistered history is never retained"
+        );
+        assert_eq!(second.reused_files, 1);
+        clear_history_search_cache(cache.path(), &state)
+            .await
+            .unwrap();
+        let third =
+            search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
+                .await
+                .unwrap();
+        assert_eq!(third.reused_files, 0);
+        assert_eq!(third.parsed_files, 2);
+        assert_eq!(third.writes.added, 1);
         assert!(
             file.exists(),
             "deleting FTS cache must not change native provider JSONL"

@@ -314,6 +314,7 @@ mod tests {
                 super::super::deferred_admission::DeferredAdmission::default(),
             ),
             workspace_sidebar_snapshots: Default::default(),
+            history_search_state: Default::default(),
             inbox,
             next_client_id: Arc::new(AtomicU64::new(2)),
             mobile_gateway: None,

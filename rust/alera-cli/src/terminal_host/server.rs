@@ -43,7 +43,6 @@ mod account_requests_tests;
 #[cfg(test)]
 mod actor_test_harness;
 mod agent_context_transcript;
-mod agent_report_summary;
 mod agent_history_resume;
 mod agent_history_transcript;
 mod agent_hook_events;
@@ -51,6 +50,7 @@ mod agent_hook_settings;
 mod agent_profile_catalog_requests;
 mod agent_profile_launch_requests;
 mod agent_prompt_composition;
+mod agent_report_summary;
 mod agent_session_history_requests;
 #[cfg(test)]
 mod agent_settings_contract_tests;
@@ -369,6 +369,7 @@ struct ServerActor {
     inbox: UnboundedSender<ServerCommand>,
     deferred_admission: Arc<deferred_admission::DeferredAdmission>,
     workspace_sidebar_snapshots: workspace_sidebar_requests::WorkspaceSidebarSnapshotState,
+    history_search_state: crate::agent_session_history_service::HistorySearchState,
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
     shutdown_gen: u64,

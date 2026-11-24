@@ -110,6 +110,7 @@ impl ServerActor {
                 self.runtime_store.clone(),
                 self.deferred_request_scheduler(),
                 self.runtime_dir.clone(),
+                self.history_search_state.clone(),
             )
             .start(route, client_id, request_id, request_type, payload)?;
             return Ok(true);
