@@ -51,7 +51,7 @@ impl ServerActor {
 
         let state = self.sessions.get_mut(&session_id).map(|session| {
             let (output_generation, durable_generation, title_change) =
-                session.append_output(&data);
+                session.append_owned_output(data);
             let title_event = title_change.map(|title| {
                 event(
                     "terminalTitleChanged",

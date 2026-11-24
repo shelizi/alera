@@ -74,6 +74,8 @@ impl PeerWriter {
             (ClientFrame::Output { session_id, data }, true) => {
                 encode_output_payload(session_id, data).into()
             }
+            (ClientFrame::SharedOutput(shared), true) => shared.binary_payload(),
+            (ClientFrame::SharedOutput(shared), false) => shared.json_payload()?,
             (ClientFrame::SharedJson(shared), _) => shared.json_payload()?,
             (ClientFrame::Json(value), _) => serde_json::to_vec(value)?.into(),
             _ => serde_json::to_vec(

@@ -60,6 +60,16 @@ impl ClientBudget {
 fn frame_bytes(frame: &ClientFrame) -> usize {
     match frame {
         ClientFrame::Output { session_id, data } => session_id.len() + data.len(),
+        ClientFrame::SharedOutput(frame) => {
+            // The final reservation doubles this estimate. Account for both
+            // lazy wire caches even if only the last queued peer retains them.
+            frame
+                .data()
+                .len()
+                .saturating_mul(2)
+                .saturating_add(frame.session_id().len())
+                .saturating_add(string_bytes(frame.session_id()))
+        }
         ClientFrame::Json(value) => json_bytes(value),
         ClientFrame::SharedJson(frame) => json_bytes(frame.value()),
         ClientFrame::OrderedControl { frame, .. }
@@ -115,6 +125,29 @@ mod tests {
         assert_eq!(runtime.available_permits(), RELAY_RUNTIME_BYTES);
         assert!(budget.reserve(frame()).is_ok());
     }
+    #[test]
+    fn shared_output_reservation_accounts_for_both_cached_wire_formats() {
+        let runtime = Arc::new(Semaphore::new(RELAY_RUNTIME_BYTES));
+        let a = ClientBudget::new(runtime.clone());
+        let b = ClientBudget::new(runtime.clone());
+        let shared = Arc::new(crate::terminal_host::frame_codec::SharedOutputFrame::new(
+            "s".into(),
+            bytes::Bytes::from(vec![0xff; 64 * 1024]),
+        ));
+        let frame = ClientFrame::SharedOutput(shared.clone());
+        let first = a.reserve(frame.clone()).unwrap();
+        let cost = RELAY_RUNTIME_BYTES - runtime.available_permits();
+        let retained =
+            shared.data().len() + shared.binary_frame().len() + shared.json_line().unwrap().len();
+        assert!(cost >= retained);
+        let second = b.reserve(frame).unwrap();
+        assert_eq!(runtime.available_permits(), RELAY_RUNTIME_BYTES - 2 * cost);
+        drop(first);
+        assert_eq!(runtime.available_permits(), RELAY_RUNTIME_BYTES - cost);
+        drop(second);
+        assert_eq!(runtime.available_permits(), RELAY_RUNTIME_BYTES);
+    }
+
     #[test]
     fn shared_broadcast_still_charges_each_relay_peer() {
         let runtime = Arc::new(Semaphore::new(RELAY_RUNTIME_BYTES));

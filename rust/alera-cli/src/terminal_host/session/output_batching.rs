@@ -7,6 +7,31 @@ use super::{DurableOutputBatch, OutputBatch, Session};
 /// generations, so a slow writer cannot hold up delivery and a paused client
 /// cannot hold up persistence.
 impl Session {
+    /// Seed either empty batch with the reader's own allocation instead of
+    /// allocating and copying into both. Prefer the longer-lived durable
+    /// batch, but preserve each batch's independent flush boundary.
+    pub(super) fn append_output_batches(&mut self, data: Vec<u8>) {
+        let len = data.len();
+        if len == 0 {
+            return;
+        }
+        // Avoid retaining an oversized reader allocation for a tiny payload.
+        let can_move = data.capacity() <= len.saturating_mul(2);
+        if can_move
+            && self.durable_output_batch.is_empty()
+            && self.durable_output_batch.capacity() < len
+        {
+            self.output_batch.extend_from_slice(&data);
+            self.durable_output_batch = data;
+        } else if can_move && self.output_batch.is_empty() && self.output_batch.capacity() < len {
+            self.durable_output_batch.extend_from_slice(&data);
+            self.output_batch = data;
+        } else {
+            self.output_batch.extend_from_slice(&data);
+            self.durable_output_batch.extend_from_slice(&data);
+        }
+    }
+
     pub fn recent_output_since(&self, cursor: Option<u64>, max_bytes: usize) -> Vec<u8> {
         let (base, end) = self.output_stream_range();
         let available = end.saturating_sub(cursor.unwrap_or(base).max(base));

@@ -244,6 +244,10 @@ async fn send_mobile_value(
         return Ok(());
     }
     if *binary {
+        if let ClientFrame::SharedOutput(shared) = frame {
+            write.send(Message::Binary(shared.binary_payload())).await?;
+            return Ok(());
+        }
         if let ClientFrame::Output { session_id, data } = frame {
             write
                 .send(Message::Binary(
@@ -255,6 +259,7 @@ async fn send_mobile_value(
     }
     let text = match frame {
         ClientFrame::SharedJson(shared) => Utf8Bytes::try_from(shared.json_payload()?)?,
+        ClientFrame::SharedOutput(shared) => Utf8Bytes::try_from(shared.json_payload()?)?,
         ClientFrame::Json(value) => serde_json::to_string(value)?.into(),
         _ => {
             let Some(value) = frame.as_json() else {

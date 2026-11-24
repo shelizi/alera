@@ -7,7 +7,9 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame, SharedJsonFrame};
+use crate::terminal_host::frame_codec::{
+    encode_json_frame, encode_output_frame, SharedJsonFrame, SharedOutputFrame,
+};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
 use crate::terminal_host::server::{DisconnectReason, ServerCommand};
 
@@ -35,6 +37,7 @@ pub enum ClientFrame {
         session_id: String,
         data: Bytes,
     },
+    SharedOutput(Arc<SharedOutputFrame>),
     UpgradeToBinary,
     /// Re-enters the actor only after this connection has written every frame
     /// queued before the marker. Restart uses it so disposing the actor cannot
@@ -89,6 +92,13 @@ impl ClientFrame {
                     }),
                 ))
             }
+            ClientFrame::SharedOutput(frame) => Some(crate::terminal_host::protocol::event(
+                "output",
+                serde_json::json!({
+                    "sessionId": frame.session_id(),
+                    "dataBase64": crate::terminal_host::protocol::encode_bytes(frame.data()),
+                }),
+            )),
             ClientFrame::UpgradeToBinary
             | ClientFrame::RestartRuntimeAfterWrite { .. }
             | ClientFrame::ShutdownRuntimeAfterWrite { .. } => None,
@@ -421,6 +431,14 @@ async fn write_frame(
             write_half.write_all(&bytes).await
         }
         ClientFrame::Json(value) => write_json_line(write_half, &value).await,
+        ClientFrame::SharedOutput(frame) => {
+            let bytes = if *binary {
+                frame.binary_frame()
+            } else {
+                frame.json_line()?
+            };
+            write_half.write_all(bytes).await
+        }
         ClientFrame::Output { session_id, data } if *binary => {
             write_half
                 .write_all(&encode_output_frame(&session_id, &data))

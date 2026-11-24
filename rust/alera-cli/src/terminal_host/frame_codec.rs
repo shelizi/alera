@@ -88,6 +88,93 @@ impl SharedJsonFrame {
     }
 }
 
+/// One immutable PTY broadcast shared by two or more recipients. Each wire
+/// representation is built at most once, on demand by the transport writer.
+/// TCP and WebSocket/relay use overlapping views of the same allocations.
+#[derive(Debug)]
+pub struct SharedOutputFrame {
+    session_id: String,
+    data: Bytes,
+    binary: OnceLock<Bytes>,
+    json_line: OnceLock<io::Result<Bytes>>,
+}
+
+impl SharedOutputFrame {
+    pub(crate) fn new(session_id: String, data: Bytes) -> Self {
+        Self {
+            session_id,
+            data,
+            binary: OnceLock::new(),
+            json_line: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn data(&self) -> &Bytes {
+        &self.data
+    }
+
+    pub(crate) fn binary_frame(&self) -> &Bytes {
+        self.binary
+            .get_or_init(|| encode_output_frame(&self.session_id, &self.data).into())
+    }
+
+    pub(crate) fn binary_payload(&self) -> Bytes {
+        self.binary_frame().slice(FRAME_HEADER_LEN..)
+    }
+
+    pub(crate) fn json_line(&self) -> io::Result<&Bytes> {
+        self.json_line
+            .get_or_init(|| encode_output_json_line(&self.session_id, &self.data))
+            .as_ref()
+            .map_err(|error| io::Error::new(error.kind(), error.to_string()))
+    }
+
+    pub(crate) fn json_payload(&self) -> io::Result<Bytes> {
+        let line = self.json_line()?;
+        Ok(line.slice(..line.len() - 1))
+    }
+}
+
+fn encode_output_json_line(session_id: &str, data: &[u8]) -> io::Result<Bytes> {
+    #[derive(serde::Serialize)]
+    struct Event<'a> {
+        event: &'static str,
+        payload: Payload<'a>,
+    }
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Payload<'a> {
+        data_base64: String,
+        session_id: &'a str,
+    }
+
+    // Serialize the borrowed session id and encoded data directly rather than
+    // constructing (and then cloning) a large intermediate JSON Value.
+    let event = Event {
+        event: "output",
+        payload: Payload {
+            data_base64: crate::terminal_host::protocol::encode_bytes(data),
+            session_id,
+        },
+    };
+    let mut out = Vec::with_capacity(
+        event
+            .payload
+            .data_base64
+            .len()
+            .saturating_add(session_id.len())
+            .saturating_add(64),
+    );
+    serde_json::to_writer(&mut out, &event).map_err(io::Error::other)?;
+    out.push(b'\n');
+    Ok(out.into())
+}
+
 /// Encodes PTY output without base64, which is the whole point of the format.
 pub fn encode_output_frame(session_id: &str, data: &[u8]) -> Vec<u8> {
     let payload_len = 2 + session_id.len() + data.len();
@@ -166,6 +253,78 @@ mod tests {
         assert_eq!(frame.line().unwrap().last(), Some(&b'\n'));
         assert_eq!(&frame.line().unwrap()[..payload.len()], payload.as_ref());
         assert_eq!(frame.line().unwrap().as_ptr(), payload.as_ptr());
+    }
+
+    #[test]
+    fn shared_output_encodes_each_wire_format_only_on_demand() {
+        let id = "session-中文\"\n\u{0000}";
+        let data = Bytes::from_static(b"\x1b[0m\xff\x00abc");
+        let frame = SharedOutputFrame::new(id.into(), data.clone());
+        assert!(frame.binary.get().is_none());
+        assert!(frame.json_line.get().is_none());
+        assert_eq!(frame.data().as_ptr(), data.as_ptr());
+
+        let binary = frame.binary_payload();
+        assert_eq!(binary.as_ref(), encode_output_payload(id, &data));
+        assert_eq!(
+            frame.binary_frame().as_ref(),
+            encode_output_frame(id, &data)
+        );
+        assert_eq!(
+            binary.as_ptr(),
+            frame.binary_frame()[FRAME_HEADER_LEN..].as_ptr()
+        );
+        // Binary-only recipients never pay for legacy encoding.
+        assert!(frame.json_line.get().is_none());
+
+        let json_payload = frame.json_payload().unwrap();
+        let expected = crate::terminal_host::protocol::event(
+            "output",
+            json!({"sessionId": id, "dataBase64": crate::terminal_host::protocol::encode_bytes(&data)}),
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&json_payload).unwrap(),
+            expected
+        );
+        assert_eq!(frame.json_line().unwrap().last(), Some(&b'\n'));
+        assert_eq!(frame.json_line().unwrap().as_ptr(), json_payload.as_ptr());
+        assert_eq!(
+            frame.json_payload().unwrap().as_ptr(),
+            json_payload.as_ptr()
+        );
+    }
+
+    #[test]
+    fn shared_output_concurrent_mixed_transports_reuse_wire_allocations() {
+        let data = Bytes::from(vec![0xff; 64 * 1024]);
+        let frame = std::sync::Arc::new(SharedOutputFrame::new("s".into(), data));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let peers: Vec<_> = (0..8)
+            .map(|index| {
+                let frame = frame.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    if index % 2 == 0 {
+                        frame.binary_payload()
+                    } else {
+                        frame.json_payload().unwrap()
+                    }
+                })
+            })
+            .collect();
+        let binary = frame.binary_payload();
+        let json = frame.json_payload().unwrap();
+        for (index, peer) in peers.into_iter().enumerate() {
+            let result = peer.join().unwrap();
+            let expected = if index % 2 == 0 { &binary } else { &json };
+            assert_eq!(&result, expected);
+            assert_eq!(result.as_ptr(), expected.as_ptr());
+        }
+
+        let legacy_only = SharedOutputFrame::new("s".into(), Bytes::new());
+        assert!(legacy_only.json_payload().is_ok());
+        assert!(legacy_only.binary.get().is_none());
     }
 
     #[test]
