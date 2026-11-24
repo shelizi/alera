@@ -16,7 +16,9 @@ use uuid::Uuid;
 mod directory_scan;
 mod preview_cache;
 use directory_scan::read_descending_prefix;
-use preview_cache::{open_canonical_preview_file, PreviewScan};
+use preview_cache::{
+    open_canonical_preview_file, open_regular_preview_candidate, OpenedPreviewFile, PreviewScan,
+};
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
 const MAX_FILES: usize = 256;
@@ -77,6 +79,8 @@ pub(crate) struct HistoryScanReport {
     cwd_canonicalizations: usize,
     #[cfg(test)]
     reused_candidate_handles: usize,
+    #[cfg(test)]
+    handle_metadata_reuses: usize,
     #[cfg(test)]
     directory_entries_retained_peak: usize,
     #[cfg(test)]
@@ -298,7 +302,8 @@ fn discover_history_with_exact_id(
                 }
                 // DirEntry already has the file type on Windows and most Unix filesystems.
                 // Filter irrelevant names before an additional metadata probe, but recheck
-                // candidates with symlink_metadata before descending or opening them.
+                // candidates before descending or reading them; Windows ordinary files
+                // can validate metadata directly on a no-follow handle.
                 let Ok(kind) = entry.file_type() else {
                     continue;
                 };
@@ -334,43 +339,59 @@ fn discover_history_with_exact_id(
                 }
                 #[cfg(test)]
                 {
-                    report.metadata_probes += 1;
                     report.path_materializations += 1;
                 }
                 let path = entry.path();
-                let Ok(meta) = fs::symlink_metadata(&path) else {
-                    continue;
-                };
-                if !meta.is_file() || meta.file_type().is_symlink() {
-                    continue;
-                }
                 if report.visited_files >= cap {
                     report.truncated = true;
                     return report;
                 }
-                // On Windows, normalize the path from the readable handle
-                // instead of opening it once for canonicalize and again to read.
-                // Oversized or unreadable files retain the original scan
-                // accounting, and exact verification stays on the old path.
-                let (canonical_file, opened) = match preview_scan
+                let regular = preview_scan
                     .is_some()
-                    .then(|| {
-                        if skip_oversized_file(meta.len(), exact_id) {
-                            None
-                        } else {
-                            open_canonical_preview_file(&path)
+                    .then(|| open_regular_preview_candidate(&path))
+                    .flatten();
+                let (canonical_file, opened, meta) =
+                    if let Some((canonical, meta, opened)) = regular {
+                        #[cfg(test)]
+                        {
+                            report.handle_metadata_reuses += 1;
                         }
-                    })
-                    .flatten()
-                {
-                    Some((canonical, file)) => (canonical, Some(file)),
-                    None => {
-                        let Ok(canonical) = fs::canonicalize(&path) else {
+                        (canonical, Some(opened), meta)
+                    } else {
+                        // Preserve compatibility and exact UUID verification.
+                        #[cfg(test)]
+                        {
+                            report.metadata_probes += 1;
+                        }
+                        let Ok(meta) = fs::symlink_metadata(&path) else {
                             continue;
                         };
-                        (canonical, None)
-                    }
-                };
+                        if !meta.is_file() || meta.file_type().is_symlink() {
+                            continue;
+                        }
+                        let (canonical, opened) = match preview_scan
+                            .is_some()
+                            .then(|| {
+                                if skip_oversized_file(meta.len(), exact_id) {
+                                    None
+                                } else {
+                                    open_canonical_preview_file(&path)
+                                }
+                            })
+                            .flatten()
+                        {
+                            Some((canonical, file)) => {
+                                (canonical, Some(OpenedPreviewFile::from_file(file)))
+                            }
+                            None => {
+                                let Ok(canonical) = fs::canonicalize(&path) else {
+                                    continue;
+                                };
+                                (canonical, None)
+                            }
+                        };
+                        (canonical, opened, meta)
+                    };
                 if !canonical_file.starts_with(&canonical_root)
                     || !seen_files.insert((
                         root.provider,
@@ -1089,6 +1110,11 @@ mod tests {
         assert_eq!(first.cwd_canonicalizations, 2);
         #[cfg(windows)]
         assert_eq!(first.reused_candidate_handles, 64);
+        #[cfg(windows)]
+        {
+            assert_eq!(first.handle_metadata_reuses, 64);
+            assert_eq!(first.metadata_probes, 0);
+        }
         assert_eq!(first.records.len(), 48);
         assert_eq!(
             serde_json::to_value(&first.records).unwrap(),
@@ -1098,6 +1124,11 @@ mod tests {
         assert_eq!(second.cwd_canonicalizations, 2);
         #[cfg(windows)]
         assert_eq!(second.reused_candidate_handles, 64);
+        #[cfg(windows)]
+        {
+            assert_eq!(second.handle_metadata_reuses, 64);
+            assert_eq!(second.metadata_probes, 0);
+        }
         assert_eq!(second.reused_files, 48);
         assert_eq!(second.parsed_files, 16);
         // Refresh both positive and negative path decisions when the
@@ -1119,6 +1150,8 @@ mod tests {
         );
         assert_eq!(exact.cwd_canonicalizations, 1);
         assert_eq!(exact.reused_candidate_handles, 0);
+        assert_eq!(exact.handle_metadata_reuses, 0);
+        assert_eq!(exact.metadata_probes, 1);
         assert_eq!(exact.source_proofs.len(), 1);
     }
 
@@ -1153,12 +1186,54 @@ mod tests {
         let mut cache = HistoryPreviewCache::default();
         let report = discover_history_cached(&roots, &known, policy, &mut cache);
         assert_eq!(report.reused_candidate_handles, 1);
+        assert_eq!(report.handle_metadata_reuses, 1);
         assert_eq!(report.records.len(), 1);
         assert_eq!(
             serde_json::to_value(&report.records).unwrap(),
             serde_json::to_value(&legacy.records).unwrap()
         );
         assert_eq!(report.source_proofs[0].canonical_file, expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_metadata_keeps_oversized_budget_and_exact_verification() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let path = home.path().join(format!("rollout-day-{id}.jsonl"));
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+            ),
+        )
+        .unwrap();
+        let file = File::options().write(true).open(&path).unwrap();
+        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        drop(file);
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let legacy = discover_history(&roots, &known, policy);
+        let mut cache = HistoryPreviewCache::default();
+        let report = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(report.visited_files, legacy.visited_files);
+        assert_eq!(report.skipped_files, legacy.skipped_files);
+        assert_eq!(report.visited_files, 1);
+        assert_eq!(report.skipped_files, 1);
+        assert_eq!(report.parsed_files, 0);
+        assert!(report.records.is_empty());
+        assert_eq!(report.handle_metadata_reuses, 1);
+        // Metadata-only exact verification intentionally has no size rejection.
+        let exact = discover_exact_native_history(&roots, &known, HistoryScanPolicy::default(), id);
+        assert_eq!(exact.records.len(), 1);
+        assert_eq!(exact.source_proofs.len(), 1);
+        assert_eq!(exact.handle_metadata_reuses, 0);
     }
 
     #[test]

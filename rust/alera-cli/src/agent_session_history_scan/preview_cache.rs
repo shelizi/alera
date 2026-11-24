@@ -1,6 +1,6 @@
 //! Bounded, in-memory cache of consented previews. Never used by exact resume.
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -16,12 +16,18 @@ type ProviderPreview = (String, PathBuf, Option<String>);
 /// infer the target path from the directory entry or strip a UNC prefix.
 #[cfg(windows)]
 pub(super) fn open_canonical_preview_file(path: &Path) -> Option<(PathBuf, File)> {
+    let file = File::open(path).ok()?;
+    let canonical = canonical_path_from_handle(&file)?;
+    Some((canonical, file))
+}
+
+#[cfg(windows)]
+fn canonical_path_from_handle(file: &File) -> Option<PathBuf> {
     use std::ffi::OsString;
     use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, VOLUME_NAME_DOS};
 
-    let file = File::open(path).ok()?;
     let handle = HANDLE(file.as_raw_handle());
     // VOLUME_NAME_DOS also selects the default FILE_NAME_NORMALIZED (0).
     let flags = VOLUME_NAME_DOS;
@@ -46,11 +52,76 @@ pub(super) fn open_canonical_preview_file(path: &Path) -> Option<(PathBuf, File)
         }
         PathBuf::from(OsString::from_wide(&buffer[..actual]))
     };
-    Some((canonical, file))
+    Some(canonical)
 }
 
 #[cfg(not(windows))]
 pub(super) fn open_canonical_preview_file(_path: &Path) -> Option<(PathBuf, File)> {
+    None
+}
+
+// Keep the snapshot tied to the handle it describes. Only the ordinary-file
+// fast path supplies a prechecked stamp; compatibility opens read it normally.
+pub(super) struct OpenedPreviewFile {
+    file: File,
+    stamp: Option<FileStamp>,
+}
+
+impl OpenedPreviewFile {
+    pub(super) fn from_file(file: File) -> Self {
+        Self { file, stamp: None }
+    }
+}
+
+#[cfg(windows)]
+fn ordinary_windows_file(meta: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+    meta.is_file()
+        && meta.file_attributes() & (FILE_ATTRIBUTE_DIRECTORY.0 | FILE_ATTRIBUTE_REPARSE_POINT.0)
+            == 0
+}
+
+/// Avoid the separate path-based metadata open for ordinary files. Opening
+/// the final component without following reparse points is essential: directory
+/// enumeration may be stale. Special files, unavailable stamps and errors
+/// fall back to the original path-based checks in the scanner.
+#[cfg(windows)]
+pub(super) fn open_regular_preview_candidate(
+    path: &Path,
+) -> Option<(PathBuf, Metadata, OpenedPreviewFile)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    let file = File::options()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    if !ordinary_windows_file(&meta) {
+        return None;
+    }
+    let canonical = canonical_path_from_handle(&file)?;
+    // Use the same metadata for size/time and cache validation, then check the
+    // native change-time and 128-bit file ID just as in the compatibility path.
+    let stamp = FileStamp::read_with_metadata(&file, &meta)?;
+    Some((
+        canonical,
+        meta,
+        OpenedPreviewFile {
+            file,
+            stamp: Some(stamp),
+        },
+    ))
+}
+
+#[cfg(not(windows))]
+pub(super) fn open_regular_preview_candidate(
+    _path: &Path,
+) -> Option<(PathBuf, Metadata, OpenedPreviewFile)> {
     None
 }
 
@@ -104,13 +175,18 @@ impl FileStamp {
 
     #[cfg(windows)]
     pub(crate) fn read(file: &File) -> Option<Self> {
+        let meta = file.metadata().ok()?;
+        Self::read_with_metadata(file, &meta)
+    }
+
+    #[cfg(windows)]
+    fn read_with_metadata(file: &File, meta: &Metadata) -> Option<Self> {
         use std::os::windows::io::AsRawHandle;
         use windows::Win32::Foundation::HANDLE;
         use windows::Win32::Storage::FileSystem::{
             FileBasicInfo, FileIdInfo, GetFileInformationByHandleEx, FILE_BASIC_INFO, FILE_ID_INFO,
         };
 
-        let meta = file.metadata().ok()?;
         if !meta.is_file() {
             return None;
         }
@@ -204,17 +280,19 @@ impl PreviewScan {
         &mut self,
         root: &ProviderHistoryRoot,
         path: &Path,
-        opened: Option<File>,
+        opened: Option<OpenedPreviewFile>,
     ) -> Option<PreviewRead> {
         // Every search opens a fresh readable handle, even on a cache hit.
-        // Windows can pass the already validated canonical-path handle.
-        let file = opened.or_else(|| File::open(path).ok())?;
+        let OpenedPreviewFile { file, stamp } = match opened {
+            Some(opened) => opened,
+            None => OpenedPreviewFile::from_file(File::open(path).ok()?),
+        };
         let key = PreviewKey {
             provider: root.provider,
             account: root.account_id.clone(),
             path: path.to_owned(),
         };
-        let stamp = FileStamp::read(&file);
+        let stamp = stamp.or_else(|| FileStamp::read(&file));
         let now = Instant::now();
         if let Some(old) = self.previous.entries.remove(&key) {
             if stamp.as_ref() == Some(&old.stamp)
@@ -273,6 +351,44 @@ impl PreviewScan {
 #[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_candidate_reuses_handle_metadata_and_rejects_reparse_points() {
+        use std::os::windows::fs::symlink_file;
+
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("source.jsonl");
+        std::fs::write(&path, b"history").unwrap();
+        let old_meta = std::fs::symlink_metadata(&path).unwrap();
+        let (canonical, meta, opened) = open_regular_preview_candidate(&path).unwrap();
+        assert_eq!(canonical, std::fs::canonicalize(&path).unwrap());
+        assert_eq!(meta.len(), old_meta.len());
+        assert_eq!(meta.modified().unwrap(), old_meta.modified().unwrap());
+        assert_eq!(opened.stamp, FileStamp::read(&opened.file));
+        assert!(open_regular_preview_candidate(home.path()).is_none());
+        assert!(open_regular_preview_candidate(&home.path().join("missing")).is_none());
+
+        // Creating symlinks requires Developer Mode or elevated privileges
+        // on some Windows hosts; exercise actual reparse rejection when available.
+        let link = home.path().join("link.jsonl");
+        match symlink_file(&path, &link) {
+            Ok(()) => {
+                assert!(!ordinary_windows_file(
+                    &std::fs::symlink_metadata(&link).unwrap()
+                ));
+                assert!(open_regular_preview_candidate(&link).is_none());
+                println!("Windows symlink reparse rejection exercised");
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                println!("Windows symlink fixture unavailable: {error}");
+            }
+            Err(error) => panic!("unexpected symlink fixture error: {error}"),
+        }
+    }
 
     #[test]
     fn accepted_preview_moves_allocations_into_cache_and_uncacheable_output() {
