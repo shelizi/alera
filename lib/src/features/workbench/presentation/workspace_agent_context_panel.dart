@@ -11,6 +11,43 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+// Only the fields actually displayed by the Context panel participate in
+// its subscription. In particular, tool input/name, timestamps, and
+// intermediate assistant output are not work reports.
+typedef _AgentContextLiveReport = ({
+  String provider,
+  AgentContextOverview overview,
+  String promptFallback,
+  String completedReplyFallback,
+});
+
+_AgentContextLiveReport? _projectLiveReport(AgentStatusEntry? status) {
+  if (status == null) return null;
+  final overview = AgentContextOverview.fromRaw(status.contextOverview);
+  return (
+    provider: status.agentType.key,
+    overview: overview,
+    promptFallback: overview.goal.isEmpty ? status.prompt.trim() : '',
+    completedReplyFallback:
+        overview.displayProgress.isEmpty &&
+            status.state == AgentStatusState.done &&
+            status.interrupted != true
+        ? (status.lastAssistantMessage?.trim() ?? '')
+        : '',
+  );
+}
+
+final _agentContextLiveReportProvider = Provider.autoDispose
+    .family<_AgentContextLiveReport?, WorkspaceTabRecord>((ref, tab) {
+      final status = ref.watch(
+        agentStatusControllerProvider.select(
+          (statuses) =>
+              matchingAgentStatusForTab(tab: tab, agentStatuses: statuses),
+        ),
+      );
+      return _projectLiveReport(status);
+    });
+
 /// Per-Agent overview. Selection is derived from the currently active tab,
 /// not the most recently updated Agent in another workspace.
 class const WorkspaceAgentContextPanel({
@@ -26,17 +63,13 @@ class const WorkspaceAgentContextPanel({
             : null;
       }),
     );
-    final status = ref.watch(
-      agentStatusControllerProvider.select((statuses) {
-        return tab == null
-            ? null
-            : matchingAgentStatusForTab(tab: tab, agentStatuses: statuses);
-      }),
-    );
+    final report = tab == null || tab.kind != WorkspaceTabKind.terminal
+        ? null
+        : ref.watch(_agentContextLiveReportProvider(tab));
     final provider = tab == null ? null : agentContextProviderForTab(tab);
     if (tab == null ||
         tab.kind != WorkspaceTabKind.terminal ||
-        (status == null && provider == null)) {
+        (report == null && provider == null)) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(20),
@@ -48,13 +81,13 @@ class const WorkspaceAgentContextPanel({
       );
     }
 
-    final overview = AgentContextOverview.fromRaw(status?.contextOverview);
+    final overview = report?.overview ?? const AgentContextOverview();
     final identity = (
       workspaceId: tab.workspaceId,
       tabId: tab.id,
       sessionId: tab.terminalSessionId,
       conversationId: tab.payload['agentTitleConversationId']?.toString() ?? '',
-      provider: status?.agentType.key ?? provider ?? '',
+      provider: report?.provider ?? provider ?? '',
     );
     // Only the visible selected tab can request its exact verified history.
     // Live Hook reports take precedence. A separate checkpoint can survive a
@@ -66,24 +99,18 @@ class const WorkspaceAgentContextPanel({
     // Invalidate the saved view when presence disappears, including a Host
     // restart and SessionEnd. A previously cached empty result must not hide
     // a more recent durable report. Selection changes use a different key.
-    ref.listen(
-      agentStatusControllerProvider.select(
-        (statuses) =>
-            matchingAgentStatusForTab(tab: tab, agentStatuses: statuses),
-      ),
-      (previous, next) {
-        if (previous != null && next == null) {
-          ref.invalidate(agentContextRecoveryProvider(identity));
-        }
-      },
-    );
+    ref.listen(_agentContextLiveReportProvider(tab), (previous, next) {
+      if (previous != null && next == null) {
+        ref.invalidate(agentContextRecoveryProvider(identity));
+      }
+    });
     final recovered = needsRecovery
         ? ref.watch(agentContextRecoveryProvider(identity))
         : null;
-    return AgentContextReportView(
+    return AgentContextReportView._projected(
       key: ValueKey(identity),
       sessionId: tab.terminalSessionId,
-      live: status,
+      report: report,
       recovery: recovered?.asData?.value,
       loading: recovered?.isLoading ?? false,
       refresh: needsRecovery
@@ -104,26 +131,37 @@ class AgentContextReportView extends StatelessWidget {
     this.recovery,
     this.loading = false,
     this.refresh,
-  });
+  }) : _report = null;
+
+  const AgentContextReportView._projected({
+    super.key,
+    required this.sessionId,
+    required _AgentContextLiveReport? report,
+    this.recovery,
+    this.loading = false,
+    this.refresh,
+  }) : _report = report,
+       live = null;
+
   final String sessionId;
   final AgentStatusEntry? live;
+  final _AgentContextLiveReport? _report;
   final AgentContextRecovery? recovery;
   final bool loading;
   final VoidCallback? refresh;
 
   @override
   Widget build(BuildContext context) {
-    final overview = AgentContextOverview.fromRaw(live?.contextOverview);
+    final report = _report ?? _projectLiveReport(live);
+    final overview = report?.overview ?? const AgentContextOverview();
     final stored = recovery?.overview ?? const AgentContextOverview();
+    final prompt = report?.promptFallback ?? '';
     final goal = overview.goal.isNotEmpty
         ? overview.goal
-        : (live?.prompt.trim().isNotEmpty ?? false)
-        ? live!.prompt.trim()
+        : prompt.isNotEmpty
+        ? prompt
         : stored.goal;
-    final raw =
-        live?.state == AgentStatusState.done && live?.interrupted != true
-        ? (live?.lastAssistantMessage?.trim() ?? '')
-        : '';
+    final raw = report?.completedReplyFallback ?? '';
     final usesStored = overview.displayProgress.isEmpty && raw.isEmpty;
     final progress = overview.displayProgress.isNotEmpty
         ? overview.displayProgress

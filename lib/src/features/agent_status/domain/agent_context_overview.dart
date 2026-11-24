@@ -10,6 +10,17 @@ class AgentContextMilestone {
   final String text;
   final DateTime at;
 
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentContextMilestone &&
+          kind == other.kind &&
+          text == other.text &&
+          at == other.at;
+
+  @override
+  int get hashCode => Object.hash(kind, text, at);
+
   Map<String, Object?> toJson() => <String, Object?>{
     'kind': kind,
     'text': text,
@@ -42,12 +53,101 @@ class AgentContextOverview {
   /// Latest event first; only meaningful user instructions and Agent reports.
   final List<AgentContextMilestone> timeline;
 
+  // Cache only snapshots we create and deep-freeze. Expando keys are weak:
+  // a closed session or superseded snapshot cannot pin a history in memory.
+  // Arbitrary caller/Host maps remain uncached and are validated every time.
+  static final _snapshotViews = Expando<AgentContextOverview>();
+
+  static Map<String, dynamic> snapshotFromRaw(Object? raw) {
+    if (raw is Map<String, dynamic> && _snapshotViews[raw] != null) {
+      return raw;
+    }
+    final overview = AgentContextOverview.fromRaw(raw);
+    final json = overview.toJson();
+    json['timeline'] = List<Map<String, Object?>>.unmodifiable(
+      (json['timeline'] as List<Map<String, Object?>>).map(
+        (event) => Map<String, Object?>.unmodifiable(event),
+      ),
+    );
+    final snapshot = Map<String, dynamic>.unmodifiable(json);
+    _snapshotViews[snapshot] = overview;
+    return snapshot;
+  }
+
+  /// Update a canonical Hook snapshot, without re-parsing or serializing a
+  /// whole overview on tool-only events. Legacy/mutable input is normalized
+  /// before it can be reused. A missing task anchor still needs initialization.
+  static Map<String, dynamic> observeSnapshot({
+    required Map<String, dynamic>? previous,
+    required String? previousPrompt,
+    required String? previousAssistant,
+    required String prompt,
+    required String? assistant,
+    required DateTime at,
+  }) {
+    final snapshot = snapshotFromRaw(previous);
+    final overview = AgentContextOverview.fromRaw(snapshot);
+    if ((assistant == null || assistant.isEmpty) &&
+        ((overview.initialGoal.isNotEmpty &&
+                (prompt.isEmpty || prompt == previousPrompt)) ||
+            (overview.initialGoal.isEmpty &&
+                overview.goal.isEmpty &&
+                prompt.isEmpty))) {
+      return snapshot;
+    }
+    final observed = observe(
+      previous: overview,
+      previousPrompt: previousPrompt,
+      previousAssistant: previousAssistant,
+      prompt: prompt,
+      assistant: assistant,
+      at: at,
+    );
+    return observed == overview ? snapshot : snapshotFromRaw(observed.toJson());
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! AgentContextOverview ||
+        goal != other.goal ||
+        progress != other.progress ||
+        reportSummary != other.reportSummary ||
+        initialGoal != other.initialGoal ||
+        currentFocus != other.currentFocus ||
+        focusUpdatedAt != other.focusUpdatedAt ||
+        timeline.length != other.timeline.length) {
+      return false;
+    }
+    for (var i = 0; i < timeline.length; i++) {
+      if (timeline[i] != other.timeline[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    goal,
+    progress,
+    reportSummary,
+    initialGoal,
+    currentFocus,
+    focusUpdatedAt,
+    Object.hashAll(timeline),
+  );
+
+  static final _controlCharacters = RegExp(r'[\x00-\x1F\x7F]+');
+  static final _whitespace = RegExp(r'\s+');
+  static final _continuationPunctuation = RegExp(
+    r'^[\s。，？！.!?,]+|[\s。，？！.!?,]+$',
+  );
+
   static String _clean(Object? value, int limit) {
     if (value is! String) return '';
     return value
         .trim()
-        .replaceAll(RegExp(r'[\x00-\x1F\x7F]+'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
+        .replaceAll(_controlCharacters, ' ')
+        .replaceAll(_whitespace, ' ')
         .trim()
         .charactersTake(limit);
   }
@@ -55,7 +155,7 @@ class AgentContextOverview {
   static bool _substantive(String prompt) {
     final lower = prompt
         .trim()
-        .replaceAll(RegExp(r'^[\s。，？！.!?,]+|[\s。，？！.!?,]+$'), '')
+        .replaceAll(_continuationPunctuation, '')
         .toLowerCase();
     return !const <String>{
       '',
@@ -107,6 +207,8 @@ class AgentContextOverview {
 
   factory AgentContextOverview.fromRaw(Object? raw) {
     if (raw is! Map) return const AgentContextOverview();
+    final cached = _snapshotViews[raw];
+    if (cached != null) return cached;
     final rawTimeline = raw['timeline'];
     final timeline = <AgentContextMilestone>[];
     if (rawTimeline is List) {
@@ -245,6 +347,9 @@ class AgentContextOverview {
 /// String extension avoids splitting UTF-16 surrogate pairs.
 extension _ContextTakeCharacters on String {
   String charactersTake(int count) {
+    // UTF-16 length is an upper bound on rune count. Short strings need
+    // neither a rune iterator nor a StringBuffer.
+    if (length <= count) return this;
     var total = 0;
     final buffer = StringBuffer();
     for (final rune in runes) {
