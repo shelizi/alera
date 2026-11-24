@@ -14,8 +14,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 mod preview_cache;
-pub(crate) use preview_cache::HistoryPreviewCache;
 use preview_cache::PreviewScan;
+pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
 const MAX_FILES: usize = 256;
 const MAX_ENTRIES: usize = 4096;

@@ -3,7 +3,8 @@
 //! Provider JSONL files are never modified. Only summaries sanitized by
 //! agent_session_history_scan may be stored. No ambient startup indexing.
 use std::collections::HashMap;
-use std::path::Path;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use alera_core::global_agent_search::{AgentSessionSearchQuery, AgentSessionSearchRecord};
@@ -14,6 +15,10 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
+use crate::agent_session_history_scan::HistoryFileStamp;
+
+pub(crate) const HISTORY_INDEX_FILE: &str = "agent-session-search.sqlite";
+const INDEX_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BATCH: usize = 256;
 const MAX_RESULTS: usize = 100;
 const MAX_INDEXED_RECORDS: i64 = 20_000;
@@ -21,6 +26,8 @@ const MAX_QUERY_CHARS: usize = 256;
 
 pub(crate) struct AgentSessionHistoryIndex {
     pool: SqlitePool,
+    path: PathBuf,
+    file_stamp: Option<HistoryFileStamp>,
 }
 
 struct IndexedDocument {
@@ -53,21 +60,24 @@ pub(crate) struct HistoryIndexWriteStats {
 impl AgentSessionHistoryIndex {
     pub(crate) async fn open(private_runtime_dir: &Path) -> Result<Self> {
         prepare_private_runtime_directory(private_runtime_dir)?;
-        let path = private_runtime_dir.join("agent-session-search.sqlite");
-        open_private_runtime_file(&path)?;
+        let path = private_runtime_dir.join(HISTORY_INDEX_FILE);
+        let file = open_private_runtime_file(&path)?;
+        let before = HistoryFileStamp::read(&file);
+        drop(file);
         let options = SqliteConnectOptions::new()
             .filename(&path)
-            .create_if_missing(true)
+            // The private file was created above; a reconnect must never silently
+            // create a replacement with default file permissions.
+            .create_if_missing(false)
             .busy_timeout(Duration::from_secs(3))
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+            .synchronous(SqliteSynchronous::Normal)
+            // Apply this per connection, including any pool reconnect.
+            .pragma("secure_delete", "ON");
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(Some(INDEX_IDLE_TIMEOUT))
             .connect_with(options)
-            .await?;
-        // SQLite and FTS shadow tables may contain user-opted-in text.
-        sqlx::query("PRAGMA secure_delete = ON")
-            .execute(&pool)
             .await?;
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS history_search_docs (
@@ -100,7 +110,45 @@ impl AgentSessionHistoryIndex {
         .await
         .context("SQLite build must support FTS5")?;
         harden_sqlite_files(&path)?;
-        Ok(Self { pool })
+        let file_stamp = before.filter(|stamp| {
+            File::open(&path)
+                .ok()
+                .and_then(|file| HistoryFileStamp::read(&file))
+                .is_some_and(|after| stamp.same_file_as(&after))
+        });
+        Ok(Self {
+            pool,
+            path,
+            file_stamp,
+        })
+    }
+
+    /// The index belongs to this private Host directory. Never reuse a stale
+    /// handle after deletion/replacement, path changes, or idle pool shutdown.
+    pub(crate) fn can_reuse(&self, private_runtime_dir: &Path) -> Result<bool> {
+        if self.pool.is_closed()
+            || self.pool.size() == 0
+            || self.path != private_runtime_dir.join(HISTORY_INDEX_FILE)
+        {
+            return Ok(false);
+        }
+        let Some(stamp) = self.file_stamp.as_ref() else {
+            return Ok(false);
+        };
+        let current = File::open(&self.path)
+            .ok()
+            .and_then(|file| HistoryFileStamp::read(&file));
+        if !current.is_some_and(|current| stamp.same_file_as(&current)) {
+            return Ok(false);
+        }
+        // Preserve the existing private-file permission checks on every search.
+        prepare_private_runtime_directory(private_runtime_dir)?;
+        harden_sqlite_files(&self.path)?;
+        Ok(true)
+    }
+
+    pub(crate) async fn close(self) {
+        self.pool.close().await;
     }
 
     /// Incremental upsert. Unchanged serialized records cause no disk update.
@@ -368,15 +416,20 @@ impl AgentSessionHistoryIndex {
     /// Explicit privacy switch-off removes indexed previews. Provider logs are
     /// untouched; the caller controls whether and when to reindex.
     pub(crate) async fn clear(&self) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("DELETE FROM history_search_fts")
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM history_search_docs")
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&self.pool)
+        tx.commit().await?;
+        let row = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&self.pool)
             .await?;
+        if row.try_get::<i64, _>(0)? != 0 {
+            bail!("history index WAL checkpoint is busy");
+        }
         Ok(())
     }
 }
@@ -446,6 +499,25 @@ mod tests {
             .is_ok());
         index.clear().await.unwrap();
         assert!(index.search("注音", 30).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reusable_index_preserves_secure_delete_after_reconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        assert!(index.can_reuse(dir.path()).unwrap());
+        assert!(!index.can_reuse(other.path()).unwrap());
+        let connection = index.pool.acquire().await.unwrap();
+        connection.close().await.unwrap();
+        let secure_delete: i64 = sqlx::query_scalar("PRAGMA secure_delete")
+            .fetch_one(&index.pool)
+            .await
+            .unwrap();
+        assert_eq!(secure_delete, 1);
+        index.clear().await.unwrap();
+        index.pool.close().await;
+        assert!(!index.can_reuse(dir.path()).unwrap());
     }
 
     #[tokio::test]

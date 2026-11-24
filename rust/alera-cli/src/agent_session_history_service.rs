@@ -11,14 +11,58 @@ use alera_core::global_agent_search::{
 };
 use anyhow::{bail, Result};
 
-use crate::agent_session_history_fts::{AgentSessionHistoryIndex, HistoryIndexWriteStats};
+use crate::agent_session_history_fts::{
+    AgentSessionHistoryIndex, HistoryIndexWriteStats, HISTORY_INDEX_FILE,
+};
 use crate::agent_session_history_scan::{
     discover_history_cached, HistoryPreviewCache, HistoryScanPolicy, ProviderHistoryRoot,
     RegisteredHistoryWorkspace,
 };
 
 /// One state per Host, shared by deferred and inline search/clear requests.
-pub(crate) type HistorySearchState = Arc<Mutex<HistoryPreviewCache>>;
+pub(crate) type HistorySearchState = Arc<Mutex<HistorySearchCache>>;
+
+#[derive(Default)]
+pub(crate) struct HistorySearchCache {
+    previews: HistoryPreviewCache,
+    directory: Option<PathBuf>,
+    index: Option<AgentSessionHistoryIndex>,
+}
+
+impl HistorySearchCache {
+    async fn select_directory(&mut self, directory: &Path) {
+        if self.directory.as_deref() != Some(directory) {
+            self.close_index().await;
+            self.previews = HistoryPreviewCache::default();
+            self.directory = Some(directory.to_owned());
+        }
+    }
+
+    async fn close_index(&mut self) {
+        if let Some(index) = self.index.take() {
+            index.close().await;
+        }
+    }
+
+    async fn ensure_index(&mut self, directory: &Path) -> Result<bool> {
+        let reusable = self
+            .index
+            .as_ref()
+            .map(|index| index.can_reuse(directory))
+            .transpose();
+        match reusable {
+            Ok(Some(true)) => return Ok(true),
+            Err(error) => {
+                self.close_index().await;
+                return Err(error);
+            }
+            _ => {}
+        }
+        self.close_index().await;
+        self.index = Some(AgentSessionHistoryIndex::open(directory).await?);
+        Ok(false)
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct HistorySearchResponse {
@@ -26,6 +70,7 @@ pub(crate) struct HistorySearchResponse {
     pub visited_files: usize,
     pub parsed_files: usize,
     pub reused_files: usize,
+    pub index_reused: bool,
     pub scan_truncated: bool,
     pub writes: HistoryIndexWriteStats,
 }
@@ -48,6 +93,7 @@ pub(crate) async fn search_history_on_demand(
         visited_files: 0,
         parsed_files: 0,
         reused_files: 0,
+        index_reused: false,
         scan_truncated: false,
         writes: HistoryIndexWriteStats::default(),
     };
@@ -59,7 +105,8 @@ pub(crate) async fn search_history_on_demand(
     // Hold the owned guard through indexing, so an explicit clear cannot race
     // with a search and leave an immediately repopulated private cache.
     let mut guard = state.clone().lock_owned().await;
-    let (scan, _guard) = tokio::task::spawn_blocking(move || {
+    guard.select_directory(runtime_cache_dir).await;
+    let (scan, mut guard) = tokio::task::spawn_blocking(move || {
         let scan = discover_history_cached(
             &roots,
             &registered,
@@ -67,7 +114,7 @@ pub(crate) async fn search_history_on_demand(
                 index_user_text: true,
                 max_files: 256,
             },
-            &mut guard,
+            &mut guard.previews,
         );
         (scan, guard)
     })
@@ -80,19 +127,31 @@ pub(crate) async fn search_history_on_demand(
         return Ok(empty);
     }
 
-    let index = AgentSessionHistoryIndex::open(runtime_cache_dir).await?;
-    // No partial, unverified or out-of-scope rows may become resumable solely
-    // because they were present in a previous local SQLite index generation.
-    for chunk in scan.records.chunks(256) {
-        let write = index.upsert_batch(chunk).await?;
-        empty.writes.added += write.added;
-        empty.writes.updated += write.updated;
-        empty.writes.unchanged += write.unchanged;
-        empty.writes.trimmed += write.trimmed;
+    empty.index_reused = guard.ensure_index(runtime_cache_dir).await?;
+    let candidates = async {
+        let index = guard.index.as_ref().expect("index opened above");
+        // No partial, unverified or out-of-scope rows may become resumable solely
+        // because they were present in a previous local SQLite index generation.
+        for chunk in scan.records.chunks(256) {
+            let write = index.upsert_batch(chunk).await?;
+            empty.writes.added += write.added;
+            empty.writes.updated += write.updated;
+            empty.writes.unchanged += write.unchanged;
+            empty.writes.trimmed += write.trimmed;
+        }
+        // Scope and current-file identity constrain FTS before top-N limiting;
+        // otherwise other accounts can hide relevant rows from a filtered query.
+        index.search_scoped(query, &scan.records).await
     }
-    // Scope and current-file identity constrain FTS before top-N limiting;
-    // otherwise other accounts can hide relevant rows from a filtered query.
-    let candidates = index.search_scoped(query, &scan.records).await?;
+    .await;
+    let candidates = match candidates {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            // A failed connection/schema must not poison every later request.
+            guard.close_index().await;
+            return Err(error);
+        }
+    };
     let observed = scan
         .records
         .iter()
@@ -127,15 +186,30 @@ pub(crate) async fn clear_history_search_cache(
     state: &HistorySearchState,
 ) -> Result<()> {
     let mut guard = state.lock().await;
-    *guard = HistoryPreviewCache::default();
-    let path = PathBuf::from(runtime_cache_dir).join("agent-session-search.sqlite");
-    if !path.exists() {
-        return Ok(());
+    guard.select_directory(runtime_cache_dir).await;
+    guard.previews = HistoryPreviewCache::default();
+    let path = runtime_cache_dir.join(HISTORY_INDEX_FILE);
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => {
+            guard.close_index().await;
+            return Ok(());
+        }
+        Err(error) => {
+            guard.close_index().await;
+            return Err(error.into());
+        }
     }
-    AgentSessionHistoryIndex::open(runtime_cache_dir)
-        .await?
+    guard.ensure_index(runtime_cache_dir).await?;
+    let result = guard
+        .index
+        .as_ref()
+        .expect("index opened above")
         .clear()
-        .await
+        .await;
+    // Release SQLite/WAL handles after explicit privacy clear, even on error.
+    guard.close_index().await;
+    result
 }
 
 #[cfg(test)]
@@ -195,6 +269,7 @@ mod tests {
                 .unwrap();
         assert_eq!(first.hits.len(), 1);
         assert_eq!(first.writes.added, 1);
+        assert!(!first.index_reused);
         assert_eq!(first.parsed_files, 2);
         assert_eq!(first.reused_files, 0);
         assert_eq!(first.hits[0].session.workspace_id, "ws");
@@ -204,6 +279,7 @@ mod tests {
                 .unwrap();
         assert_eq!(second.hits.len(), 1);
         assert_eq!(second.writes.unchanged, 1);
+        assert!(second.index_reused);
         assert_eq!(
             second.parsed_files, 1,
             "unregistered history is never retained"
@@ -212,11 +288,13 @@ mod tests {
         clear_history_search_cache(cache.path(), &state)
             .await
             .unwrap();
+        assert!(state.lock().await.index.is_none());
         let third =
             search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
                 .await
                 .unwrap();
         assert_eq!(third.reused_files, 0);
+        assert!(!third.index_reused);
         assert_eq!(third.parsed_files, 2);
         assert_eq!(third.writes.added, 1);
         assert!(

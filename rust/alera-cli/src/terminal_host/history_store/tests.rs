@@ -152,6 +152,66 @@ async fn shrinking_the_limit_cuts_across_chunks() {
 }
 
 #[tokio::test]
+async fn trim_preserves_binary_suffix_and_other_sessions_without_extra_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.upsert(sample("s2")).await.unwrap();
+    store
+        .append_output("s1", 0, &[0xff, 0, 0x80, 0x61])
+        .await
+        .unwrap();
+    store.append_output("s1", 1, &[0xfe, 0]).await.unwrap();
+    store.append_output("s2", 0, b"other").await.unwrap();
+
+    // A no-op trim must not update or delete any rows.
+    sqlx::query(
+        "CREATE TRIGGER reject_output_update BEFORE UPDATE ON outputChunks
+                 BEGIN SELECT RAISE(ABORT, 'unexpected output update'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_output_delete BEFORE DELETE ON outputChunks
+                 BEGIN SELECT RAISE(ABORT, 'unexpected output delete'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    store.trim_session("s1", 6).await.unwrap();
+    store.trim_session("s1", 100).await.unwrap();
+    store.trim_session("missing", 0).await.unwrap();
+    sqlx::query("DROP TRIGGER reject_output_update")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TRIGGER reject_output_delete")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    store.trim_session("s1", 5).await.unwrap();
+    assert_eq!(
+        store.read("s1", 100).await.unwrap().unwrap().buffer,
+        vec![0, 0x80, 0x61, 0xfe, 0]
+    );
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 2);
+    store.trim_session("s1", 0).await.unwrap();
+    assert!(store
+        .read("s1", 100)
+        .await
+        .unwrap()
+        .unwrap()
+        .buffer
+        .is_empty());
+    assert_eq!(
+        store.read("s2", 100).await.unwrap().unwrap().buffer,
+        b"other"
+    );
+}
+
+#[tokio::test]
 async fn shrinking_session_limit_trims_existing_chunks() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();

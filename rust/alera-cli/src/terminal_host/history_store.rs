@@ -260,15 +260,24 @@ impl TerminalHostHistoryStore {
         // by bytes, not rows, so a chatty session persisting a batch every
         // 100 ms accumulates six figures of rows, and this runs on the server
         // actor: on every checkpoint tick, every detach, and every configure.
-        let row_count: i64 =
-            sqlx::query("SELECT COUNT(*) AS rowCount FROM outputChunks WHERE sessionId = ?")
-                .bind(session_id)
-                .fetch_one(&self.pool)
-                .await?
-                .try_get("rowCount")?;
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS rowCount, COALESCE(SUM(length(data)), 0) AS totalBytes \
+             FROM outputChunks WHERE sessionId = ?",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await?;
+        let row_count: i64 = row.try_get("rowCount")?;
+        let total_bytes: i64 = row.try_get("totalBytes")?;
         if row_count > OUTPUT_COMPACTION_ROW_THRESHOLD {
             // Compaction keeps only the retained tail, so it is the trim too.
             return compact_output_rows(self, session_id, max_bytes).await;
+        }
+        let max_bytes_i64 = i64::try_from(max_bytes).unwrap_or(i64::MAX);
+        if total_bytes <= max_bytes_i64 {
+            // Most periodic checkpoints are under the configured cap. One
+            // aggregate is sufficient; no window function or write transaction.
+            return Ok(());
         }
         let row = sqlx::query(
             "SELECT id, sequence, byteLen, running FROM ( \
@@ -280,7 +289,7 @@ impl TerminalHostHistoryStore {
              ) WHERE running > ? ORDER BY sequence DESC, id DESC LIMIT 1",
         )
         .bind(session_id)
-        .bind(i64::try_from(max_bytes).unwrap_or(i64::MAX))
+        .bind(max_bytes_i64)
         .fetch_optional(&self.pool)
         .await?;
         if let Some(row) = row {
@@ -295,15 +304,11 @@ impl TerminalHostHistoryStore {
             // slow part, and only this session's own worker removes its rows.
             let mut transaction = self.begin_write().await?;
             if remaining > 0 {
-                let data: Vec<u8> = sqlx::query("SELECT data FROM outputChunks WHERE id = ?")
-                    .bind(id)
-                    .fetch_one(&mut *transaction)
-                    .await?
-                    .try_get("data")?;
-                let tail_start = data.len().saturating_sub(remaining);
-                let tail = data[tail_start..].to_vec();
-                sqlx::query("UPDATE outputChunks SET data = ? WHERE id = ?")
-                    .bind(tail)
+                // SQLite substr operates on BLOB bytes, not Unicode characters.
+                // Keep the boundary data in SQLite instead of round-tripping
+                // the full chunk and copying its retained suffix through Rust.
+                sqlx::query("UPDATE outputChunks SET data = substr(data, -?) WHERE id = ?")
+                    .bind(i64::try_from(remaining).unwrap_or(i64::MAX))
                     .bind(id)
                     .execute(&mut *transaction)
                     .await?;

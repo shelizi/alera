@@ -95,6 +95,7 @@ impl AgentSessionHistoryRequestHandler {
             "visitedFiles": result.visited_files,
             "parsedFiles": result.parsed_files,
             "reusedFiles": result.reused_files,
+            "indexReused": result.index_reused,
             "scanTruncated": result.scan_truncated,
             "writes": {
                 "added": result.writes.added,

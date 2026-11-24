@@ -11,7 +11,7 @@ const MAX_AGE: Duration = Duration::from_secs(60);
 type ProviderPreview = (String, PathBuf, Option<String>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileStamp {
+pub(crate) struct FileStamp {
     len: u64,
     #[cfg(unix)]
     identity: (u64, u64, i64, i64, i64, i64),
@@ -20,8 +20,26 @@ struct FileStamp {
 }
 
 impl FileStamp {
+    /// Stable identity only: the private SQLite index may change contents between searches.
+    pub(crate) fn same_file_as(&self, other: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            self.identity.0 == other.identity.0 && self.identity.1 == other.identity.1
+        }
+        #[cfg(windows)]
+        {
+            self.identity.0 == other.identity.0
+                && self.identity.1 == other.identity.1
+                && self.identity.2 == other.identity.2
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = other;
+            false
+        }
+    }
     #[cfg(unix)]
-    fn read(file: &File) -> Option<Self> {
+    pub(crate) fn read(file: &File) -> Option<Self> {
         use std::os::unix::fs::MetadataExt;
         let meta = file.metadata().ok()?;
         if !meta.is_file() || meta.ino() == 0 {
@@ -41,7 +59,7 @@ impl FileStamp {
     }
 
     #[cfg(windows)]
-    fn read(file: &File) -> Option<Self> {
+    pub(crate) fn read(file: &File) -> Option<Self> {
         use std::os::windows::io::AsRawHandle;
         use windows::Win32::Foundation::HANDLE;
         use windows::Win32::Storage::FileSystem::{
@@ -90,7 +108,7 @@ impl FileStamp {
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn read(_file: &File) -> Option<Self> {
+    pub(crate) fn read(_file: &File) -> Option<Self> {
         None
     }
 }
