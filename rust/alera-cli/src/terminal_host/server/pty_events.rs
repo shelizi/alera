@@ -28,6 +28,9 @@ impl ServerActor {
     }
 
     async fn handle_pty_output(&mut self, session_id: String, data: Vec<u8>) {
+        if data.is_empty() {
+            return;
+        }
         #[cfg(windows)]
         let cursor_response_error = self.sessions.get_mut(&session_id).and_then(|session| {
             if !session.take_initial_conpty_cursor_query(&data) {
@@ -87,17 +90,17 @@ impl ServerActor {
             self.broadcast_authenticated_mobile(title_event);
         }
         self.record_orchestration_output_activity(&session_id);
-        if let Some(generation) = output_generation {
-            self.spawn_output_batch_timer(session_id.clone(), generation);
-        }
-        if let Some(generation) = durable_generation {
-            self.spawn_durable_output_batch_timer(session_id.clone(), generation);
-        }
+        // A batch already at its size boundary flushes now. Do not spawn
+        // a timer whose generation would be invalidated immediately.
         if output_len >= OUTPUT_BATCH_MAX_BYTES {
             self.flush_output_batch(&session_id);
+        } else if let Some(generation) = output_generation {
+            self.spawn_output_batch_timer(session_id.clone(), generation);
         }
         if durable_len >= OUTPUT_BATCH_MAX_BYTES {
             self.flush_durable_output_batch(&session_id);
+        } else if let Some(generation) = durable_generation {
+            self.spawn_durable_output_batch_timer(session_id.clone(), generation);
         }
         if let Some(generation) = checkpoint {
             self.spawn_checkpoint_timer(session_id, generation);

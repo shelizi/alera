@@ -631,8 +631,9 @@ impl Session {
         self.append_owned_output(data.to_vec())
     }
 
-    /// Append an owned PTY reader allocation to scrollback and both independent
-    /// output batches. Return timer generations when their flushes need arming.
+    /// Append an owned PTY reader allocation to scrollback and durable output,
+    /// plus a live delivery batch only when it has recipients. Return timer
+    /// generations when nonempty batches need their flushes armed.
     pub(super) fn append_owned_output(
         &mut self,
         data: Vec<u8>,
@@ -641,18 +642,19 @@ impl Session {
         self.buffer.append(&data);
         let title_change = self.title_tracker.feed(&data);
         self.append_output_batches(data);
-        let output_generation = if self.output_batch_armed {
+        let output_generation = if self.output_batch.is_empty() || self.output_batch_armed {
             None
         } else {
             self.output_batch_armed = true;
             Some(self.output_batch_gen)
         };
-        let durable_generation = if self.durable_output_batch_armed {
-            None
-        } else {
-            self.durable_output_batch_armed = true;
-            Some(self.durable_output_batch_gen)
-        };
+        let durable_generation =
+            if self.durable_output_batch.is_empty() || self.durable_output_batch_armed {
+                None
+            } else {
+                self.durable_output_batch_armed = true;
+                Some(self.durable_output_batch_gen)
+            };
         (output_generation, durable_generation, title_change)
     }
 

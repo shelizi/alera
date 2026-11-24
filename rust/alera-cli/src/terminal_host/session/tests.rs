@@ -121,6 +121,7 @@ fn conpty_startup_cursor_query_is_detected_once_across_output_chunks() {
 #[test]
 fn output_batch_coalesces_until_flush() {
     let mut session = test_session();
+    session.attach(1);
     assert_eq!(session.append_output(b"ab"), (Some(0), Some(0), None));
     assert_eq!(session.append_output(b"cd"), (None, None, None));
     assert!(session.output_batch_due(0));
@@ -138,6 +139,7 @@ fn output_batch_coalesces_until_flush() {
 #[test]
 fn owned_output_reuses_reader_allocation_across_independent_flushes() {
     let mut session = test_session();
+    session.attach(1);
     let first = vec![0xff; 16 * 1024];
     let first_ptr = first.as_ptr();
     assert_eq!(session.append_owned_output(first), (Some(0), Some(0), None));
@@ -175,6 +177,7 @@ fn owned_output_reuses_reader_allocation_across_independent_flushes() {
 #[test]
 fn owned_output_does_not_retain_disproportionate_reader_capacity() {
     let mut session = test_session();
+    session.attach(1);
     let mut data = Vec::with_capacity(1024 * 1024);
     data.extend_from_slice(b"tiny");
     let original = data.as_ptr();
@@ -237,6 +240,7 @@ fn output_backpressure_pauses_only_the_slow_client_until_resumed() {
 #[test]
 fn output_batch_empty_flush_disarms_timer() {
     let mut session = test_session();
+    session.attach(1);
     assert_eq!(session.append_output(b"a"), (Some(0), Some(0), None));
     assert!(session.flush_output_batch().is_some());
     assert!(session.flush_output_batch().is_none());
@@ -651,4 +655,89 @@ fn checkpoint_stamp_does_not_treat_saturated_cursor_as_unchanged() {
         .as_ref()
         .unwrap()
         .matches(&session, 1024));
+}
+
+#[test]
+fn unobserved_output_keeps_durable_bytes_without_allocating_live_batches() {
+    let mut session = test_session();
+    const CHUNK: usize = 16 * 1024;
+    const CHUNKS: usize = 64;
+    session.set_max_bytes(CHUNK * CHUNKS);
+    let mut durable_bytes = Vec::new();
+    let mut live_timers = 0;
+    let mut durable_timers = 0;
+    for index in 0..CHUNKS {
+        let data = vec![index as u8; CHUNK];
+        let original = data.as_ptr();
+        let (live, durable, _) = session.append_owned_output(data);
+        live_timers += usize::from(live.is_some());
+        durable_timers += usize::from(durable.is_some());
+        assert_eq!(session.output_batch.capacity(), 0);
+        assert_eq!(session.output_batch_len(), 0);
+        assert!(session.flush_output_batch().is_none());
+        if index % 4 == 0 {
+            assert_eq!(session.durable_output_batch.as_ptr(), original);
+        }
+        if index % 4 == 3 {
+            let batch = session.flush_durable_output_batch().unwrap();
+            assert_eq!(batch.sequence, (index / 4) as i64);
+            assert_eq!(batch.end_cursor, ((index + 1) * CHUNK) as u64);
+            durable_bytes.extend_from_slice(&batch.data);
+        }
+    }
+    assert_eq!(live_timers, 0);
+    assert_eq!(durable_timers, CHUNKS / 4);
+    assert_eq!(durable_bytes.len(), CHUNK * CHUNKS);
+    assert_eq!(session.buffer.to_bytes(), durable_bytes);
+    assert_eq!(session.output_stream_range(), (0, (CHUNK * CHUNKS) as u64));
+    for (index, chunk) in durable_bytes.chunks_exact(CHUNK).enumerate() {
+        assert!(chunk.iter().all(|byte| *byte == index as u8));
+    }
+}
+
+#[test]
+fn live_batch_tracks_active_recipients_and_invalidates_an_abandoned_generation() {
+    let mut session = test_session();
+    session.attach(1);
+    session.attach(2);
+    session.set_output_paused(1, true);
+    // Non-attached requests can leave stale pause entries. They must not
+    // suppress the other viewer even when the set lengths happen to match.
+    session.set_output_paused(99, true);
+    let (first, _, _) = session.append_output(b"first");
+    assert_eq!(first, Some(0));
+    assert_eq!(session.output_clients(), vec![2]);
+    assert_eq!(session.output_batch_len(), 5);
+
+    session.set_output_paused(2, true);
+    let (live, _, title) = session.append_output(b"\x1b]2;Background\x07");
+    assert_eq!(live, None);
+    assert_eq!(title.as_deref(), Some("Background"));
+    assert_eq!(session.output_batch.capacity(), 0);
+    assert!(!session.output_batch_due(first.unwrap()));
+    assert_eq!(session.delivered_output_cursor(2), Some(0));
+    assert!(session.output_clients().is_empty());
+
+    // Real attach/resume first catches the recipient up from the ring.
+    session.attach(2);
+    let end = session.output_stream_range().1;
+    let (next, _, _) = session.append_output(b"next");
+    assert_eq!(next, Some(1));
+    assert_eq!(session.delivered_output_cursor(2), Some(end));
+    assert_eq!(session.flush_output_batch().unwrap().data, b"next");
+    let durable = session.flush_durable_output_batch().unwrap();
+    assert_eq!(durable.data, b"first\x1b]2;Background\x07next");
+    assert_eq!(durable.end_cursor, end + 4);
+}
+
+#[test]
+fn empty_output_does_not_arm_either_batch() {
+    let mut session = test_session();
+    session.attach(1);
+    assert_eq!(session.append_owned_output(Vec::new()), (None, None, None));
+    assert_eq!(session.output_batch.capacity(), 0);
+    assert_eq!(session.durable_output_batch.capacity(), 0);
+    assert!(!session.output_batch_due(0));
+    assert!(!session.durable_output_batch_due(0));
+    assert_eq!(session.output_stream_range(), (0, 0));
 }

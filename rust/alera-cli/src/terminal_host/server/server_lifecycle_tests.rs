@@ -104,7 +104,7 @@ async fn disconnect_checkpoints_only_attached_sessions_while_another_client_rema
         assert_eq!(session.clients.contains(&2), i % 2 == 0);
         assert!(!session.output_resync_pending(1));
         assert_eq!(session.delivered_output_cursor(1), None);
-        assert_eq!(session.output_batch_len(), 16);
+        assert_eq!(session.output_batch_len(), if i % 2 == 0 { 16 } else { 0 });
         assert_eq!(session.durable_output_batch_len(), 16);
         assert_eq!(session.arm_checkpoint(), None);
         assert!(
