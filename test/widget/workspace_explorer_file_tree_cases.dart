@@ -232,7 +232,7 @@ void _registerWorkspaceExplorerFileTreeTests() {
       _file('readme.md'),
     ];
     service.emitWatchBatch(<String>['']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
 
     expect(find.text('external.dart'), findsOneWidget);
     expect(service.watchedPathUpdates.last, contains(''));

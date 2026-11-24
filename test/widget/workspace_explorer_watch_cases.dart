@@ -1,6 +1,64 @@
 part of 'workspace_explorer_test.dart';
 
+/// Widget tests must advance fake time through the watch quiet-period.
+/// pumpAndSettle alone can return before a trailing debounce timer fires.
+Future<void> _pumpWatchedRefresh(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 130));
+  await tester.pumpAndSettle();
+}
+
 void _registerWorkspaceExplorerWatchTests() {
+  testWidgets('rapid workspace switching keeps only the latest Explorer', (
+    tester,
+  ) async {
+    final first = _workspace();
+    final second = _workspace(
+      id: 'workspace-2',
+      path: '/repo/other',
+    ).copyWith(projectId: 'project-2');
+    final service = _FakeWorkspaceFileService()
+      ..childrenByWorkspacePath[first.path] =
+          <String, List<native.WorkspaceFileEntry>>{
+            '': <native.WorkspaceFileEntry>[_file('first.dart')],
+          }
+      ..childrenByWorkspacePath[second.path] =
+          <String, List<native.WorkspaceFileEntry>>{
+            '': <native.WorkspaceFileEntry>[_file('second.dart')],
+          };
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              height: 480,
+              child: _SwitchingWorkspaceExplorerHarness(
+                first: first,
+                second: second,
+                onOpenFile: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('first.dart'), findsOneWidget);
+
+    // Simulate A -> B -> A while B's watcher teardown is still outstanding.
+    await tester.tap(find.text('Switch workspace'));
+    await tester.pump();
+    await tester.tap(find.text('Switch workspace'));
+    await tester.pump(const Duration(milliseconds: 1000));
+    await tester.pumpAndSettle();
+
+    expect(find.text('first.dart'), findsOneWidget);
+    expect(find.text('second.dart'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
   testWidgets(
     'closed native watcher reconnects and discovers newly created files',
     (tester) async {
@@ -44,7 +102,7 @@ void _registerWorkspaceExplorerWatchTests() {
         _file('after.dart'),
       ];
       service.emitWatchBatch([''], changedRelativePaths: ['after.dart']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       expect(find.text('after.dart'), findsOneWidget);
     },
   );
@@ -95,6 +153,8 @@ void _registerWorkspaceExplorerWatchTests() {
     service.emitWatchBatch(<String>['d']);
     service.emitWatchBatch(<String>['b']);
     await tester.pump();
+    expect(statusCalls(), baseline);
+    await tester.pump(const Duration(milliseconds: 130));
     expect(statusCalls(), baseline + 1);
 
     gate.complete();
@@ -104,6 +164,62 @@ void _registerWorkspaceExplorerWatchTests() {
     expect(
       service.listChildrenCalls.length - baselineListCalls,
       lessThanOrEqualTo(5),
+    );
+  });
+
+  testWidgets('Quick Open coalesces collapsed-folder notification storms', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: true),
+      ];
+    await _pumpExplorer(tester, service);
+    final indexRequestsBefore = service.quickOpenRefreshRequests.length;
+    final directoryReadsBefore = service.listChildrenCalls.length;
+    for (var index = 0; index < 100; index++) {
+      service.emitWatchBatch(
+        const <String>[],
+        changedRelativePaths: const <String>['src/deep/example.dart'],
+      );
+    }
+    await _pumpWatchedRefresh(tester);
+
+    expect(
+      service.quickOpenRefreshRequests.length - indexRequestsBefore,
+      1,
+      reason: 'A file storm should not request 100 separate index rebuilds',
+    );
+    expect(service.listChildrenCalls.length, directoryReadsBefore);
+  });
+
+  testWidgets('Quick Open refreshes during continuous watch notifications', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('src', hasChildrenHint: true),
+      ];
+    await _pumpExplorer(tester, service);
+    final before = service.quickOpenRefreshRequests.length;
+    for (var index = 0; index < 30; index++) {
+      service.emitWatchBatch(
+        const <String>[],
+        changedRelativePaths: const <String>['src/deep/changed.dart'],
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+
+    expect(
+      service.quickOpenRefreshRequests.length - before,
+      inInclusiveRange(1, 3),
+      reason: 'The 750-ms maximum wait must prevent index starvation',
+    );
+    await _pumpWatchedRefresh(tester);
+    expect(
+      service.quickOpenRefreshRequests.length - before,
+      inInclusiveRange(2, 4),
     );
   });
 
@@ -121,7 +237,7 @@ void _registerWorkspaceExplorerWatchTests() {
         const <String>[],
         changedRelativePaths: const <String>['src/deep/new.dart'],
       );
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
 
       expect(service.quickOpenRefreshRequests, isNotEmpty);
       expect(service.listChildrenCalls, hasLength(baseline));
@@ -196,7 +312,7 @@ void _registerWorkspaceExplorerWatchTests() {
         _file('src/b.dart'),
       ];
       service.emitWatchBatch(<String>['src']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       expect(service.nativeProjectionUpdates, initial + 1);
       expect(service.projectionCalls, 0);
       expect(find.text('M'), findsOneWidget);
@@ -216,7 +332,7 @@ void _registerWorkspaceExplorerWatchTests() {
         _file('src/b.dart'),
       ];
       service.emitWatchBatch(<String>['src']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       expect(find.text('M'), findsNothing);
       expect(
         tester
@@ -260,7 +376,7 @@ void _registerWorkspaceExplorerWatchTests() {
         ),
     ];
     service.emitWatchBatch(<String>['']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
     expect(
       tester.widget<tree.DirectoryTreeView>(view).controller.data,
       same(treeBefore),
@@ -295,7 +411,7 @@ void _registerWorkspaceExplorerWatchTests() {
       _file('src/extra.dart'),
     ];
     service.emitWatchBatch(<String>['src']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
 
     expect(service.nativeProjectionUpdates, projected + 1);
     expect(service.projectionCalls, 0);
@@ -351,7 +467,7 @@ void _registerWorkspaceExplorerWatchTests() {
         for (var i = 0; i < 150; i++) _file('src/batch_$i.dart'),
       ];
       service.emitWatchBatch(<String>['src']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       final added = tester.widget<tree.DirectoryTreeView>(view).controller.data;
       expect(added.nodes.length, before.nodes.length + 150);
       expect(added.nodes['path:persistent.md'], same(persistent));
@@ -362,7 +478,7 @@ void _registerWorkspaceExplorerWatchTests() {
         _file('src/base.dart'),
       ];
       service.emitWatchBatch(<String>['src']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       final removed = tester
           .widget<tree.DirectoryTreeView>(view)
           .controller
@@ -396,7 +512,7 @@ void _registerWorkspaceExplorerWatchTests() {
         _file('src/replacement.dart'),
       ];
       service.emitWatchBatch(<String>['src']);
-      await tester.pumpAndSettle();
+      await _pumpWatchedRefresh(tester);
       expect(service.nativeProjectionUpdates, previousNativeUpdates + 1);
       expect(service.projectionCalls, previousFallbacks + 1);
       expect(find.text('replacement.dart'), findsOneWidget);
@@ -432,7 +548,7 @@ void _registerWorkspaceExplorerWatchTests() {
       _file('a/new.dart'),
     ];
     service.emitWatchBatch(<String>['a']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
     final afterTree = tester
         .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
         .controller
@@ -470,7 +586,7 @@ void _registerWorkspaceExplorerWatchTests() {
     // Native listing returns new instances even when all fields are equal.
     service.childrenByDirectory['src'] = [_file('src/main.dart')];
     service.emitWatchBatch(<String>['src']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
 
     expect(service.watchedPathUpdates, hasLength(updatesAfterExpand));
     expect(

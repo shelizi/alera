@@ -67,10 +67,9 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
         _watcherRecoveryInFlight) {
       return;
     }
-    _workspaceFiles.scheduleQuickOpenRefresh(
-      workspacePath: widget.workspace.path,
-      debounce: const Duration(milliseconds: 120),
-    );
+    _watchQuickOpenRefreshQueue.enqueue(const <String>[
+      'index',
+    ], immediate: true);
     _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
     final exponent = _watcherFailureCount.clamp(0, 4);
     _watcherFailureCount += 1;
@@ -104,6 +103,9 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
       // watcher generation changed. Always reconcile once after reattach.
       if (mounted && _watcherHandle != null) {
         _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
+        _watchQuickOpenRefreshQueue.enqueue(const <String>[
+          'index',
+        ], immediate: true);
       }
     }
   }
@@ -116,11 +118,29 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     final handle = _watcherHandle;
     _watchSubscription = null;
     _watcherHandle = null;
-    if (discardPending) _watchRefreshQueue.clear();
+    if (discardPending) {
+      _watchRefreshQueue.clear();
+      _watchQuickOpenRefreshQueue.clear();
+    }
     _lastSyncedWatchedDirectories = null;
-    await subscription?.cancel();
+    // Cancellation may stall if a platform event stream never acknowledges
+    // teardown. Generation guards already reject the old stream: do not keep
+    // the next Workspace behind a permanently animated loading indicator.
+    if (subscription != null) {
+      try {
+        await subscription.cancel().timeout(const Duration(milliseconds: 300));
+      } catch (_) {
+        // Best-effort stream cleanup continues after the bounded wait.
+      }
+    }
     if (handle != null) {
-      await _workspaceFiles.stopExplorerWatcher(handle: handle);
+      try {
+        await _workspaceFiles
+            .stopExplorerWatcher(handle: handle)
+            .timeout(const Duration(milliseconds: 500));
+      } catch (_) {
+        // Native cleanup is best effort; a stale handle must not block UI.
+      }
     }
   }
 
@@ -158,12 +178,19 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
           .toSet(),
     );
     if (searchRelevant) {
-      _workspaceFiles.scheduleQuickOpenRefresh(
-        workspacePath: widget.workspace.path,
-        debounce: const Duration(milliseconds: 120),
-      );
+      _watchQuickOpenRefreshQueue.enqueue(const <String>['index']);
     }
     _watchRefreshQueue.enqueue(batch.directoryRelativePaths);
+  }
+
+  Future<void> _scheduleWatchedQuickOpenRefresh(List<String> _) async {
+    if (!mounted) return;
+    // The queue already enforces a 120-ms quiet period and a 750-ms maximum
+    // wait. Do not restart the backend's own debounce on every watcher event.
+    _workspaceFiles.scheduleQuickOpenRefresh(
+      workspacePath: widget.workspace.path,
+      debounce: Duration.zero,
+    );
   }
 
   Future<void> _refreshWatchedDirectories(List<String> relativePaths) async {

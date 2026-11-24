@@ -61,8 +61,11 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   Future<void> _restartExplorer() async {
+    final generation = _nativeProjectionGeneration;
     await _stopNativeWatcher();
-    if (!mounted) {
+    // A newer workspace navigation may have started while the old native
+    // stream was being cancelled. Only the latest request can re-bootstrap.
+    if (!mounted || generation != _nativeProjectionGeneration) {
       return;
     }
     await _bootstrapExplorer();

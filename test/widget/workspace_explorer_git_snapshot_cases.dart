@@ -49,7 +49,7 @@ void _registerWorkspaceExplorerGitSnapshotTests() {
     );
 
     service.emitWatchBatch(<String>['', 'src']);
-    await tester.pumpAndSettle();
+    await _pumpWatchedRefresh(tester);
 
     expect(
       gitBackend.calls.where((call) => call.method == 'explorerStatusSnapshot'),

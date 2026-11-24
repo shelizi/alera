@@ -156,6 +156,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   bool _watcherRecoveryInFlight = false;
   late final WorkspaceExplorerWatchRefreshQueue _watchRefreshQueue =
       WorkspaceExplorerWatchRefreshQueue(refresh: _refreshWatchedDirectories);
+  late final WorkspaceExplorerWatchRefreshQueue _watchQuickOpenRefreshQueue =
+      WorkspaceExplorerWatchRefreshQueue(
+        refresh: _scheduleWatchedQuickOpenRefresh,
+      );
   Set<String>? _lastSyncedWatchedDirectories;
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
@@ -247,6 +251,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _expandedDirectoryPaths.clear();
       _selectedRelativePath = null;
       _resetExplorerProjection();
+      _watchRefreshQueue.clear();
+      _watchQuickOpenRefreshQueue.clear();
       _controller.dispose();
       _controller = tree.DirectoryTreeController(
         data: _buildTreeData(),
@@ -268,6 +274,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
     _watchRefreshQueue.dispose();
+    _watchQuickOpenRefreshQueue.dispose();
     _disposeNativeProjectionSession();
     unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
