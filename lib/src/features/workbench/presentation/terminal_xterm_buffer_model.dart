@@ -4,81 +4,9 @@ import 'dart:typed_data';
 import 'package:xterm2/core.dart';
 
 import 'terminal_search_source.dart';
+import 'terminal_xterm_head_list.dart';
 import 'terminal_xterm_worker.dart';
 import 'terminal_xterm_worker_packed_cells.dart';
-
-final class _TerminalXtermHeadList<T extends Object> extends ListBase<T> {
-  static const int _minCompactionHead = 1024;
-
-  final List<T?> _storage = <T?>[];
-  int _head = 0;
-
-  int get storageHead => _head;
-
-  @override
-  int get length => _storage.length - _head;
-
-  @override
-  set length(int value) {
-    if (value < 0) {
-      throw RangeError.range(value, 0, null, 'value');
-    }
-    final current = length;
-    if (value > current) {
-      throw UnsupportedError('Grow the terminal head list with add/addAll.');
-    }
-    if (value == 0) {
-      clear();
-      return;
-    }
-    if (value == current) return;
-    _storage.length = _head + value;
-  }
-
-  @override
-  T operator [](int index) {
-    RangeError.checkValidIndex(index, this);
-    return _storage[_head + index] as T;
-  }
-
-  @override
-  void operator []=(int index, T value) {
-    RangeError.checkValidIndex(index, this);
-    _storage[_head + index] = value;
-  }
-
-  @override
-  void add(T value) => _storage.add(value);
-
-  @override
-  void addAll(Iterable<T> iterable) => _storage.addAll(iterable);
-
-  @override
-  void clear() {
-    _storage.clear();
-    _head = 0;
-  }
-
-  void trimStart(int count) {
-    RangeError.checkValueInInterval(count, 0, length, 'count');
-    if (count == 0) return;
-    final end = _head + count;
-    for (var index = _head; index < end; index++) {
-      _storage[index] = null;
-    }
-    _head = end;
-    _compactIfNeeded();
-  }
-
-  void _compactIfNeeded() {
-    if (_head < _minCompactionHead || _head * 2 < _storage.length) return;
-    final retained = _storage.sublist(_head);
-    _storage
-      ..clear()
-      ..addAll(retained);
-    _head = 0;
-  }
-}
 
 const int _packedCellWords = 3;
 const int _retainedRowOverheadBytes = 96;
@@ -114,8 +42,8 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       <TerminalSearchSourceListener>{};
   Object _searchGeneration = Object();
   int _searchLineBase = 0;
-  final _TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>
-  _searchLineIds = _TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>();
+  final TerminalXtermHeadList<_TerminalXtermBufferSearchLineId> _searchLineIds =
+      TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>();
   int _revision = 0;
   int _cols = 0;
   int _rows = 0;
@@ -134,15 +62,15 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   final Map<int, String> _hyperlinks = <int, String>{};
   List<TerminalXtermWorkerEffect> _effects =
       const <TerminalXtermWorkerEffect>[];
-  final _TerminalXtermHeadList<String> _rowTexts =
-      _TerminalXtermHeadList<String>();
+  final TerminalXtermHeadList<String> _rowTexts =
+      TerminalXtermHeadList<String>();
   // One packed row per buffer line rather than one object per cell: a full
   // scrollback held ~10k x cols cell objects on the UI isolate, and that heap
   // is what every collection in the isolate group had to walk.
-  final _TerminalXtermHeadList<Uint32List> _renderRows =
-      _TerminalXtermHeadList<Uint32List>();
-  final _TerminalXtermHeadList<bool> _wrappedRows =
-      _TerminalXtermHeadList<bool>();
+  final TerminalXtermHeadList<Uint32List> _renderRows =
+      TerminalXtermHeadList<Uint32List>();
+  final TerminalXtermHeadList<bool> _wrappedRows =
+      TerminalXtermHeadList<bool>();
   List<int> _semanticPromptLines = <int>[];
   late final UnmodifiableListView<String> _rowTextsView = UnmodifiableListView(
     _rowTexts,
@@ -640,19 +568,29 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
 
   Uint32List _freezeCells(List<TerminalXtermWorkerRenderCell> cells) {
     final packed = Uint32List(cells.length * _packedCellWords);
+    _copyCells(packed, 0, cells);
+    return packed;
+  }
+
+  void _copyCells(
+    Uint32List packed,
+    int start,
+    List<TerminalXtermWorkerRenderCell> cells,
+  ) {
     if (cells is TerminalXtermWorkerPackedCells) {
+      // Use the typed payload for partial spans as well as complete rows.
+      // Indexing the List facade would construct a render-cell object.
       for (var column = 0; column < cells.length; column++) {
-        final offset = column * _packedCellWords;
+        final offset = (start + column) * _packedCellWords;
         packed[offset + _packedWidthWord] = cells.widthAt(column);
         packed[offset + _packedContentWord] = cells.contentAt(column);
         packed[offset + _packedHyperlinkWord] = cells.hyperlinkIdAt(column);
       }
-      return packed;
+      return;
     }
     for (var column = 0; column < cells.length; column++) {
-      _packCell(packed, column, cells[column]);
+      _packCell(packed, start + column, cells[column]);
     }
-    return packed;
   }
 
   void _packCell(
@@ -690,9 +628,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
     // A new row rather than an in-place write keeps the identity contract:
     // an untouched row is the same object, a changed one is not.
     final next = Uint32List.fromList(existing);
-    for (var offset = 0; offset < changed.cells.length; offset++) {
-      _packCell(next, start + offset, changed.cells[offset]);
-    }
+    _copyCells(next, start, changed.cells);
     return next;
   }
 

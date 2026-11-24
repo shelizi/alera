@@ -7,7 +7,9 @@ import 'package:xterm2/xterm.dart';
 
 import '../domain/terminal_mode_reset.dart';
 import '../domain/terminal_osc52_clipboard.dart';
+import 'terminal_xterm_head_list.dart';
 import 'terminal_xterm_worker_packed_cells.dart';
+import 'terminal_xterm_worker_row_cache.dart';
 
 const String _workerReady = 'ready';
 const String _workerWrite = 'write';
@@ -1774,78 +1776,6 @@ final class TerminalXtermWorker {
   }
 }
 
-final class _TerminalXtermWorkerRowCache {
-  const _TerminalXtermWorkerRowCache({
-    required this.cells,
-    required this.combiningCharacters,
-    required this.isWrapped,
-  });
-
-  factory _TerminalXtermWorkerRowCache.capture(BufferLine line) {
-    final cells = Uint32List(line.length * 5);
-    for (var column = 0; column < line.length; column++) {
-      final offset = column * 5;
-      cells[offset] = line.getForeground(column);
-      cells[offset + 1] = line.getBackground(column);
-      cells[offset + 2] = line.getAttributes(column);
-      cells[offset + 3] = line.getContent(column);
-      cells[offset + 4] = line.getUnderlineColor(column);
-    }
-    return _TerminalXtermWorkerRowCache(
-      cells: cells,
-      combiningCharacters: line.hasCombiningCharacters
-          ? <String?>[
-              for (var column = 0; column < line.length; column++)
-                line.getCombiningCharacters(column),
-            ]
-          : null,
-      isWrapped: line.isWrapped,
-    );
-  }
-
-  final Uint32List cells;
-  final List<String?>? combiningCharacters;
-  final bool isWrapped;
-
-  bool _cellMatches(BufferLine line, int column) {
-    final offset = column * 5;
-    if (offset + 4 >= cells.length ||
-        cells[offset] != line.getForeground(column) ||
-        cells[offset + 1] != line.getBackground(column) ||
-        cells[offset + 2] != line.getAttributes(column) ||
-        cells[offset + 3] != line.getContent(column) ||
-        cells[offset + 4] != line.getUnderlineColor(column)) {
-      return false;
-    }
-    return combiningCharacters?[column] == line.getCombiningCharacters(column);
-  }
-
-  _TerminalXtermWorkerCellSpan? changedCellSpan(BufferLine line) {
-    if (cells.length != line.length * 5) {
-      return _TerminalXtermWorkerCellSpan(0, line.length);
-    }
-    int? start;
-    var end = 0;
-    for (var column = 0; column < line.length; column++) {
-      if (_cellMatches(line, column)) continue;
-      start ??= column;
-      end = column + 1;
-    }
-    return start == null ? null : _TerminalXtermWorkerCellSpan(start, end);
-  }
-
-  bool matches(BufferLine line) {
-    return isWrapped == line.isWrapped && changedCellSpan(line) == null;
-  }
-}
-
-final class _TerminalXtermWorkerCellSpan {
-  const _TerminalXtermWorkerCellSpan(this.start, this.end);
-
-  final int start;
-  final int end;
-}
-
 void terminalXtermWorkerMain(List<Object?> initialization) {
   final owner = initialization[0]! as SendPort;
   final cols = initialization[1]! as int;
@@ -1884,11 +1814,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
   }
 
   var revision = 0;
-  List<_TerminalXtermWorkerRowCache>? viewportCache;
+  List<TerminalXtermWorkerRowCache>? viewportCache;
   var cachedCols = 0;
   var cachedRows = 0;
-  List<BufferLine>? bufferLineRefs;
-  List<_TerminalXtermWorkerRowCache?>? bufferLineCaches;
+  TerminalXtermHeadList<BufferLine>? bufferLineRefs;
+  TerminalXtermHeadList<TerminalXtermWorkerRowCache?>? bufferLineCaches;
   var cachedBufferScrollBack = 0;
 
   List<Object?> renderCellMessage(
@@ -1957,11 +1887,9 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
 
   void refreshViewportCache() {
     final first = terminal.buffer.scrollBack;
-    viewportCache = <_TerminalXtermWorkerRowCache>[
+    viewportCache = <TerminalXtermWorkerRowCache>[
       for (var row = 0; row < terminal.viewHeight; row++)
-        _TerminalXtermWorkerRowCache.capture(
-          terminal.buffer.lines[first + row],
-        ),
+        TerminalXtermWorkerRowCache.capture(terminal.buffer.lines[first + row]),
     ];
     cachedCols = terminal.viewWidth;
     cachedRows = terminal.viewHeight;
@@ -2055,7 +1983,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
         previous == null ||
         cachedCols != terminal.viewWidth ||
         cachedRows != terminal.viewHeight;
-    final nextCache = <_TerminalXtermWorkerRowCache>[];
+    final nextCache = <TerminalXtermWorkerRowCache>[];
     final changedRows = <Object?>[];
 
     for (var row = 0; row < terminal.viewHeight; row++) {
@@ -2063,11 +1991,18 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       final previousRow = !fullRepaint && row < previous.length
           ? previous[row]
           : null;
-      if (previousRow != null && previousRow.matches(line)) {
+      final span = previousRow?.changedCellSpan(line);
+      if (previousRow != null &&
+          previousRow.isWrapped == line.isWrapped &&
+          span == null) {
         nextCache.add(previousRow);
         continue;
       }
-      nextCache.add(_TerminalXtermWorkerRowCache.capture(line));
+      nextCache.add(
+        previousRow == null
+            ? TerminalXtermWorkerRowCache.capture(line)
+            : previousRow.refresh(line, span),
+      );
       changedRows.add(rowMessage(row, line));
     }
 
@@ -2107,8 +2042,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     final rowTexts = List<String>.filled(lines.length, '', growable: false);
     final combiningEntries = <Object?>[];
     final hyperlinkUpdates = <int, String>{};
-    final nextRefs = <BufferLine>[];
-    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
+    final nextRefs = TerminalXtermHeadList<BufferLine>();
+    final nextCaches = TerminalXtermHeadList<TerminalXtermWorkerRowCache?>();
     final currentScrollBack = terminal.buffer.scrollBack;
     var wordOffset = 0;
     var absoluteCell = 0;
@@ -2119,7 +2054,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
       nextCaches.add(
         row < currentScrollBack
             ? null
-            : _TerminalXtermWorkerRowCache.capture(line),
+            : TerminalXtermWorkerRowCache.capture(line),
       );
       rowTexts[row] = line.toString();
       packedWords[wordOffset++] = line.length;
@@ -2155,9 +2090,7 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     bufferLineRefs = nextRefs;
     bufferLineCaches = nextCaches;
     cachedBufferScrollBack = currentScrollBack;
-    final cachedRowCount = nextCaches
-        .whereType<_TerminalXtermWorkerRowCache>()
-        .length;
+    final cachedRowCount = lines.length - currentScrollBack;
     final packedRows = <Object?>[
       _packedBufferRowsTag,
       rowTexts,
@@ -2333,8 +2266,8 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
         lines.length - retainedRows > maxRevisitedRows) {
       return packedFullBufferDelta();
     }
-    final nextRefs = <BufferLine>[];
-    final nextCaches = <_TerminalXtermWorkerRowCache?>[];
+    final nextRefs = TerminalXtermHeadList<BufferLine>();
+    final nextCaches = TerminalXtermHeadList<TerminalXtermWorkerRowCache?>();
     var cachedRowCount = 0;
     for (var row = retainedRows; row < lines.length; row++) {
       final line = lines[row];
@@ -2366,7 +2299,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
         continue;
       }
       nextCaches.add(
-        remainsScrollback ? null : _TerminalXtermWorkerRowCache.capture(line),
+        remainsScrollback
+            ? null
+            : previousCache == null
+            ? TerminalXtermWorkerRowCache.capture(line)
+            : previousCache.refresh(line, changedSpan),
       );
       if (!remainsScrollback) cachedRowCount += 1;
       final cellStart = changedSpan?.start ?? 0;
@@ -2377,14 +2314,14 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
     final changedRows = packedSpanRows(changedSpans, hyperlinkUpdates);
 
     if (retainedRows > 0) {
-      // Shift the retained prefix into place and append the revisited rows,
-      // instead of rebuilding lists as long as the whole buffer.
+      // Advance the logical head and append the revisited rows. At the
+      // scrollback limit a single new line must not shift every retained row.
       previousRefs!
-        ..removeRange(0, trimStart)
+        ..trimStart(trimStart)
         ..length = retainedRows
         ..addAll(nextRefs);
       previousCaches!
-        ..removeRange(0, trimStart)
+        ..trimStart(trimStart)
         ..length = retainedRows
         ..addAll(nextCaches);
       bufferLineRefs = previousRefs;
@@ -2635,6 +2572,11 @@ void terminalXtermWorkerMain(List<Object?> initialization) {
           throw ArgumentError.value(command, 'command');
       }
     } catch (error, stackTrace) {
+      // A failed reply may have partially refreshed a worker-owned cache.
+      // Require a fresh repaint rather than comparing against unsent state.
+      viewportCache = null;
+      bufferLineRefs = null;
+      bufferLineCaches = null;
       fail(reply, error, stackTrace);
     }
   });
