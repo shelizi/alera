@@ -874,6 +874,318 @@ async fn concurrent_combined_persists_keep_session_tails_isolated() {
 }
 
 #[tokio::test]
+async fn batched_insert_respects_row_and_payload_limits_and_preserves_binary_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let mut tx = store.begin_write().await.unwrap();
+    let created_at = "2026-11-24T00:00:00.000Z";
+    assert_eq!(
+        insert_output_rows(&mut tx, "s1", created_at, &[])
+            .await
+            .unwrap(),
+        0
+    );
+
+    let tiny: Vec<Vec<u8>> = (0..OUTPUT_INSERT_BATCH_ROWS * 2 + 1)
+        .map(|i| vec![(i % 256) as u8, 0xff, 0])
+        .collect();
+    assert_eq!(
+        insert_output_rows(
+            &mut tx,
+            "s1",
+            created_at,
+            &tiny
+                .iter()
+                .enumerate()
+                .map(|(i, data)| (i as i64, data.as_slice()))
+                .collect::<Vec<_>>()
+        )
+        .await
+        .unwrap(),
+        3
+    );
+    // Fit exactly one full payload batch, then force two independent large
+    // rows and an oversized row that must stay intact. Identical sequences
+    // still use insertion id as the chronological tie breaker.
+    let large = vec![
+        vec![0x80; OUTPUT_INSERT_BATCH_BYTES / 2],
+        vec![0x81; OUTPUT_INSERT_BATCH_BYTES / 2],
+        vec![0x82; OUTPUT_INSERT_BATCH_BYTES / 2 + 1],
+        vec![0x83; OUTPUT_INSERT_BATCH_BYTES / 2 + 1],
+        vec![0x84; OUTPUT_INSERT_BATCH_BYTES + 17],
+        vec![0xff, 0, b'x'],
+    ];
+    let next = tiny.len() as i64;
+    assert_eq!(
+        insert_output_rows(
+            &mut tx,
+            "s1",
+            created_at,
+            &large
+                .iter()
+                .map(|data| (next, data.as_slice()))
+                .collect::<Vec<_>>()
+        )
+        .await
+        .unwrap(),
+        5
+    );
+    tx.commit().await.unwrap();
+
+    let expected = tiny
+        .iter()
+        .chain(&large)
+        .flat_map(|data| data.iter().copied())
+        .collect::<Vec<_>>();
+    assert_eq!(store.read_buffer("s1", usize::MAX).await.unwrap(), expected);
+    let lengths: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT sequence, length(data), createdAt FROM outputChunks
+         WHERE sessionId = 's1' ORDER BY sequence, id",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(lengths.len(), tiny.len() + large.len());
+    for (i, (sequence, len, timestamp)) in lengths.iter().enumerate() {
+        let expected_sequence = if i < tiny.len() { i as i64 } else { next };
+        let expected_len = if i < tiny.len() {
+            tiny[i].len()
+        } else {
+            large[i - tiny.len()].len()
+        };
+        assert_eq!(*sequence, expected_sequence);
+        assert_eq!(*len, expected_len as i64);
+        assert_eq!(timestamp, created_at);
+    }
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn failed_later_insert_batch_rolls_back_earlier_inserts_and_checkpoint_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    let original = sample("s1");
+    store
+        .persist_session("s1", Some(&original), &[(0, b"seed")])
+        .await
+        .unwrap();
+    store.upsert(sample("other")).await.unwrap();
+    store
+        .append_output("other", 0, b"other history")
+        .await
+        .unwrap();
+
+    let mut outputs = vec![(1, b"+".to_vec())];
+    for sequence in 2..(OUTPUT_INSERT_BATCH_ROWS as i64 + 8) {
+        let mut data = vec![sequence as u8; OUTPUT_CHUNK_TARGET_BYTES];
+        data[0] = 0xff;
+        data[1] = 0;
+        outputs.push((sequence, data));
+    }
+    // The first full batch (sequences 2 through 65) succeeds, then the
+    // second fails. The existing-row update and metadata must roll back too.
+    let fail_at = OUTPUT_INSERT_BATCH_ROWS as i64 + 2;
+    sqlx::query("CREATE TABLE rejectedSequence (sequence INTEGER NOT NULL)")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO rejectedSequence VALUES (?)")
+        .bind(fail_at)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_later_batch BEFORE INSERT ON outputChunks
+         WHEN NEW.sessionId = 's1' AND NEW.sequence = (SELECT sequence FROM rejectedSequence)
+         BEGIN SELECT RAISE(ABORT, 'later output batch rejected'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let mut updated = original.clone();
+    updated.working_directory = "/tmp/updated".into();
+    let mut expected = b"seed".to_vec();
+    for (_, data) in &outputs {
+        expected.extend_from_slice(data);
+    }
+    updated.output_stream_bytes = expected.len() as u64;
+    assert!(store
+        .persist_session("s1", Some(&updated), &outputs)
+        .await
+        .is_err());
+
+    let persisted = store.read("s1", usize::MAX).await.unwrap().unwrap();
+    assert_eq!(persisted.buffer, b"seed");
+    assert_eq!(persisted.working_directory, original.working_directory);
+    assert_eq!(persisted.output_stream_bytes, original.output_stream_bytes);
+    assert_eq!(output_row_count(&store, "s1").await, 1);
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 1);
+
+    sqlx::query("DROP TRIGGER reject_later_batch")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        store
+            .persist_session("s1", Some(&updated), &outputs)
+            .await
+            .unwrap();
+        let persisted = store.read("s1", usize::MAX).await.unwrap().unwrap();
+        assert_eq!(persisted.buffer, expected);
+        assert_eq!(persisted.working_directory, updated.working_directory);
+        assert_eq!(persisted.output_stream_bytes, updated.output_stream_bytes);
+        assert_eq!(
+            store.next_output_sequence("s1").await.unwrap(),
+            outputs.last().unwrap().0 + 1
+        );
+    }
+    assert_eq!(output_row_count(&store, "s1").await, outputs.len() as i64);
+    assert_eq!(
+        store.read_buffer("other", usize::MAX).await.unwrap(),
+        b"other history"
+    );
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn compaction_rewrites_multiple_insert_batches_without_losing_the_retained_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let count = OUTPUT_COMPACTION_ROW_THRESHOLD + 7;
+    let data: Vec<Vec<u8>> = (0..count)
+        .map(|sequence| {
+            let mut chunk = vec![sequence as u8; 1024];
+            chunk[..8].copy_from_slice(&sequence.to_le_bytes());
+            chunk
+        })
+        .collect();
+    let mut tx = store.begin_write().await.unwrap();
+    insert_output_rows(
+        &mut tx,
+        "s1",
+        "",
+        &data
+            .iter()
+            .enumerate()
+            .map(|(sequence, bytes)| (sequence as i64, bytes.as_slice()))
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(output_row_count(&store, "s1").await, count);
+    let mut expected = data.concat();
+    let latest = [0xff, 0, 0x80, b'x'];
+    expected.extend_from_slice(&latest);
+    let cap = OUTPUT_CHUNK_TARGET_BYTES * (OUTPUT_INSERT_BATCH_ROWS + 9) + 13;
+    assert!(expected.len() > cap);
+    store
+        .persist_session_with_trim("s1", None, &[(count, latest)], Some(cap))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.read_buffer("s1", usize::MAX).await.unwrap(),
+        expected[expected.len() - cap..]
+    );
+    assert_eq!(
+        output_row_count(&store, "s1").await,
+        cap.div_ceil(OUTPUT_CHUNK_TARGET_BYTES) as i64
+    );
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), count + 1);
+    store.close_for_test().await;
+}
+
+/// Measure the actual SQLite insertion statements, excluding transaction
+/// admission and rollback so the result isolates database worker round trips.
+#[tokio::test]
+#[ignore = "manual output insert microbenchmark"]
+async fn benchmark_batched_history_insert() {
+    use std::time::Instant;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let data = vec![b'x'; OUTPUT_CHUNK_TARGET_BYTES];
+    async fn run(
+        store: &TerminalHostHistoryStore,
+        data: &[u8],
+        rows: usize,
+        calls: usize,
+        batched: bool,
+    ) -> (f64, usize) {
+        let mut elapsed = std::time::Duration::ZERO;
+        let mut statements = 0;
+        for _ in 0..calls {
+            let mut tx = store.begin_write().await.unwrap();
+            let started = Instant::now();
+            if batched {
+                statements += insert_output_rows(
+                    &mut tx,
+                    "s1",
+                    "",
+                    &(0..rows)
+                        .map(|sequence| (sequence as i64, data))
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap();
+            } else {
+                for sequence in 0..rows {
+                    sqlx::query(
+                        "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES (?, ?, ?, ?)")
+                        .bind("s1").bind(sequence as i64).bind("").bind(data)
+                        .execute(&mut *tx).await.unwrap();
+                    statements += 1;
+                }
+            }
+            elapsed += started.elapsed();
+            let (actual_rows, actual_bytes, newest): (i64, i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*), SUM(length(data)), MAX(sequence) FROM outputChunks WHERE sessionId = 's1'")
+                .fetch_one(&mut *tx).await.unwrap();
+            assert_eq!(actual_rows, rows as i64);
+            assert_eq!(actual_bytes, (rows * data.len()) as i64);
+            assert_eq!(newest, rows as i64 - 1);
+            tx.rollback().await.unwrap();
+        }
+        (elapsed.as_secs_f64() * 1000.0, statements)
+    }
+    for (rows, calls) in [(1, 128), (64, 16), (512, 4)] {
+        for _ in 0..2 {
+            run(&store, &data, rows, calls, false).await;
+            run(&store, &data, rows, calls, true).await;
+        }
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut old_statements = 0;
+        let mut new_statements = 0;
+        for round in 0..7 {
+            for batched in [round % 2 != 0, round % 2 == 0] {
+                let (ms, statements) = run(&store, &data, rows, calls, batched).await;
+                if batched {
+                    new_statements = statements;
+                    after.push(ms);
+                } else {
+                    old_statements = statements;
+                    before.push(ms);
+                }
+            }
+        }
+        before.sort_by(f64::total_cmp);
+        after.sort_by(f64::total_cmp);
+        assert_eq!(old_statements, rows * calls);
+        assert_eq!(
+            new_statements,
+            rows.div_ceil(OUTPUT_INSERT_BATCH_ROWS) * calls
+        );
+        eprintln!("insert_bench rows={rows} calls={calls} old_statements={old_statements} new_statements={new_statements} old_ms={:.4} new_ms={:.4}",
+            before[3],after[3]);
+    }
+    store.close_for_test().await;
+}
+
+#[tokio::test]
 async fn persist_session_coalesces_small_outputs_into_one_row() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();

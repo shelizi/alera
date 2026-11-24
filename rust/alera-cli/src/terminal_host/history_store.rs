@@ -8,7 +8,7 @@ use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use futures_util::TryStreamExt;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Row, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
 pub const HISTORY_DATABASE_FILE_NAME: &str = "terminal_history.sqlite";
 const HISTORY_STORE_MAX_CONNECTIONS: u32 = 2;
@@ -16,6 +16,10 @@ const HISTORY_STORE_MAX_CONNECTIONS: u32 = 2;
 const OUTPUT_CHUNK_TARGET_BYTES: usize = 16 * 1024;
 /// A session with more rows than this is compacted before it is trimmed.
 const OUTPUT_COMPACTION_ROW_THRESHOLD: i64 = 2048;
+/// Bound both SQLite parameters (four per row) and encoded BLOB payload.
+/// An oversized individual row is still inserted intact, on its own.
+const OUTPUT_INSERT_BATCH_ROWS: usize = 64;
+const OUTPUT_INSERT_BATCH_BYTES: usize = 1024 * 1024;
 
 const CREATE_CHECKPOINTS_TABLE_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS checkpoints (\n\
@@ -662,33 +666,98 @@ async fn append_output_rows(
     }
 
     let created_at = format_timestamp(Utc::now());
-    for row in rows.into_iter().filter(|row| row.dirty) {
-        match row.existing_id {
-            Some(id) => {
-                sqlx::query(
-                    "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
-                )
-                .bind(row.sequence)
-                .bind(&created_at)
-                .bind(row.data.as_ref())
-                .bind(id)
-                .execute(&mut **transaction)
-                .await?;
-            }
-            None => {
-                sqlx::query(
-                    "INSERT INTO outputChunks (sessionId, sequence, createdAt, data)                      VALUES (?, ?, ?, ?)",
-                )
-                .bind(session_id)
-                .bind(row.sequence)
-                .bind(&created_at)
-                .bind(row.data.as_ref())
-                .execute(&mut **transaction)
-                .await?;
-            }
+    // At most the first planned row extends an existing row. Preserve its
+    // update-before-inserts order and leave the single-row hot path cheap.
+    if let Some(row) = rows.first().filter(|row| row.dirty) {
+        if let Some(id) = row.existing_id {
+            sqlx::query(
+                "UPDATE outputChunks SET sequence = ?, createdAt = ?, data = ? WHERE id = ?",
+            )
+            .bind(row.sequence)
+            .bind(&created_at)
+            .bind(row.data.as_ref())
+            .bind(id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+    }
+    // The optional existing row is always first; all following rows are
+    // new inserts. Avoid a descriptor allocation for ordinary single rows.
+    let first_new = usize::from(rows.first().is_some_and(|row| row.existing_id.is_some()));
+    match &rows[first_new..] {
+        [] => {}
+        [row] => {
+            insert_output_rows(
+                transaction,
+                session_id,
+                &created_at,
+                &[(row.sequence, row.data.as_ref())],
+            )
+            .await?;
+        }
+        new_rows => {
+            let inserts: Vec<_> = new_rows
+                .iter()
+                .map(|row| (row.sequence, row.data.as_ref()))
+                .collect();
+            insert_output_rows(transaction, session_id, &created_at, &inserts).await?;
         }
     }
     Ok(())
+}
+
+/// Insert new rows in chronological order, without a database-worker
+/// round trip for every row. Only bound values enter the SQL builder;
+/// the batch stores borrowed slices, not another copy of the history.
+/// Return the number of INSERT statements for regression/benchmark checks.
+async fn insert_output_rows(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    session_id: &str,
+    created_at: &str,
+    mut rows: &[(i64, &[u8])],
+) -> Result<usize> {
+    let mut statements = 0;
+    while let Some(first) = rows.first() {
+        let mut end = 1;
+        let mut payload_bytes = first.1.len();
+        while end < rows.len().min(OUTPUT_INSERT_BATCH_ROWS) {
+            let next_len = rows[end].1.len();
+            if payload_bytes.saturating_add(next_len) > OUTPUT_INSERT_BATCH_BYTES {
+                break;
+            }
+            payload_bytes += next_len;
+            end += 1;
+        }
+        let (batch, rest) = rows.split_at(end);
+        rows = rest;
+        if let [(sequence, data)] = batch {
+            // Most periodic flushes create zero or one row. Keep their
+            // existing static cached statement and avoid a batch allocation.
+            sqlx::query(
+                "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES (?, ?, ?, ?)",
+            )
+            .bind(session_id)
+            .bind(*sequence)
+            .bind(created_at)
+            .bind(*data)
+            .execute(&mut **transaction)
+            .await?;
+        } else {
+            let mut sql = QueryBuilder::<Sqlite>::new(
+                "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) ",
+            );
+            sql.push_values(batch.iter().copied(), |mut values, (sequence, data)| {
+                values
+                    .push_bind(session_id)
+                    .push_bind(sequence)
+                    .push_bind(created_at)
+                    .push_bind(data);
+            });
+            sql.build().execute(&mut **transaction).await?;
+        }
+        statements += 1;
+    }
+    Ok(statements)
 }
 
 struct PendingOutputRow<'a> {
@@ -725,17 +794,11 @@ async fn compact_output_rows(
     let chunks = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES);
     let first_sequence = newest.saturating_sub(chunks.len() as i64 - 1);
     let created_at = format_timestamp(Utc::now());
-    for (index, chunk) in chunks.enumerate() {
-        sqlx::query(
-            "INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES (?, ?, ?, ?)",
-        )
-        .bind(session_id)
-        .bind(first_sequence.saturating_add(index as i64))
-        .bind(&created_at)
-        .bind(chunk)
-        .execute(&mut **transaction)
-        .await?;
-    }
+    let inserts: Vec<_> = chunks
+        .enumerate()
+        .map(|(index, chunk)| (first_sequence.saturating_add(index as i64), chunk))
+        .collect();
+    insert_output_rows(transaction, session_id, &created_at, &inserts).await?;
     Ok(())
 }
 
