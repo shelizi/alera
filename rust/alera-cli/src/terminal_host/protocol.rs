@@ -289,6 +289,46 @@ pub fn encode_bytes(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
 }
 
+/// Encode a logical byte stream in two slices, without materializing the
+/// joined input. Only the final block may carry base64 padding.
+pub(super) fn encode_byte_slices(first: &[u8], second: &[u8]) -> String {
+    if first.is_empty() {
+        return encode_bytes(second);
+    }
+    if second.is_empty() {
+        return encode_bytes(first);
+    }
+    let len = first
+        .len()
+        .checked_add(second.len())
+        .expect("byte length overflow");
+    let encoded_len = base64::encoded_len(len, true).expect("base64 length overflow");
+    let mut output = vec![0; encoded_len];
+    let split = first.len() / 3 * 3;
+    let mut written = STANDARD
+        .encode_slice(&first[..split], &mut output)
+        .expect("exact base64 capacity");
+
+    let tail = &first[split..];
+    let second_start = if tail.is_empty() {
+        0
+    } else {
+        let take = (3 - tail.len()).min(second.len());
+        let mut bridge = [0; 3];
+        bridge[..tail.len()].copy_from_slice(tail);
+        bridge[tail.len()..tail.len() + take].copy_from_slice(&second[..take]);
+        written += STANDARD
+            .encode_slice(&bridge[..tail.len() + take], &mut output[written..])
+            .expect("exact base64 capacity");
+        take
+    };
+    written += STANDARD
+        .encode_slice(&second[second_start..], &mut output[written..])
+        .expect("exact base64 capacity");
+    debug_assert_eq!(written, encoded_len);
+    String::from_utf8(output).expect("base64 is ASCII")
+}
+
 /// Decode a base64 string field, matching `decodeTerminalHostBytes`: a missing,
 /// non-string, or empty value yields no bytes; an invalid string is an error.
 pub fn decode_bytes(value: Option<&Value>) -> HostResult<Vec<u8>> {
@@ -358,7 +398,13 @@ fn positive_int(value: Option<&Value>, label: &str) -> HostResult<u64> {
 /// Build a success response frame `{id, ok: true, payload}`.
 pub fn ok_response(id: i64, payload: Value) -> Value {
     trace_response_outcome(id, OutcomeClass::Ok, None);
-    json!({ "id": id, "ok": true, "payload": payload })
+    // Move the owned payload into its envelope. json! serializes borrowed
+    // expressions into fresh Values, including multi-megabyte snapshots.
+    Value::Object(Map::from_iter([
+        ("id".into(), Value::from(id)),
+        ("ok".into(), Value::Bool(true)),
+        ("payload".into(), payload),
+    ]))
 }
 
 /// Build an error response frame `{id, ok: false, error}`.
@@ -379,7 +425,10 @@ fn trace_response_outcome(id: i64, outcome_class: OutcomeClass, error_code: Opti
 
 /// Build an event frame `{event, payload}`.
 pub fn event(name: &str, payload: Value) -> Value {
-    json!({ "event": name, "payload": payload })
+    Value::Object(Map::from_iter([
+        ("event".into(), Value::from(name)),
+        ("payload".into(), payload),
+    ]))
 }
 
 #[cfg(test)]
@@ -482,6 +531,20 @@ mod tests {
     }
 
     #[test]
+    fn split_base64_matches_contiguous_encoding_at_every_padding_boundary() {
+        let data: Vec<u8> = (0..257).map(|n| (n * 29 % 256) as u8).collect();
+        for len in 0..=data.len() {
+            let expected = encode_bytes(&data[..len]);
+            for split in 0..=len {
+                assert_eq!(
+                    encode_byte_slices(&data[..split], &data[split..len]),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
     fn bytes_round_trip() {
         let encoded = encode_bytes(b"hello");
         let decoded = decode_bytes(Some(&Value::String(encoded))).unwrap();
@@ -490,6 +553,32 @@ mod tests {
         assert!(decode_bytes(Some(&Value::String(String::new())))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn response_and_event_move_owned_large_payloads_without_cloning() {
+        let snapshot = "a".repeat(1024 * 1024);
+        let pointer = snapshot.as_ptr();
+        let payload = Value::Object(Map::from_iter([(
+            "snapshotBase64".into(),
+            Value::String(snapshot),
+        )]));
+        let wrapped = ok_response(7, payload);
+        assert_eq!(wrapped["id"], 7);
+        assert_eq!(wrapped["ok"], true);
+        assert_eq!(
+            wrapped["payload"]["snapshotBase64"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            pointer
+        );
+
+        let snapshot = "b".repeat(1024 * 1024);
+        let pointer = snapshot.as_ptr();
+        let wrapped = event("restore", Value::String(snapshot));
+        assert_eq!(wrapped["event"], "restore");
+        assert_eq!(wrapped["payload"].as_str().unwrap().as_ptr(), pointer);
     }
 
     #[test]

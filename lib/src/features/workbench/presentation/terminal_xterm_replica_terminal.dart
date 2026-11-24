@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:xterm2/xterm.dart';
 
 import '../domain/terminal_osc52_clipboard.dart';
+import 'terminal_buffer_budget.dart';
 import 'terminal_xterm_buffer_model.dart';
 import 'terminal_xterm_worker.dart';
 import 'terminal_xterm_replica_row_writer.dart';
@@ -51,6 +52,9 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   bool _notificationsEnabled;
   bool _notificationPending = false;
   bool _applyingReplicaDelta = false;
+  int? _replicaCellBytes;
+  int _localPixelWidth = 0;
+  int _localPixelHeight = 0;
   int? _requestedViewWidth;
   int? _requestedViewHeight;
   bool _synchronizedUpdateSuppressed = false;
@@ -62,6 +66,46 @@ final class TerminalXtermReplicaTerminal extends Terminal {
       TerminalXtermReplicaRowWriter();
 
   TerminalXtermBufferModel get replicaModel => _model;
+
+  /// Actual allocated cell capacity, maintained by the worker delta writer.
+  /// Before the first repaint or after a local parser/resize mutation, use
+  /// the authoritative buffer rather than returning a potentially stale total.
+  int get retainedCellBufferBytes =>
+      _replicaCellBytes ?? measureTerminalCellBufferBytes(this);
+
+  @override
+  void write(String data) {
+    _replicaCellBytes = null;
+    super.write(data);
+  }
+
+  @override
+  void clear() {
+    _replicaCellBytes = null;
+    super.clear();
+  }
+
+  @override
+  void reset() {
+    _replicaCellBytes = null;
+    super.reset();
+  }
+
+  void _resizeLocally(int cols, int rows, int? pixelWidth, int? pixelHeight) {
+    // Even a pixel-only resize can compact xterm's history. Invalidate only
+    // when the base implementation would actually resize its buffers.
+    final width = math.max(cols, 1);
+    final height = math.max(rows, 1);
+    if (width != super.viewWidth ||
+        height != super.viewHeight ||
+        (pixelWidth != null && pixelWidth != _localPixelWidth) ||
+        (pixelHeight != null && pixelHeight != _localPixelHeight)) {
+      _replicaCellBytes = null;
+      _localPixelWidth = pixelWidth ?? _localPixelWidth;
+      _localPixelHeight = pixelHeight ?? _localPixelHeight;
+    }
+    super.resize(cols, rows, pixelWidth, pixelHeight);
+  }
 
   /// The size the view last asked for. It equals [viewWidth] and [viewHeight]
   /// once the worker has applied it and its repaint has arrived.
@@ -84,7 +128,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
   ]) {
     final forward = onResize;
     if (forward == null || _disposed) {
-      super.resize(newWidth, newHeight, pixelWidth, pixelHeight);
+      _resizeLocally(newWidth, newHeight, pixelWidth, pixelHeight);
       return;
     }
     newWidth = math.max(newWidth, 1);
@@ -93,7 +137,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
       final abandonedRequest = _requestedViewWidth != null;
       _requestedViewWidth = null;
       _requestedViewHeight = null;
-      super.resize(newWidth, newHeight, pixelWidth, pixelHeight);
+      _resizeLocally(newWidth, newHeight, pixelWidth, pixelHeight);
       if (abandonedRequest) {
         // The view went back to the size the worker already has; replace the
         // pending request so the session does not apply the abandoned one.
@@ -115,7 +159,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     // A full repaint replaces every row, so reflowing them first is wasted.
     reflowEnabled = reflowWas && reflow;
     try {
-      super.resize(cols, rows);
+      _resizeLocally(cols, rows, null, null);
     } finally {
       onResize = forward;
       reflowEnabled = reflowWas;
@@ -146,6 +190,13 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     if (_applyingReplicaDelta) {
       return;
     }
+    // A notification from the base terminal is not a worker delta. The
+    // parser or an external mutation may have changed its storage.
+    _replicaCellBytes = null;
+    _publishReplicaNotification();
+  }
+
+  void _publishReplicaNotification() {
     if (_synchronizedUpdateSuppressed) {
       _synchronizedUpdateNotificationPending = true;
       return;
@@ -162,9 +213,14 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     final shouldNotify = _bufferDeltaNeedsNotification(delta);
     _updateSynchronizedUpdateState(delta.globalState);
     _applyingReplicaDelta = true;
+    var cellBytes = _replicaCellBytes;
+    // Do not expose the pre-delta total from a reentrant callback, or keep
+    // it if a malformed delta fails after changing the buffer.
+    _replicaCellBytes = null;
     try {
       if (super.viewWidth != delta.cols || super.viewHeight != delta.rows) {
         _resizeToWorker(delta.cols, delta.rows, reflow: !delta.fullRepaint);
+        cellBytes = null;
       }
 
       final target = super.mainBuffer.lines;
@@ -174,8 +230,13 @@ final class TerminalXtermReplicaTerminal extends Terminal {
           null,
           growable: false,
         );
+        var nextCellBytes = 0;
         for (final changed in delta.rowDeltas) {
-          rows[changed.row] = _rowWriter.buildLine(changed);
+          final line = _rowWriter.buildLine(changed);
+          nextCellBytes +=
+              line.data.lengthInBytes -
+              (rows[changed.row]?.data.lengthInBytes ?? 0);
+          rows[changed.row] = line;
         }
         if (rows.any((line) => line == null)) {
           throw StateError(
@@ -183,16 +244,36 @@ final class TerminalXtermReplicaTerminal extends Terminal {
           );
         }
         target.replaceWith(rows.cast<BufferLine>());
+        cellBytes = nextCellBytes;
       } else {
         if (delta.trimStart > 0) {
+          if (cellBytes != null) {
+            final trim = math.min(delta.trimStart, target.length);
+            var removedBytes = 0;
+            for (var row = 0; row < trim; row++) {
+              removedBytes += target[row].data.lengthInBytes;
+            }
+            cellBytes -= removedBytes;
+          }
           target.trimStart(delta.trimStart);
         }
         for (final changed in delta.rowDeltas) {
           if (changed.row == target.length) {
-            target.push(_rowWriter.buildLine(changed));
+            final line = _rowWriter.buildLine(changed);
+            if (cellBytes != null) {
+              // A circular-buffer push can evict the oldest row at capacity.
+              cellBytes +=
+                  line.data.lengthInBytes -
+                  (target.isFull ? target[0].data.lengthInBytes : 0);
+            }
+            target.push(line);
           } else if (changed.row >= 0 && changed.row < target.length) {
             final line = target[changed.row];
+            final oldBytes = line.data.lengthInBytes;
             _rowWriter.applyRowDelta(line, changed);
+            if (cellBytes != null) {
+              cellBytes += line.data.lengthInBytes - oldBytes;
+            }
           } else {
             throw StateError(
               'Terminal xterm replica received invalid row ${changed.row}.',
@@ -209,10 +290,17 @@ final class TerminalXtermReplicaTerminal extends Terminal {
       }
 
       super.mainBuffer.setCursor(delta.cursorX, delta.cursorY);
+      // A full repaint already counted every allocated row. A partial
+      // update touches only removed/changed/appended rows; if a local resize
+      // invalidated the baseline, recover it once from the live buffer.
+      _replicaCellBytes = cellBytes ?? measureTerminalCellBufferBytes(this);
       _model.apply(delta);
       super.setKeyboardActionMode(_model.keyboardActionMode);
       super.setBracketedPasteMode(_model.bracketedPaste);
       _hasReplicaState = true;
+    } catch (_) {
+      _replicaCellBytes = null;
+      rethrow;
     } finally {
       _applyingReplicaDelta = false;
     }
@@ -224,7 +312,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     }
     if (shouldNotify || _synchronizedUpdateNotificationPending) {
       _synchronizedUpdateNotificationPending = false;
-      notifyListeners();
+      _publishReplicaNotification();
     }
   }
 
@@ -287,7 +375,7 @@ final class TerminalXtermReplicaTerminal extends Terminal {
     _synchronizedUpdateSuppressed = false;
     if (!_synchronizedUpdateNotificationPending) return;
     _synchronizedUpdateNotificationPending = false;
-    notifyListeners();
+    _publishReplicaNotification();
   }
 
   @override

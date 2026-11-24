@@ -1,12 +1,16 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
+use crate::terminal_host::frame_codec::{
+    encode_json_frame, encode_output_frame, encode_output_json_line, SharedJsonFrame,
+    SharedOutputFrame,
+};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
 use crate::terminal_host::server::{DisconnectReason, ServerCommand};
 
@@ -29,10 +33,12 @@ pub enum ClientFrame {
         frame: Box<ClientFrame>,
     },
     Json(Value),
+    SharedJson(Arc<SharedJsonFrame>),
     Output {
         session_id: String,
-        data: Vec<u8>,
+        data: Bytes,
     },
+    SharedOutput(Arc<SharedOutputFrame>),
     UpgradeToBinary,
     /// Re-enters the actor only after this connection has written every frame
     /// queued before the marker. Restart uses it so disposing the actor cannot
@@ -68,11 +74,16 @@ impl From<Value> for ClientFrame {
 }
 
 impl ClientFrame {
+    pub(crate) fn shared_json(value: Value) -> Self {
+        Self::SharedJson(Arc::new(SharedJsonFrame::new(value)))
+    }
+
     /// The JSON this frame would be on a text-only transport, or None for the
     /// upgrade marker, which has no representation there.
     pub fn as_json(&self) -> Option<Value> {
         match self.payload() {
             ClientFrame::Json(value) => Some(value.clone()),
+            ClientFrame::SharedJson(frame) => Some(frame.value().clone()),
             ClientFrame::Output { session_id, data } => {
                 Some(crate::terminal_host::protocol::event(
                     "output",
@@ -82,6 +93,13 @@ impl ClientFrame {
                     }),
                 ))
             }
+            ClientFrame::SharedOutput(frame) => Some(crate::terminal_host::protocol::event(
+                "output",
+                serde_json::json!({
+                    "sessionId": frame.session_id(),
+                    "dataBase64": crate::terminal_host::protocol::encode_bytes(frame.data()),
+                }),
+            )),
             ClientFrame::UpgradeToBinary
             | ClientFrame::RestartRuntimeAfterWrite { .. }
             | ClientFrame::ShutdownRuntimeAfterWrite { .. } => None,
@@ -401,14 +419,35 @@ async fn write_frame(
             let _ = inbox.send(ServerCommand::RequestedShutdown);
             Ok(())
         }
+        ClientFrame::SharedJson(frame) => {
+            let bytes = if *binary {
+                frame.binary_frame()?
+            } else {
+                frame.line()?
+            };
+            write_half.write_all(bytes).await
+        }
         ClientFrame::Json(value) if *binary => {
             let bytes = encode_json_frame(&value)?;
             write_half.write_all(&bytes).await
         }
         ClientFrame::Json(value) => write_json_line(write_half, &value).await,
+        ClientFrame::SharedOutput(frame) => {
+            let bytes = if *binary {
+                frame.binary_frame()
+            } else {
+                frame.json_line()?
+            };
+            write_half.write_all(bytes).await
+        }
         ClientFrame::Output { session_id, data } if *binary => {
             write_half
                 .write_all(&encode_output_frame(&session_id, &data))
+                .await
+        }
+        ClientFrame::Output { session_id, data } => {
+            write_half
+                .write_all(&encode_output_json_line(&session_id, &data)?)
                 .await
         }
         ClientFrame::OrderedControl { .. } | ClientFrame::SequencedTerminal { .. } => {

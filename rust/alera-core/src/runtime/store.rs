@@ -288,6 +288,7 @@ impl RuntimeStore {
             "orchestrationTasksParentIdx",
             "orchestrationDispatchTaskIdx",
             "orchestrationDispatchStatusIdx",
+            "orchestrationDispatchActiveHandleIdx",
             "orchestrationGatesTaskIdx",
         ] {
             sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX IF EXISTS {index}")))

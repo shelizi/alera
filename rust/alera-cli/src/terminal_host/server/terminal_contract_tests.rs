@@ -405,7 +405,7 @@ async fn observe_existing_terminal_resumes_delta_on_same_output_lane() {
     assert!(matches!(
         terminal_rx.recv().await.expect("delta output"),
         ClientFrame::SequencedTerminal { frame, .. }
-            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b" world")
     ));
 }
 
@@ -643,7 +643,7 @@ async fn create_or_attach_resumes_retained_state_from_an_absolute_output_cursor(
     assert!(matches!(
         frame,
         ClientFrame::SequencedTerminal { frame, .. }
-            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b" world")
     ));
     assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(11));
 }

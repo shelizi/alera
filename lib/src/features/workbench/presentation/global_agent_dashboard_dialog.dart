@@ -12,6 +12,16 @@ import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_c
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+typedef _DashboardCardState = ({
+  GlobalAgentLiveRow row,
+  bool expanded,
+  bool hidden,
+  bool historyBusy,
+  bool controlsDisabled,
+  bool armedInterrupt,
+  bool armedTerminate,
+});
+
 /// Global scope is deliberate: this watches the full Workbench inventory and
 /// current Agent map, not the selected project's subset. This page lives in
 /// the center workbench; the sidebar and existing Tab state remain mounted.
@@ -122,6 +132,49 @@ class _GlobalAgentDashboardPageState
 
   /// Keep busy sessions readable; collapse whole status sections explicitly.
   final Set<GlobalAgentDashboardGroup> _collapsedGroups = {};
+
+  // Keep only lightweight keyed builders for visited live cards. Reusing
+  // their widget instances skips the whole card subtree for unrelated Hook
+  // events. Active history is deliberately not cached: its paginated
+  // messages and loading state can change independently of the live row.
+  final _cardWidgets =
+      <GlobalAgentIdentity, ({_DashboardCardState state, Widget widget})>{};
+
+  static Key _itemKey(Object item) => ValueKey<Object>(
+    item is GlobalAgentDashboardSection
+        ? item.group
+        : (item as GlobalAgentLiveRow).identity,
+  );
+
+  Widget _cardWidget(GlobalAgentLiveRow row) {
+    final identity = row.identity;
+    if (_historicalTarget == identity) {
+      _cardWidgets.remove(identity);
+      return Builder(builder: (context) => _buildAgentCard(context, row));
+    }
+    bool armed(bool terminate) =>
+        _armedControl ==
+        (
+          sessionId: identity.sessionId,
+          workspaceId: identity.workspaceId,
+          tabId: identity.tabId,
+          terminate: terminate,
+        );
+    final state = (
+      row: row,
+      expanded: _expandedTimelines.contains(identity),
+      hidden: _hiddenCards.contains(identity),
+      historyBusy: _historicalBusy,
+      controlsDisabled: _controlling || _sending,
+      armedInterrupt: armed(false),
+      armedTerminate: armed(true),
+    );
+    final previous = _cardWidgets[identity];
+    if (previous != null && previous.state == state) return previous.widget;
+    final widget = Builder(builder: (context) => _buildAgentCard(context, row));
+    _cardWidgets[identity] = (state: state, widget: widget);
+    return widget;
+  }
 
   ({String sessionId, String workspaceId, String tabId}) _identity(
     GlobalAgentLiveRow row,
@@ -390,14 +443,22 @@ class _GlobalAgentDashboardPageState
 
   @override
   Widget build(BuildContext context) {
-    final workbench = ref.watch(workbenchControllerProvider);
-    final statuses = ref.watch(agentStatusControllerProvider);
-    final all = projectGlobalAgentLiveRows(workbench, statuses);
-    final liveIdentities = all.map(_identity).toSet();
-    _hiddenCards.removeWhere((identity) => !liveIdentities.contains(identity));
-    _expandedTimelines.removeWhere(
-      (identity) => !liveIdentities.contains(identity),
-    );
+    // History browsing does not subscribe to the high-frequency live map.
+    final all = _historyMode
+        ? const <GlobalAgentLiveRow>[]
+        : ref.watch(globalAgentLiveRowsProvider);
+    if (_historyMode) {
+      _cardWidgets.clear();
+    } else {
+      final liveIdentities = all.map(_identity).toSet();
+      _hiddenCards.removeWhere(
+        (identity) => !liveIdentities.contains(identity),
+      );
+      _expandedTimelines.removeWhere(
+        (identity) => !liveIdentities.contains(identity),
+      );
+    }
+    final searchTerms = globalAgentSearchTerms(_query);
     final needsReviewCount = all.where((row) => row.needsReview).length;
     // A hidden card cannot hide a waiting/blocked Agent from the review queue.
     final rows = all
@@ -408,9 +469,21 @@ class _GlobalAgentDashboardPageState
               !_hiddenCards.contains(_identity(row)),
         )
         .where((row) => !_needsReviewOnly || row.needsReview)
-        .where((row) => row.matches(_query))
+        .where((row) => row.matchesTerms(searchTerms))
         .toList();
-    final items = globalAgentDashboardVisibleItems(rows, _collapsedGroups);
+    final items = globalAgentDashboardVisibleItems(
+      rows,
+      _collapsedGroups,
+      alreadySorted: true,
+    );
+    final indexByKey = <Key, int>{
+      for (var i = 0; i < items.length; i++) _itemKey(items[i]): i,
+    };
+    // Filtered/collapsed cards can release their render snapshots; the
+    // projection keeps only their current data while they are live.
+    _cardWidgets.removeWhere(
+      (identity, _) => !indexByKey.containsKey(ValueKey<Object>(identity)),
+    );
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     return Material(
@@ -580,359 +653,79 @@ class _GlobalAgentDashboardPageState
                             style: muted,
                           ),
                         )
-                      : ListView.separated(
+                      : ListView.builder(
                           itemCount: items.length,
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(height: AleraTokens.space8),
+                          findChildIndexCallback: (key) => indexByKey[key],
                           itemBuilder: (context, index) {
                             final item = items[index];
                             if (item is GlobalAgentDashboardSection) {
                               final collapsed = _collapsedGroups.contains(
                                 item.group,
                               );
-                              return InkWell(
-                                onTap: () => setState(() {
-                                  if (!_collapsedGroups.add(item.group)) {
-                                    _collapsedGroups.remove(item.group);
-                                  }
-                                  // Collapsing a group must not leave an
-                                  // invisible target or armed destructive action.
-                                  _target = null;
-                                  _instruction.clear();
-                                  _closeHistoricalMessages();
-                                  _armedControl = null;
-                                }),
-                                child: Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    4,
-                                    12,
-                                    4,
-                                    4,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        collapsed
-                                            ? Icons.chevron_right
-                                            : Icons.expand_more,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        item.group.label,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleMedium,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        '${item.rows.length} Agents',
-                                        style: muted,
-                                      ),
-                                      const Spacer(),
-                                      Text(
-                                        collapsed ? 'Expand' : 'Collapse',
-                                        style: muted,
-                                      ),
-                                    ],
-                                  ),
+                              return Padding(
+                                key: _itemKey(item),
+                                padding: EdgeInsets.only(
+                                  bottom: index == items.length - 1
+                                      ? 0
+                                      : AleraTokens.space8,
                                 ),
-                              );
-                            }
-                            final row = item as GlobalAgentLiveRow;
-                            final identity = _identity(row);
-                            final expanded = _expandedTimelines.contains(
-                              identity,
-                            );
-                            return DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: AleraTokens.surface,
-                                border: Border.all(
-                                  color: AleraTokens.borderSubtle,
-                                ),
-                                borderRadius: BorderRadius.circular(
-                                  AleraTokens.radiusMd,
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(
-                                  AleraTokens.space16,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
+                                child: InkWell(
+                                  onTap: () => setState(() {
+                                    if (!_collapsedGroups.add(item.group)) {
+                                      _collapsedGroups.remove(item.group);
+                                    }
+                                    // Collapsing a group must not leave an
+                                    // invisible target or armed destructive action.
+                                    _target = null;
+                                    _instruction.clear();
+                                    _closeHistoricalMessages();
+                                    _armedControl = null;
+                                  }),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      4,
+                                      12,
+                                      4,
+                                      4,
+                                    ),
+                                    child: Row(
                                       children: [
-                                        Expanded(
-                                          child: Text(
-                                            '${row.project} / ${row.workspace}',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleSmall,
-                                          ),
+                                        Icon(
+                                          collapsed
+                                              ? Icons.chevron_right
+                                              : Icons.expand_more,
                                         ),
+                                        const SizedBox(width: 4),
                                         Text(
-                                          '${row.status.agentType.key} - '
-                                          '${row.status.state.key}',
+                                          item.group.label,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '${item.rows.length} Agents',
+                                          style: muted,
+                                        ),
+                                        const Spacer(),
+                                        Text(
+                                          collapsed ? 'Expand' : 'Collapse',
                                           style: muted,
                                         ),
                                       ],
                                     ),
-                                    if (row.needsReview) ...[
-                                      const SizedBox(
-                                        height: AleraTokens.space4,
-                                      ),
-                                      Text(
-                                        'Needs review · ${row.status.state.key} · last reported ${row.status.updatedAt.toLocal()}',
-                                        style: muted,
-                                      ),
-                                    ],
-                                    const SizedBox(height: AleraTokens.space8),
-                                    Text(
-                                      row.goal.isEmpty
-                                          ? row.tab.title
-                                          : row.goal,
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    if (row.progress.isNotEmpty) ...[
-                                      const SizedBox(
-                                        height: AleraTokens.space4,
-                                      ),
-                                      Text(
-                                        row.progress,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: muted,
-                                      ),
-                                    ],
-                                    if (row.timeline.isNotEmpty) ...[
-                                      TextButton.icon(
-                                        onPressed: () => setState(() {
-                                          if (!_expandedTimelines.add(
-                                            identity,
-                                          )) {
-                                            _expandedTimelines.remove(identity);
-                                          }
-                                        }),
-                                        icon: Icon(
-                                          expanded
-                                              ? Icons.expand_less
-                                              : Icons.expand_more,
-                                        ),
-                                        label: Text(
-                                          'Timeline (${row.timeline.length})',
-                                        ),
-                                      ),
-                                      if (expanded)
-                                        for (final event in row.timeline)
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                              vertical: 4,
-                                            ),
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  '${event.kind} · ${event.at.toLocal()}',
-                                                  style: muted,
-                                                ),
-                                                Text(event.text),
-                                              ],
-                                            ),
-                                          ),
-                                    ],
-                                    Wrap(
-                                      alignment: WrapAlignment.end,
-                                      spacing: 4,
-                                      runSpacing: 0,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () => setState(() {
-                                            _target = (
-                                              sessionId:
-                                                  row.tab.terminalSessionId,
-                                              workspaceId:
-                                                  row.status.workspaceId,
-                                              tabId: row.tab.id,
-                                            );
-                                            _sendFeedback = null;
-                                          }),
-                                          icon: const Icon(Icons.edit_note),
-                                          label: const Text('Steer'),
-                                        ),
-                                        if (row.status.agentType.key ==
-                                                'claude' ||
-                                            row.status.agentType.key == 'codex')
-                                          TextButton.icon(
-                                            onPressed: _historicalBusy
-                                                ? null
-                                                : () => _readHistoricalMessages(
-                                                    row,
-                                                  ),
-                                            icon: const Icon(
-                                              Icons.menu_book_outlined,
-                                            ),
-                                            label: const Text(
-                                              'Original conversation',
-                                            ),
-                                          ),
-                                        TextButton.icon(
-                                          onPressed: () => _focus(row),
-                                          icon: const Icon(Icons.open_in_new),
-                                          label: const Text('Open Agent'),
-                                        ),
-                                        TextButton.icon(
-                                          onPressed: () => _toggleHidden(row),
-                                          icon: Icon(
-                                            _hiddenCards.contains(identity)
-                                                ? Icons.visibility
-                                                : Icons.visibility_off,
-                                          ),
-                                          label: Text(
-                                            _hiddenCards.contains(identity)
-                                                ? 'Show card'
-                                                : 'Hide (keeps running)',
-                                          ),
-                                        ),
-                                        TextButton.icon(
-                                          onPressed: _controlling || _sending
-                                              ? null
-                                              : () => _controlAgent(row, false),
-                                          icon: const Icon(
-                                            Icons.pause_circle_outline,
-                                          ),
-                                          label: Text(
-                                            _armedControl ==
-                                                    (
-                                                      sessionId: row
-                                                          .tab
-                                                          .terminalSessionId,
-                                                      workspaceId: row
-                                                          .status
-                                                          .workspaceId,
-                                                      tabId: row.tab.id,
-                                                      terminate: false,
-                                                    )
-                                                ? 'Confirm interrupt'
-                                                : 'Interrupt',
-                                          ),
-                                        ),
-                                        TextButton.icon(
-                                          onPressed: _controlling || _sending
-                                              ? null
-                                              : () => _controlAgent(row, true),
-                                          icon: const Icon(
-                                            Icons.stop_circle_outlined,
-                                          ),
-                                          label: Text(
-                                            _armedControl ==
-                                                    (
-                                                      sessionId: row
-                                                          .tab
-                                                          .terminalSessionId,
-                                                      workspaceId: row
-                                                          .status
-                                                          .workspaceId,
-                                                      tabId: row.tab.id,
-                                                      terminate: true,
-                                                    )
-                                                ? 'Confirm terminate'
-                                                : 'Terminate',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_historicalTarget == identity) ...[
-                                      const Divider(height: 16),
-                                      Row(
-                                        children: [
-                                          const Icon(Icons.history, size: 16),
-                                          const SizedBox(width: 8),
-                                          const Expanded(
-                                            child: Text(
-                                              'Original Claude/Codex conversation · read only',
-                                            ),
-                                          ),
-                                          IconButton(
-                                            tooltip:
-                                                'Close original conversation',
-                                            onPressed: () => setState(
-                                              _closeHistoricalMessages,
-                                            ),
-                                            icon: const Icon(
-                                              Icons.close,
-                                              size: 18,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      if (_historicalStatus != null)
-                                        Text(_historicalStatus!, style: muted),
-                                      if (_historicalBusy)
-                                        const LinearProgressIndicator(
-                                          minHeight: 2,
-                                        ),
-                                      if (_historicalMessages.isNotEmpty)
-                                        SizedBox(
-                                          height: 340,
-                                          child: ListView.builder(
-                                            itemCount:
-                                                _historicalMessages.length,
-                                            itemBuilder: (context, itemIndex) {
-                                              final message =
-                                                  _historicalMessages[itemIndex];
-                                              return Padding(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      vertical: 5,
-                                                    ),
-                                                child: Column(
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(
-                                                      message.role == 'user'
-                                                          ? 'You'
-                                                          : 'Agent',
-                                                      style: Theme.of(context)
-                                                          .textTheme
-                                                          .labelMedium,
-                                                    ),
-                                                    if (message.timestamp !=
-                                                        null)
-                                                      Text(
-                                                        message.timestamp!,
-                                                        style: muted,
-                                                      ),
-                                                    SelectableText(
-                                                      message.text,
-                                                    ),
-                                                  ],
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                      if (_historicalBefore != null)
-                                        TextButton.icon(
-                                          onPressed: _historicalBusy
-                                              ? null
-                                              : () => _readHistoricalMessages(
-                                                  row,
-                                                  older: true,
-                                                ),
-                                          icon: const Icon(Icons.expand_less),
-                                          label: const Text(
-                                            'Load older conversation messages',
-                                          ),
-                                        ),
-                                    ],
-                                  ],
+                                  ),
                                 ),
+                              );
+                            }
+                            return Padding(
+                              key: _itemKey(item),
+                              padding: EdgeInsets.only(
+                                bottom: index == items.length - 1
+                                    ? 0
+                                    : AleraTokens.space8,
                               ),
+                              child: _cardWidget(item as GlobalAgentLiveRow),
                             );
                           },
                         ),
@@ -940,6 +733,228 @@ class _GlobalAgentDashboardPageState
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAgentCard(BuildContext context, GlobalAgentLiveRow row) {
+    final identity = _identity(row);
+    final expanded = _expandedTimelines.contains(identity);
+    final muted = Theme.of(context).textTheme.bodySmall
+        ?.copyWith(color: AleraTokens.foregroundMuted);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AleraTokens.surface,
+        border: Border.all(color: AleraTokens.borderSubtle),
+        borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AleraTokens.space16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${row.project} / ${row.workspace}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                Text(
+                  '${row.status.agentType.key} - '
+                  '${row.status.state.key}',
+                  style: muted,
+                ),
+              ],
+            ),
+            if (row.needsReview) ...[
+              const SizedBox(height: AleraTokens.space4),
+              Text(
+                'Needs review · ${row.status.state.key} · last reported ${row.status.updatedAt.toLocal()}',
+                style: muted,
+              ),
+            ],
+            const SizedBox(height: AleraTokens.space8),
+            Text(
+              row.goal.isEmpty ? row.tab.title : row.goal,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (row.progress.isNotEmpty) ...[
+              const SizedBox(height: AleraTokens.space4),
+              Text(
+                row.progress,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+            ],
+            if (row.timeline.isNotEmpty) ...[
+              TextButton.icon(
+                onPressed: () => setState(() {
+                  if (!_expandedTimelines.add(identity)) {
+                    _expandedTimelines.remove(identity);
+                  }
+                }),
+                icon: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+                label: Text('Timeline (${row.timeline.length})'),
+              ),
+              if (expanded)
+                for (final event in row.timeline)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${event.kind} · ${event.at.toLocal()}',
+                          style: muted,
+                        ),
+                        Text(event.text),
+                      ],
+                    ),
+                  ),
+            ],
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 4,
+              runSpacing: 0,
+              children: [
+                TextButton.icon(
+                  onPressed: () => setState(() {
+                    _target = (
+                      sessionId: row.tab.terminalSessionId,
+                      workspaceId: row.status.workspaceId,
+                      tabId: row.tab.id,
+                    );
+                    _sendFeedback = null;
+                  }),
+                  icon: const Icon(Icons.edit_note),
+                  label: const Text('Steer'),
+                ),
+                if (row.status.agentType.key == 'claude' ||
+                    row.status.agentType.key == 'codex')
+                  TextButton.icon(
+                    onPressed: _historicalBusy
+                        ? null
+                        : () => _readHistoricalMessages(row),
+                    icon: const Icon(Icons.menu_book_outlined),
+                    label: const Text('Original conversation'),
+                  ),
+                TextButton.icon(
+                  onPressed: () => _focus(row),
+                  icon: const Icon(Icons.open_in_new),
+                  label: const Text('Open Agent'),
+                ),
+                TextButton.icon(
+                  onPressed: () => _toggleHidden(row),
+                  icon: Icon(
+                    _hiddenCards.contains(identity)
+                        ? Icons.visibility
+                        : Icons.visibility_off,
+                  ),
+                  label: Text(
+                    _hiddenCards.contains(identity)
+                        ? 'Show card'
+                        : 'Hide (keeps running)',
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _controlling || _sending
+                      ? null
+                      : () => _controlAgent(row, false),
+                  icon: const Icon(Icons.pause_circle_outline),
+                  label: Text(
+                    _armedControl ==
+                            (
+                              sessionId: row.tab.terminalSessionId,
+                              workspaceId: row.status.workspaceId,
+                              tabId: row.tab.id,
+                              terminate: false,
+                            )
+                        ? 'Confirm interrupt'
+                        : 'Interrupt',
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _controlling || _sending
+                      ? null
+                      : () => _controlAgent(row, true),
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: Text(
+                    _armedControl ==
+                            (
+                              sessionId: row.tab.terminalSessionId,
+                              workspaceId: row.status.workspaceId,
+                              tabId: row.tab.id,
+                              terminate: true,
+                            )
+                        ? 'Confirm terminate'
+                        : 'Terminate',
+                  ),
+                ),
+              ],
+            ),
+            if (_historicalTarget == identity) ...[
+              const Divider(height: 16),
+              Row(
+                children: [
+                  const Icon(Icons.history, size: 16),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Original Claude/Codex conversation · read only',
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close original conversation',
+                    onPressed: () => setState(_closeHistoricalMessages),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+              if (_historicalStatus != null)
+                Text(_historicalStatus!, style: muted),
+              if (_historicalBusy) const LinearProgressIndicator(minHeight: 2),
+              if (_historicalMessages.isNotEmpty)
+                SizedBox(
+                  height: 340,
+                  child: ListView.builder(
+                    itemCount: _historicalMessages.length,
+                    itemBuilder: (context, itemIndex) {
+                      final message = _historicalMessages[itemIndex];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 5),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              message.role == 'user' ? 'You' : 'Agent',
+                              style: Theme.of(context).textTheme.labelMedium,
+                            ),
+                            if (message.timestamp != null)
+                              Text(message.timestamp!, style: muted),
+                            SelectableText(message.text),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              if (_historicalBefore != null)
+                TextButton.icon(
+                  onPressed: _historicalBusy
+                      ? null
+                      : () => _readHistoricalMessages(row, older: true),
+                  icon: const Icon(Icons.expand_less),
+                  label: const Text('Load older conversation messages'),
+                ),
+            ],
+          ],
         ),
       ),
     );

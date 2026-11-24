@@ -5,7 +5,7 @@
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
 use alera_gpui_desktop::session::PreviewSessionStore;
-use alera_gpui_desktop::terminal::TerminalCreateFlow;
+use alera_gpui_desktop::terminal::{TerminalCreateFlow, TerminalDock};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -28,6 +28,94 @@ impl Drop for IsolatedHost {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+#[test]
+#[ignore = "requires ALERA_GPUI_TEST_CLI and starts an isolated temporary Alera Host"]
+fn native_only_project_registers_on_explicit_new_tab() {
+    let cli = std::env::var_os("ALERA_GPUI_TEST_CLI")
+        .map(PathBuf::from)
+        .expect("Set ALERA_GPUI_TEST_CLI to this branch's compatible alera.exe");
+    assert!(cli.is_absolute() && cli.is_file());
+    let temp = tempfile::tempdir().unwrap();
+    let repo_dir = temp.path().join("native-only");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    git2::Repository::init(&repo_dir).unwrap();
+    let root = dunce::canonicalize(&repo_dir).unwrap();
+    let runtime = temp.path().join("runtime");
+    let _cleanup = IsolatedHost { cli: cli.clone(), runtime: runtime.clone() };
+    let bridge = RuntimeCliBridge::new(&cli, &runtime);
+    let terminal = bridge.create_workbench_terminal_tracked(&root, None)
+        .expect("explicit New Terminal must register Native-only projects");
+    let shell = dunce::canonicalize(PathBuf::from(
+        std::env::var_os("ComSpec").expect("Windows ComSpec"),
+    )).unwrap();
+    let agent = bridge.create_workbench_terminal_tracked(
+        &root, Some(("agy", shell.to_str().unwrap())),
+    ).expect("explicit AGY uses the same registered workspace");
+    assert_eq!(terminal.workspace_id, agent.workspace_id);
+    assert_ne!(terminal.handle, agent.handle);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if sessions.iter().any(|session| terminal.matches_live_session(session))
+            && sessions.iter().any(|session| agent.matches_live_session(session)) {
+            assert_eq!(sessions.iter().filter(|session| session.running).count(), 2);
+            break;
+        }
+        assert!(Instant::now() < deadline, "new tabs were not listed as live");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let workspaces = bridge.list_registered_workspaces().unwrap();
+    assert_eq!(workspaces.iter().filter(|ws| ws.path == root).count(), 1);
+
+    // A Native Tab close must remove the corresponding durable Host Session,
+    // not merely detach its local preview. Never touch the other live Agent.
+    let mut dock = TerminalDock::default();
+    dock.update_sessions(bridge.list_terminals().unwrap());
+    assert!(dock.reconcile_workspace_sessions(&terminal.workspace_id));
+    let target = dock
+        .tabs
+        .iter()
+        .position(|tab| tab.handle == terminal.handle)
+        .and_then(|index| dock.context_target_at(index))
+        .unwrap();
+    let mut wrong_owner = dock
+        .sessions
+        .iter()
+        .find(|s| s.handle == terminal.handle)
+        .unwrap()
+        .clone();
+    wrong_owner.workspace_id = "wrong-workspace".into();
+    let mut wrong_dock = TerminalDock::default();
+    wrong_dock.update_sessions(vec![wrong_owner]);
+    assert!(wrong_dock.open(&terminal.handle));
+    assert!(bridge
+        .close_verified_terminal(&wrong_dock.context_target_at(0).unwrap())
+        .is_err());
+    assert!(bridge
+        .list_terminals()
+        .unwrap()
+        .iter()
+        .any(|s| terminal.matches_live_session(s)));
+    bridge
+        .close_verified_terminal(&target)
+        .expect("explicit Terminal close must succeed");
+    let after = bridge.list_terminals().unwrap();
+    assert!(!after.iter().any(|s| s.handle == terminal.handle));
+    assert!(after.iter().any(|s| agent.matches_live_session(s)));
+    dock.confirm_workspace_session_closed(&target);
+    assert_eq!(dock.tabs.len(), 1);
+    assert_eq!(dock.tabs[0].handle, agent.handle);
+    let agent_target = dock.context_target_at(0).unwrap();
+    bridge
+        .close_verified_terminal(&agent_target)
+        .expect("explicit Agent close must succeed");
+    assert!(!bridge
+        .list_terminals()
+        .unwrap()
+        .iter()
+        .any(|s| s.handle == agent.handle));
 }
 
 #[test]

@@ -168,6 +168,7 @@ mod orchestration_contract_tests;
 mod orchestration_contract_tests_mutation_ids;
 mod orchestration_delivery;
 mod orchestration_dispatch_requests;
+mod orchestration_output_activity;
 mod orchestration_gate_requests;
 mod orchestration_message_requests;
 mod orchestration_mutation_requests;
@@ -358,7 +359,7 @@ struct ServerActor {
     orchestration_waiters: MessageWaiterRegistry,
     orchestration_delivery_in_flight: HashSet<String>,
     orchestration_delivery_backpressured: HashSet<String>,
-    orchestration_activity_last_recorded: HashMap<String, Instant>,
+    orchestration_output_activity: orchestration_output_activity::OutputActivity,
     pending_dispatch_installs: HashMap<String, dispatch_context_install::PendingDispatchContext>,
     /// Runs with a drift probe parked off the actor; the probe completion
     /// resumes the dispatch round. One in-flight probe per run.
@@ -375,6 +376,7 @@ struct ServerActor {
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
     shutdown_gen: u64,
+    shutdown_timer: lifecycle::ShutdownTimer,
     disposed: bool,
 }
 
@@ -702,7 +704,12 @@ impl ServerActor {
             ServerCommand::ResourceSampleReady { snapshot } => {
                 self.handle_resource_sample_ready(snapshot)
             }
-            ServerCommand::AutomationTick => self.handle_automation_tick().await,
+            ServerCommand::AutomationTick { completed } => {
+                self.handle_automation_tick().await;
+                // Acknowledge even when dispatch returned early (for example
+                // while a workspace mutation owns the runtime).
+                let _ = completed.send(());
+            }
             ServerCommand::CodexMessage { .. } => {}
             ServerCommand::CodexMalformed { reason } => {
                 tracing::warn!(reason, "Codex app-server returned malformed JSON");

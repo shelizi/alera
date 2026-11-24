@@ -26,16 +26,16 @@ final class RuntimeAgentPresenceDelta {
 /// A null result means the event came from an older host, or from a global
 /// invalidation that intentionally requires a full snapshot reconciliation.
 RuntimeAgentPresenceDelta? decodeRuntimeAgentPresenceDelta(
-  Map<String, Object?> payload,
-) {
+  Map<String, Object?> payload, {
+  Map<String, AgentStatusEntry> previous = const {},
+}) {
   final changes = payload['changes'];
   if (changes is! List) {
     return null;
   }
   final upserts = <AgentStatusEntry>[];
   final removedSessionIds = <String>{};
-  for (final raw in changes.whereType<Map>()) {
-    final change = Map<String, Object?>.from(raw);
+  for (final change in changes.whereType<Map>()) {
     final sessionId = change['terminalSessionId'];
     if (sessionId is! String || sessionId.isEmpty) {
       continue;
@@ -44,7 +44,7 @@ RuntimeAgentPresenceDelta? decodeRuntimeAgentPresenceDelta(
       removedSessionIds.add(sessionId);
       continue;
     }
-    if (_entryFromRuntime(change) case final entry?) {
+    if (_entryFromRuntime(change, previous: previous) case final entry?) {
       upserts.add(entry);
     }
   }
@@ -61,29 +61,45 @@ void runtimeAgentStatusSync(Ref ref) {
   final coalesceOwner = Object();
   var disposed = false;
   var generation = 0;
+  Completer<void>? refreshing;
+  var refreshQueued = false;
 
   Future<void> refresh() async {
-    final requested = ++generation;
+    if (disposed) return;
+    if (refreshing case final active?) {
+      // Reconnect and legacy invalidations can arrive during a request.
+      // Keep only one follow-up; never enqueue concurrent list RPCs.
+      generation += 1;
+      refreshQueued = true;
+      return active.future;
+    }
+    final completion = Completer<void>();
+    refreshing = completion;
     try {
-      final payload = await client.runtimeRequest('agentPresence.list');
-      // Concurrent refreshes can land out of order, and an older snapshot
-      // would undo a newer one.
-      if (disposed || requested != generation) {
-        return;
-      }
-      final entries = payload is List
-          ? payload
-                .whereType<Map>()
-                .map(
-                  (item) => _entryFromRuntime(Map<String, Object?>.from(item)),
-                )
-                .whereType<AgentStatusEntry>()
-          : const <AgentStatusEntry>[];
-      ref
-          .read(agentStatusControllerProvider.notifier)
-          .replaceRuntimeSnapshot(entries);
-    } on Object {
-      // Older sidecars keep the existing local status implementation working.
+      do {
+        refreshQueued = false;
+        final requested = ++generation;
+        try {
+          final payload = await client.runtimeRequest('agentPresence.list');
+          // A delta or queued refresh invalidates a snapshot in flight.
+          if (disposed || requested != generation) continue;
+          final previous = ref.read(agentStatusControllerProvider);
+          final entries = payload is List
+              ? payload
+                    .whereType<Map>()
+                    .map((item) => _entryFromRuntime(item, previous: previous))
+                    .whereType<AgentStatusEntry>()
+              : const <AgentStatusEntry>[];
+          ref
+              .read(agentStatusControllerProvider.notifier)
+              .replaceRuntimeSnapshot(entries);
+        } on Object {
+          // Older sidecars keep the existing local status implementation working.
+        }
+      } while (refreshQueued && !disposed);
+    } finally {
+      refreshing = null;
+      completion.complete();
     }
   }
 
@@ -92,7 +108,10 @@ void runtimeAgentStatusSync(Ref ref) {
     // a snapshot RPC. Empty legacy/global events still fall back to a
     // coalesced full reconciliation.
     if (event.name == 'agentPresenceChanged') {
-      final delta = decodeRuntimeAgentPresenceDelta(event.payload);
+      final delta = decodeRuntimeAgentPresenceDelta(
+        event.payload,
+        previous: ref.read(agentStatusControllerProvider),
+      );
       if (delta != null) {
         // The event is newer than every snapshot request already in flight.
         // Invalidate those requests before applying the delta so a late list
@@ -122,16 +141,20 @@ void runtimeAgentStatusSync(Ref ref) {
   unawaited(refresh());
 }
 
-AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
+final _agentTypesByKey = {for (final type in AgentType.values) type.key: type};
+final _agentStatesByKey = {
+  for (final state in AgentStatusState.values) state.key: state,
+};
+
+AgentStatusEntry? _entryFromRuntime(
+  Map json, {
+  required Map<String, AgentStatusEntry> previous,
+}) {
   final sessionId = json['handle'] ?? json['terminalSessionId'];
   final workspaceId = json['workspaceId'];
   final tabId = json['tabId'];
-  final agentType = AgentType.values
-      .where((value) => value.key == json['agentType'])
-      .firstOrNull;
-  final state = AgentStatusState.values
-      .where((value) => value.key == (json['agentState'] ?? json['state']))
-      .firstOrNull;
+  final agentType = _agentTypesByKey[json['agentType']];
+  final state = _agentStatesByKey[json['agentState'] ?? json['state']];
   if (sessionId is! String ||
       workspaceId is! String ||
       tabId is! String ||
@@ -145,31 +168,54 @@ AgentStatusEntry? _entryFromRuntime(Map<String, Object?> json) {
   final stateStartedAt =
       DateTime.tryParse(json['stateStartedAt'] as String? ?? '')?.toUtc() ??
       updatedAt;
-  final rawContext = json['contextOverview'];
-  final conversationId = rawContext is Map
-      ? rawContext['conversationId']
+  final old = previous[sessionId];
+  // Do not reuse data from a different workspace, tab or agent occupying
+  // the same terminal handle. Only identical validated input is reused.
+  final matching =
+      old != null &&
+          old.terminalSessionId == sessionId &&
+          old.workspaceId == workspaceId &&
+          old.tabId == tabId &&
+          old.agentType == agentType
+      ? old
       : null;
+  final prompt = json['prompt'] as String? ?? '';
+  final toolName = json['toolName'] as String?;
+  final toolInput = json['toolInput'] as String?;
+  final lastAssistantMessage = json['lastAssistantMessage'] as String?;
+  final interrupted = json['interrupted'] as bool?;
+  final rawContext = json['contextOverview'];
+  final context = rawContext is Map
+      ? AgentContextOverview.snapshotFromRaw(
+          rawContext,
+          previous: matching?.contextOverview,
+        )
+      : null;
+  if (matching != null &&
+      matching.state == state &&
+      matching.updatedAt == updatedAt &&
+      matching.stateStartedAt == stateStartedAt &&
+      matching.prompt == prompt &&
+      matching.toolName == toolName &&
+      matching.toolInput == toolInput &&
+      matching.lastAssistantMessage == lastAssistantMessage &&
+      matching.interrupted == interrupted &&
+      identical(matching.contextOverview, context)) {
+    return matching;
+  }
   return AgentStatusEntry(
     terminalSessionId: sessionId,
     workspaceId: workspaceId,
     tabId: tabId,
     agentType: agentType,
     state: state,
-    prompt: json['prompt'] as String? ?? '',
+    prompt: prompt,
     updatedAt: updatedAt,
     stateStartedAt: stateStartedAt,
-    toolName: json['toolName'] as String?,
-    toolInput: json['toolInput'] as String?,
-    lastAssistantMessage: json['lastAssistantMessage'] as String?,
-    interrupted: json['interrupted'] as bool?,
-    contextOverview: rawContext is Map
-        ? <String, Object?>{
-            ...AgentContextOverview.fromRaw(rawContext).toJson(),
-            if (conversationId is String &&
-                conversationId.isNotEmpty &&
-                conversationId.length <= 128)
-              'conversationId': conversationId,
-          }
-        : null,
+    toolName: toolName,
+    toolInput: toolInput,
+    lastAssistantMessage: lastAssistantMessage,
+    interrupted: interrupted,
+    contextOverview: context,
   );
 }

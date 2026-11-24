@@ -48,7 +48,9 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     };
     if matches!(
         &command.action,
-        DesktopSettingsAction::SidebarOrderGet | DesktopSettingsAction::SidebarOrderMove { .. }
+        DesktopSettingsAction::SidebarOrderGet
+            | DesktopSettingsAction::SidebarSortSet { .. }
+            | DesktopSettingsAction::SidebarOrderMove { .. }
     ) {
         return crate::sidebar_order_commands::run(
             &mut client,
@@ -59,6 +61,7 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     }
     let (request, payload) = match command.action {
         DesktopSettingsAction::SidebarOrderGet
+        | DesktopSettingsAction::SidebarSortSet { .. }
         | DesktopSettingsAction::SidebarOrderMove { .. } => unreachable!("handled above"),
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
         DesktopSettingsAction::AgentHooksGet => ("runtimeSettings.get", json!({})),

@@ -22,7 +22,29 @@ const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_MANAGEMENT_RESPONSE: u64 = 256 * 1024;
 const MAX_PROJECTS: usize = 256;
 
+#[derive(Debug)]
+pub enum HostCreateFailure {
+    NotSubmitted(io::Error),
+    OutcomeUnknown(io::Error),
+}
+
 impl RuntimeCliBridge {
+    /// Distinguish preflight failures from a potentially submitted PTY create.
+    pub fn create_workbench_terminal_tracked(
+        &self,
+        root: &Path,
+        agent: Option<(&str, &str)>,
+    ) -> Result<CreatedHostTerminal, HostCreateFailure> {
+        let workspace_id = self
+            .ensure_host_workspace_for_explicit_terminal_inner(root, true)
+            .map_err(HostCreateFailure::NotSubmitted)?;
+        match agent {
+            Some((id, executable)) => self.create_agent_terminal(&workspace_id, id, executable),
+            None => self.create_terminal(&workspace_id),
+        }
+        .map_err(HostCreateFailure::OutcomeUnknown)
+    }
+
     /// Called exclusively after the user requests New Terminal. The CLI,
     /// rather than GPUI, owns Host launch, authentication and the PTY.
     ///
@@ -75,6 +97,14 @@ impl RuntimeCliBridge {
     }
 
     fn ensure_host_workspace_for_explicit_terminal(&self, root: &Path) -> io::Result<String> {
+        self.ensure_host_workspace_for_explicit_terminal_inner(root, false)
+    }
+
+    fn ensure_host_workspace_for_explicit_terminal_inner(
+        &self,
+        root: &Path,
+        register_local_project: bool,
+    ) -> io::Result<String> {
         let active = dunce::canonicalize(root)?;
         if active != root || !active.is_dir() {
             return Err(io::Error::new(
@@ -98,7 +128,7 @@ impl RuntimeCliBridge {
         let workspace_id = match select_registered_host_workspace(&active, &registered) {
             Ok(id) => id,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.register_existing_host_workspace(&active)?
+                self.register_existing_host_workspace(&active, register_local_project)?
             }
             Err(error) => return Err(error),
         };
@@ -126,7 +156,7 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
-    fn register_existing_host_workspace(&self, root: &Path) -> io::Result<String> {
+    fn register_existing_host_workspace(&self, root: &Path, register_local_project: bool) -> io::Result<String> {
         let (_, runtime) = self.agent_cli_paths();
         let args = vec![
             OsString::from("project"),
@@ -136,7 +166,50 @@ impl RuntimeCliBridge {
             OsString::from("list"),
         ];
         let projects = self.management_json(&args, MANAGEMENT_TIMEOUT)?;
-        let (project_id, main_checkout) = matching_existing_project(root, &projects)?;
+        let (project_id, main_checkout) = match matching_existing_project(root, &projects) {
+            Ok(found) => found,
+            Err(error) if register_local_project && error.kind() == io::ErrorKind::NotFound => {
+                // A Native-only project has not yet been added to the Host.
+                // Register only an explicit, existing main checkout or folder.
+                let kind = match git2::Repository::discover(root) {
+                    Ok(repo) => {
+                        let main_root = repo.commondir().parent()
+                            .and_then(|path| dunce::canonicalize(path).ok());
+                        if main_root.as_deref() != Some(root) {
+                            return Err(invalid("Register the main Git project before launching a linked worktree"));
+                        }
+                        "git-repository"
+                    }
+                    Err(_) => "folder",
+                };
+                let name = root.file_name().and_then(|name| name.to_str())
+                    .filter(|name| !name.is_empty() && name.len() <= 128)
+                    .ok_or_else(|| invalid("Invalid project name"))?;
+                let add_args = vec![
+                    OsString::from("project"),
+                    OsString::from("--json"),
+                    OsString::from("--runtime-dir"),
+                    runtime.as_os_str().to_owned(),
+                    OsString::from("add"),
+                    OsString::from("--name"),
+                    OsString::from(name),
+                    OsString::from("--repo-path"),
+                    root.as_os_str().to_owned(),
+                    OsString::from("--kind"),
+                    OsString::from(kind),
+                ];
+                self.management_json(&add_args, MANAGEMENT_TIMEOUT)?;
+                let projects = self.management_json(&args, MANAGEMENT_TIMEOUT)?;
+                matching_existing_project(root, &projects)?
+            }
+            Err(error) => return Err(error),
+        };
+        // Project add may already have registered the main workspace.
+        match select_registered_host_workspace(root, &self.list_registered_workspaces()?) {
+            Ok(id) => return Ok(id),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         let name = root
             .file_name()
             .and_then(|name| name.to_str())
@@ -344,6 +417,21 @@ mod tests {
             &root.path().join("missing-project"),
         );
         assert!(result.is_err());
+        assert!(!runtime.exists());
+    }
+
+    #[test]
+    fn failed_preflight_never_submits_a_terminal_or_agent() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtime = temp.path().join("runtime");
+        let bridge = RuntimeCliBridge::new("missing-alera-cli", &runtime);
+        let missing = temp.path().join("missing-project");
+        for agent in [None, Some(("agy", "missing-agy"))] {
+            assert!(matches!(
+                bridge.create_workbench_terminal_tracked(&missing, agent),
+                Err(HostCreateFailure::NotSubmitted(_))
+            ));
+        }
         assert!(!runtime.exists());
     }
 

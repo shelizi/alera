@@ -237,7 +237,9 @@ class const WorkspaceWorkbenchView({
   required final WorkbenchLayout? layout,
   required final TerminalRuntime terminalRuntime,
   final WorkbenchMobileDriverPresence? mobileDriverPresence,
-  required final Map<String, AgentStatusEntry> agentStatuses,
+  // Explicit snapshots are supported for embedded/test views. The main
+  // shell omits this so each tab observes its own live attention.
+  final Map<String, AgentStatusEntry>? agentStatuses,
   required final CreateTerminalTabCallback onCreateTab,
   final CreateUntitledTabCallback? onCreateUntitledTab,
   required final CreateAgentTabCallback onCreateAgentTab,
@@ -280,7 +282,10 @@ class _WorkspaceWorkbenchViewState
   @override
   void didUpdateWidget(covariant WorkspaceWorkbenchView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    unawaited(_syncEditorFileWatcher());
+    if (oldWidget.workspace.path != widget.workspace.path ||
+        !identical(oldWidget.tabs, widget.tabs)) {
+      unawaited(_syncEditorFileWatcher());
+    }
   }
 
   @override

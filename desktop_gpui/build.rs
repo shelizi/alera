@@ -9,6 +9,8 @@ fn main() {
         // Classic keeps the canonical desktop icon in windows/runner/resources.
         // Embedding the exact same .ico avoids the generic Rust/GPUI icon in
         // Explorer, taskbar, window switcher and a renamed AleraNative.exe.
+        // GPUI's Windows backend explicitly loads icon resource ID 1; the
+        // .rc must use that ID rather than Classic's own IDI_APP_ICON=101.
         // Keep Native's distinct AppUserModelID; icon parity does not merge
         // the two editions' shortcut or instance identities.
         println!("cargo:rerun-if-changed=native_app_icon.rc");

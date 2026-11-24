@@ -448,6 +448,41 @@ void main() {
     expect(trimmed.bufferLength, 25);
   });
 
+  test(
+    'worker remains incremental through repeated scrollback compaction',
+    () async {
+      final direct = _createDirectTerminal(cols: 16, rows: 3, maxLines: 25);
+      final worker = await TerminalXtermWorker.start(
+        cols: 16,
+        rows: 3,
+        maxLines: 25,
+      );
+      addTearDown(worker.close);
+      final mirror = <String>[];
+      final initial = List<String>.generate(
+        25,
+        (index) => 'line $index',
+      ).join('\r\n');
+      direct.write(initial);
+      _applyBufferDelta(mirror, await worker.writeBufferDelta(initial));
+      expect(mirror, _bufferRows(direct));
+
+      // More than one logical-head compaction threshold, with both styled and
+      // combining text. Neither compaction nor cache reuse should change the
+      // incremental repaint or the authoritative retained rows.
+      for (var index = 25; index < 1100; index++) {
+        final text = '\r\n\x1b[32mline $index e\u0301\x1b[0m';
+        direct.write(text);
+        final delta = await worker.writeBufferDelta(text);
+        expect(delta.fullRepaint, isFalse);
+        expect(delta.trimStart, 1);
+        expect(delta.cachedRowCount, lessThanOrEqualTo(3));
+        _applyBufferDelta(mirror, delta);
+        expect(mirror, _bufferRows(direct));
+      }
+    },
+  );
+
   test('worker only compares rows that were active before the write', () async {
     final worker = await TerminalXtermWorker.start(
       cols: 8,

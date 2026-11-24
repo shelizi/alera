@@ -1273,7 +1273,7 @@ impl Workbench {
             agent_type,
         };
         if self.terminals.session_list_is_stale()
-            || validated_agent_navigation_target(&target, &self.terminals.sessions).is_none()
+            || alera_gpui_desktop::agent_status_notifications::validated_sidebar_navigation_target(&target, &self.terminals.sessions).is_none()
         {
             self.agent_navigation.cancel();
             self.terminals.status = "Agent identity changed; refresh before opening Tab".into();

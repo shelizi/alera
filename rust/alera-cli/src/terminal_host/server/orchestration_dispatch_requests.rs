@@ -274,7 +274,7 @@ impl ServerActor {
                 .await
                 .map_err(state_error)?;
         }
-        self.orchestration_activity_last_recorded.remove(&to);
+        self.orchestration_output_activity.remove(&to);
         let preamble = build_dispatch_preamble(&PreambleParams {
             task_id: &task_id,
             dispatch_id: &dispatch.id,
@@ -412,6 +412,9 @@ impl ServerActor {
             )
             .await
             .map_err(state_error)?;
+        // Acceptance writes activity itself; the next PTY output must not
+        // inherit a throttle from the pre-acceptance lookup.
+        self.orchestration_output_activity.remove(&terminal);
         self.consume_owned_spawn_metadata(&terminal).await;
         Ok(json!({ "outcome": "accepted", "dispatch": accepted }))
     }

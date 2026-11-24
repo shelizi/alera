@@ -296,7 +296,7 @@ impl ServerActor {
                         client_id,
                         crate::terminal_host::client::ClientFrame::Output {
                             session_id: session_id.to_owned(),
-                            data,
+                            data: data.into(),
                         },
                     )
                 {

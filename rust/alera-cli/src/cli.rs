@@ -167,6 +167,9 @@ pub enum TerminalAction {
     /// Local desktop-only lifecycle action on an exact live Agent.
     #[command(name = "control-agent-verified")]
     ControlAgentVerified(TerminalControlAgentArgs),
+    /// Explicitly close an exact existing Host terminal tab (agent or shell).
+    #[command(name = "close-verified")]
+    CloseVerified(TerminalCloseVerifiedArgs),
     /// Explicit consent-gated, local-only historical Agent search.
     #[command(name = "history-search")]
     HistorySearch(TerminalHistorySearchArgs),
@@ -265,6 +268,18 @@ pub struct TerminalControlAgentArgs {
     /// Explicit acknowledgment that termination removes the Host Session.
     #[arg(long, default_value_t = false)]
     pub confirm_terminate: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalCloseVerifiedArgs {
+    #[arg(long)]
+    pub handle: String,
+    #[arg(long)]
+    pub expected_workspace_id: String,
+    #[arg(long)]
+    pub expected_tab_id: String,
+    #[arg(long)]
+    pub confirm_close: bool,
 }
 
 #[derive(Debug, Args)]
@@ -532,6 +547,13 @@ pub enum DesktopSettingsAction {
     Get,
     /// Read only the two sidebar sort modes and their stable ID order.
     SidebarOrderGet,
+    /// Update one sidebar sort mode in the shared Host preferences.
+    SidebarSortSet {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        mode: String,
+    },
     /// Rearrange one registered sidebar entry in shared Host prefs.
     SidebarOrderMove {
         #[arg(long)]

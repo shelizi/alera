@@ -177,7 +177,7 @@ impl Workbench {
                 }
                 match result {
                     Ok(prefs) => {
-                        view.sidebar_order_prefs = Some(prefs);
+                        view.accept_sidebar_order_prefs(prefs);
                         order_project_groups(
                             &mut view.project_tree_groups,
                             view.runtime_catalog.as_ref(),

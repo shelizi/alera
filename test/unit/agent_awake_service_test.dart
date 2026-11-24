@@ -21,6 +21,122 @@ void main() {
 
       expect(displayLock.states, isEmpty);
       expect(assertion.starts, isEmpty);
+      expect(assertion.stops, isEmpty);
+      await service.dispose();
+    });
+
+    test('coalesces a status burst behind a pending assertion start', () async {
+      final displayLock = _FakeDisplayLock();
+      final assertion = _FakeAssertion()..startGate = Completer<void>();
+      final service = _service(displayLock: displayLock, assertion: assertion);
+      addTearDown(service.dispose);
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
+      await service.setEnabled(true);
+      final first = service.setStatuses({'session-1': _entry()});
+      await _waitForAssertionStarts(assertion, 1);
+
+      final queued = <Future<void>>[];
+      for (var index = 0; index < 1000; index++) {
+        queued.add(
+          service.setStatuses({
+            'session-1': _entry(state: index.isEven ? .waiting : .working),
+          }),
+        );
+      }
+      queued.add(service.setStatuses(const <String, AgentStatusEntry>{}));
+      assertion.startGate!.complete();
+      await Future.wait<void>([first, ...queued]);
+
+      expect(assertion.starts, ['status-change']);
+      expect(assertion.stops, ['status-change']);
+      expect(displayLock.states, [true, false]);
+      expect(assertion.activeCount, 0);
+      expect(assertion.maxActiveCount, 1);
+    });
+
+    test(
+      'disabled snapshots retain working entries for later enable',
+      () async {
+        final displayLock = _FakeDisplayLock();
+        final assertion = _FakeAssertion();
+        final service = _service(
+          displayLock: displayLock,
+          assertion: assertion,
+        );
+        addTearDown(service.dispose);
+        await service.setHookSettings(
+          const AgentStatusHookSettings(values: {'codex': true}),
+        );
+        final mutable = {'session-1': _entry()};
+        await service.setStatuses(mutable);
+        mutable.clear();
+        for (var index = 0; index < 100; index++) {
+          await service.setHookSettings(
+            AgentStatusHookSettings(
+              values: {'codex': true, 'claude': index.isEven},
+            ),
+          );
+        }
+        expect(assertion.starts, isEmpty);
+        expect(assertion.stops, isEmpty);
+
+        await service.setEnabled(true);
+        expect(assertion.starts, ['settings-change']);
+        expect(displayLock.states, [true]);
+        await service.setEnabled(false);
+        expect(assertion.stops, ['settings-change']);
+        for (var index = 0; index < 100; index++) {
+          await service.setStatuses({'session-1': _entry()});
+        }
+        expect(assertion.stops, ['settings-change']);
+        expect(displayLock.states, [true, false]);
+      },
+    );
+
+    test('retries an unsettled stop after disabling', () async {
+      final displayLock = _FakeDisplayLock();
+      final assertion = _FakeAssertion();
+      final service = _service(displayLock: displayLock, assertion: assertion);
+      addTearDown(service.dispose);
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
+      await service.setEnabled(true);
+      await service.setStatuses({'session-1': _entry()});
+      assertion.throwOnStop = true;
+      await service.setEnabled(false);
+      expect(assertion.stops, ['settings-change']);
+      assertion.throwOnStop = false;
+      await service.setStatuses(const <String, AgentStatusEntry>{});
+      expect(assertion.stops, ['settings-change', 'status-change']);
+      await service.setStatuses({'session-1': _entry()});
+      expect(assertion.stops, hasLength(2));
+    });
+
+    test('an entry exactly at its expiry is no longer wake eligible', () async {
+      final displayLock = _FakeDisplayLock();
+      final assertion = _FakeAssertion();
+      final base = DateTime.utc(2026, 5, 27, 12);
+      var now = base;
+      final service = _service(
+        displayLock: displayLock,
+        assertion: assertion,
+        now: () => now,
+        staleAfter: const Duration(hours: 2),
+      );
+      addTearDown(service.dispose);
+      await service.setHookSettings(
+        const AgentStatusHookSettings(values: {'codex': true}),
+      );
+      await service.setEnabled(true);
+      final working = {'session-1': _entry(updatedAt: base)};
+      await service.setStatuses(working);
+      now = base.add(const Duration(hours: 2));
+      await service.setStatuses(working);
+      expect(displayLock.states, [true, false]);
+      expect(assertion.stops, ['status-change']);
     });
 
     test('starts and stops while an enabled hook reports working', () async {

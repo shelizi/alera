@@ -125,165 +125,138 @@ class _ProjectWorkbenchSidebarState
                   child: AgentRunSpinnerScope(
                     child: state.projects.isEmpty
                         ? _EmptyProjectsView(onAddProject: _addProject)
-                        : Consumer(
-                            builder: (context, ref, _) {
-                              // The rows are memoized in a provider, so this only
-                              // rebuilds when the computed list actually changes.
-                              final rows = ref.watch(
-                                workbenchSidebarRowsProvider,
-                              );
-                              return _SidebarBody(
-                                state: state,
-                                commands: commands,
-                                rows: rows,
-                                onOpenWorkspace: _openWorkspace,
-                                onOpenWorkspaceFolder: openWorkspaceFolder,
-                                onOpenWorkspaceExternally:
-                                    openWorkspaceExternally,
-                                onCopyWorkspacePath: copyWorkspacePath,
-                                onOpenWorkspaceInBrowser:
-                                    openWorkspaceInBrowser,
-                                onSleepWorkspace: sleepWorkspace,
-                                onSleepProject: sleepProject,
-                                onArchiveWorkspace: archiveWorkspace,
-                                onRestoreWorkspace: restoreWorkspace,
-                                onCreateWorkspace: _createWorkspace,
-                                onOpenProjectSettings: _openProjectSettings,
-                                onDeleteWorkspace: _deleteWorkspace,
-                                onRenameProject: _renameProject,
-                                onRemoveProject: _removeProject,
-                                onRenameWorkspace: _renameWorkspace,
-                                onSetWorkspacePinned: _setWorkspacePinned,
-                                onSetWorkspaceTreePinned:
-                                    _setWorkspaceTreePinned,
-                                onManageWorkspaceTags: _manageWorkspaceTags,
-                                onSetWorkspaceParent: _setWorkspaceParent,
-                                onClearWorkspaceParent: _clearWorkspaceParent,
-                                fileManagerLabel:
-                                    workspaceFolderOpener.fileManagerLabel,
-                                onSelectTerminal: _selectTerminal,
-                                onCloseTerminal: _closeTerminal,
-                                onTransferTerminalTab:
-                                    !terminalTransferSupported
-                                    ? null
-                                    : (data, destination) async {
-                                        Workspace? source;
-                                        for (final workspaces
-                                            in state
-                                                .workspacesByProject
-                                                .values) {
-                                          for (final workspace in workspaces) {
-                                            if (workspace.id ==
-                                                data.workspaceId) {
-                                              source = workspace;
-                                              break;
-                                            }
-                                          }
-                                          if (source != null) break;
+                        : _SidebarBody(
+                            state: state,
+                            commands: commands,
+                            onOpenWorkspace: _openWorkspace,
+                            onOpenWorkspaceFolder: openWorkspaceFolder,
+                            onOpenWorkspaceExternally: openWorkspaceExternally,
+                            onCopyWorkspacePath: copyWorkspacePath,
+                            onOpenWorkspaceInBrowser: openWorkspaceInBrowser,
+                            onSleepWorkspace: sleepWorkspace,
+                            onSleepProject: sleepProject,
+                            onArchiveWorkspace: archiveWorkspace,
+                            onRestoreWorkspace: restoreWorkspace,
+                            onCreateWorkspace: _createWorkspace,
+                            onOpenProjectSettings: _openProjectSettings,
+                            onDeleteWorkspace: _deleteWorkspace,
+                            onRenameProject: _renameProject,
+                            onRemoveProject: _removeProject,
+                            onRenameWorkspace: _renameWorkspace,
+                            onSetWorkspacePinned: _setWorkspacePinned,
+                            onSetWorkspaceTreePinned: _setWorkspaceTreePinned,
+                            onManageWorkspaceTags: _manageWorkspaceTags,
+                            onSetWorkspaceParent: _setWorkspaceParent,
+                            onClearWorkspaceParent: _clearWorkspaceParent,
+                            fileManagerLabel:
+                                workspaceFolderOpener.fileManagerLabel,
+                            onSelectTerminal: _selectTerminal,
+                            onCloseTerminal: _closeTerminal,
+                            onTransferTerminalTab: !terminalTransferSupported
+                                ? null
+                                : (data, destination) async {
+                                    Workspace? source;
+                                    for (final workspaces
+                                        in state.workspacesByProject.values) {
+                                      for (final workspace in workspaces) {
+                                        if (workspace.id == data.workspaceId) {
+                                          source = workspace;
+                                          break;
                                         }
-                                        if (source == null) {
-                                          throw StateError(
-                                            'Source Terminal workspace no longer exists.',
+                                      }
+                                      if (source != null) break;
+                                    }
+                                    if (source == null) {
+                                      throw StateError(
+                                        'Source Terminal workspace no longer exists.',
+                                      );
+                                    }
+                                    final String receiptId;
+                                    try {
+                                      receiptId = await controller
+                                          .transferTerminalTab(
+                                            source: source,
+                                            destination: destination,
+                                            tabId: data.tabId,
                                           );
-                                        }
-                                        final String receiptId;
-                                        try {
-                                          receiptId = await controller
-                                              .transferTerminalTab(
-                                                source: source,
-                                                destination: destination,
-                                                tabId: data.tabId,
-                                              );
-                                        } on TerminalTransferOutcomeUnknownException catch (
-                                          error
-                                        ) {
-                                          if (!mounted) return;
-                                          // Timeout/disconnect is *not*
-                                          // failure. The original mutation
-                                          // may already have committed.
-                                          ScaffoldMessenger.maybeOf(
-                                            context,
-                                          )?.showSnackBar(
-                                            SnackBar(
-                                              duration: const Duration(
-                                                seconds: 20,
-                                              ),
-                                              content: Text(
-                                                error.hostRecoveryRequired
-                                                    ? 'Host found incomplete or conflicting Terminal transfer evidence (receipt, workspace owner, or live PTY). Keep the pending record; do not close, restart, or move this tab until recovery.'
-                                                    : 'Terminal move status is unknown. Do not move or close the tab until the Host confirms its current workspace.',
-                                              ),
-                                              action: SnackBarAction(
-                                                label: 'Check status',
-                                                onPressed: () {
-                                                  unawaited(
-                                                    controller
-                                                        .confirmUnknownTerminalTransfer(
-                                                          data.tabId,
-                                                        )
-                                                        .then<void>((
-                                                          confirmed,
-                                                        ) {
-                                                          if (!mounted) return;
-                                                          AleraToast.publish(
-                                                            message: confirmed
-                                                                ? 'Host confirmed the Terminal move and both layouts were refreshed.'
-                                                                : 'No pending Terminal move was found.',
-                                                          );
-                                                        })
-                                                        .catchError((
-                                                          Object error,
-                                                        ) {
-                                                          AleraToast.publish(
-                                                            message:
-                                                                'Terminal status is still unknown: $error',
-                                                          );
-                                                        }),
-                                                  );
-                                                },
-                                              ),
-                                            ),
-                                          );
-                                          return;
-                                        }
-                                        if (!mounted) return;
-                                        ScaffoldMessenger.maybeOf(
-                                          context,
-                                        )?.showSnackBar(
-                                          SnackBar(
-                                            duration: const Duration(
-                                              seconds: 10,
-                                            ),
-                                            content: Text(
-                                              'Terminal moved to ${destination.name}. '
-                                              'The running shell keeps its original directory.',
-                                            ),
-                                            action: SnackBarAction(
-                                              label: 'Undo',
-                                              onPressed: () {
-                                                unawaited(
-                                                  controller
-                                                      .undoTerminalTransfer(
-                                                        tabId: data.tabId,
-                                                        expectedMutationId:
-                                                            receiptId,
-                                                      )
-                                                      .catchError((
-                                                        Object error,
-                                                      ) {
-                                                        AleraToast.publish(
-                                                          message:
-                                                              'Could not undo Terminal move: $error',
-                                                        );
-                                                      }),
-                                                );
-                                              },
-                                            ),
+                                    } on TerminalTransferOutcomeUnknownException catch (
+                                      error
+                                    ) {
+                                      if (!mounted) return;
+                                      // Timeout/disconnect is *not*
+                                      // failure. The original mutation
+                                      // may already have committed.
+                                      ScaffoldMessenger.maybeOf(
+                                        context,
+                                      )?.showSnackBar(
+                                        SnackBar(
+                                          duration: const Duration(seconds: 20),
+                                          content: Text(
+                                            error.hostRecoveryRequired
+                                                ? 'Host found incomplete or conflicting Terminal transfer evidence (receipt, workspace owner, or live PTY). Keep the pending record; do not close, restart, or move this tab until recovery.'
+                                                : 'Terminal move status is unknown. Do not move or close the tab until the Host confirms its current workspace.',
                                           ),
-                                        );
-                                      },
-                              );
-                            },
+                                          action: SnackBarAction(
+                                            label: 'Check status',
+                                            onPressed: () {
+                                              unawaited(
+                                                controller
+                                                    .confirmUnknownTerminalTransfer(
+                                                      data.tabId,
+                                                    )
+                                                    .then<void>((confirmed) {
+                                                      if (!mounted) return;
+                                                      AleraToast.publish(
+                                                        message: confirmed
+                                                            ? 'Host confirmed the Terminal move and both layouts were refreshed.'
+                                                            : 'No pending Terminal move was found.',
+                                                      );
+                                                    })
+                                                    .catchError((Object error) {
+                                                      AleraToast.publish(
+                                                        message:
+                                                            'Terminal status is still unknown: $error',
+                                                      );
+                                                    }),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.maybeOf(
+                                      context,
+                                    )?.showSnackBar(
+                                      SnackBar(
+                                        duration: const Duration(seconds: 10),
+                                        content: Text(
+                                          'Terminal moved to ${destination.name}. '
+                                          'The running shell keeps its original directory.',
+                                        ),
+                                        action: SnackBarAction(
+                                          label: 'Undo',
+                                          onPressed: () {
+                                            unawaited(
+                                              controller
+                                                  .undoTerminalTransfer(
+                                                    tabId: data.tabId,
+                                                    expectedMutationId:
+                                                        receiptId,
+                                                  )
+                                                  .catchError((Object error) {
+                                                    AleraToast.publish(
+                                                      message:
+                                                          'Could not undo Terminal move: $error',
+                                                    );
+                                                  }),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    );
+                                  },
                           ),
                   ),
                 ),

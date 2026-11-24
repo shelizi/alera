@@ -828,3 +828,108 @@ async fn reset_scopes_tasks_and_messages_independently() {
     store.reset_orchestration_messages().await.unwrap();
     assert!(store.orchestration_inbox(10).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn active_handle_batch_matches_single_lookup_and_survives_index_upgrade() {
+    use std::collections::HashSet;
+    let (dir, store) = store().await;
+    let mut handles: Vec<String> = (0..300).map(|index| format!("handle-{index}")).collect();
+    let mut expected = HashSet::new();
+    let statuses = [
+        "pending",
+        "dispatched",
+        "awaiting_acceptance",
+        "stalled",
+        "completed",
+        "failed",
+        "circuit_broken",
+        "startup_failed",
+        "cancelled",
+        "superseded",
+    ];
+    for (index, status) in statuses.into_iter().enumerate() {
+        let handle = &handles[index * 30];
+        let task = store
+            .create_orchestration_task(task("work", vec![]))
+            .await
+            .unwrap();
+        let dispatch = store
+            .create_orchestration_dispatch(&task.id, handle)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE orchestrationDispatchContexts SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(&dispatch.id)
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let legacy = store
+            .active_orchestration_dispatch_for_handle(handle)
+            .await
+            .unwrap()
+            .is_some();
+        assert_eq!(legacy, index < 4);
+        if legacy {
+            expected.insert(handle.clone());
+        }
+    }
+    handles.push(handles[0].clone());
+    handles.push(handles[30].clone());
+    assert!(store
+        .active_orchestration_dispatch_handles(&[])
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .active_orchestration_dispatch_handles(&handles)
+            .await
+            .unwrap(),
+        expected
+    );
+
+    // Existing version-2 databases get the additive partial index at open.
+    sqlx::query("DROP INDEX orchestrationDispatchActiveHandleIdx")
+        .execute(store.pool())
+        .await
+        .unwrap();
+    store.pool().close().await;
+    drop(store);
+    let reopened = RuntimeStore::open(dir.path()).await.unwrap();
+    let index_sql: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'orchestrationDispatchActiveHandleIdx'")
+        .fetch_one(reopened.pool()).await.unwrap();
+    assert!(index_sql.contains("WHERE status IN"));
+    assert_eq!(
+        reopened
+            .active_orchestration_dispatch_handles(&handles)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert_eq!(
+        reopened
+            .get_metadata("orchestration.schemaVersion")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("2")
+    );
+
+    // The partial index covers the active-handle query; completed history
+    // does not have to be scanned on each coordinator poll.
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN SELECT DISTINCT assignee_handle FROM orchestrationDispatchContexts \
+         WHERE status IN ('pending','dispatched','awaiting_acceptance','stalled') \
+         AND assignee_handle IN (?, ?)",
+    )
+    .bind("handle-0")
+    .bind("handle-30")
+    .fetch_all(reopened.pool())
+    .await
+    .unwrap();
+    assert!(
+        plan.iter()
+            .any(|(_, _, _, detail)| detail.contains("orchestrationDispatchActiveHandleIdx")),
+        "{plan:?}"
+    );
+}

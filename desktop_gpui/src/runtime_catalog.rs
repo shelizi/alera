@@ -50,6 +50,9 @@ pub struct RuntimeCatalog {
     pub workspaces: Vec<RuntimeWorkspace>,
     pub tags: Vec<RuntimeTag>,
     pub sections: Vec<RuntimeSection>,
+    /// Authoritative Host update timestamps, in Unix milliseconds.
+    pub project_updated_ms: HashMap<String, i64>,
+    pub workspace_updated_ms: HashMap<String, i64>,
 }
 
 fn item_list<'a>(value: &'a Value, kind: &str) -> io::Result<&'a [Value]> {
@@ -72,6 +75,12 @@ fn display_text(value: Option<&Value>, max_len: usize) -> Option<String> {
         return None;
     }
     Some(text.to_owned())
+}
+
+fn timestamp_ms(value: Option<&Value>) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value?.as_str()?)
+        .ok()
+        .map(|at| at.timestamp_millis())
 }
 
 fn existing_directory(value: Option<&Value>) -> Option<PathBuf> {
@@ -111,6 +120,9 @@ pub fn parse_runtime_catalog(
             continue;
         };
         if project_ids.insert(id.clone()) {
+            if let Some(at) = timestamp_ms(value.get("updatedAt")) {
+                catalog.project_updated_ms.insert(id.clone(), at);
+            }
             catalog.projects.push(RuntimeProject { id, name, root });
         }
     }
@@ -167,6 +179,9 @@ pub fn parse_runtime_catalog(
             .filter_map(|name| display_text(Some(name), 64))
             .take(MAX_TAGS)
             .collect();
+        if let Some(at) = timestamp_ms(value.get("updatedAt")) {
+            catalog.workspace_updated_ms.insert(id.clone(), at);
+        }
         catalog.workspaces.push(RuntimeWorkspace {
             id,
             project_id,

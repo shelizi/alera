@@ -13,7 +13,7 @@ const MAX_STATE_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_TABS: usize = 24;
 const MAX_RECENT_WORKSPACES: usize = 12;
 const MAX_SAVED_PROJECTS: usize = 32;
-const MAX_TERMINAL_LAYOUT_TABS: usize = 8;
+const MAX_TERMINAL_LAYOUT_TABS: usize = crate::terminal::MAX_OPEN_TABS;
 const MAX_GIT_FAVORITES: usize = 80;
 
 #[derive(Debug, Clone)]
@@ -1710,7 +1710,7 @@ mod tests {
         let b = dunce::canonicalize(b.path()).unwrap();
         let store = PreviewSessionStore::new(state.path());
         let layout = TerminalLayout {
-            tabs: (0..9)
+            tabs: (0..=MAX_TERMINAL_LAYOUT_TABS)
                 .map(|i| TerminalLayoutTab {
                     handle: format!("term-{i}"),
                     workspace_id: "workspace".into(),

@@ -271,11 +271,12 @@ mod tests {
             );
         }
         let sidebar = source
-            .split_once(r#".id("agent-profiles-list")"#)
+            .split_once(r#".id("project-worktree-header")"#)
             .unwrap()
             .1;
-        assert!(sidebar.contains("quota_provider_icon(&brand, 16.0)"));
-        assert!(sidebar.contains("quota_provider_icon(&brand, 14.0)"));
+        assert!(sidebar.contains("quota_provider_icon(&agent_type, 14.0)"));
+        assert!(sidebar.contains("UiIcon::Terminal, 14.0, MUTED"));
+        assert!(sidebar.contains("project-tree-session:{workspace_id}:{tab_id}:{handle}"));
     }
 
     #[test]
@@ -299,12 +300,11 @@ mod tests {
         assert!(tab.contains(".tooltip(agent_type, locale)"));
         assert!(tab.contains("tab_tooltip_title = agent_tooltip.clone()"));
         let sidebar = main
-            .split_once(r#".id("terminal-sessions-scroll")"#)
+            .split_once(r#".id("project-worktree-header")"#)
             .unwrap()
             .1;
         assert!(sidebar.contains("agent_run_indicator("));
-        assert!(sidebar.contains("if state == AgentVisualState::Working"));
-        assert!(sidebar.contains("state.tooltip(&brand, agent_ui_locale)"));
+        assert!(sidebar.contains("state.tooltip(&agent_type, agent_ui_locale)"));
     }
 
     #[test]
@@ -319,8 +319,11 @@ mod tests {
         // Keep the rendered calls, but do not couple this test to rustfmt
         // indentation or whether the helper is namespace-qualified.
         let compact = source.split_whitespace().collect::<String>();
-        assert!(compact
-            .contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,false,"));
+        assert!(!source.contains(r#".id("runtime-tools-toggle")"#));
+        assert!(!source.contains(r#".id("terminal-sessions-scroll")"#));
+        assert!(source.contains("project-tree-session:{workspace_id}:{tab_id}:{handle}"));
+        assert!(source.contains("reconcile_current_workspace_sessions"));
+        assert!(source.contains("close_verified_host_tab(target.clone(), cx)"));
         assert!(
             compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,true,")
         );
@@ -328,9 +331,9 @@ mod tests {
         assert!(source.contains("if is_agent && inventory_current && tab.running"));
         assert!(source.contains("AgentVisualState::from_hook(state, tab.interrupted).color()"));
         // Status never alters the separate 6px Tab attention slot or the
-        // Agent profile selection marker.
+        // selected Workspace Session row.
         assert!(source.contains(".w(px(TAB_ATTENTION_DOT_SIZE))"));
-        assert!(source.contains("if selected { \"●\" } else { \"○\" }"));
+        assert!(source.contains(".when(selected, |row| row.bg(rgb(ACTIVE)))"));
     }
 
     #[test]
@@ -497,11 +500,12 @@ mod tests {
         assert!(compact.contains("view.create_host_terminal_in_pane("));
         assert!(compact.contains("view.prepare_detected_agent_in_pane("));
         // No extra Host-session or Profile-selection step belongs to +.
+        // A saved recovery action is allowed only while the Host is unavailable.
+        assert!(compact.contains("ifsaved{"));
+        assert!(menu.contains("view.terminals.session_list_is_stale() || view.terminals.sessions.is_empty()"));
         for advanced in [
             "Attach running Host session",
-            "Restore saved Agent / Terminal tabs",
             "Host Agent Profiles",
-            "Pending Host requests",
             "Rescan installed agents",
         ] {
             assert!(
@@ -509,6 +513,10 @@ mod tests {
                 "{advanced} must live outside New Tab"
             );
         }
+        // Pending creation and offline saved-tab recovery are conditional.
+        assert!(menu.contains("terminal_create_flow.is_active()"));
+        assert!(menu.contains("Pending Host requests"));
+        assert!(menu.contains("cancel_host_terminal_confirmation(cx)"));
         let workbench = include_str!("main.rs");
         assert_eq!(
             workbench
@@ -516,8 +524,9 @@ mod tests {
                 .count(),
             3
         );
-        assert!(workbench.contains("runtime-host-recovery-actions"));
-        assert!(workbench.contains("this.attach_live_terminal_to_pane(&original, &target, cx)"));
+        assert!(!workbench.contains(r#".id("runtime-host-recovery-actions")"#));
+        assert!(menu.contains("view.restore_saved_host_tabs(cx)"));
+        assert!(workbench.contains("view.attach_live_terminal_to_pane(&session, &target, cx)"));
     }
 
     #[test]
@@ -572,7 +581,7 @@ mod tests {
         }
         let view_options = include_str!("native_sidebar_view_options.rs");
         assert!(view_options.contains("window.open_dialog(cx"));
-        assert!(view_options.contains(".title(\"View Options\")"));
+        assert!(view_options.contains(".title(tr(locale, \"View Options\"))"));
     }
     #[test]
     fn source_control_parity_keeps_commit_editor_without_redundant_git_and_agent_buttons() {

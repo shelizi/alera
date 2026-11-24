@@ -171,14 +171,9 @@ impl ServerActor {
         let Some(session) = self.sessions.get(handle) else {
             return "<terminal is gone>".to_string();
         };
-        let snapshot = session.snapshot_payload();
-        let Ok(bytes) =
-            crate::terminal_host::protocol::decode_bytes(snapshot.get("snapshotBase64"))
-        else {
-            return "<output unavailable>".to_string();
-        };
-        let start = bytes.len().saturating_sub(STALL_DIAGNOSTIC_BYTES);
-        String::from_utf8_lossy(&bytes[start..]).into_owned()
+        let start = session.buffer.len().saturating_sub(STALL_DIAGNOSTIC_BYTES);
+        let bytes = session.buffer.slice_from(start);
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// Sends the adapter's interrupt sequence. Best effort: a worker that

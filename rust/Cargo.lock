@@ -90,6 +90,7 @@ dependencies = [
  "keyring",
  "keyring-core",
  "libc",
+ "memchr",
  "notify",
  "png",
  "portable-pty",

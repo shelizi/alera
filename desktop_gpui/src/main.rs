@@ -137,7 +137,7 @@ use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
-use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
+use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs, SidebarSortContext};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_cell_metrics, raw_key_reply_may_drain,
     resolve_registered_host_workspace_path, select_registered_host_workspace,
@@ -145,7 +145,7 @@ use alera_gpui_desktop::terminal::{
     TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
     TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
     TerminalPollGate, TerminalResizeOutcome, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
-    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    TerminalViewportProposal,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -173,7 +173,7 @@ use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_sidebar_order::{
-    order_worktree_rows_with_manual, visible_worktree_rows,
+    order_worktree_rows_sorted, visible_worktree_rows,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
@@ -874,7 +874,7 @@ struct Workbench {
     sidebar_save_busy: bool,
     explorer_context_menu: Option<ExplorerContextMenu>,
     show_project_management: bool,
-    runtime_details_open: bool,
+    host_tab_closing: HashSet<(String, String, String)>,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_visibility: ExplorerVisibilityOptions,
@@ -907,6 +907,7 @@ struct Workbench {
     runtime_catalog: Option<RuntimeCatalog>,
     sidebar_order_prefs: Option<SidebarOrderPrefs>,
     sidebar_order_busy: bool,
+    sidebar_sort_error: Option<String>,
     sidebar_reorder_hold: Arc<Mutex<SidebarReorderHoldGate>>,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
@@ -1531,7 +1532,9 @@ impl Workbench {
                         view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
                     }
                 }
-                view.sidebar_order_prefs = order_result.and_then(Result::ok);
+                if let Some(Ok(prefs)) = order_result {
+                    view.accept_sidebar_order_prefs(prefs);
+                }
                 order_project_groups(
                     &mut groups,
                     view.runtime_catalog.as_ref(),
@@ -7632,7 +7635,10 @@ impl Workbench {
                 }
                 view.mcp_host_workspaces_loading = false;
                 match result {
-                    Ok(workspaces) => view.mcp_host_workspaces = workspaces,
+                    Ok(workspaces) => {
+                        view.mcp_host_workspaces = workspaces;
+                        view.reconcile_current_workspace_sessions(cx);
+                    },
                     Err(_) => view.mcp_host_workspaces.clear(),
                 }
                 cx.notify();
@@ -8746,7 +8752,7 @@ impl Workbench {
                         view.agent_launch_pane = None;
                         let guidance = classify_agent_profile_launch_failure(&error).guidance();
                         view.agent_status = format!(
-                            "Agent launch not confirmed: {guidance} Check Runtime / Agents > Terminal sessions before retrying; the Host might have created the tab."
+                            "Agent launch not confirmed: {guidance} Check the registered Workspace or the New Tab recovery menu before retrying; the Host might have created the tab."
                         );
                         view.refresh_terminals(cx);
                     }
@@ -8773,7 +8779,7 @@ impl Workbench {
                         "Previous Host create unresolved; inspect existing sessions before acknowledging (no new PTY)"
                             .into();
                     self.model
-                        .set_status("Host create interrupted; inspect Runtime / Agents > Terminal sessions");
+                        .set_status("Host create interrupted; inspect the registered Workspace or the New Tab recovery menu");
                 }
             }
             Err(error) => {
@@ -8788,9 +8794,9 @@ impl Workbench {
         }
     }
 
-    /// A validated exact Host session proves the create completed. Only then
-    /// retire the matching persistent marker; a failed retire blocks retries.
-    fn resolve_confirmed_host_create_journal(&mut self) {
+    /// Retire the matching marker only after exact Host confirmation or a
+    /// proven pre-submit failure. A failed retire still blocks retries.
+    fn retire_host_create_journal(&mut self) {
         let Some(record) = self.terminal_create_journal.as_ref() else {
             return;
         };
@@ -8808,7 +8814,7 @@ impl Workbench {
             Err(error) => {
                 self.terminal_create_flow.restore_outcome_unknown();
                 self.terminals.status =
-                    format!("Host created a PTY but recovery marker could not be cleared: {error}");
+                    format!("Host create recovery marker could not be cleared: {error}");
             }
         }
     }
@@ -8841,6 +8847,8 @@ impl Workbench {
             self.terminals.status =
                 "A Host terminal request is pending; confirm, retry its listing, or cancel first"
                     .into();
+            self.model.set_status("Host request pending; use the New Tab (+) recovery actions");
+            self.refresh_terminals(cx);
             cx.notify();
             return;
         }
@@ -8891,7 +8899,7 @@ impl Workbench {
             Err(error) => {
                 self.restore_host_create_journal();
                 self.terminals.status = format!(
-                    "Host create blocked by recovery journal: {error}. Check Runtime / Agents > Terminal sessions; no new PTY issued"
+                    "Host create blocked by recovery journal: {error}. Check the registered Workspace or the New Tab recovery menu; no new PTY issued"
                 );
                 self.model
                     .set_status("Unresolved Host create: inspect existing sessions before retry");
@@ -8917,6 +8925,7 @@ impl Workbench {
             "Checking registered Host workspaces before creating terminal…"
         }
         .into();
+        self.model.set_status(self.terminals.status.clone());
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx
@@ -8924,15 +8933,10 @@ impl Workbench {
                     // Explicit New Terminal may start the existing CLI Host
                     // and register this *already existing* checkout. Passive
                     // refresh/read/write still never start a Host or PTY.
-                    if let Some(agent_id) = agent_id {
-                        bridge.create_agent_terminal_for_workspace(
-                            &root,
-                            &agent_id,
-                            agent_executable.as_deref().expect("checked installed executable before creating Host Agent"),
-                        )
-                    } else {
-                        bridge.create_terminal_for_workspace(&root)
-                    }
+                    bridge.create_workbench_terminal_tracked(
+                        &root,
+                        agent_id.as_deref().zip(agent_executable.as_deref()),
+                    )
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -8955,12 +8959,24 @@ impl Workbench {
                         } else {
                             "Host terminal created; confirming session identity (30s limit)…"
                         }.into();
-                        if is_agent {
-                            view.model.set_status("Agent starting; confirming Host session identity");
-                        }
+                        view.model.set_status(view.terminals.status.clone());
                         view.refresh_terminals(cx);
                     }
-                    Err(error) => {
+                    Err(alera_gpui_desktop::terminal_bootstrap::HostCreateFailure::NotSubmitted(error)) => {
+                        if !view.terminal_create_flow.fail_request(request_id) {
+                            return;
+                        }
+                        view.terminal_create_pane = None;
+                        view.retire_host_create_journal();
+                        let message = if view.terminal_create_flow.is_active() {
+                            format!("Host preflight failed: {error}; recovery marker could not be retired")
+                        } else {
+                            format!("Host preflight failed: {error}; no PTY created, safe to retry")
+                        };
+                        view.terminals.status = message.clone();
+                        view.model.set_status(message);
+                    }
+                    Err(alera_gpui_desktop::terminal_bootstrap::HostCreateFailure::OutcomeUnknown(error)) => {
                         // The pending pane intent must belong to this exact
                         // request, not a stale callback after pane reuse.
                         if !view.terminal_create_pane.as_ref().is_some_and(|pending| {
@@ -8977,16 +8993,12 @@ impl Workbench {
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host reply unverified: {error}. Inspect Runtime / Agents > Terminal sessions, then dismiss the pending request before another New Terminal."
+                                "Host reply unverified: {error}. Inspect the registered Workspace or the New Tab recovery menu, then dismiss the pending request before another New Terminal."
                             )
                         } else {
                             format!("Host create outcome unknown: {error}. Inspect existing sessions, then dismiss the pending request before another PTY.")
                         };
-                        if is_agent {
-                            view.model.set_status(
-                                "Agent outcome unknown; inspect Host sessions before dismissing request",
-                            );
-                        }
+                        view.model.set_status(view.terminals.status.clone());
                         // Re-list existing Host sessions, never create a second PTY.
                         view.refresh_terminals(cx);
                     }
@@ -9049,6 +9061,7 @@ impl Workbench {
             self.terminals.status =
                 "Acknowledged after Host inventory; existing PTYs remain available via Attach"
                     .into();
+            self.model.set_status("Host request dismissed; New Tab is available again");
             cx.notify();
         }
     }
@@ -9139,6 +9152,7 @@ impl Workbench {
                                 })
                             });
                             view.restore_terminal_layout_from_host(cx);
+                            view.reconcile_current_workspace_sessions(cx);
                             view.maybe_restore_inline_original(PaneSlot::Primary, cx);
                             view.maybe_restore_inline_original(PaneSlot::Secondary, cx);
                             view.refresh_host_tab_pins(cx);
@@ -9161,7 +9175,7 @@ impl Workbench {
                                 )
                             };
                             if let Some(created) = confirmed {
-                                view.resolve_confirmed_host_create_journal();
+                                view.retire_host_create_journal();
                                 // Never redirect a delayed Host create result to
                                 // whichever pane currently has global focus.
                                 // Only the exact authenticated Host triple may
@@ -9173,12 +9187,12 @@ impl Workbench {
                                 if let (Some(pending), Some(session)) = (pending, session) {
                                     if !pending.target.still_valid(view.workspace_generation, &view.mixed_panes) {
                                         view.terminals.status =
-                                            "Host terminal created, but its pane changed; use Runtime / Agents > Terminal sessions (PTY kept alive)".into();
+                                            "Host terminal created, but its pane changed; use the registered Workspace or the New Tab recovery menu (PTY kept alive)".into();
                                     } else if view.attach_live_terminal_to_pane(
                                         &session, &pending.target, cx,
                                     ).is_none() {
                                         view.terminals.status =
-                                            "Host terminal created but Native attach was refused; use Runtime / Agents > Terminal sessions".into();
+                                            "Host terminal created but Native attach was refused; use the registered Workspace or the New Tab recovery menu".into();
                                     } else if let Some(agent_id) = pending.expected_agent_id.as_deref() {
                                         // Host PTY input can be ready before
                                         // the provider Hook reports an Agent.
@@ -9196,7 +9210,7 @@ impl Workbench {
                                     }
                                 } else {
                                     view.terminals.status =
-                                        "Host terminal confirmed without a current pane request; use Runtime / Agents > Terminal sessions".into();
+                                        "Host terminal confirmed without a current pane request; use the registered Workspace or the New Tab recovery menu".into();
                                 }
                             }
                             // Launch reply contains a Host workspace+tab id,
@@ -9235,7 +9249,7 @@ impl Workbench {
                                         );
                                     } else {
                                         view.agent_status =
-                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use Runtime / Agents > Terminal sessions".into();
+                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use the registered Workspace or the New Tab recovery menu".into();
                                     }
                                 } else {
                                     // The Agent still belongs to Runtime Host.
@@ -9244,7 +9258,7 @@ impl Workbench {
                                     view.agent_pending_tab = None;
                                     view.agent_launch_pane = None;
                                     view.agent_status =
-                                        "Agent created; origin pane closed. Use Runtime / Agents > Terminal sessions to place it manually".into();
+                                        "Agent created; origin pane closed. Use the registered Workspace or the New Tab recovery menu to place it manually".into();
                                 }
                             }
                         }
@@ -9369,6 +9383,70 @@ impl Workbench {
         );
         cx.notify();
         Some(identity)
+    }
+
+    fn reconcile_current_workspace_sessions(&mut self, cx: &mut Context<Self>) {
+        let Ok(workspace) = select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces) else {
+            return;
+        };
+        if self.terminals.reconcile_workspace_sessions(&workspace) {
+            self.sync_mixed_tabs(cx);
+            self.save_terminal_layout();
+            self.save_mixed_pane_layout(cx);
+            self.refresh_terminal_output(cx);
+        }
+    }
+
+    /// Explicit tab close is a Host mutation, not a preview detach. Keep both
+    /// sidebar and Tab visible until the Host acknowledges the exact target.
+    fn close_verified_host_tab(&mut self, target: TerminalTabContextTarget, cx: &mut Context<Self>) {
+        let key = (target.handle.clone(), target.workspace_id().to_owned(), target.tab_id().to_owned());
+        if self.host_tab_closing.contains(&key) { return; }
+        if self.terminals.session_list_is_stale() {
+            self.terminals.status = "Refresh Host sessions before closing a Tab".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        }
+        if self.terminals.index_for_context(&target).is_none() { return; }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.status = "Host CLI unavailable; Tab was not closed".into();
+            cx.notify();
+            return;
+        };
+        self.host_tab_closing.insert(key.clone());
+        self.terminals.status = "Closing Host session...".into();
+        cx.spawn(async move |view, cx| {
+            let requested = target.clone();
+            let result = cx.background_spawn(async move {
+                bridge.close_verified_terminal(&requested)
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                view.host_tab_closing.remove(&key);
+                match result {
+                    Ok(()) => {
+                        // Invalidate inventory started before the close.
+                        view.agent_presence_event_generation = view.agent_presence_event_generation.wrapping_add(1);
+                        view.terminals.confirm_workspace_session_closed(&target);
+                        if view.terminal_panes.secondary_index(&view.terminals).is_none() {
+                            view.terminal_panes.close_secondary();
+                        }
+                        view.sync_mixed_tabs(cx);
+                        view.save_terminal_layout();
+                        view.save_mixed_pane_layout(cx);
+                        view.terminals.status = "Host session closed".into();
+                        view.refresh_terminal_output(cx);
+                    }
+                    Err(error) => {
+                        view.terminals.status = format!("Host close not confirmed: {error}. Refresh before retrying.");
+                        view.model.set_status(view.terminals.status.clone());
+                    }
+                }
+                view.refresh_terminals(cx);
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
     }
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
@@ -10838,8 +10916,8 @@ impl Workbench {
                     }))
                     .on_mouse_up(
                         gpui::MouseButton::Middle,
-                        cx.listener(move |this, _, _, cx| {
-                            this.close_mixed_tab(&for_middle, cx);
+                        cx.listener(move |this, _, window, cx| {
+                            this.request_close_mixed_tab(&for_middle, window, cx);
                         }),
                     )
                     .on_drag(
@@ -10865,8 +10943,8 @@ impl Workbench {
             )
             .child(
                 tab_close_button((close_id, index), tr(locale, "Close tab")).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.close_mixed_tab(&for_close, cx);
+                    move |this, _, window, cx| {
+                        this.request_close_mixed_tab(&for_close, window, cx);
                     },
                 )),
             )
@@ -11284,7 +11362,58 @@ impl Workbench {
         cx.notify();
     }
 
+    fn request_close_mixed_tab(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.mixed_tab_is_current(id, cx) {
+            return;
+        }
+        let dirty = match id {
+            WorkbenchTabIdentity::Editor { instance, .. } => self
+                .editor_for_instance(*instance, cx)
+                .and_then(|(_, editor)| editor.read(cx).tab_instances().into_iter()
+                    .find(|(candidate, _)| candidate == instance))
+                .map(|(_, label)| label.dirty)
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !dirty {
+            self.close_mixed_tab(id, cx);
+            return;
+        }
+        let owner = cx.entity().downgrade();
+        let target = id.clone();
+        let locale = self.settings_menu_locale;
+        window.open_dialog(cx, move |dialog, _, _| {
+            let for_submit = owner.clone();
+            let target = target.clone();
+            dialog
+                .title(tr(locale, "Discard unsaved changes (confirmation required)"))
+                .w(px(440.))
+                .centered()
+                .on_ok(move |_, _, cx| {
+                    for_submit.update(cx, |view, cx| {
+                        view.close_mixed_tab_with_discard(&target, true, cx);
+                        !view.mixed_tab_is_current(&target, cx)
+                    }).unwrap_or(true)
+                })
+                .child(div().child(tr(locale, "Discard unsaved changes (confirmation required)")))
+        });
+    }
+
     fn close_mixed_tab(&mut self, id: &WorkbenchTabIdentity, cx: &mut Context<Self>) {
+        self.close_mixed_tab_with_discard(id, false, cx);
+    }
+
+    fn close_mixed_tab_with_discard(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        confirmed_discard: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.mixed_tab_is_current(id, cx) {
             self.mixed_tab_context = None;
             cx.notify();
@@ -11293,19 +11422,8 @@ impl Workbench {
         self.mixed_tab_context = None;
         match id {
             WorkbenchTabIdentity::Host(target) => {
-                if let Some(index) = self.terminals.index_for_context(target) {
-                    self.terminals.close(index);
-                    if self
-                        .terminal_panes
-                        .secondary_index(&self.terminals)
-                        .is_none()
-                    {
-                        self.terminal_panes.close_secondary();
-                    }
-                    self.terminals.status = "Preview closed; Host PTY remains alive".into();
-                    self.save_terminal_layout();
-                    self.refresh_terminal_output(cx);
-                }
+                self.close_verified_host_tab(target.clone(), cx);
+                return;
             }
             WorkbenchTabIdentity::GitHistory => {
                 self.git_history_tab_open = false;
@@ -11331,8 +11449,13 @@ impl Workbench {
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 if let Some((slot, editor)) = self.editor_for_instance(*instance, cx) {
-                    let closed =
-                        editor.update(cx, |editor, cx| editor.close_tab_instance(*instance, cx));
+                    let closed = editor.update(cx, |editor, cx| {
+                        if confirmed_discard {
+                            editor.close_tab_instance_confirmed_discard(*instance, cx)
+                        } else {
+                            editor.close_tab_instance(*instance, cx)
+                        }
+                    });
                     self.model
                         .set_status(editor.read(cx).status_text().to_owned());
                     if closed && editor.read(cx).tabs_empty() {
@@ -11483,7 +11606,7 @@ impl Workbench {
                     }
                 }
             },
-            MixedContextAction::Close => self.close_mixed_tab(&id, cx),
+            MixedContextAction::Close => self.request_close_mixed_tab(&id, window, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
                 for target in self.mixed_panes.close_unpinned_candidates(
                     &id,
@@ -11890,7 +12013,12 @@ impl Workbench {
             }
             return;
         }
-        if validated_agent_navigation_target(&notice, &self.terminals.sessions).is_none() {
+        let verified = if source == AgentNavigationSource::Sidebar {
+            alera_gpui_desktop::agent_status_notifications::validated_sidebar_navigation_target(&notice, &self.terminals.sessions)
+        } else {
+            validated_agent_navigation_target(&notice, &self.terminals.sessions)
+        };
+        if verified.is_none() {
             self.agent_navigation.cancel();
             self.terminals.status =
                 "Agent navigation target is stale; Host session no longer exists".into();
@@ -11964,6 +12092,26 @@ impl Workbench {
             // This never starts a Shell, Agent or new provider Session.
             self.select_terminal(notice.session_id.clone(), cx);
             self.sync_mixed_tabs(cx);
+        }
+        // Plain Terminal rows use exactly the same workspace navigation,
+        // without treating a shell as an Agent notification/history target.
+        if source == AgentNavigationSource::Sidebar && notice.agent_type == "terminal" {
+            if let Some(identity) = self.terminals.tabs.iter().enumerate()
+                .find(|(_, tab)| tab.handle == notice.session_id
+                    && tab.workspace_id == notice.workspace_id && tab.tab_id == notice.tab_id)
+                .and_then(|(index, _)| self.terminals.context_target_at(index))
+                .map(WorkbenchTabIdentity::Host)
+            {
+                self.agent_navigation.reset_retries();
+                self.focus_mixed_tab(&identity, window, cx);
+                self.global_agent_maximized = false;
+                cx.notify();
+            } else {
+                self.agent_navigation.cancel();
+                self.terminals.status = "Terminal Tab no longer available".into();
+                cx.notify();
+            }
+            return;
         }
         let target = validated_agent_navigation_pane_target(
             &notice,
@@ -12781,15 +12929,27 @@ impl Render for Workbench {
             .collect();
         let sidebar_filters = &self.sidebar_view_options;
         let sidebar_filtered = sidebar_filters.is_filtered();
+        let sidebar_sort_active = self.sidebar_order_prefs.as_ref().is_some_and(|prefs|
+            prefs.project_sort != "name" || prefs.workspace_sort != "name");
+        let sidebar_sort = if self.sidebar_order_prefs.as_ref().is_some_and(|prefs|
+            [&prefs.project_sort, &prefs.workspace_sort].iter().any(|mode|
+                matches!(mode.as_str(), "recent" | "activity"))) {
+            SidebarSortContext::new(
+                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref(),
+                &self.terminals.sessions, !self.terminals.session_list_is_stale(),
+                chrono::Utc::now().timestamp_millis(),
+            )
+        } else {
+            SidebarSortContext::default()
+        };
         let sidebar_git_project = self.project_tree_groups.iter()
             .find(|group| group.is_active && !group.worktrees.is_empty())
             .map(|group| group.root.clone());
         let sidebar_has_git_projects = self.project_tree_groups.iter()
             .any(|group| !group.worktrees.is_empty());
-        let project_tree_rows: Vec<_> = self
+        let mut project_tree_rows: Vec<_> = self
             .project_tree_groups
             .iter()
-            .take(45)
             .enumerate()
             .filter(|(_, group)| {
                 sidebar_filters.project_roots.is_empty() || sidebar_filters.project_roots.contains(&group.root)
@@ -12809,10 +12969,12 @@ impl Render for Workbench {
                 if entries.is_empty() && (sidebar_filtered || !show_all) {
                     return None;
                 }
-                let rows = order_worktree_rows_with_manual(
-                    &entries, catalog, self.sidebar_order_prefs.as_ref()
-                        .filter(|prefs| prefs.workspace_is_manual())
+                let order = self.sidebar_order_prefs.as_ref();
+                let rows = order_worktree_rows_sorted(
+                    &entries, catalog, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
+                    order.filter(|prefs| prefs.workspace_is_manual())
                         .map(|prefs| prefs.workspace_order.as_slice()),
+                    &sidebar_sort,
                 );
                 // Searching temporarily expands matching descendants without
                 // modifying the user's persisted collapse preference.
@@ -12821,7 +12983,12 @@ impl Render for Workbench {
                 Some((index, group.clone(), collapsed, rows))
             })
             .collect();
-        let sidebar_visible_workspace_count: usize = project_tree_rows.iter().map(|(_, _, _, rows)| rows.len()).sum();
+        project_tree_rows.sort_by_cached_key(|(_, group, _, rows)| {
+            sidebar_sort.project_key(group, rows.iter().map(|row| row.entry.path.as_path()),
+                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref())
+        });
+        project_tree_rows.truncate(45);
+
         let sidebar_all_projects_collapsed = !project_tree_rows.is_empty()
             && project_tree_rows.iter().all(|(_, _, collapsed, _)| *collapsed);
         let sidebar_search_empty = (sidebar_search_active || sidebar_filtered) && project_tree_rows.is_empty();
@@ -12868,24 +13035,8 @@ impl Render for Workbench {
         let worktree_create_root = self.worktree_create_root.clone();
         let worktree_create_from_existing = self.worktree_create_from_existing;
         let worktree_delete_pending = self.worktree_delete_pending.clone();
-        let runtime_status = self.runtime_status.clone();
-        let runtime_loading = self.runtime_loading;
-        let mcp_ui_status = self.mcp_ui_status.clone();
-        let mcp_ui_window_id = self.mcp_ui_window_id.clone();
-        let agent_profile_rows: Vec<_> = self
-            .agent_profiles
-            .iter()
-            .take(28)
-            .cloned()
-            .enumerate()
-            .collect();
-        let agent_profile_selected = self.agent_selected_profile.clone();
-        let agent_profiles_loading = self.agent_profiles_loading;
-        let agent_launch_busy = self.agent_launch_busy;
-        let agent_pending = self.agent_pending_tab.is_some();
-        let agent_prompt_input = self.agent_prompt_input.clone();
-        let agent_status = self.agent_status.clone();
-        let terminal_list_loading = self.terminal_list_loading;
+
+
         let agent_inventory_current = !self.terminals.session_list_is_stale();
         // Full identity checks prevent one pane or recycled Host handle from
         // showing another Agent's private task context.
@@ -12908,62 +13059,20 @@ impl Render for Workbench {
         let agent_state_summary =
             AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current);
         let agent_ui_locale = self.settings_menu_locale;
-        // Shared Host setting: default-off; a missing/stale snapshot cannot
-        // enable the left summary accidentally.
-        let show_agent_task_summaries = native_agent_context_ui::task_summary_sidebar_enabled(
-            self.settings_native_profile_migrated && self.settings_shared_error.is_none(),
-            self.settings_extra_values
-                .get("agents.showTaskSummariesInSidebar"),
-        );
-        let terminal_sessions: Vec<_> = self
-            .terminals
-            .sessions
-            .iter()
-            .map(|session| {
-                (
-                    session.handle.clone(),
-                    // Process presence and Hook state are independent. The
-                    // optional colored badge below owns Hook presentation;
-                    // the title itself never repeats a stale Hook result.
-                    format!(
-                        "{} {} · {}",
-                        if session.running { "●" } else { "○" },
-                        session.agent_type.as_deref().unwrap_or("Terminal"),
-                        session.handle,
-                    ),
-                    session.workspace_id.clone(),
-                    session.tab_id.clone(),
-                    session.running,
-                    // Do not advertise a stale branded session when its
-                    // Host PTY is no longer running.
-                    session
-                        .running
-                        .then(|| session.agent_type.clone())
-                        .flatten(),
-                    AgentVisualState::for_session(session, agent_inventory_current),
-                    // Avoid cloning task text on each paint while disabled.
-                    if show_agent_task_summaries {
-                        session
-                            .agent_context
-                            .as_ref()
-                            .map_or_else(String::new, |ctx| ctx.goal.clone())
-                    } else {
-                        String::new()
-                    },
-                    if show_agent_task_summaries {
-                        session
-                            .agent_context
-                            .as_ref()
-                            .map_or_else(String::new, |ctx| ctx.progress.clone())
-                    } else {
-                        String::new()
-                    },
-                )
-            })
-            .collect();
+        // Session rows are rendered only under their registered Workspace.
+
         // Display live Host Agents beneath their registered Workspace, as in
         // Classic. Match the trusted Host workspace ID to the registered path;
         // never infer ownership from Agent names, branch labels or handles.
+        // Keep Classic's existing opt-in summary preference, but never
+        // render a second global list of sessions.
+        let show_agent_task_summaries = native_agent_context_ui::task_summary_sidebar_enabled(
+            self.settings_native_profile_migrated && self.settings_shared_error.is_none(),
+            self.settings_extra_values.get("agents.showTaskSummariesInSidebar"),
+        );
+        let active_sidebar_session = if self.center_view == CenterView::Terminal {
+            self.terminals.active().map(|tab| (tab.handle.clone(), tab.workspace_id.clone(), tab.tab_id.clone()))
+        } else { None };
         let registered_sidebar_workspaces: HashMap<&str, &PathBuf> = self
             .mcp_host_workspaces
             .iter()
@@ -12971,13 +13080,11 @@ impl Render for Workbench {
             .collect();
         let mut sidebar_agents_by_workspace: HashMap<
             PathBuf,
-            Vec<(String, String, String, String, Option<AgentVisualState>)>,
+            Vec<(String, String, String, String, Option<AgentVisualState>, Option<String>)>,
         > = HashMap::new();
         if !self.terminals.session_list_is_stale() {
             for session in &self.terminals.sessions {
-                let Some(agent_type) = session.agent_type.as_ref() else {
-                    continue;
-                };
+                let agent_type = session.agent_type.as_deref().unwrap_or("terminal");
                 if !session.running {
                     continue;
                 }
@@ -12991,18 +13098,20 @@ impl Render for Workbench {
                         session.handle.clone(),
                         session.workspace_id.clone(),
                         session.tab_id.clone(),
-                        agent_type.clone(),
+                        agent_type.to_owned(),
                         AgentVisualState::for_session(session, agent_inventory_current),
+                        if show_agent_task_summaries {
+                            session.agent_context.as_ref().and_then(|context| {
+                                let text = if context.progress.trim().is_empty() { &context.goal } else { &context.progress };
+                                (!text.trim().is_empty()).then(|| text.chars().take(160).collect::<String>())
+                            })
+                        } else { None },
                     ));
             }
         }
-        let terminal_create_busy = self.terminal_create_flow.is_active();
-        let terminal_create_unknown = self.terminal_create_flow.is_outcome_unknown();
-        let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
+
         let terminal_creating = self.terminal_create_flow.is_creating();
-        let host_restore_available = self.terminal_layout_restore
-            .as_ref()
-            .is_some_and(|layout| !layout.tabs.is_empty());
+
         // The primary pane renders its own Host identity, even when the
         // second pane currently owns keyboard focus. The global TerminalDock
         // selection alone cannot identify two simultaneous pane contents.
@@ -17463,8 +17572,7 @@ impl Render for Workbench {
                                     .gap_1()
                                     // Classic's single Projects toolbar replaces separate
                                     // Recent and Projects / Worktrees headings.
-                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_sm().child("Projects"))
-                                    .child(div().text_xs().text_color(rgb(MUTED)).child(sidebar_visible_workspace_count.to_string()))
+                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_sm().child(tr(self.settings_menu_locale, "Projects")))
                                     .child(div().flex_1())
                                     .child(icon_button("projects-go-back", UiIcon::ChevronLeft,
                                         "Go Back", false)
@@ -17475,7 +17583,7 @@ impl Render for Workbench {
                                         .disabled(self.sidebar_forward.is_empty())
                                         .on_click(cx.listener(|view, _, _, cx| view.navigate_sidebar_history(true, cx))))
                                     .child(icon_button("projects-view-options", UiIcon::Sliders,
-                                        "View Options", sidebar_filtered)
+                                        "View Options", sidebar_filtered || sidebar_sort_active)
                                         .on_click(cx.listener(|view, _, window, cx| {
                                             view.open_sidebar_view_options(window, cx);
                                         })))
@@ -17679,7 +17787,8 @@ impl Render for Workbench {
                                                                     .hover(|style| style.bg(rgb(ACTIVE)))
                                                                     .cursor_pointer()
                                                                     .text_sm()
-                                                                    .text_color(rgb(if current { TEXT } else { MUTED }))
+                                                                    .text_color(rgb(TEXT))
+                                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
                                                                     .child(title)
                                                                     .on_drop(cx.listener(move |this, drag: &SidebarOrderDrag, _, cx| {
                                                                         this.drop_sidebar_order(
@@ -17763,9 +17872,9 @@ impl Render for Workbench {
                                                         let sidebar_agents = sidebar_agents_by_workspace
                                                             .get(&target).cloned().unwrap_or_default();
                                                         let workspace_agent_state = sidebar_agents.iter()
-                                                            .find_map(|(_, _, _, _, state)| *state);
+                                                            .find_map(|(_, _, _, _, state, _)| *state);
                                                         let mut sibling_agent_counts: HashMap<String, usize> = HashMap::new();
-                                                        for (_, _, _, kind, _) in &sidebar_agents {
+                                                        for (_, _, _, kind, _, _) in &sidebar_agents {
                                                             *sibling_agent_counts.entry(kind.clone()).or_default() += 1;
                                                         }
                                                         let active = workspace_root == target;
@@ -17814,12 +17923,10 @@ impl Render for Workbench {
                                                             .child(div()
                                                             .id(("project-tree-worktree", index * 128 + child_index))
                                                             .flex_1().min_w_0()
-                                                            .pl(px(15.0 + depth.min(8) as f32 * 14.0))
+                                                            .pl(px(10.0 + depth.min(8) as f32 * 12.0))
                                                             .pr_1()
                                                             .py_1()
                                                             .rounded_md()
-                                                            .border_1()
-                                                            .border_color(rgb(if active { BORDER_ACTIVE } else { PANEL }))
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
                                                             .cursor_pointer()
@@ -17905,31 +18012,36 @@ impl Render for Workbench {
                                                                 metadata.cloned(), menu_catalog, menu_confirmation,
                                                                 is_primary_workspace, active,
                                                             )))
-                                                            .children(sidebar_agents.into_iter().take(24).enumerate().map(
-                                                                |(agent_index, (handle, workspace_id, tab_id, agent_type, visual_state))| {
-                                                                    let provider_name = native_agent_quota_ui::classic_agent_display_name(&agent_type);
+                                                            .children(sidebar_agents.into_iter().enumerate().map(
+                                                                |(_agent_index, (handle, workspace_id, tab_id, agent_type, visual_state, summary))| {
+                                                                    let provider_name = if agent_type == "terminal" { "Terminal" } else { native_agent_quota_ui::classic_agent_display_name(&agent_type) };
                                                                     let duplicate = sibling_agent_counts.get(&agent_type).copied().unwrap_or(0) > 1;
                                                                     let agent_caption = if duplicate {
                                                                         format!("{} · {}", provider_name, tab_id.chars().take(6).collect::<String>())
                                                                     } else {
                                                                         provider_name.to_owned()
                                                                     };
-                                                                    let agent_tooltip = format!("Open {} · Host Tab {}", provider_name, tab_id);
+                                                                    let agent_tooltip = visual_state.map(|state| state.tooltip(&agent_type, agent_ui_locale))
+                                                                        .unwrap_or_else(|| format!("Open {provider_name}"));
+                                                                    let selected = active_sidebar_session.as_ref().is_some_and(|(h, w, t)|
+                                                                        h == &handle && w == &workspace_id && t == &tab_id);
+                                                                    let closing = self.host_tab_closing.contains(&(handle.clone(), workspace_id.clone(), tab_id.clone()));
                                                                     div()
-                                                                        .id(("project-tree-agent", index * 4096 + child_index * 32 + agent_index))
-                                                                        .ml(px(29.0 + depth.min(8) as f32 * 14.0))
+                                                                        .id(gpui::SharedString::from(format!("project-tree-session:{workspace_id}:{tab_id}:{handle}")))
+                                                                        .ml(px(24.0 + depth.min(8) as f32 * 12.0))
                                                                         .px_2()
                                                                         .py_1()
                                                                         .flex()
                                                                         .items_center()
                                                                         .gap_2()
                                                                         .rounded_md()
+                                                                        .when(selected, |row| row.bg(rgb(ACTIVE)))
                                                                         .cursor_pointer()
                                                                         .hover(|style| style.bg(rgb(ACTIVE)))
                                                                         .tooltip(move |window, cx| {
                                                                             gpui_kit::component::tooltip::Tooltip::new(agent_tooltip.clone()).build(window, cx)
                                                                         })
-                                                                        .child(native_agent_quota_ui::quota_provider_icon(&agent_type, 14.0))
+                                                                        .child(if agent_type == "terminal" { icon(UiIcon::Terminal, 14.0, MUTED).into_any_element() } else { native_agent_quota_ui::quota_provider_icon(&agent_type, 14.0) })
                                                                         .child(
                                                                             div().w(px(12.0)).h(px(12.0)).flex_shrink_0()
                                                                                 .flex().items_center().justify_center()
@@ -17940,8 +18052,13 @@ impl Render for Workbench {
                                                                                         .bg(rgb(MUTED)).into_any_element()
                                                                                 }),
                                                                         )
-                                                                        .child(div().flex_1().min_w_0().truncate()
-                                                                            .text_xs().text_color(rgb(MUTED)).child(agent_caption))
+                                                                        .child(div().flex_1().min_w_0().flex().flex_col()
+                                                                            .child(div().truncate().text_xs()
+                                                                                .text_color(rgb(if selected { TEXT } else { MUTED })).child(agent_caption))
+                                                                            .when_some(summary, |row, text| row.child(
+                                                                                div().truncate().text_xs().text_color(rgb(MUTED)).child(text)
+                                                                            )))
+                                                                        .when(closing, |row| row.child(div().text_xs().text_color(rgb(MUTED)).child("...")))
                                                                         .on_click(cx.listener(move |view, _, _, cx| {
                                                                             view.open_sidebar_agent_tab(
                                                                                 handle.clone(), workspace_id.clone(),
@@ -18216,346 +18333,6 @@ impl Render for Workbench {
                                 div().h(px(0.0)).into_any_element()
                             })
                             )
-                            .child(
-                                div()
-                                    .id("runtime-tools-toggle")
-                                    .h(px(34.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .cursor_pointer()
-                                    .border_t_1()
-                                    .border_color(rgb(BORDER))
-                                    .child(div()
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("RUNTIME / AGENTS"))
-                                    .when(agent_state_summary.total() > 0, |header| {
-                                        header.child(native_agent_quota_ui::agent_state_summary_chips(
-                                            agent_state_summary, agent_ui_locale, false,
-                                        ))
-                                    })
-                                    .child(icon(
-                                        if self.runtime_details_open { UiIcon::Close } else { UiIcon::More },
-                                        16.0, MUTED,
-                                    ))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.runtime_details_open = !this.runtime_details_open;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("runtime-tools-details")
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .when(!self.runtime_details_open, |panel| panel.hidden())
-                            .child(
-                                div()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child("Runtime Host"),
-                            )
-                            .child(div().text_sm().text_color(rgb(MUTED)).child(runtime_status))
-                            .child(
-                                div()
-                                    .id("runtime-status-refresh")
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(rgb(TEXT))
-                                    .child(if runtime_loading {
-                                        "Checking…"
-                                    } else {
-                                        "Check Host"
-                                    })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.refresh_runtime(cx);
-                                    })),
-                            )
-                            .child(div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(mcp_ui_status))
-                            .child(div()
-                                .id("native-mcp-copy-window-id")
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(TEXT))
-                                .child("Copy Native MCP window ID")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(mcp_ui_window_id.clone()));
-                                    this.model.set_status("Native MCP window ID copied; set windowId when Classic and Native are both open");
-                                    cx.notify();
-                                })))
-                            .child(div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(div()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_sm()
-                                    .child("Agent Profiles"))
-                                .child(div()
-                                    .id("agent-profiles-refresh")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(TEXT))
-                                    .child(if agent_profiles_loading { "Loading…" } else { "Refresh ↻" })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.refresh_agent_profiles(cx);
-                                    }))))
-                            .child(div()
-                                .id("agent-profiles-list")
-                                .max_h(px(116.0))
-                                .overflow_y_scroll()
-                                .children(agent_profile_rows.into_iter().map(|(index, profile)| {
-                                    let selected = agent_profile_selected.as_deref() == Some(profile.id.as_str());
-                                    let id = profile.id;
-                                    let brand = profile.agent_type.trim().to_ascii_lowercase();
-                                    let kind = if profile.managed { "Managed" } else { "Command" };
-                                    let label = format!("{} · {} ({kind})", profile.name, profile.agent_type);
-                                    div()
-                                        .id(("agent-profile-row", index))
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                        .hover(|style| style.bg(rgb(ACTIVE)))
-                                        .py_1()
-                                        .flex()
-                                        .min_w_0()
-                                        .items_center()
-                                        .gap_2()
-                                        // Keep the pre-existing selected/unselected state,
-                                        // separate from the Agent's brand identity.
-                                        .child(div().w(px(10.0)).flex_shrink_0().child(
-                                            if selected { "●" } else { "○" },
-                                        ))
-                                        .child(native_agent_quota_ui::quota_provider_icon(&brand, 16.0))
-                                        .child(div().min_w_0().truncate().child(label))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.agent_selected_profile = Some(id.clone());
-                                            cx.notify();
-                                        }))
-                                })))
-                            .child(agent_prompt_input)
-                            .child(div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(div()
-                                    .id("agent-profile-launch")
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(rgb(if agent_launch_busy || agent_pending { MUTED } else { TEXT }))
-                                    .child(if agent_launch_busy { "Starting Agent…" } else { "+ Launch Agent" })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.launch_selected_agent(cx);
-                                    })))
-                                .child(if agent_pending {
-                                    div()
-                                        .id("agent-dismiss-tracking")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child("Dismiss tracking")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.agent_pending_tab = None;
-                                            this.agent_launch_pane = None;
-                                            this.agent_status = "Agent still belongs to Host; use Runtime / Agents > Terminal sessions to find it".into();
-                                            cx.notify();
-                                        }))
-                                        .into_any_element()
-                                } else { div().h(px(0.0)).into_any_element() }))
-                            .child(div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(agent_status))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .child("Terminal sessions"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("terminal-sessions-refresh")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child(if terminal_list_loading {
-                                                "Checking…"
-                                            } else {
-                                                "Reconnect ↻"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.refresh_terminals(cx);
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child(HOST_SESSION_LIST_SCOPE),
-                            )
-                            .child(
-                                 div()
-                                     .id("runtime-host-recovery-actions")
-                                     .flex()
-                                     .flex_col()
-                                     .gap_1()
-                                     .when(!(host_restore_available || terminal_create_busy || terminal_create_timed_out || terminal_create_unknown), |row| row.hidden())
-                                     .when(host_restore_available, |row| row.child(
-                                         div()
-                                             .id("runtime-host-restore-saved")
-                                             .cursor_pointer()
-                                             .text_xs()
-                                             .text_color(rgb(TEXT))
-                                             .child("Restore saved Agent / Terminal tabs")
-                                             .on_click(cx.listener(|view, _, _, cx| {
-                                                 view.restore_saved_host_tabs(cx);
-                                             })),
-                                     ))
-                                     .when(terminal_create_timed_out, |row| row.child(
-                                         div()
-                                             .id("runtime-host-recheck-pending")
-                                             .cursor_pointer()
-                                             .text_xs()
-                                             .text_color(rgb(TEXT))
-                                             .child("Recheck pending Host session (no new PTY)")
-                                             .on_click(cx.listener(|view, _, _, cx| {
-                                                 view.retry_host_terminal_confirmation(cx);
-                                             })),
-                                     ))
-                                     .when(terminal_create_busy || terminal_create_unknown || terminal_create_timed_out, |row| row.child(
-                                         div()
-                                             .id("runtime-host-dismiss-pending")
-                                             .cursor_pointer()
-                                             .text_xs()
-                                             .text_color(rgb(MUTED))
-                                             .child("Dismiss pending request (keep Host PTY)")
-                                             .on_click(cx.listener(|view, _, _, cx| {
-                                                 view.cancel_host_terminal_confirmation(cx);
-                                             })),
-                                     )),
-                             )
-                             .child(
-                                div()
-                                    .id("terminal-sessions-scroll")
-                                    .max_h(px(310.0))
-                                    .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, tab_id, session_running, agent_type, visual_state, goal, progress))| {
-                                        let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
-                                        let row_status_tooltip = visual_state
-                                            .map(|state| state.tooltip(&brand, agent_ui_locale));
-                                        div()
-                                            .id(("terminal-session", index))
-                                            // The whole Session row is easier to hover than a
-                                            // 6px status dot; both show the same state.
-                                            .when(row_status_tooltip.is_some(), |row| {
-                                                let tip = row_status_tooltip.clone().unwrap_or_default();
-                                                row.tooltip(move |window, cx| {
-                                                    gpui_kit::component::tooltip::Tooltip::new(tip.clone())
-                                                        .build(window, cx)
-                                                })
-                                            })
-                                            .py_1()
-                                            .px_1()
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(
-                                                div()
-                                                    .min_w_0()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(native_agent_quota_ui::quota_provider_icon(&brand, 14.0))
-                                                    // Like Classic's sidebar, animate only Working,
-                                                    // and reserve a stable slot for every Hook state.
-                                                    .child(
-                                                        div()
-                                                            .id(("host-agent-status-dot", index))
-                                                            .w(px(12.0))
-                                                            .h(px(12.0))
-                                                            .flex_shrink_0()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .when(visual_state.is_some(), |dot| {
-                                                                let state = visual_state.unwrap();
-                                                                let tooltip = state.tooltip(&brand, agent_ui_locale);
-                                                                dot.child(native_agent_quota_ui::agent_run_indicator(
-                                                                    state,
-                                                                    if state == AgentVisualState::Working { 11.0 } else { TAB_ATTENTION_DOT_SIZE },
-                                                                ))
-                                                                .tooltip(move |window, cx| {
-                                                                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
-                                                                        .build(window, cx)
-                                                                })
-                                                            })
-                                                    )
-                                                    .child(div().min_w_0().truncate().child(label)),
-                                            )
-                                            .when(!goal.is_empty(), |row| row.child(
-                                                div().min_w_0().text_sm().child(goal.clone())
-                                            ))
-                                            .when(!progress.is_empty(), |row| row.child(
-                                                div().min_w_0().text_xs().text_color(rgb(MUTED))
-                                                    .child(format!("Latest report: {progress}"))
-                                            ))
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(format!("Host workspace: {workspace_id}")),
-                                            )
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                 if !session_running || this.terminals.session_list_is_stale() {
-                                                     this.terminals.status = "Host session no longer live; refresh the list before attaching".into();
-                                                     cx.notify();
-                                                     return;
-                                                 }
-                                                 let original = this.terminals.sessions.iter()
-                                                     .find(|session| {
-                                                         session.running
-                                                             && session.handle == handle
-                                                             && session.workspace_id == workspace_id
-                                                             && session.tab_id == tab_id
-                                                     })
-                                                     .cloned();
-                                                 let Some(original) = original else {
-                                                     this.terminals.status = "Host session changed; refresh before attaching".into();
-                                                     cx.notify();
-                                                     return;
-                                                 };
-                                                 let current_workspace =
-                                                     select_registered_host_workspace(this.model.root(), &this.mcp_host_workspaces).ok();
-                                                 if current_workspace.as_deref() != Some(workspace_id.as_str()) {
-                                                     this.terminals.status = "Switch to this Host session's registered Worktree before attaching".into();
-                                                     cx.notify();
-                                                     return;
-                                                 }
-                                                 let Some(target) = PaneAttachGuard::capture(
-                                                     this.workspace_generation,
-                                                     this.mixed_panes.focused_pane(),
-                                                     &this.mixed_panes,
-                                                 ) else {
-                                                     this.terminals.status = "Active pane changed; choose a pane and retry".into();
-                                                     cx.notify();
-                                                     return;
-                                                 };
-                                                 if let Some(identity) = this.attach_live_terminal_to_pane(&original, &target, cx) {
-                                                     this.focus_mixed_tab(&identity, window, cx);
-                                                 }
-                                             }))
-                                    })),
-                            )
-                            )
                             // Match Classic: keep Settings anchored at the bottom of
                             // the left sidebar rather than consuming a whole title row.
                             .child(
@@ -18581,7 +18358,8 @@ impl Render for Workbench {
                                             .items_center()
                                             .gap_2()
                                             .child(icon(UiIcon::NewFolder, 15.0, TEXT))
-                                            .child(div().text_xs().child("Add Project"))
+                                            .border_1().border_color(rgb(BORDER))
+                                            .child(div().text_xs().child(tr(self.settings_menu_locale, "Add Project")))
                                             .on_click(cx.listener(|view, _, _, cx| {
                                                 view.pick_workspace(cx);
                                             })),
@@ -19141,7 +18919,7 @@ fn main() {
                             sidebar_save_busy: false,
                             explorer_context_menu: None,
                             show_project_management: false,
-                            runtime_details_open: false,
+                            host_tab_closing: HashSet::new(),
                             editor: None,
                             secondary_editor: None,
                             editor_transfer_in_progress: false,
@@ -19154,6 +18932,7 @@ fn main() {
                             runtime_catalog: None,
                             sidebar_order_prefs: None,
                             sidebar_order_busy: false,
+                            sidebar_sort_error: None,
                             sidebar_reorder_hold: Arc::new(Mutex::new(SidebarReorderHoldGate::default())),
                             runtime_catalog_error: None,
                             project_settings_project_id: None,

@@ -25,9 +25,48 @@ pub async fn run(
     match action {
         DesktopSettingsAction::SidebarOrderGet => {
             print_value(
-                &projection(revision, &prefs),
+                &projection_with_activity(client, revision, &prefs).await,
                 json_output,
                 "Shared sidebar order",
+            );
+            0
+        }
+        DesktopSettingsAction::SidebarSortSet { kind, mode } => {
+            let changed = match set_sort_mode(&mut prefs, kind, mode) {
+                Some(changed) => changed,
+                None => return print_error("Invalid sidebar sort kind or mode"),
+            };
+            if !changed {
+                print_value(
+                    &projection_with_activity(client, revision, &prefs).await,
+                    json_output,
+                    "Shared sidebar order",
+                );
+                return 0;
+            }
+            let payload = json!({"expectedRevision": revision, "prefs": prefs});
+            let readback = match client
+                .request_value("workbenchViewPrefs.update", &payload)
+                .await
+            {
+                Ok(value) => value,
+                Err(_) => return print_error("Host rejected sidebar sort; refresh and try again"),
+            };
+            let Some((saved, saved_revision)) = read_prefs(&readback) else {
+                return print_error("Sidebar sort Host save readback was invalid");
+            };
+            if saved_revision <= revision
+                || saved.project_sort != prefs.project_sort
+                || saved.workspace_sort != prefs.workspace_sort
+                || saved.project_order != prefs.project_order
+                || saved.workspace_order != prefs.workspace_order
+            {
+                return print_error("Host did not confirm saved sidebar sort");
+            }
+            print_value(
+                &projection_with_activity(client, saved_revision, &saved).await,
+                json_output,
+                "Shared sidebar sort saved",
             );
             0
         }
@@ -101,7 +140,7 @@ pub async fn run(
                 return print_error("Host did not confirm saved sidebar order");
             }
             print_value(
-                &projection(saved_revision, &saved),
+                &projection_with_activity(client, saved_revision, &saved).await,
                 json_output,
                 "Shared sidebar order saved",
             );
@@ -111,10 +150,92 @@ pub async fn run(
     }
 }
 
+/// Patch one field of the fresh shared record; never reset filters or manual IDs.
+fn set_sort_mode(prefs: &mut SharedWorkbenchViewPrefs, kind: &str, mode: &str) -> Option<bool> {
+    let next = match mode {
+        "name" => SharedWorkbenchSortBy::Name,
+        "recent" => SharedWorkbenchSortBy::Recent,
+        "activity" => SharedWorkbenchSortBy::Activity,
+        "manual" => SharedWorkbenchSortBy::Manual,
+        _ => return None,
+    };
+    let field = match kind {
+        "project" => &mut prefs.project_sort,
+        "workspace" => &mut prefs.workspace_sort,
+        _ => return None,
+    };
+    let changed = *field != next;
+    *field = next;
+    Some(changed)
+}
+
 fn read_prefs(value: &Value) -> Option<(SharedWorkbenchViewPrefs, i64)> {
     let revision = value.get("revision")?.as_i64()?;
     let prefs = serde_json::from_value(value.get("prefs")?.clone()).ok()?;
     Some((prefs, revision))
+}
+
+/// Read Classic's persisted activity without exposing the rest of its preferences.
+/// Older Hosts can still return sort settings; catalog timestamps are the fallback.
+async fn projection_with_activity(
+    client: &mut RuntimeHostRpcClient,
+    revision: i64,
+    prefs: &SharedWorkbenchViewPrefs,
+) -> Value {
+    let mut value = projection(revision, prefs);
+    let needs_activity = [prefs.project_sort, prefs.workspace_sort]
+        .iter()
+        .any(|mode| {
+            matches!(
+                mode,
+                SharedWorkbenchSortBy::Recent | SharedWorkbenchSortBy::Activity
+            )
+        });
+    if needs_activity {
+        if let Ok(activity) = client
+            .request_value("workspaceActivity.list", &json!({}))
+            .await
+        {
+            if let Some(entries) = activity.as_object() {
+                // Keep within the Native bridge's 128 KiB response limit.
+                let room = (120 * 1024usize).saturating_sub(value.to_string().len());
+                value["workspaceActivity"] = Value::Object(bounded_activity(entries, room));
+            }
+        }
+    }
+    value
+}
+
+fn bounded_activity(
+    entries: &serde_json::Map<String, Value>,
+    room: usize,
+) -> serde_json::Map<String, Value> {
+    let mut candidates = entries
+        .iter()
+        .filter_map(|(id, at)| {
+            if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+                return None;
+            }
+            let raw = at.as_str()?;
+            if raw.len() > 64 {
+                return None;
+            }
+            let timestamp = chrono::DateTime::parse_from_rfc3339(raw).ok()?;
+            Some((timestamp, id, at))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+    let mut result = serde_json::Map::new();
+    let mut used = 32usize; // field name, object delimiters, and final newline
+    for (_, id, at) in candidates.into_iter().take(512) {
+        let bytes = serde_json::to_string(id).unwrap_or_default().len() + at.to_string().len() + 2;
+        if used.saturating_add(bytes) > room {
+            break;
+        }
+        used += bytes;
+        result.insert(id.clone(), at.clone());
+    }
+    result
 }
 
 fn projection(revision: i64, prefs: &SharedWorkbenchViewPrefs) -> Value {
@@ -171,6 +292,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sort_patch_preserves_other_mode_filters_and_manual_orders() {
+        let mut prefs = SharedWorkbenchViewPrefs::default();
+        prefs.project_order = vec!["p1".into()];
+        prefs.workspace_order = vec!["w1".into()];
+        prefs.selected_tag_ids = vec!["tag".into()];
+        let mut expected = prefs.clone();
+        expected.workspace_sort = SharedWorkbenchSortBy::Activity;
+        assert_eq!(
+            set_sort_mode(&mut prefs, "workspace", "activity"),
+            Some(true)
+        );
+        assert_eq!(prefs, expected);
+        assert_eq!(
+            set_sort_mode(&mut prefs, "workspace", "activity"),
+            Some(false)
+        );
+        assert_eq!(set_sort_mode(&mut prefs, "project", "bogus"), None);
+        assert_eq!(set_sort_mode(&mut prefs, "section", "name"), None);
+        assert_eq!(prefs, expected);
+    }
+
+    #[test]
     fn dragging_down_and_up_preserves_hidden_saved_ids() {
         let saved: Vec<String> = ["a", "hidden", "b", "c"].map(String::from).into();
         let visible: Vec<String> = ["a", "b", "c"].map(String::from).into();
@@ -183,6 +326,19 @@ mod tests {
             ["c", "a", "hidden", "b"]
         );
         assert_eq!(move_ids(&[], &visible, "a", "c", false), None,);
+    }
+
+    #[test]
+    fn activity_projection_prioritizes_newest_and_respects_budget() {
+        let entries = json!({
+            "old": "2026-11-23T00:00:00Z",
+            "new": "2026-11-24T00:00:00Z",
+            "invalid": "not a timestamp",
+        });
+        let bounded = bounded_activity(entries.as_object().unwrap(), 68);
+        assert_eq!(bounded.len(), 1);
+        assert!(bounded.contains_key("new"));
+        assert!(bounded_activity(entries.as_object().unwrap(), 0).is_empty());
     }
 
     #[test]

@@ -518,6 +518,17 @@ impl EditorTabs {
         effect
     }
 
+    /// Used only after the user explicitly confirms a discard dialog.
+    pub fn close_tab_confirmed_discard(&mut self, instance: u64) -> CloseEffect {
+        let Some(index) = self.index_for_instance(instance) else {
+            return CloseEffect::RefusedUnsaved;
+        };
+        match self.close_tab(index, true) {
+            CloseEffect::Armed => self.close_tab(index, true),
+            effect => effect,
+        }
+    }
+
     /// Close every clean tab except `keep`. Dirty file and scratch tabs are
     /// never discarded: they stay open and are counted in `blocked`.
     pub fn close_clean_others(&mut self, keep: usize) -> CleanCloseReport {
@@ -988,6 +999,30 @@ mod tests {
             OpenEffect::AlreadyOpen
         ));
         assert_eq!(tabs.document().unwrap().content(), "A!");
+    }
+
+    #[test]
+    fn confirmed_discard_closes_only_the_requested_dirty_instance() {
+        use crate::editor_session::CloseEffect;
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file_a = root.join("a.txt");
+        let file_b = root.join("b.txt");
+        fs::write(&file_a, "A").unwrap();
+        fs::write(&file_b, "B").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(root, &file_a).unwrap();
+        tabs.document_mut().unwrap().replace(None, "!").unwrap();
+        tabs.open_file(root, &file_b).unwrap();
+        tabs.document_mut().unwrap().replace(None, "?").unwrap();
+        let target = tabs.tab_instances[0];
+        assert!(matches!(tabs.close_tab(0, false), CloseEffect::RefusedUnsaved));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert!(tabs.close_tab_confirmed_discard(target).closed());
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().content(), "B?");
+        assert!(matches!(tabs.close_tab_confirmed_discard(target), CloseEffect::RefusedUnsaved));
+        assert_eq!(fs::read(&file_a).unwrap(), b"A");
     }
 
     #[test]

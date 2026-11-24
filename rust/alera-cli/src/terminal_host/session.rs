@@ -12,13 +12,15 @@ use crate::terminal_host::history_repository::{
     TerminalHostCheckpoint, TerminalHostHistoryRepository,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::{encode_bytes, TerminalHostLaunch};
+use crate::terminal_host::protocol::{encode_byte_slices, TerminalHostLaunch};
 use crate::terminal_host::resources::ShellProcess;
 
 #[cfg(test)]
 use crate::terminal_host::resources::seal_shell_process;
 
 mod checkpoint_restore;
+#[cfg(any(windows, test))]
+mod conpty_cursor_query;
 #[cfg(test)]
 mod driver_test_stub;
 mod input_queue;
@@ -39,6 +41,8 @@ mod title_tracker;
 pub(crate) mod windows_process_job;
 pub(crate) mod workspace_shutdown;
 
+#[cfg(windows)]
+use conpty_cursor_query::StartupCursorQuery;
 #[cfg(test)]
 use input_queue::PtyDeferredWrite;
 use input_queue::PtyWrite;
@@ -119,6 +123,7 @@ pub use driver::SessionDriver;
 pub struct DurableOutputBatch {
     pub data: Vec<u8>,
     pub sequence: i64,
+    pub end_cursor: u64,
 }
 
 /// A hosted terminal session. The PTY is read on a dedicated OS thread; other
@@ -183,12 +188,12 @@ pub struct Session {
     #[cfg(windows)]
     worker_process: Option<Arc<std::os::windows::io::OwnedHandle>>,
     #[cfg(windows)]
-    conpty_startup_cursor_query_tail: Vec<u8>,
-    #[cfg(windows)]
-    conpty_startup_cursor_query_answered: bool,
+    conpty_startup_cursor_query: StartupCursorQuery,
     terminated: bool,
     checkpoint_gen: u64,
     checkpoint_armed: bool,
+    // Only small metadata is retained, never a second copy of scrollback.
+    last_queued_checkpoint: Option<Box<LiveCheckpointStamp>>,
     output_batch: Vec<u8>,
     output_batch_gen: u64,
     output_batch_armed: bool,
@@ -198,6 +203,42 @@ pub struct Session {
     durable_output_batch_sequence: i64,
     output_stream_bytes: u64,
     title_tracker: TerminalTitleTracker,
+}
+
+/// Identity of the last checkpoint handed to this session's write-behind
+/// repository. That repository owns retries even after the caller returns.
+/// The timestamp is deliberately excluded: a no-op detach is not a change
+/// to terminal history. Cursor plus tail length proves an unchanged ring
+/// because the live session only appends or trims its scrollback.
+#[derive(Default)]
+struct LiveCheckpointStamp {
+    session_id: String,
+    workspace_id: String,
+    tab_id: String,
+    working_directory: String,
+    running: bool,
+    exit_code: Option<i32>,
+    ended_at: Option<DateTime<Utc>>,
+    cursor: u64,
+    tail_len: usize,
+    max_bytes: usize,
+}
+
+impl LiveCheckpointStamp {
+    fn matches(&self, session: &Session, max_bytes: usize) -> bool {
+        // A saturated cursor no longer proves that the bytes are unchanged.
+        session.output_stream_bytes != u64::MAX
+            && self.cursor == session.output_stream_bytes
+            && self.tail_len == session.buffer.len()
+            && self.max_bytes == max_bytes
+            && self.session_id == session.id
+            && self.workspace_id == session.workspace_id
+            && self.tab_id == session.tab_id
+            && self.working_directory == session.working_directory
+            && self.running == session.running
+            && self.exit_code == session.exit_code
+            && self.ended_at == session.ended_at
+    }
 }
 
 impl Session {
@@ -328,7 +369,7 @@ impl Session {
         let on_event: Arc<dyn Fn(PtyEvent) + Send + Sync> = Arc::new(on_event);
 
         let mut title_tracker = TerminalTitleTracker::default();
-        title_tracker.feed(initial_scrollback);
+        title_tracker.seed(initial_scrollback);
         let mut session = Session {
             #[cfg(unix)]
             child_reaper: Arc::default(),
@@ -362,12 +403,11 @@ impl Session {
             #[cfg(windows)]
             worker_process,
             #[cfg(windows)]
-            conpty_startup_cursor_query_tail: Vec::new(),
-            #[cfg(windows)]
-            conpty_startup_cursor_query_answered: false,
+            conpty_startup_cursor_query: StartupCursorQuery::default(),
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
+            last_queued_checkpoint: None,
             output_batch: Vec::new(),
             output_batch_gen: 0,
             output_batch_armed: false,
@@ -382,6 +422,7 @@ impl Session {
             title_tracker,
         };
         history.queue_checkpoint(session.checkpoint(None), max_bytes);
+        session.remember_queued_checkpoint(max_bytes);
         // A failure to allocate a PTY worker thread must fail just this
         // session, not panic the shared Host and disconnect every terminal.
         if let Err(error) = spawn_reader(
@@ -582,46 +623,38 @@ impl Session {
 
     #[cfg(windows)]
     pub(super) fn take_initial_conpty_cursor_query(&mut self, data: &[u8]) -> bool {
-        const QUERY: &[u8] = b"\x1b[6n";
-        if self.conpty_startup_cursor_query_answered {
-            return false;
-        }
-
-        let mut observed =
-            Vec::with_capacity(self.conpty_startup_cursor_query_tail.len() + data.len());
-        observed.extend_from_slice(&self.conpty_startup_cursor_query_tail);
-        observed.extend_from_slice(data);
-        if observed.windows(QUERY.len()).any(|window| window == QUERY) {
-            self.conpty_startup_cursor_query_answered = true;
-            self.conpty_startup_cursor_query_tail.clear();
-            return true;
-        }
-
-        let keep = QUERY.len().saturating_sub(1).min(observed.len());
-        self.conpty_startup_cursor_query_tail = observed[observed.len() - keep..].to_vec();
-        false
+        self.conpty_startup_cursor_query.take(data)
     }
 
-    /// Append PTY output to the scrollback and live-output batch. Returns a
-    /// timer generation when a delayed flush should be armed.
+    #[cfg(test)]
     pub fn append_output(&mut self, data: &[u8]) -> (Option<u64>, Option<u64>, Option<String>) {
+        self.append_owned_output(data.to_vec())
+    }
+
+    /// Append an owned PTY reader allocation to scrollback and durable output,
+    /// plus a live delivery batch only when it has recipients. Return timer
+    /// generations when nonempty batches need their flushes armed.
+    pub(super) fn append_owned_output(
+        &mut self,
+        data: Vec<u8>,
+    ) -> (Option<u64>, Option<u64>, Option<String>) {
         self.output_stream_bytes = self.output_stream_bytes.saturating_add(data.len() as u64);
-        self.buffer.append(data);
-        self.output_batch.extend_from_slice(data);
-        self.durable_output_batch.extend_from_slice(data);
-        let title_change = self.title_tracker.feed(data);
-        let output_generation = if self.output_batch_armed {
+        self.buffer.append(&data);
+        let title_change = self.title_tracker.feed(&data);
+        self.append_output_batches(data);
+        let output_generation = if self.output_batch.is_empty() || self.output_batch_armed {
             None
         } else {
             self.output_batch_armed = true;
             Some(self.output_batch_gen)
         };
-        let durable_generation = if self.durable_output_batch_armed {
-            None
-        } else {
-            self.durable_output_batch_armed = true;
-            Some(self.durable_output_batch_gen)
-        };
+        let durable_generation =
+            if self.durable_output_batch.is_empty() || self.durable_output_batch_armed {
+                None
+            } else {
+                self.durable_output_batch_armed = true;
+                Some(self.durable_output_batch_gen)
+            };
         (output_generation, durable_generation, title_change)
     }
 
@@ -662,9 +695,14 @@ impl Session {
         json!({ "sessionId": self.id, "error": message })
     }
 
+    fn encode_snapshot_tail(&self, restore_bytes: usize) -> String {
+        let (first, second) = self.buffer.tail_slices(restore_bytes);
+        encode_byte_slices(first, second)
+    }
+
     pub fn attachment_payload(&self, created: bool, restore_bytes: usize) -> Value {
         let (cols, rows) = self.current_dims;
-        json!({
+        let mut payload = json!({
             "sessionId": self.id,
             "created": created,
             "running": self.running,
@@ -672,7 +710,6 @@ impl Session {
             "driver": self.driver.payload(),
             "delta": false,
             "outputCursor": self.output_stream_bytes,
-            "snapshotBase64": encode_bytes(&self.buffer.tail(restore_bytes)),
             // The size the snapshot bytes were written at. A client whose own
             // viewport is narrower has to replay them here and then resize,
             // letting its emulator reflow wrapped lines, because re-parsing the
@@ -681,7 +718,9 @@ impl Session {
             // behaves exactly as it does today.
             "snapshotCols": cols,
             "snapshotRows": rows,
-        })
+        });
+        payload["snapshotBase64"] = Value::String(self.encode_snapshot_tail(restore_bytes));
+        payload
     }
 
     /// Attachment reply for a client whose retained emulator state is still
@@ -707,20 +746,14 @@ impl Session {
     /// not hand it more history than its emulator will keep.
     pub fn restore_payload(&self, restore_bytes: usize) -> Value {
         let (cols, rows) = self.current_dims;
-        json!({
+        let mut payload = json!({
             "sessionId": self.id,
-            "snapshotBase64": encode_bytes(&self.buffer.tail(restore_bytes)),
             "resetInteractionModes": true,
             "snapshotCols": cols,
             "snapshotRows": rows,
-        })
-    }
-
-    pub fn snapshot_payload(&self) -> Value {
-        json!({
-            "sessionId": self.id,
-            "snapshotBase64": encode_bytes(&self.buffer.to_bytes()),
-        })
+        });
+        payload["snapshotBase64"] = Value::String(self.encode_snapshot_tail(restore_bytes));
+        payload
     }
 
     /// Arm a debounced checkpoint timer if one is not already pending. Returns
@@ -750,9 +783,57 @@ impl Session {
         self.checkpoint_armed = false;
     }
 
-    /// Capture the current session state without touching SQLite. The repository
-    /// owns persistence and keeps this snapshot in memory until it is durable.
+    /// Capture the current session state without touching SQLite. Used for
+    /// new or finalized sessions, when an exact full snapshot must reseed
+    /// the repository regardless of any previous stream identity.
     pub fn checkpoint(
+        &mut self,
+        ended_at_override: Option<DateTime<Utc>>,
+    ) -> TerminalHostCheckpoint {
+        let mut checkpoint = self.checkpoint_metadata(ended_at_override);
+        checkpoint.buffer = self.buffer.to_bytes();
+        checkpoint
+    }
+
+    /// Called by the actor only after flushing the durable output batch.
+    /// The repository can reuse its contiguous verified tail, or lazily
+    /// capture this exact buffer when the cache is absent or incomplete.
+    pub(super) fn queue_live_checkpoint(
+        &mut self,
+        history: &TerminalHostHistoryRepository,
+        max_bytes: usize,
+    ) {
+        if self
+            .last_queued_checkpoint
+            .as_ref()
+            .is_some_and(|stamp| stamp.matches(self, max_bytes))
+        {
+            return;
+        }
+        let checkpoint = self.checkpoint_metadata(None);
+        history.queue_checkpoint_from_live(checkpoint, self.buffer.len(), max_bytes, || {
+            self.buffer.to_bytes()
+        });
+        self.remember_queued_checkpoint(max_bytes);
+    }
+
+    fn remember_queued_checkpoint(&mut self, max_bytes: usize) {
+        let stamp = self
+            .last_queued_checkpoint
+            .get_or_insert_with(Default::default);
+        stamp.session_id.clone_from(&self.id);
+        stamp.workspace_id.clone_from(&self.workspace_id);
+        stamp.tab_id.clone_from(&self.tab_id);
+        stamp.working_directory.clone_from(&self.working_directory);
+        stamp.running = self.running;
+        stamp.exit_code = self.exit_code;
+        stamp.ended_at = self.ended_at;
+        stamp.cursor = self.output_stream_bytes;
+        stamp.tail_len = self.buffer.len();
+        stamp.max_bytes = max_bytes;
+    }
+
+    fn checkpoint_metadata(
         &mut self,
         ended_at_override: Option<DateTime<Utc>>,
     ) -> TerminalHostCheckpoint {
@@ -769,7 +850,7 @@ impl Session {
             ended_at: self.ended_at,
             output_stream_bytes: self.output_stream_bytes,
             updated_at: Utc::now(),
-            buffer: self.buffer.to_bytes(),
+            buffer: Vec::new(),
         }
     }
 }

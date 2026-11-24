@@ -37,12 +37,11 @@ impl Session {
             #[cfg(windows)]
             worker_process: None,
             #[cfg(windows)]
-            conpty_startup_cursor_query_tail: Vec::new(),
-            #[cfg(windows)]
-            conpty_startup_cursor_query_answered: true,
+            conpty_startup_cursor_query: StartupCursorQuery::answered(),
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
+            last_queued_checkpoint: None,
             output_batch: Vec::new(),
             output_batch_gen: 0,
             output_batch_armed: false,

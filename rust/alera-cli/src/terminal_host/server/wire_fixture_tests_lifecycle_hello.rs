@@ -105,7 +105,7 @@ async fn binary_hello_upgrades_in_band_and_frames_everything_after() {
     handle
         .try_send_terminal(ClientFrame::Output {
             session_id: output_fixture["sessionId"].as_str().unwrap().to_string(),
-            data,
+            data: data.into(),
         })
         .unwrap();
 
@@ -169,7 +169,7 @@ async fn terminal_output_binary_fixture_matches_the_frame_codec() {
     assert_eq!(
         ClientFrame::Output {
             session_id: session_id.to_string(),
-            data,
+            data: data.into(),
         }
         .as_json()
         .unwrap(),

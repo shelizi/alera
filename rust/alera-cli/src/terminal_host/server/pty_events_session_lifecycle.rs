@@ -175,7 +175,7 @@ impl ServerActor {
             })]);
         }
         self.forget_push_session(session_id);
-        self.orchestration_activity_last_recorded.remove(session_id);
+        self.orchestration_output_activity.remove(session_id);
         self.orchestration_delivery_in_flight.remove(session_id);
         self.orchestration_delivery_backpressured.remove(session_id);
         self.fail_active_dispatch_for_closed_session(session_id, reason)

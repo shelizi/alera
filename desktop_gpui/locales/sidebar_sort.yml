@@ -1,0 +1,67 @@
+# Classic-compatible grouped sidebar sort dropdowns.
+_version: 2
+"View Options":
+  en: "View Options"
+  zh-TW: "檢視選項"
+  zh-CN: "视图选项"
+  ja: "表示オプション"
+"Sort Projects By":
+  en: "Sort Projects By"
+  zh-TW: "專案排序方式"
+  zh-CN: "项目排序方式"
+  ja: "プロジェクトの並び順"
+"Then Workspaces By":
+  en: "Then Workspaces By"
+  zh-TW: "再依工作區排序"
+  zh-CN: "再按工作区排序"
+  ja: "次にワークスペースの並び順"
+"Name":
+  en: "Name"
+  zh-TW: "名稱"
+  zh-CN: "名称"
+  ja: "名前"
+"Recent":
+  en: "Recent"
+  zh-TW: "最近活動"
+  zh-CN: "最近活动"
+  ja: "最近のアクティビティ"
+"Agent Activity":
+  en: "Agent Activity"
+  zh-TW: "Agent 活動"
+  zh-CN: "Agent 活动"
+  ja: "Agent アクティビティ"
+"Manual":
+  en: "Manual"
+  zh-TW: "手動"
+  zh-CN: "手动"
+  ja: "手動"
+"Show Workspaces":
+  en: "Show Workspaces"
+  zh-TW: "顯示工作區"
+  zh-CN: "显示工作区"
+  ja: "ワークスペースの表示"
+"Unavailable":
+  en: "Unavailable"
+  zh-TW: "無法使用"
+  zh-CN: "不可用"
+  ja: "利用不可"
+"Retry":
+  en: "Retry"
+  zh-TW: "重試"
+  zh-CN: "重试"
+  ja: "再試行"
+"Loading sidebar sort settings":
+  en: "Loading sidebar sort settings"
+  zh-TW: "正在讀取排序設定"
+  zh-CN: "正在读取排序设置"
+  ja: "並び順設定を読み込み中"
+"Shared sidebar sort unavailable":
+  en: "Shared sidebar sort unavailable"
+  zh-TW: "無法讀取共享排序設定"
+  zh-CN: "无法读取共享排序设置"
+  ja: "共有の並び順設定を利用できません"
+"Sidebar sort could not be saved":
+  en: "Sidebar sort could not be saved"
+  zh-TW: "無法儲存排序設定"
+  zh-CN: "无法保存排序设置"
+  ja: "並び順設定を保存できませんでした"

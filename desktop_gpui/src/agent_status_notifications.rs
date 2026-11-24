@@ -319,6 +319,21 @@ pub fn validated_agent_navigation_target<'a>(
     )
 }
 
+/// Sidebar includes plain Terminal sessions; notifications and Agent history
+/// continue to require an actual Agent provider.
+pub fn validated_sidebar_navigation_target<'a>(
+    target: &AgentNavigationTarget,
+    sessions: &'a [TerminalSession],
+) -> Option<&'a TerminalSession> {
+    sessions.iter().find(|session| {
+        session.running
+            && session.handle == target.session_id
+            && session.workspace_id == target.workspace_id
+            && session.tab_id == target.tab_id
+            && session.agent_type.as_deref().unwrap_or("terminal") == target.agent_type
+    })
+}
+
 /// Resolve a verified Host identity to an existing Agent preview and pane.
 fn validated_agent_pane_identity(
     session_id: &str,

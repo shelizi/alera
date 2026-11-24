@@ -1,4 +1,5 @@
 import 'package:alera/src/features/workbench/domain/terminal_osc52_clipboard.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_replica_terminal.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,100 @@ import 'package:xterm2/core.dart';
 import 'package:xterm2/xterm.dart';
 
 void main() {
+  test(
+    'incremental memory accounting matches full scans through worker updates',
+    () async {
+      final worker = await TerminalXtermWorker.start(
+        cols: 80,
+        rows: 6,
+        maxLines: 128,
+      );
+      addTearDown(worker.close);
+      final replica = TerminalXtermReplicaTerminal(
+        cols: 80,
+        rows: 6,
+        maxLines: 128,
+      );
+      addTearDown(replica.dispose);
+
+      void check() {
+        final model = replica.replicaModel;
+        var mirrorBytes = 0;
+        for (var row = 0; row < model.bufferLength; row++) {
+          mirrorBytes +=
+              model.packedRows[row].lengthInBytes +
+              model.rowTexts[row].length * 2 +
+              96;
+        }
+        expect(model.retainedBytes, mirrorBytes);
+        expect(
+          replica.retainedCellBufferBytes,
+          measureTerminalCellBufferBytes(replica),
+        );
+      }
+
+      Future<void> write(String text) async {
+        replica.applyBufferDelta(await worker.writeBufferDelta(text));
+        check();
+      }
+
+      // No worker state yet: the renderer still has its initial allocation.
+      check();
+      await write('initial 界e\u0301😀');
+      await write('\r\x1b[31mZ\x1b[0m');
+      await write('\x1b[?2004h');
+      await write(
+        List<String>.generate(
+          120,
+          (i) => '\r\n' + (i.isEven ? '界e\u0301😀' : 'x' * 66) + ' $i',
+        ).join(),
+      );
+      await write('\r\nmore');
+      await write('\r\nanother');
+      await write('\r\n1\r\n2\r\n3\r\n4\r\n5\r\n6');
+      expect(replica.buffer.lines.length, 128);
+      // Repeated head trims change the cost of the retained mirror as its
+      // compacted rows and longer rows enter and leave the buffer.
+      for (var i = 0; i < 160; i++) {
+        await write('\r\n' + (i.isEven ? 'short' : '界' * 30) + ' $i');
+      }
+      final cellBytes = replica.retainedCellBufferBytes;
+      final mirrorBytes = replica.replicaModel.retainedBytes;
+      replica.applyStateDelta(await worker.parseHidden('\r\nhidden\nhidden'));
+      check();
+      expect(replica.retainedCellBufferBytes, cellBytes);
+      expect(replica.replicaModel.retainedBytes, mirrorBytes);
+      replica.applyBufferDelta(await worker.snapshotBufferDelta());
+      check();
+
+      replica.applyBufferDelta(
+        await worker.resizeBufferDelta(cols: 43, rows: 8),
+      );
+      check();
+      // Pixel-only local resize may compact the existing renderer history.
+      replica.resize(43, 8, 8, 16);
+      check();
+      await write('next');
+      await write('\x1b[?1049h\x1b[2Jalt');
+      await write('\x1b[?1049l');
+      await write('\x1b[3J');
+      check();
+      await write('\x1bcreset');
+      check();
+
+      // A local parser mutation is not authoritative worker state, but its
+      // allocated capacity must not be reported using the old cached total.
+      replica.write('\r\n' + 'local\r\n' * 40);
+      check();
+      replica.clear();
+      check();
+      replica.reset();
+      check();
+      replica.applyBufferDelta(await worker.snapshotBufferDelta());
+      check();
+    },
+  );
+
   test('replica reconstructs direct xterm buffer and renderer state', () async {
     final direct = _createDirect(cols: 16, rows: 5, maxLines: 64);
     final worker = await TerminalXtermWorker.start(

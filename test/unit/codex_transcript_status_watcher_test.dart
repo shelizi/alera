@@ -461,6 +461,93 @@ void main() {
       },
     );
 
+    test('dispatches mixed transcript records without replaying tool calls', () async {
+      transcript.writeAsStringSync('');
+      watcher.observeHookEvent(
+        _event(
+          hookEventName: 'UserPromptSubmit',
+          payload: <String, Object?>{
+            'turn_id': 'turn-1',
+            'transcript_path': transcript.path,
+          },
+        ),
+      );
+      await watcher.scanNowForTesting('session-1');
+
+      final call = {
+        'type': 'response_item',
+        'payload': {
+          'type': 'function_call',
+          'name': 'functions.request_user_input',
+          'call_id': 'call-1',
+          'arguments': jsonEncode({
+            'questions': ['要繼續嗎？😀'],
+          }),
+        },
+      };
+      final records = <Object?>[
+        null,
+        ['invalid root'],
+        {
+          'type': 'response_item',
+          'payload': ['invalid payload'],
+        },
+        {
+          'type': 'event_msg',
+          'payload': {
+            'type': 'task_complete',
+            'turn_id': 'old-turn',
+            'last_agent_message': 'old',
+          },
+        },
+        for (var i = 0; i < 1000; i++)
+          {
+            'type': 'response_item',
+            'payload': {
+              'type': 'message',
+              'content': [
+                {'type': 'task_complete', 'text': 'nested record $i'},
+              ],
+            },
+          },
+        call,
+        call,
+        {
+          'type': 'response_item',
+          'payload': {
+            'type': 'function_call_output',
+            'call_id': 'call-1',
+            'output': 'ok',
+          },
+        },
+        call,
+        {
+          'type': 'response_item',
+          'payload': {'type': 'function_call_output', 'call_id': 'call-1'},
+        },
+      ];
+      transcript.writeAsStringSync(
+        records.map(jsonEncode).join('\n') +
+            '\n' +
+            r'{"type":"event_msg","payload":{"type":"task_complet\u0065","turn_id":"turn-1","last_agent_message":"done"}}' +
+            '\n',
+        mode: .append,
+      );
+      await watcher.scanNowForTesting('session-1');
+      expect(sink.events.map((event) => event.hookEventName), [
+        'PreToolUse',
+        'PostToolUse',
+        'Stop',
+      ]);
+      expect(sink.events.first.payload['tool_input'], {
+        'questions': ['要繼續嗎？😀'],
+      });
+      expect(sink.events[1].payload['tool_use_id'], 'call-1');
+      expect(sink.events.last.payload['last_assistant_message'], 'done');
+      await watcher.scanNowForTesting('session-1');
+      expect(sink.events, hasLength(3));
+    });
+
     test('clearTerminal drops the watch for a closed terminal', () async {
       transcript.writeAsStringSync('');
       watcher.observeHookEvent(

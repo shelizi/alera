@@ -13,7 +13,7 @@ use super::ServerActor;
 fn output(data: &[u8]) -> ClientFrame {
     ClientFrame::Output {
         session_id: "s1".to_string(),
-        data: data.to_vec(),
+        data: bytes::Bytes::copy_from_slice(data),
     }
 }
 
@@ -31,6 +31,119 @@ async fn actor_with_client(
         HashMap::from([("s1".to_string(), session)]),
     )
     .await
+}
+
+#[tokio::test]
+async fn output_batch_shares_raw_bytes_and_keeps_per_client_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, mut ar) = ClientHandle::test_terminal_channels();
+    let (b, mut br) = ClientHandle::test_terminal_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.attach(1);
+    session.attach(2);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(a)), (2, local_client(b))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    let data = vec![0xff, 0, 0x1b, 0x61];
+    actor.sessions.get_mut("s1").unwrap().append_output(&data);
+    actor.flush_output_batch("s1");
+    let unwrap = |frame: ClientFrame| match frame {
+        ClientFrame::SequencedTerminal { frame, .. } => match *frame {
+            ClientFrame::SharedOutput(shared) => shared,
+            _ => panic!("expected shared output"),
+        },
+        _ => panic!("missing terminal ordering envelope"),
+    };
+    let a = unwrap(ar.try_recv().unwrap());
+    let b = unwrap(br.try_recv().unwrap());
+    assert_eq!(a.data().as_ref(), data.as_slice());
+    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    assert_eq!(a.binary_frame().as_ptr(), b.binary_frame().as_ptr());
+    assert_eq!(
+        a.json_payload().unwrap().as_ptr(),
+        b.json_payload().unwrap().as_ptr()
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(1),
+        Some(data.len() as u64)
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(data.len() as u64)
+    );
+}
+
+#[tokio::test]
+async fn shared_output_backpressure_does_not_block_other_clients() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, mut ar) = ClientHandle::test_terminal_channels();
+    let (b, mut br) = ClientHandle::test_terminal_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.attach(1);
+    session.attach(2);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(a)), (2, local_client(b))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    for _ in 0..CLIENT_TERMINAL_OUT_QUEUE_CAPACITY {
+        actor.sessions.get_mut("s1").unwrap().append_output(b"ab");
+        actor.flush_output_batch("s1");
+        let _ = ar.try_recv().unwrap();
+    }
+    let before = CLIENT_TERMINAL_OUT_QUEUE_CAPACITY as u64 * 2;
+    actor.sessions.get_mut("s1").unwrap().append_output(b"cd");
+    actor.flush_output_batch("s1");
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(1),
+        Some(before + 2)
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(before)
+    );
+    let fast = ar.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(
+        decode_bytes(fast["payload"].get("dataBase64")).unwrap(),
+        b"cd"
+    );
+    for _ in 0..CLIENT_TERMINAL_OUT_QUEUE_CAPACITY {
+        let _ = br.try_recv().unwrap();
+    }
+    let resumed = actor.resume_output_for_client("s1", 2);
+    assert_eq!(resumed["resumed"], true);
+    let missed = br.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(
+        decode_bytes(missed["payload"].get("dataBase64")).unwrap(),
+        b"cd"
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(before + 2)
+    );
+}
+
+#[tokio::test]
+async fn single_recipient_output_does_not_allocate_a_shared_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();
+    let mut actor = actor_with_client(&dir, handle, 1024).await;
+    actor
+        .sessions
+        .get_mut("s1")
+        .unwrap()
+        .append_output(b"single");
+    actor.flush_output_batch("s1");
+    assert!(matches!(
+        terminal_rx.try_recv().unwrap(),
+        ClientFrame::SequencedTerminal { frame, .. }
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b"single")
+    ));
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(6));
 }
 
 #[tokio::test]
@@ -87,7 +200,7 @@ async fn resume_serves_only_the_bytes_the_client_missed() {
     assert!(matches!(
         missed,
         ClientFrame::SequencedTerminal { frame, .. }
-            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b" world")
     ));
     let session = &actor.sessions["s1"];
     assert_eq!(session.delivered_output_cursor(2), Some(11));
@@ -191,4 +304,135 @@ async fn detaching_forgets_the_delivery_cursor() {
     session.detach(2);
 
     assert_eq!(session.delivered_output_cursor(2), None);
+}
+
+#[tokio::test]
+async fn detached_and_paused_pty_output_resumes_exactly_once_and_keeps_history() {
+    use super::ServerCommand;
+    use crate::terminal_host::session::PtyEvent;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();
+    let session = Session::driver_test_stub("s1", 120, 40);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(2, local_client(handle))]),
+        HashMap::from([("s1".to_owned(), session)]),
+    )
+    .await;
+    let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+    // Match actual Session::spawn: the checkpoint row precedes output-only
+    // batches, so they cannot be mistaken for output from a deleted session.
+    actor.immediate_checkpoint("s1").await;
+    assert!(actor.history.flush_pending(Duration::from_secs(5)).await);
+
+    actor
+        .handle_pty_event("s1".into(), PtyEvent::Output(b"hello world".to_vec()))
+        .await;
+    assert_eq!(actor.sessions["s1"].output_batch_len(), 0);
+    assert_eq!(actor.sessions["s1"].durable_output_batch_len(), 11);
+    assert!(terminal_rx.try_recv().is_err());
+    let command = tokio::time::timeout(Duration::from_secs(3), inbox_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let ServerCommand::DurableOutputBatchTick {
+        session_id,
+        generation,
+    } = command
+    else {
+        panic!("unobserved PTY output must arm only the durable batch timer");
+    };
+    assert_eq!(session_id, "s1");
+    actor.handle_durable_output_batch_tick(session_id, generation);
+
+    let reply = actor
+        .create_or_attach(
+            2,
+            &serde_json::json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+                "workingDirectory": ".",
+                "resumeCursor": 5
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["delta"], true);
+    assert_eq!(reply["outputCursor"], 11);
+    let assert_output = |frame: ClientFrame, expected: &[u8]| {
+        assert!(matches!(frame, ClientFrame::SequencedTerminal { frame, .. }
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == expected)));
+    };
+    assert_output(terminal_rx.try_recv().unwrap(), b" world");
+    assert!(terminal_rx.try_recv().is_err());
+
+    // The actor's request path flushes before changing pause state.
+    actor.flush_all_output("s1");
+    let pause = actor.set_output_paused_for_client("s1", 2, true);
+    assert_eq!(pause["outputCursor"], 11);
+    actor
+        .handle_pty_event("s1".into(), PtyEvent::Output(vec![0xff, 0x00, b'!']))
+        .await;
+    assert_eq!(actor.sessions["s1"].output_batch_len(), 0);
+    assert!(terminal_rx.try_recv().is_err());
+    actor.flush_all_output("s1");
+    let resumed = actor.set_output_paused_for_client("s1", 2, false);
+    assert_eq!(resumed["resumed"], true);
+    assert_output(terminal_rx.try_recv().unwrap(), &[0xff, 0x00, b'!']);
+
+    actor
+        .handle_pty_event("s1".into(), PtyEvent::Output(b" live".to_vec()))
+        .await;
+    assert_eq!(actor.sessions["s1"].output_batch_len(), 5);
+    actor.flush_all_output("s1");
+    assert_output(terminal_rx.try_recv().unwrap(), b" live");
+    assert!(terminal_rx.try_recv().is_err());
+    assert_eq!(actor.sessions["s1"].delivered_output_cursor(2), Some(19));
+    actor.immediate_checkpoint("s1").await;
+    assert!(actor.history.flush_pending(Duration::from_secs(5)).await);
+    let history = actor.history.read("s1", usize::MAX).await.unwrap().unwrap();
+    assert_eq!(history.buffer, b"hello world\xff\x00! live");
+    assert_eq!(history.output_stream_bytes, 19);
+}
+
+#[tokio::test]
+async fn full_pty_batch_flushes_without_spawning_superseded_timers() {
+    use super::OUTPUT_BATCH_MAX_BYTES;
+    use crate::terminal_host::session::PtyEvent;
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut terminal_rx) = ClientHandle::test_terminal_channels();
+    let mut actor = actor_with_client(&dir, handle, OUTPUT_BATCH_MAX_BYTES).await;
+    let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+    // Seed checkpoint metadata before the immediate output-only write.
+    actor.immediate_checkpoint("s1").await;
+    let data = vec![b'x'; OUTPUT_BATCH_MAX_BYTES];
+    actor
+        .handle_pty_event("s1".into(), PtyEvent::Output(data.clone()))
+        .await;
+
+    assert_eq!(actor.sessions["s1"].output_batch_len(), 0);
+    assert_eq!(actor.sessions["s1"].durable_output_batch_len(), 0);
+    let frame = terminal_rx.try_recv().unwrap();
+    assert!(matches!(frame, ClientFrame::SequencedTerminal { frame, .. }
+        if matches!(*frame, ClientFrame::Output { data: ref delivered, .. } if delivered.as_ref() == data)));
+    // Both old timer delays (8 and 100 ms) are shorter than this window.
+    // The checkpoint timer is intentionally still armed at five seconds.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), inbox_rx.recv())
+            .await
+            .is_err()
+    );
+
+    actor.immediate_checkpoint("s1").await;
+    assert!(actor.history.flush_pending(Duration::from_secs(5)).await);
+    let history = actor.history.read("s1", usize::MAX).await.unwrap().unwrap();
+    assert_eq!(history.buffer, data);
+    assert_eq!(history.output_stream_bytes, OUTPUT_BATCH_MAX_BYTES as u64);
 }

@@ -89,6 +89,8 @@ class _CodexTranscriptWatch({
   void dispose() {
     _disposed = true;
     _partialLine.clear();
+    _pendingToolsByCallId.clear();
+    _emittedCallIds.clear();
     unawaited(_subscription?.cancel());
     unawaited(_foregroundSubscription?.cancel());
     _watchdogTimer?.cancel();
@@ -255,7 +257,15 @@ class _CodexTranscriptWatch({
     if (record == null) {
       return;
     }
-    if (_isCurrentTurnStart(record)) {
+    final payload = record['payload'];
+    if (payload is! Map<String, Object?>) {
+      return;
+    }
+    final recordType = record['type'];
+    final payloadType = payload['type'];
+    if (turnId != null &&
+        payload['turn_id'] == turnId &&
+        (payloadType == 'task_started' || recordType == 'turn_context')) {
       _armed = true;
       return;
     }
@@ -263,20 +273,23 @@ class _CodexTranscriptWatch({
       return;
     }
 
-    final completion = _turnCompletion(record);
+    final completion = _turnCompletion(recordType, payloadType, payload);
     if (completion != null) {
       _emitStop(completion);
       dispose();
       return;
     }
 
-    final pending = _pendingFunctionCall(record);
+    final pending = _pendingFunctionCall(recordType, payloadType, payload);
     if (pending != null) {
       _emitWaiting(pending);
       return;
     }
 
-    final completedCallId = _completedFunctionCallId(record);
+    final completedCallId =
+        recordType == 'response_item' && payloadType == 'function_call_output'
+        ? _string(payload['call_id'])
+        : null;
     if (completedCallId == null) {
       return;
     }
@@ -302,15 +315,17 @@ class _CodexTranscriptWatch({
     );
   }
 
-  _TranscriptTurnCompletion? _turnCompletion(Map<String, Object?> record) {
-    final payload = _recordPayload(record);
-    if (record['type'] != 'event_msg' || payload == null) {
+  _TranscriptTurnCompletion? _turnCompletion(
+    Object? recordType,
+    Object? payloadType,
+    Map<String, Object?> payload,
+  ) {
+    if (recordType != 'event_msg') {
       return null;
     }
     if (turnId != null && payload['turn_id'] != turnId) {
       return null;
     }
-    final payloadType = payload['type'];
     if (payloadType == 'task_complete') {
       return _TranscriptTurnCompletion(
         interrupted: false,
@@ -343,31 +358,22 @@ class _CodexTranscriptWatch({
     );
   }
 
-  bool _isCurrentTurnStart(Map<String, Object?> record) {
-    if (turnId == null) {
-      return false;
-    }
-    final payload = _recordPayload(record);
-    if (payload == null) {
-      return false;
-    }
-    return payload['turn_id'] == turnId &&
-        (payload['type'] == 'task_started' || record['type'] == 'turn_context');
-  }
-
-  _PendingFunctionCall? _pendingFunctionCall(Map<String, Object?> record) {
-    final payload = _recordPayload(record);
-    if (payload == null) {
-      return null;
-    }
-    final recordType = record['type'];
-    final payloadType = payload['type'];
+  _PendingFunctionCall? _pendingFunctionCall(
+    Object? recordType,
+    Object? payloadType,
+    Map<String, Object?> payload,
+  ) {
     if (recordType == 'response_item' && payloadType == 'function_call') {
       final toolName = _string(payload['name']);
       if (!_isCodexTranscriptWaitingTool(toolName)) {
         return null;
       }
       final callId = _string(payload['call_id']) ?? _string(payload['id']);
+      // Replayed call IDs cannot emit another waiting event. Avoid parsing
+      // their potentially large argument JSON a second time.
+      if (callId != null && _emittedCallIds.contains(callId)) {
+        return null;
+      }
       return _PendingFunctionCall(
         toolName: toolName!,
         callId: callId,
@@ -387,15 +393,6 @@ class _CodexTranscriptWatch({
         callId: _string(payload['call_id']),
         toolInput: payload,
       );
-    }
-    return null;
-  }
-
-  String? _completedFunctionCallId(Map<String, Object?> record) {
-    final payload = _recordPayload(record);
-    if (record['type'] == 'response_item' &&
-        payload?['type'] == 'function_call_output') {
-      return _string(payload?['call_id']);
     }
     return null;
   }
@@ -447,15 +444,12 @@ String? _hookEventName(AgentHookEvent event) {
       ]);
 }
 
-Map<String, Object?>? _recordPayload(Map<String, Object?> record) {
-  final payload = record['payload'];
-  return payload is Map ? Map<String, Object?>.from(payload) : null;
-}
-
 Map<String, Object?>? _jsonObject(String line) {
   try {
     final decoded = jsonDecode(line);
-    return decoded is Map ? Map<String, Object?>.from(decoded) : null;
+    // jsonDecode already produces string-keyed maps. Neither the record
+    // nor its payload needs a second allocation for read-only dispatch.
+    return decoded is Map<String, Object?> ? decoded : null;
   } catch (_) {
     return null;
   }

@@ -95,12 +95,31 @@ final class _TerminalHostSocketReader._(
           if (!_lines.isClosed) {
             _lines.add(message[1]);
           }
+        case terminalHostIsolatePresenceBatch:
+          // Envelope only: maintain wire order and one logical event per
+          // notification for every runtime listener.
+          for (var index = 1; index < message.length; index++) {
+            if (_lines.isClosed) break;
+            _lines.add(message[index]);
+          }
         case terminalHostIsolateOutput:
           if (!_output.isClosed) {
             _output.add(
               TerminalHostOutputTextEvent(
                 message[1] as String,
                 message[2] as String,
+              ),
+            );
+          }
+        case terminalHostIsolateOutputBatch:
+          // This is only a transport envelope. Keep the existing one-event
+          // per decoded frame contract for every session consumer.
+          for (var index = 1; index + 1 < message.length; index += 2) {
+            if (_output.isClosed) break;
+            _output.add(
+              TerminalHostOutputTextEvent(
+                message[index] as String,
+                message[index + 1] as String,
               ),
             );
           }

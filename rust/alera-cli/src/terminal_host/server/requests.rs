@@ -415,27 +415,33 @@ impl ServerActor {
                     .sessions
                     .get(&session_id)
                     .ok_or_else(|| HostError::state(format!("terminal not found: {session_id}")))?;
-                let snapshot = session.snapshot_payload();
-                let bytes =
-                    crate::terminal_host::protocol::decode_bytes(snapshot.get("snapshotBase64"))?;
                 let (base_cursor, end_cursor) = session.output_stream_range();
                 let (requested_cursor, start_cursor, next_cursor) =
                     terminal_read_window(base_cursor, end_cursor, cursor, max_bytes as u64);
-                let (start_cursor, next_cursor) =
-                    align_terminal_text_window(&bytes, base_cursor, start_cursor, next_cursor);
-                let start = (start_cursor - base_cursor) as usize;
-                let end = (next_cursor - base_cursor) as usize;
-                let selected = &bytes[start..end];
-                Ok(json!({
+                let (selected, start_cursor, next_cursor) = read_terminal_text_page(
+                    &session.buffer,
+                    base_cursor,
+                    start_cursor,
+                    next_cursor,
+                );
+                let mut result = json!({
                     "handle": session_id,
                     "running": session.running(),
                     "baseCursor": base_cursor,
                     "cursor": start_cursor,
                     "nextCursor": next_cursor,
                     "truncated": requested_cursor < base_cursor,
-                    "text": String::from_utf8_lossy(selected),
-                    "dataBase64": crate::terminal_host::protocol::encode_bytes(selected),
-                }))
+                });
+                result["dataBase64"] =
+                    Value::String(crate::terminal_host::protocol::encode_bytes(&selected));
+                // The selected page is already owned; retain its allocation
+                // for valid UTF-8 and preserve lossy decoding for binary data.
+                let text = match String::from_utf8(selected) {
+                    Ok(text) => text,
+                    Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+                };
+                result["text"] = Value::String(text);
+                Ok(result)
             }
             "resize" => {
                 self.require_auth(client_id)?;
@@ -1459,6 +1465,55 @@ fn terminal_read_window(
     (requested, start, next)
 }
 
+/// Read only the requested page, with a seven-byte stack lookaround for a
+/// cursor that lands inside a UTF-8 scalar. The trailing suffix may need more
+/// bytes (including malformed sequences); extend only as needed and never
+/// revalidate an already settled prefix.
+fn read_terminal_text_page(
+    buffer: &crate::terminal_host::buffer::ScrollbackBuffer,
+    base_cursor: u64,
+    start_cursor: u64,
+    next_cursor: u64,
+) -> (Vec<u8>, u64, u64) {
+    let mut start = (start_cursor - base_cursor) as usize;
+    let mut end = (next_cursor - base_cursor) as usize;
+    if buffer.byte_at(start).is_some_and(is_utf8_continuation) {
+        let context_start = start.saturating_sub(3);
+        let context_end = start.saturating_add(4).min(buffer.len());
+        let (first, second) = buffer.range_slices(context_start, context_end);
+        let mut context = [0; 7];
+        context[..first.len()].copy_from_slice(first);
+        context[first.len()..first.len() + second.len()].copy_from_slice(second);
+        if let Some(scalar_end) = containing_utf8_scalar_end(
+            &context[..context_end - context_start],
+            start - context_start,
+        ) {
+            start = context_start + scalar_end;
+        }
+    }
+    end = end.max(start).min(buffer.len());
+    let mut selected = buffer.slice_range(start, end);
+    let mut check_from = 0;
+    while let Some(incomplete_at) = trailing_incomplete_utf8_start(&selected[check_from..]) {
+        check_from += incomplete_at;
+        if let Some(byte) = buffer.byte_at(end) {
+            selected.push(byte);
+            end += 1;
+        } else {
+            // Preserve the old behavior for an incomplete last scalar.
+            selected.truncate(check_from);
+            end = start + check_from;
+            break;
+        }
+    }
+    (
+        selected,
+        base_cursor + start as u64,
+        base_cursor + end as u64,
+    )
+}
+
+#[cfg(test)]
 fn align_terminal_text_window(
     bytes: &[u8],
     base_cursor: u64,

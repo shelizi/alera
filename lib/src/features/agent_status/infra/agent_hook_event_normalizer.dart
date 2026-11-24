@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
+import 'agent_hook_text_preview.dart';
 import 'jsonl_tail_reader.dart';
 
 part 'normalizers/agent_hook_adapter.dart';
@@ -107,18 +108,18 @@ bool isExplicitAgentInterruptHookEvent(AgentHookEvent event) {
 }
 
 String? agentHookEventName(AgentHookEvent event) {
-  final explicit = _readFirstString(
-    <String, Object?>{'hookEventName': event.hookEventName},
-    const <String>['hookEventName'],
-  );
-  final raw =
-      explicit ??
-      _readFirstString(event.payload, const <String>[
-        'hook_event_name',
-        'hookEventName',
-        'hook_type',
-        'hookType',
-      ]);
+  final explicit = event.hookEventName;
+  final normalized = explicit == null
+      ? ''
+      : _normalizeSingleLine(explicit, 200);
+  final raw = normalized.isNotEmpty
+      ? normalized
+      : _readFirstString(event.payload, const <String>[
+          'hook_event_name',
+          'hookEventName',
+          'hook_type',
+          'hookType',
+        ]);
   return _agentHookAdapterFor(event.agentType).normalizeEventName(event, raw);
 }
 

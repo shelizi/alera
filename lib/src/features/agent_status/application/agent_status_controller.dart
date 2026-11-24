@@ -161,8 +161,8 @@ class AgentStatusController extends _$AgentStatusController
         toolInput: normalized.toolInput,
         lastAssistantMessage: normalized.lastAssistantMessage,
         interrupted: normalized.interrupted,
-        contextOverview: AgentContextOverview.observe(
-          previous: AgentContextOverview.fromRaw(previous?.contextOverview),
+        contextOverview: AgentContextOverview.observeSnapshot(
+          previous: previous?.contextOverview,
           previousPrompt: previous?.prompt,
           previousAssistant: previous?.lastAssistantMessage,
           prompt: normalized.prompt,
@@ -175,7 +175,7 @@ class AgentStatusController extends _$AgentStatusController
               ? normalized.lastAssistantMessage
               : null,
           at: receivedAt,
-        ).toJson(),
+        ),
       );
       ensureMutable();
       next[event.terminalSessionId] = entry;

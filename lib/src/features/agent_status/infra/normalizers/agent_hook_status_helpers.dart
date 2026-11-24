@@ -60,27 +60,11 @@ String? _readFirstString(Map<String, Object?> payload, List<String> keys) {
   return null;
 }
 
-String _normalizeSingleLine(String value, int maxLength) {
-  final normalized = value.trim().replaceAll(
-    RegExp(r'[\r\n\u2028\u2029]+'),
-    ' ',
-  );
-  return normalized.length <= maxLength
-      ? normalized
-      : normalized.substring(0, maxLength);
-}
+String _normalizeSingleLine(String value, int maxLength) =>
+    normalizeAgentHookSingleLine(value, maxLength);
 
-String _normalizeMultiline(String value, int maxLength) {
-  final normalized = value
-      .trim()
-      .replaceAll('\r\n', '\n')
-      .replaceAll('\r', '\n')
-      .replaceAll(RegExp(r'[\u2028\u2029]'), '\n')
-      .replaceAll(RegExp(r'\n{3,}'), '\n\n');
-  return normalized.length <= maxLength
-      ? normalized
-      : normalized.substring(0, maxLength);
-}
+String _normalizeMultiline(String value, int maxLength) =>
+    normalizeAgentHookMultiline(value, maxLength);
 
 const Map<String, List<String>> _toolInputKeysByTool = <String, List<String>>{
   'Bash': <String>['command'],

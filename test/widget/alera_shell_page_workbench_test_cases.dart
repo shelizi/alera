@@ -126,6 +126,97 @@ void _registerAleraShellWorkbenchTests() {
     );
   });
 
+  testWidgets('live agent attention updates only the changed tab dot', (
+    tester,
+  ) async {
+    final state = _stackedWorkbenchState();
+    AgentStatusEntry entry(
+      String id,
+      AgentStatusState status, {
+      String? tool,
+    }) => _agentStatusEntry(
+      terminalSessionId: id,
+      workspaceId: 'workspace-1',
+      tabId: id,
+      state: status,
+      toolName: tool,
+    );
+    final active = entry('tab-2', .waiting);
+    final harness = await _pumpShell(
+      tester,
+      state: state,
+      agentStatuses: {
+        'tab-1': entry('tab-1', .working, tool: 'Read'),
+        'tab-2': active,
+      },
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    final workbench = find.byType(WorkspaceWorkbenchView);
+    final foreground = find.byKey(
+      const ValueKey<String>('fake-terminal-tab-2'),
+    );
+    final first = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:tab-1'),
+    );
+    final second = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:tab-2'),
+    );
+    Finder dot(Finder chip, String label) => find.descendant(
+      of: chip,
+      matching: find.byWidgetPredicate(
+        (w) => w is Tooltip && w.message == label,
+      ),
+    );
+    final originalWorkbench = tester.widget(workbench);
+    final originalForeground = tester.widget(foreground);
+    final originalFirst = tester.widget(first);
+    final originalSecond = tester.widget(second);
+    final originalDot = tester.widget(dot(first, 'Codex working'));
+
+    harness.agentStatus.setEntries({
+      'tab-1': entry('tab-1', .working, tool: 'Write'),
+      'tab-2': active,
+    });
+    await tester.pump();
+    expect(tester.widget(workbench), same(originalWorkbench));
+    expect(tester.widget(foreground), same(originalForeground));
+    expect(tester.widget(first), same(originalFirst));
+    expect(tester.widget(second), same(originalSecond));
+    expect(tester.widget(dot(first, 'Codex working')), same(originalDot));
+
+    harness.agentStatus.setEntries({
+      'tab-1': entry('tab-1', .done),
+      'tab-2': active,
+    });
+    await tester.pump();
+    expect(dot(first, 'Codex done (unacked)'), findsOneWidget);
+    expect(tester.widget(workbench), same(originalWorkbench));
+    expect(tester.widget(foreground), same(originalForeground));
+    expect(tester.widget(second), same(originalSecond));
+
+    // A completion on the currently visible tab is still marked read.
+    harness.agentStatus.setEntries({
+      'tab-1': entry('tab-1', .done),
+      'tab-2': entry('tab-2', .done),
+    });
+    await tester.pump();
+    await tester.pump();
+    expect(dot(second, 'Codex done'), findsOneWidget);
+    expect(dot(first, 'Codex done (unacked)'), findsOneWidget);
+    expect(tester.widget(workbench), same(originalWorkbench));
+
+    await tester.tap(
+      find.descendant(of: first, matching: find.text('Terminal 1')),
+    );
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 1));
+    await tester.pumpAndSettle();
+    expect(
+      harness.controller.state.activeTabIdByWorkspace['workspace-1'],
+      'tab-1',
+    );
+    expect(dot(first, 'Codex done'), findsOneWidget);
+  });
+
   testWidgets('shell renders split terminal panes for one workspace', (
     tester,
   ) async {

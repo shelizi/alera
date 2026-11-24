@@ -472,6 +472,18 @@ impl NativeEditor {
         !self.contains_tab_instance(instance)
     }
 
+    /// Only the explicit workbench confirmation dialog calls this method.
+    pub fn close_tab_instance_confirmed_discard(
+        &mut self,
+        instance: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let effect = self.tabs.close_tab_confirmed_discard(instance);
+        let closed = effect.closed();
+        self.apply_tab_close_effect(effect, cx);
+        closed
+    }
+
     fn new_untitled_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let root = self.workspace_root.clone();
         match self.open_scratch(&root, cx) {
@@ -659,8 +671,16 @@ impl NativeEditor {
     }
 
     pub fn close_editor_tab(&mut self, index: usize, discard: bool, cx: &mut Context<Self>) {
-        self.tab_context = None;
         let effect = self.tabs.close_tab(index, discard);
+        self.apply_tab_close_effect(effect, cx);
+    }
+
+    fn apply_tab_close_effect(
+        &mut self,
+        effect: alera_gpui_desktop::editor_session::CloseEffect,
+        cx: &mut Context<Self>,
+    ) {
+        self.tab_context = None;
         self.status = effect.status();
         if effect.closed() {
             self.line_geometry.clear();

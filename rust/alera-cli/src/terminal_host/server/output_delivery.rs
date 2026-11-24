@@ -15,15 +15,34 @@ impl ServerActor {
             Some((batch.data, session.output_clients()))
         });
         if let Some((data, clients)) = broadcast {
-            for client_id in clients {
+            if clients.is_empty() {
+                return;
+            }
+            let data = bytes::Bytes::from(data);
+            // Keep the common single-client path allocation-free beyond its
+            // raw frame. Only broadcasts need the shared wire caches.
+            if clients.len() == 1 {
                 self.send_terminal_output(
                     session_id,
-                    client_id,
+                    clients[0],
                     ClientFrame::Output {
                         session_id: session_id.to_string(),
-                        data: data.clone(),
+                        data,
                     },
                 );
+            } else {
+                let frame =
+                    std::sync::Arc::new(crate::terminal_host::frame_codec::SharedOutputFrame::new(
+                        session_id.to_string(),
+                        data,
+                    ));
+                for client_id in clients {
+                    self.send_terminal_output(
+                        session_id,
+                        client_id,
+                        ClientFrame::SharedOutput(frame.clone()),
+                    );
+                }
             }
         }
     }
@@ -39,6 +58,7 @@ impl ServerActor {
     ) -> bool {
         let bytes = match &frame {
             ClientFrame::Output { data, .. } => data.len(),
+            ClientFrame::SharedOutput(frame) => frame.data().len(),
             _ => 0,
         };
         let result = self
@@ -114,7 +134,7 @@ impl ServerActor {
                 client_id,
                 ClientFrame::Output {
                     session_id: session_id.to_string(),
-                    data,
+                    data: data.into(),
                 },
             );
         if accepted {
@@ -152,7 +172,7 @@ impl ServerActor {
         let result = self
             .clients
             .get(&client_id)
-            .map(|client| client.handle.try_send_terminal(frame.clone().into()));
+            .map(|client| client.handle.try_send_terminal(frame.into()));
         match result {
             Some(Ok(())) => {
                 if let Some(session) = self.sessions.get_mut(&session_id) {

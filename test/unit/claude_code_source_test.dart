@@ -106,6 +106,77 @@ void main() {
     },
   );
 
+  test(
+    'assembles thousands of out-of-order chunks and ignores duplicate size',
+    () {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      store.observeHookEvent(_hook('SessionStart', {}));
+      const count = 8192;
+      final chunks = List<String>.generate(
+        count,
+        (index) => 'value_$index = "界😀";\n',
+      );
+      chunks[0] = fence + 'text\n' + chunks[0];
+      chunks[count - 1] += fence;
+      void send(int index, String text, {bool isFinal = false}) {
+        store.observeHookEvent(
+          _hook('MessageDisplay', {
+            'message_id': 'fragmented',
+            'index': index,
+            'final': isFinal,
+            'delta': text,
+          }),
+        );
+      }
+
+      send(count - 1, chunks.last, isFinal: true);
+      for (var index = count - 2; index > 0; index--) {
+        send(index, chunks[index]);
+      }
+      // A replay is not a new chunk even if its payload exceeds the budget.
+      send(1, 'x' * (1024 * 1024 + 1));
+      expect(store.blocksForTerminal('terminal-1'), isEmpty);
+      send(0, chunks.first);
+      expect(
+        store.blocksForTerminal('terminal-1').single.code,
+        List<String>.generate(
+          count,
+          (index) => 'value_$index = "界😀";',
+        ).join('\n'),
+      );
+    },
+  );
+
+  test(
+    'oversized chunks are discarded without poisoning the next assembly',
+    () {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      void send(int index, String text, {bool isFinal = false}) {
+        store.observeHookEvent(
+          _hook('MessageDisplay', {
+            'message_id': 'retry',
+            'index': index,
+            'final': isFinal,
+            'delta': text,
+          }),
+        );
+      }
+
+      send(0, 'x' * (1024 * 1024 + 1));
+      expect(store.blocksForTerminal('terminal-1'), isEmpty);
+      final good = fence + 'text\nrecovered\n' + fence;
+      send(0, good, isFinal: true);
+      expect(store.blocksForTerminal('terminal-1').single.code, 'recovered');
+      // A complete oversized replacement must not replace earlier source.
+      send(0, 'x' * (1024 * 1024 + 1), isFinal: true);
+      expect(store.blocksForTerminal('terminal-1').single.code, 'recovered');
+      send(0, fence + 'text\nnext\n' + fence, isFinal: true);
+      expect(store.blocksForTerminal('terminal-1').single.code, 'next');
+    },
+  );
+
   test('unfenced prose is never guessed to be executable source', () {
     final store = ClaudeCodeMessageStore();
     addTearDown(store.dispose);
