@@ -119,7 +119,6 @@ class _SidebarReorderHandleState extends State<_SidebarReorderHandle> {
 class const _SidebarBody({
   required final WorkbenchState state,
   required final _WorkbenchSidebarCommands commands,
-  required final List<WorkbenchSidebarRow> rows,
   required final Future<void> Function(Project project, Workspace workspace)
   onOpenWorkspace,
   required final Future<void> Function(Workspace workspace)
@@ -164,48 +163,45 @@ class const _SidebarBody({
 }) extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (rows.isEmpty) {
+    final layout = ref.watch(
+      workbenchSidebarViewProvider.select((view) => view.layout),
+    );
+    if (layout.keys.isEmpty) {
       return _EmptyResultsView(query: state.searchQuery);
     }
-    // Archived collapse state is session-local, so the rows provider emits
-    // every archived row and this layer hides the collapsed ones.
-    final expandedArchivedKeys = ref.watch(
-      workbenchArchivedSectionsCollapseProvider,
-    );
-    final archivedCollapsedKeys = defaultCollapsedArchivedSidebarKeys(
-      rows,
-      expandedArchivedKeys,
-    );
     final resolvedEditor = ref.watch(resolvedExternalEditorProvider).value;
     final installedEditors =
         ref.watch(installedExternalEditorsProvider).value ??
         const <ExternalEditorSpec>[];
-    final effectiveArchivedCollapsedKeys = archivedSidebarCollapseKeysForQuery(
-      archivedCollapsedKeys,
-      state.searchQuery,
-    );
-    final visibleRows = collapseArchivedSidebarRows(
-      rows,
-      effectiveArchivedCollapsedKeys,
-    );
     return ListView.builder(
       padding: const EdgeInsets.only(
         top: AleraTokens.space4,
         bottom: AleraTokens.space8,
       ),
-      itemCount: visibleRows.length,
+      itemCount: layout.keys.length,
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? layout.indexByKey[key.value] : null,
       itemBuilder: (context, index) {
-        return KeyedSubtree(
-          key: ValueKey<String>(visibleRows[index].key),
-          child: _buildRow(
-            context,
-            ref,
-            visibleRows,
-            index,
-            effectiveArchivedCollapsedKeys,
-            resolvedEditor,
-            installedEditors,
-          ),
+        final key = layout.keys[index];
+        return Consumer(
+          key: ValueKey<String>(key),
+          builder: (context, ref, _) {
+            final row = ref.watch(
+              workbenchSidebarViewProvider.select(
+                (view) => view.rowsByKey[key],
+              ),
+            );
+            if (row == null) return const SizedBox.shrink();
+            return _buildRow(
+              context,
+              ref,
+              row,
+              layout,
+              index,
+              resolvedEditor,
+              installedEditors,
+            );
+          },
         );
       },
     );
@@ -214,13 +210,12 @@ class const _SidebarBody({
   Widget _buildRow(
     BuildContext context,
     WidgetRef ref,
-    List<WorkbenchSidebarRow> rows,
+    WorkbenchSidebarRow row,
+    WorkbenchSidebarLayout layout,
     int index,
-    Set<String> archivedCollapsedKeys,
     ExternalEditorSpec? resolvedEditor,
     List<ExternalEditorSpec> installedEditors,
   ) {
-    final row = rows[index];
     if (row is WorkbenchSectionHeaderRow) {
       return _WorkspaceSectionHeader(row: row, commands: commands);
     }
@@ -234,18 +229,16 @@ class const _SidebarBody({
       );
     }
     if (row is WorkbenchAllHeaderRow) {
-      final previous = index > 0 ? rows[index - 1] : null;
       return _SidebarSectionTile(
         leadingIcon: AleraIcons.listView,
         label: 'All',
         count: row.workspaceCount,
         expanded: !row.collapsed,
-        showTopDivider: previous is WorkbenchWorkspaceRow,
+        showTopDivider: layout.previousIsWorkspace(index),
         onToggle: commands.toggleAllSectionCollapsed,
       );
     }
     if (row is WorkbenchArchivedHeaderRow) {
-      final previous = index > 0 ? rows[index - 1] : null;
       return Padding(
         padding: EdgeInsets.only(left: AleraTokens.space12 * row.indent),
         child: _SidebarSectionTile(
@@ -254,9 +247,9 @@ class const _SidebarBody({
           count: row.workspaceCount,
           expanded: !archivedSidebarSectionIsCollapsed(
             row.key,
-            archivedCollapsedKeys,
+            layout.collapsedArchivedKeys,
           ),
-          showTopDivider: row.indent == 0 && previous is WorkbenchWorkspaceRow,
+          showTopDivider: row.indent == 0 && layout.previousIsWorkspace(index),
           onToggle: () => ref
               .read(workbenchArchivedSectionsCollapseProvider.notifier)
               .toggle(row.key),
@@ -266,7 +259,6 @@ class const _SidebarBody({
     if (row is WorkbenchProjectHeaderRow) {
       return _reorderableSidebarRow(
         ref: ref,
-        rows: rows,
         label: row.project.name,
         target: _SidebarOrderDrag(kind: .project, id: row.project.id),
         child: Padding(
@@ -310,7 +302,6 @@ class const _SidebarBody({
       final hasDescendants = _workspaceHasDescendants(state, row.workspace);
       return _reorderableSidebarRow(
         ref: ref,
-        rows: rows,
         label: row.workspace.name,
         target: _SidebarOrderDrag(
           kind: .workspace,
@@ -401,7 +392,6 @@ class const _SidebarBody({
 
   Widget _reorderableSidebarRow({
     required WidgetRef ref,
-    required List<WorkbenchSidebarRow> rows,
     required String label,
     required _SidebarOrderDrag target,
     required Widget child,
@@ -436,6 +426,10 @@ class const _SidebarBody({
       onAcceptWithDetails: (details) {
         if (!accepts(details.data)) return;
         final controller = ref.read(workbenchControllerProvider.notifier);
+        // The row can outlive a layout update during a drag. Read the live
+        // visible order at drop time, rather than retaining the old row list.
+        final view = ref.read(workbenchSidebarViewProvider);
+        final rows = view.layout.keys.map((key) => view.rowsByKey[key]!);
         if (target.kind == _SidebarOrderKind.project) {
           controller.moveProjectInSidebar(
             sourceId: details.data.id,

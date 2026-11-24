@@ -36,12 +36,20 @@ class const _SidebarFooter({
           ),
           child: Row(
             children: <Widget>[
-              OutlinedButton.icon(
-                onPressed: onAddProject,
-                icon: const Icon(AleraIcons.newFolder),
-                label: Text(context.tr('Add Project')),
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: onAddProject,
+                    icon: const Icon(AleraIcons.newFolder),
+                    label: Text(
+                      context.tr('Add Project'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
               ),
-              const Spacer(),
               _FooterIconButton(
                 tooltip: 'Global Agents',
                 onPressed: onOpenGlobalAgents,
