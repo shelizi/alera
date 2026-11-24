@@ -50,7 +50,7 @@ impl Workbench {
     }
 
     /// Match Classic's New Tab popup: New File, New Terminal, then installed
-    /// Agent CLIs. Host session recovery and Profile management live outside +.
+    /// Agent CLIs, with recovery actions shown only for a pending create.
     pub(super) fn kit_new_tab_menu(
         owner: gpui::WeakEntity<Self>,
         target: Option<PaneAttachGuard>,
@@ -124,6 +124,32 @@ impl Workbench {
                         });
                     },
                 ));
+            }
+            // Recovery actions must be reachable even when an Editor hides
+            // the Runtime session panel. Keep the durable no-duplicate guard.
+            let pending = owner.upgrade().map(|entity| {
+                let view = entity.read(cx);
+                view.terminal_create_flow.is_active()
+            }).unwrap_or(false);
+            if pending {
+                let refresh_owner = owner.clone();
+                let dismiss_owner = owner.clone();
+                menu = menu.separator()
+                    .label(tr(locale, "Pending Host requests"))
+                    .item(PopupMenuItem::new(tr(locale, "Recheck pending Host session (no new PTY)"))
+                        .on_click(move |_, _, cx| {
+                            let _ = refresh_owner.update(cx, |view, cx| {
+                                view.retry_host_terminal_confirmation(cx);
+                                view.refresh_terminals(cx);
+                            });
+                        }))
+                    .item(PopupMenuItem::new(tr(locale, "Cancel pending request (keep Host PTY)"))
+                        .on_click(move |_, _, cx| {
+                            let _ = dismiss_owner.update(cx, |view, cx| {
+                                view.cancel_host_terminal_confirmation(cx);
+                                view.model.set_status(view.terminals.status.clone());
+                            });
+                        }));
             }
             menu.scrollable(true)
                 .max_h(px(new_tab_menu_max_height(viewport_height)))

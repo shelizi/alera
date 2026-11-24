@@ -501,7 +501,6 @@ mod tests {
             "Attach running Host session",
             "Restore saved Agent / Terminal tabs",
             "Host Agent Profiles",
-            "Pending Host requests",
             "Rescan installed agents",
         ] {
             assert!(
@@ -509,6 +508,10 @@ mod tests {
                 "{advanced} must live outside New Tab"
             );
         }
+        // A pending create is the sole conditional recovery exception.
+        assert!(menu.contains("terminal_create_flow.is_active()"));
+        assert!(menu.contains("Pending Host requests"));
+        assert!(menu.contains("cancel_host_terminal_confirmation(cx)"));
         let workbench = include_str!("main.rs");
         assert_eq!(
             workbench

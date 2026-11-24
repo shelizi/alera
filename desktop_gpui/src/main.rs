@@ -8788,9 +8788,9 @@ impl Workbench {
         }
     }
 
-    /// A validated exact Host session proves the create completed. Only then
-    /// retire the matching persistent marker; a failed retire blocks retries.
-    fn resolve_confirmed_host_create_journal(&mut self) {
+    /// Retire the matching marker only after exact Host confirmation or a
+    /// proven pre-submit failure. A failed retire still blocks retries.
+    fn retire_host_create_journal(&mut self) {
         let Some(record) = self.terminal_create_journal.as_ref() else {
             return;
         };
@@ -8808,7 +8808,7 @@ impl Workbench {
             Err(error) => {
                 self.terminal_create_flow.restore_outcome_unknown();
                 self.terminals.status =
-                    format!("Host created a PTY but recovery marker could not be cleared: {error}");
+                    format!("Host create recovery marker could not be cleared: {error}");
             }
         }
     }
@@ -8841,6 +8841,8 @@ impl Workbench {
             self.terminals.status =
                 "A Host terminal request is pending; confirm, retry its listing, or cancel first"
                     .into();
+            self.model.set_status("Host request pending; use the New Tab (+) recovery actions");
+            self.refresh_terminals(cx);
             cx.notify();
             return;
         }
@@ -8917,6 +8919,7 @@ impl Workbench {
             "Checking registered Host workspaces before creating terminal…"
         }
         .into();
+        self.model.set_status(self.terminals.status.clone());
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx
@@ -8924,15 +8927,10 @@ impl Workbench {
                     // Explicit New Terminal may start the existing CLI Host
                     // and register this *already existing* checkout. Passive
                     // refresh/read/write still never start a Host or PTY.
-                    if let Some(agent_id) = agent_id {
-                        bridge.create_agent_terminal_for_workspace(
-                            &root,
-                            &agent_id,
-                            agent_executable.as_deref().expect("checked installed executable before creating Host Agent"),
-                        )
-                    } else {
-                        bridge.create_terminal_for_workspace(&root)
-                    }
+                    bridge.create_workbench_terminal_tracked(
+                        &root,
+                        agent_id.as_deref().zip(agent_executable.as_deref()),
+                    )
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -8955,12 +8953,24 @@ impl Workbench {
                         } else {
                             "Host terminal created; confirming session identity (30s limit)…"
                         }.into();
-                        if is_agent {
-                            view.model.set_status("Agent starting; confirming Host session identity");
-                        }
+                        view.model.set_status(view.terminals.status.clone());
                         view.refresh_terminals(cx);
                     }
-                    Err(error) => {
+                    Err(alera_gpui_desktop::terminal_bootstrap::HostCreateFailure::NotSubmitted(error)) => {
+                        if !view.terminal_create_flow.fail_request(request_id) {
+                            return;
+                        }
+                        view.terminal_create_pane = None;
+                        view.retire_host_create_journal();
+                        let message = if view.terminal_create_flow.is_active() {
+                            format!("Host preflight failed: {error}; recovery marker could not be retired")
+                        } else {
+                            format!("Host preflight failed: {error}; no PTY created, safe to retry")
+                        };
+                        view.terminals.status = message.clone();
+                        view.model.set_status(message);
+                    }
+                    Err(alera_gpui_desktop::terminal_bootstrap::HostCreateFailure::OutcomeUnknown(error)) => {
                         // The pending pane intent must belong to this exact
                         // request, not a stale callback after pane reuse.
                         if !view.terminal_create_pane.as_ref().is_some_and(|pending| {
@@ -8982,11 +8992,7 @@ impl Workbench {
                         } else {
                             format!("Host create outcome unknown: {error}. Inspect existing sessions, then dismiss the pending request before another PTY.")
                         };
-                        if is_agent {
-                            view.model.set_status(
-                                "Agent outcome unknown; inspect Host sessions before dismissing request",
-                            );
-                        }
+                        view.model.set_status(view.terminals.status.clone());
                         // Re-list existing Host sessions, never create a second PTY.
                         view.refresh_terminals(cx);
                     }
@@ -9049,6 +9055,7 @@ impl Workbench {
             self.terminals.status =
                 "Acknowledged after Host inventory; existing PTYs remain available via Attach"
                     .into();
+            self.model.set_status("Host request dismissed; New Tab is available again");
             cx.notify();
         }
     }
@@ -9161,7 +9168,7 @@ impl Workbench {
                                 )
                             };
                             if let Some(created) = confirmed {
-                                view.resolve_confirmed_host_create_journal();
+                                view.retire_host_create_journal();
                                 // Never redirect a delayed Host create result to
                                 // whichever pane currently has global focus.
                                 // Only the exact authenticated Host triple may
@@ -10838,8 +10845,8 @@ impl Workbench {
                     }))
                     .on_mouse_up(
                         gpui::MouseButton::Middle,
-                        cx.listener(move |this, _, _, cx| {
-                            this.close_mixed_tab(&for_middle, cx);
+                        cx.listener(move |this, _, window, cx| {
+                            this.request_close_mixed_tab(&for_middle, window, cx);
                         }),
                     )
                     .on_drag(
@@ -10865,8 +10872,8 @@ impl Workbench {
             )
             .child(
                 tab_close_button((close_id, index), tr(locale, "Close tab")).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.close_mixed_tab(&for_close, cx);
+                    move |this, _, window, cx| {
+                        this.request_close_mixed_tab(&for_close, window, cx);
                     },
                 )),
             )
@@ -11284,7 +11291,58 @@ impl Workbench {
         cx.notify();
     }
 
+    fn request_close_mixed_tab(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.mixed_tab_is_current(id, cx) {
+            return;
+        }
+        let dirty = match id {
+            WorkbenchTabIdentity::Editor { instance, .. } => self
+                .editor_for_instance(*instance, cx)
+                .and_then(|(_, editor)| editor.read(cx).tab_instances().into_iter()
+                    .find(|(candidate, _)| candidate == instance))
+                .map(|(_, label)| label.dirty)
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !dirty {
+            self.close_mixed_tab(id, cx);
+            return;
+        }
+        let owner = cx.entity().downgrade();
+        let target = id.clone();
+        let locale = self.settings_menu_locale;
+        window.open_dialog(cx, move |dialog, _, _| {
+            let for_submit = owner.clone();
+            let target = target.clone();
+            dialog
+                .title(tr(locale, "Discard unsaved changes (confirmation required)"))
+                .w(px(440.))
+                .centered()
+                .on_ok(move |_, _, cx| {
+                    for_submit.update(cx, |view, cx| {
+                        view.close_mixed_tab_with_discard(&target, true, cx);
+                        !view.mixed_tab_is_current(&target, cx)
+                    }).unwrap_or(true)
+                })
+                .child(div().child(tr(locale, "Discard unsaved changes (confirmation required)")))
+        });
+    }
+
     fn close_mixed_tab(&mut self, id: &WorkbenchTabIdentity, cx: &mut Context<Self>) {
+        self.close_mixed_tab_with_discard(id, false, cx);
+    }
+
+    fn close_mixed_tab_with_discard(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        confirmed_discard: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.mixed_tab_is_current(id, cx) {
             self.mixed_tab_context = None;
             cx.notify();
@@ -11331,8 +11389,13 @@ impl Workbench {
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 if let Some((slot, editor)) = self.editor_for_instance(*instance, cx) {
-                    let closed =
-                        editor.update(cx, |editor, cx| editor.close_tab_instance(*instance, cx));
+                    let closed = editor.update(cx, |editor, cx| {
+                        if confirmed_discard {
+                            editor.close_tab_instance_confirmed_discard(*instance, cx)
+                        } else {
+                            editor.close_tab_instance(*instance, cx)
+                        }
+                    });
                     self.model
                         .set_status(editor.read(cx).status_text().to_owned());
                     if closed && editor.read(cx).tabs_empty() {
@@ -11483,7 +11546,7 @@ impl Workbench {
                     }
                 }
             },
-            MixedContextAction::Close => self.close_mixed_tab(&id, cx),
+            MixedContextAction::Close => self.request_close_mixed_tab(&id, window, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
                 for target in self.mixed_panes.close_unpinned_candidates(
                     &id,
