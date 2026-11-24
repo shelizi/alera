@@ -618,6 +618,62 @@ fn terminal_text_window_skips_an_explicit_cursor_inside_a_scalar() {
 }
 
 #[test]
+fn bounded_terminal_pages_match_legacy_alignment_for_wrapped_binary_history() {
+    use crate::terminal_host::buffer::ScrollbackBuffer;
+    let mut random = 0x1234_5678_u32;
+    let mut data = Vec::new();
+    for i in 0..320 {
+        random ^= random << 13;
+        random ^= random >> 17;
+        random ^= random << 5;
+        data.push(random as u8);
+        if i % 17 == 0 {
+            data.extend_from_slice("a\u{00e9}\u{4e2d}\u{1f600}z".as_bytes());
+        }
+        if i % 31 == 0 {
+            data.extend_from_slice(&[0xf0, 0xc2, 0xc2, 0x80, 0x80, 0xff]);
+        }
+    }
+    data.extend_from_slice(&[0xf0, 0x9f]);
+    // Force a physical ring wrap at different offsets, including inside
+    // valid scalars. The logical stream is the same in every case.
+    for wrapped in [0, 1, 2, 3, 7, 79, data.len() - 1] {
+        let mut seed = vec![b'x'; wrapped];
+        seed.extend_from_slice(&data[..data.len() - wrapped]);
+        let mut buffer = ScrollbackBuffer::new(data.len(), &seed);
+        buffer.append(&data[data.len() - wrapped..]);
+        assert_eq!(buffer.to_bytes(), data);
+        let base = 12_345;
+        for start in 0..=data.len() {
+            for limit in [0, 1, 2, 3, 4, 7, 19, 63, data.len()] {
+                let end = (start + limit).min(data.len());
+                let (old_start, old_end) =
+                    align_terminal_text_window(&data, base, base + start as u64, base + end as u64);
+                let (page, actual_start, actual_end) =
+                    read_terminal_text_page(&buffer, base, base + start as u64, base + end as u64);
+                assert_eq!((actual_start, actual_end), (old_start, old_end));
+                assert_eq!(
+                    page,
+                    data[(old_start - base) as usize..(old_end - base) as usize]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_terminal_page_extends_only_unsettled_malformed_suffix() {
+    use crate::terminal_host::buffer::ScrollbackBuffer;
+    let mut data = b"prefix".to_vec();
+    data.extend(std::iter::repeat_n(0xc2, 8192));
+    data.extend_from_slice(b"z");
+    let buffer = ScrollbackBuffer::new(data.len(), &data);
+    let (page, start, next) = read_terminal_text_page(&buffer, 0, 0, 7);
+    assert_eq!((start, next), (0, data.len() as u64));
+    assert_eq!(page, data);
+}
+
+#[test]
 fn mobile_hello_advertises_deferred_terminal_input() {
     // Without this the phone feature-detects a host that cannot split a prompt
     // from its Enter, falls back to one write, and agent TUIs read the trailing
