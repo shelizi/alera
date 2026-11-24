@@ -116,13 +116,50 @@ impl ScrollbackBuffer {
         copy_deque_from(&self.bytes, start)
     }
 
+    /// Borrow a logical byte range as at most two ring slices. The caller
+    /// supplies an in-bounds range; no discarded prefix is visited or copied.
+    pub(super) fn range_slices(&self, start: usize, end: usize) -> (&[u8], &[u8]) {
+        assert!(start <= end && end <= self.bytes.len());
+        let (first, second) = self.bytes.as_slices();
+        if start < first.len() {
+            (
+                &first[start..end.min(first.len())],
+                &second[..end.saturating_sub(first.len())],
+            )
+        } else {
+            (&second[start - first.len()..end - first.len()], &[])
+        }
+    }
+
+    pub(super) fn slice_range(&self, start: usize, end: usize) -> Vec<u8> {
+        let (first, second) = self.range_slices(start, end);
+        let mut data = Vec::with_capacity(end - start);
+        data.extend_from_slice(first);
+        data.extend_from_slice(second);
+        data
+    }
+
+    pub(super) fn byte_at(&self, index: usize) -> Option<u8> {
+        self.bytes.get(index).copied()
+    }
+
     /// The last bytes, started at a line boundary when one is close by.
     ///
     /// Determine the alignment directly on the ring before allocating the
     /// replay buffer, so even a multi-megabyte snapshot is copied only once.
     pub fn tail(&self, max_bytes: usize) -> Vec<u8> {
+        self.slice_from(self.tail_start(max_bytes))
+    }
+
+    /// Borrow the exact same aligned tail for callers that can consume two
+    /// slices, such as snapshot base64 encoding.
+    pub(super) fn tail_slices(&self, max_bytes: usize) -> (&[u8], &[u8]) {
+        self.range_slices(self.tail_start(max_bytes), self.bytes.len())
+    }
+
+    fn tail_start(&self, max_bytes: usize) -> usize {
         if self.bytes.len() <= max_bytes {
-            return self.to_bytes();
+            return 0;
         }
         let start = self.bytes.len() - max_bytes;
         let mut bytes = self.bytes.range(start..);
@@ -136,7 +173,7 @@ impl ScrollbackBuffer {
                 .position(|byte| !is_utf8_continuation(*byte))
                 .unwrap_or(max_bytes),
         };
-        self.slice_from(start + skip)
+        start + skip
     }
 
     #[allow(dead_code)]

@@ -12,7 +12,7 @@ use crate::terminal_host::history_repository::{
     TerminalHostCheckpoint, TerminalHostHistoryRepository,
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
-use crate::terminal_host::protocol::{encode_bytes, TerminalHostLaunch};
+use crate::terminal_host::protocol::{encode_byte_slices, TerminalHostLaunch};
 use crate::terminal_host::resources::ShellProcess;
 
 #[cfg(test)]
@@ -653,6 +653,11 @@ impl Session {
         json!({ "sessionId": self.id, "error": message })
     }
 
+    fn encode_snapshot_tail(&self, restore_bytes: usize) -> String {
+        let (first, second) = self.buffer.tail_slices(restore_bytes);
+        encode_byte_slices(first, second)
+    }
+
     pub fn attachment_payload(&self, created: bool, restore_bytes: usize) -> Value {
         let (cols, rows) = self.current_dims;
         json!({
@@ -663,7 +668,7 @@ impl Session {
             "driver": self.driver.payload(),
             "delta": false,
             "outputCursor": self.output_stream_bytes,
-            "snapshotBase64": encode_bytes(&self.buffer.tail(restore_bytes)),
+            "snapshotBase64": self.encode_snapshot_tail(restore_bytes),
             // The size the snapshot bytes were written at. A client whose own
             // viewport is narrower has to replay them here and then resize,
             // letting its emulator reflow wrapped lines, because re-parsing the
@@ -700,17 +705,10 @@ impl Session {
         let (cols, rows) = self.current_dims;
         json!({
             "sessionId": self.id,
-            "snapshotBase64": encode_bytes(&self.buffer.tail(restore_bytes)),
+            "snapshotBase64": self.encode_snapshot_tail(restore_bytes),
             "resetInteractionModes": true,
             "snapshotCols": cols,
             "snapshotRows": rows,
-        })
-    }
-
-    pub fn snapshot_payload(&self) -> Value {
-        json!({
-            "sessionId": self.id,
-            "snapshotBase64": encode_bytes(&self.buffer.to_bytes()),
         })
     }
 

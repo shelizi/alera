@@ -187,6 +187,32 @@ fn owned_output_does_not_retain_disproportionate_reader_capacity() {
 }
 
 #[test]
+fn snapshot_encoding_matches_legacy_aligned_tail_across_ring_wrap() {
+    use crate::terminal_host::protocol::{decode_bytes, encode_bytes};
+    let mut session = test_session();
+    session.set_max_bytes(23);
+    session.append_output(b"01234567890123456789012");
+    session.append_output(b"\xff\x00\x1b[0m\n\xe4\xb8\xad\xf0\x9f\x98\x80tail");
+    let original = session.buffer.to_bytes();
+    let (first, second) = session.buffer.range_slices(0, original.len());
+    assert!(!first.is_empty() && !second.is_empty());
+    for cap in 0..=original.len() + 1 {
+        let expected = session.buffer.tail(cap);
+        for payload in [
+            session.attachment_payload(false, cap),
+            session.restore_payload(cap),
+        ] {
+            assert_eq!(payload["snapshotBase64"], encode_bytes(&expected));
+            assert_eq!(
+                decode_bytes(payload.get("snapshotBase64")).unwrap(),
+                expected
+            );
+        }
+    }
+    assert_eq!(session.buffer.to_bytes(), original);
+}
+
+#[test]
 fn output_backpressure_pauses_only_the_slow_client_until_resumed() {
     let mut session = test_session();
     session.attach(1);
