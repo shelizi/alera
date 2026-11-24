@@ -19,22 +19,31 @@ final class GitWorktreeMetadataWatcher {
     Duration debounce = const Duration(milliseconds: 300),
     Duration pollInterval = const Duration(seconds: 60),
     GitMetadataWatchFactory? watchDirectory,
+    Future<String?> Function(String)? resolveCommonDir,
+    Future<bool> Function(String)? directoryExists,
   }) : _onRefresh = onRefresh,
        _debounce = debounce,
        _pollInterval = pollInterval,
-       _watchDirectory = watchDirectory ?? _defaultGitMetadataWatch;
+       _watchDirectory = watchDirectory ?? _defaultGitMetadataWatch,
+       _resolveCommonDir = resolveCommonDir ?? resolveGitCommonDir,
+       _directoryExists = directoryExists ?? _defaultDirectoryExists;
 
   final String repoPath;
   final Future<void> Function() _onRefresh;
   final Duration _debounce;
   final Duration _pollInterval;
   final GitMetadataWatchFactory _watchDirectory;
+  final Future<String?> Function(String) _resolveCommonDir;
+  final Future<bool> Function(String) _directoryExists;
 
   StreamSubscription<String>? _commonGitDirSub;
   StreamSubscription<String>? _worktreesSub;
   Timer? _debounceTimer;
   Timer? _pollTimer;
   Future<void>? _refreshFuture;
+  Future<void>? _metadataProbeFuture;
+  bool _metadataProbeAgain = false;
+  bool _resetWorktreesOnProbe = false;
   String? _commonGitDir;
   bool _started = false;
   bool _disposed = false;
@@ -43,18 +52,20 @@ final class GitWorktreeMetadataWatcher {
   int _refreshSuspendCount = 0;
   bool _refreshQueuedWhileSuspended = false;
 
-  void start() {
+  Future<void> start() {
     if (_started || _disposed) {
-      return;
+      return _metadataProbeFuture ?? Future<void>.value();
     }
     _started = true;
-    _ensureMetadataWatches();
+    final initialProbe = _queueMetadataProbe();
     if (_pollInterval.inMicroseconds > 0) {
       _pollTimer = Timer.periodic(_pollInterval, (_) {
-        _ensureMetadataWatches();
+        unawaited(_queueMetadataProbe());
+        // A slow filesystem probe must not delay the authoritative poll.
         _scheduleRefresh();
       });
     }
+    return initialProbe;
   }
 
   /// Defers watcher-driven refreshes while Alera itself mutates worktrees.
@@ -104,17 +115,55 @@ final class GitWorktreeMetadataWatcher {
       subscriptions.map((subscription) => subscription.cancel()),
     );
 
+    final metadataProbe = _metadataProbeFuture;
+    if (metadataProbe != null) {
+      await metadataProbe;
+    }
     final refreshFuture = _refreshFuture;
     if (refreshFuture != null) {
       await refreshFuture;
     }
   }
 
-  void _ensureMetadataWatches() {
+  /// Serialize filesystem probes. A burst during an in-flight probe retains
+  /// one trailing pass, including any request to reattach the worktrees watch.
+  Future<void> _queueMetadataProbe({bool resetWorktrees = false}) {
+    if (_disposed) {
+      return Future<void>.value();
+    }
+    _resetWorktreesOnProbe |= resetWorktrees;
+    final running = _metadataProbeFuture;
+    if (running != null) {
+      _metadataProbeAgain = true;
+      return running;
+    }
+    final future = _runMetadataProbeLoop();
+    _metadataProbeFuture = future;
+    return future;
+  }
+
+  Future<void> _runMetadataProbeLoop() async {
+    try {
+      do {
+        _metadataProbeAgain = false;
+        final resetWorktrees = _resetWorktreesOnProbe;
+        _resetWorktreesOnProbe = false;
+        try {
+          await _ensureMetadataWatches(resetWorktrees: resetWorktrees);
+        } catch (_) {
+          // Metadata watching is best-effort. The next poll retries.
+        }
+      } while (_metadataProbeAgain && !_disposed);
+    } finally {
+      _metadataProbeFuture = null;
+    }
+  }
+
+  Future<void> _ensureMetadataWatches({required bool resetWorktrees}) async {
+    final resolvedCommonDir = await _resolveCommonDir(repoPath);
     if (_disposed) {
       return;
     }
-    final resolvedCommonDir = resolveGitCommonDir(repoPath);
     if (resolvedCommonDir == null) {
       _resetCommonGitDirWatch();
       _resetWorktreesWatch();
@@ -130,7 +179,10 @@ final class GitWorktreeMetadataWatcher {
     }
     _commonGitDir = resolvedCommonDir;
 
-    if (_commonGitDirSub == null && Directory(resolvedCommonDir).existsSync()) {
+    if (_commonGitDirSub == null && await _directoryExists(resolvedCommonDir)) {
+      if (_disposed) {
+        return;
+      }
       try {
         _commonGitDirSub = _watchDirectory(resolvedCommonDir, recursive: false)
             .listen(
@@ -143,15 +195,25 @@ final class GitWorktreeMetadataWatcher {
         _commonGitDirSub = null;
       }
     }
-    _ensureWorktreesWatch();
+    if (_disposed) {
+      return;
+    }
+    if (resetWorktrees) {
+      _resetWorktreesWatch();
+    }
+    await _ensureWorktreesWatch();
   }
 
-  void _ensureWorktreesWatch() {
+  Future<void> _ensureWorktreesWatch() async {
     final worktreesPath = _worktreesPath;
     if (_disposed || worktreesPath == null) {
       return;
     }
-    if (!Directory(worktreesPath).existsSync()) {
+    final exists = await _directoryExists(worktreesPath);
+    if (_disposed) {
+      return;
+    }
+    if (!exists) {
       _resetWorktreesWatch();
       return;
     }
@@ -177,11 +239,13 @@ final class GitWorktreeMetadataWatcher {
 
   void _handleCommonGitDirEvent(String eventPath) {
     final worktreesPath = _worktreesPath;
-    if (worktreesPath == null || !_isWithinOrEqual(worktreesPath, eventPath)) {
+    if (_disposed ||
+        worktreesPath == null ||
+        !_isWithinOrEqual(worktreesPath, eventPath) ||
+        _isWorktreeIndexEvent(worktreesPath, eventPath)) {
       return;
     }
-    _resetWorktreesWatch();
-    _ensureWorktreesWatch();
+    unawaited(_queueMetadataProbe(resetWorktrees: true));
     _scheduleRefresh();
   }
 
@@ -264,23 +328,19 @@ final class GitWorktreeMetadataWatcher {
 }
 
 /// Resolves the shared Git directory for both main and linked worktrees.
-String? resolveGitCommonDir(String repoPath) {
+Future<String?> resolveGitCommonDir(String repoPath) async {
   try {
     final dotGitPath = p.join(repoPath, '.git');
-    final dotGitDirectory = Directory(dotGitPath);
-    if (dotGitDirectory.existsSync()) {
-      return _absoluteNormalized(dotGitDirectory.path);
+    final type = await FileSystemEntity.type(dotGitPath);
+    if (type == FileSystemEntityType.directory) {
+      return _absoluteNormalized(dotGitPath);
     }
-
-    final dotGitFile = File(dotGitPath);
-    if (!dotGitFile.existsSync()) {
+    if (type != FileSystemEntityType.file) {
       return null;
     }
-    final match = RegExp(
-      r'^gitdir:\s*(.+)$',
-      caseSensitive: false,
-      multiLine: true,
-    ).firstMatch(dotGitFile.readAsStringSync());
+    final match = _gitDirPattern.firstMatch(
+      await File(dotGitPath).readAsString(),
+    );
     final rawGitDir = match?.group(1)?.trim();
     if (rawGitDir == null || rawGitDir.isEmpty) {
       return null;
@@ -290,10 +350,10 @@ String? resolveGitCommonDir(String repoPath) {
     );
 
     final commonDirFile = File(p.join(gitDir, 'commondir'));
-    if (!commonDirFile.existsSync()) {
+    if (!await commonDirFile.exists()) {
       return gitDir;
     }
-    final rawCommonDir = commonDirFile.readAsStringSync().trim();
+    final rawCommonDir = (await commonDirFile.readAsString()).trim();
     if (rawCommonDir.isEmpty) {
       return gitDir;
     }
@@ -304,6 +364,14 @@ String? resolveGitCommonDir(String repoPath) {
     return null;
   }
 }
+
+final _gitDirPattern = RegExp(
+  r'^gitdir:\s*(.+)$',
+  caseSensitive: false,
+  multiLine: true,
+);
+
+Future<bool> _defaultDirectoryExists(String path) => Directory(path).exists();
 
 Stream<String> _defaultGitMetadataWatch(
   String path, {

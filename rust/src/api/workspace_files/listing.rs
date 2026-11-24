@@ -103,10 +103,11 @@ fn read_dir_children(directory: &Path) -> Result<Vec<PathBuf>, WorkspaceFileErro
     {
         let entry = result
             .map_err(|error| WorkspaceFileError::from_io(error, directory.to_string_lossy()))?;
-        if is_protected_child_path(&entry.path()) {
+        let path = entry.path();
+        if is_protected_child_path(&path) {
             continue;
         }
-        paths.push(entry.path());
+        paths.push(path);
     }
     Ok(paths)
 }
@@ -141,6 +142,13 @@ fn lock_visited_directories(
 }
 
 fn walk_listable_descendant(directory: &Path) -> HideIgnoredDirectoryKind {
+    walk_listable_descendant_with_probe(directory, has_unprotected_child)
+}
+
+fn walk_listable_descendant_with_probe(
+    directory: &Path,
+    mut has_child: impl FnMut(&Path) -> Result<bool, WorkspaceFileError>,
+) -> HideIgnoredDirectoryKind {
     let visited = Arc::new(Mutex::new(HashSet::new()));
     if let Some(id) = directory_identity(directory) {
         lock_visited_directories(&visited).insert(id);
@@ -174,6 +182,11 @@ fn walk_listable_descendant(directory: &Path) -> HideIgnoredDirectoryKind {
     let mut truncated = false;
     let mut saw_error = false;
     let mut visits = 0;
+    // The depth-first walker already proves that an ancestor contains an
+    // unprotected child whenever it yields a descendant. Only probe a
+    // directory with no yielded child to distinguish physically empty from
+    // ignored-only. This avoids reopening every intermediate directory.
+    let mut pending_directory: Option<PathBuf> = None;
     for result in walker {
         let entry = match result {
             Ok(entry) => entry,
@@ -185,6 +198,11 @@ fn walk_listable_descendant(directory: &Path) -> HideIgnoredDirectoryKind {
         if entry.path() == directory {
             continue;
         }
+        if let Some(pending) = pending_directory.take() {
+            if !entry.path().starts_with(&pending) && !matches!(has_child(&pending), Ok(true)) {
+                return HideIgnoredDirectoryKind::Listable;
+            }
+        }
         visits += 1;
         let Some(file_type) = entry.file_type() else {
             continue;
@@ -192,14 +210,25 @@ fn walk_listable_descendant(directory: &Path) -> HideIgnoredDirectoryKind {
         if !file_type.is_dir() {
             return HideIgnoredDirectoryKind::Listable;
         }
-        match has_unprotected_child(entry.path()) {
-            Ok(false) | Err(_) => return HideIgnoredDirectoryKind::Listable,
-            Ok(true) if entry.depth() >= LISTABLE_DESCENDANT_MAX_DEPTH => truncated = true,
-            Ok(true) => {}
+        if entry.depth() >= LISTABLE_DESCENDANT_MAX_DEPTH
+            || visits >= LISTABLE_DESCENDANT_MAX_VISITS
+        {
+            // No later yielded child can prove non-emptiness at the limit.
+            // Preserve the original empty/unreadable directory behavior.
+            if !matches!(has_child(entry.path()), Ok(true)) {
+                return HideIgnoredDirectoryKind::Listable;
+            }
+            truncated = true;
+        } else {
+            pending_directory = Some(entry.path().to_path_buf());
         }
         if visits >= LISTABLE_DESCENDANT_MAX_VISITS {
-            truncated = true;
             break;
+        }
+    }
+    if let Some(pending) = pending_directory {
+        if !matches!(has_child(&pending), Ok(true)) {
+            return HideIgnoredDirectoryKind::Listable;
         }
     }
     if truncated || saw_error {
@@ -253,6 +282,43 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
         }
+    }
+
+    #[test]
+    fn listable_walk_skips_reopening_intermediate_directories() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let root = workspace.path().join("source");
+        let mut leaf = root.clone();
+        for index in 0..20 {
+            leaf.push(format!("d{index}"));
+        }
+        fs::create_dir_all(&leaf).expect("create nested directories");
+        fs::write(leaf.join("visible.txt"), "visible").expect("write visible file");
+        let mut probes = Vec::new();
+        let result = walk_listable_descendant_with_probe(&root, |path| {
+            probes.push(path.to_path_buf());
+            has_unprotected_child(path)
+        });
+        assert_eq!(result, HideIgnoredDirectoryKind::Listable);
+        assert!(probes.is_empty(), "ancestors already have visible children");
+
+        fs::remove_file(leaf.join("visible.txt")).expect("empty leaf");
+        let result = walk_listable_descendant_with_probe(&root, |path| {
+            probes.push(path.to_path_buf());
+            has_unprotected_child(path)
+        });
+        assert_eq!(result, HideIgnoredDirectoryKind::Listable);
+        assert_eq!(probes, vec![leaf.clone()]);
+
+        fs::write(workspace.path().join(".gitignore"), "*.jsonl\n").expect("ignore sessions");
+        fs::write(leaf.join("session.jsonl"), "session").expect("write ignored leaf");
+        probes.clear();
+        let result = walk_listable_descendant_with_probe(&root, |path| {
+            probes.push(path.to_path_buf());
+            has_unprotected_child(path)
+        });
+        assert_eq!(result, HideIgnoredDirectoryKind::IgnoredOnly);
+        assert_eq!(probes, vec![leaf]);
     }
 
     #[test]

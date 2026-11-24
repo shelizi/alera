@@ -110,7 +110,7 @@ final class _GitWorktreeMetadataWatcherHandle
   String get repoPath => _watcher.repoPath;
 
   @override
-  void start() => _watcher.start();
+  void start() => unawaited(_watcher.start());
 
   @override
   Future<void> suspendRefresh() => _watcher.suspendRefresh();
