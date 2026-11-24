@@ -114,7 +114,7 @@ pub async fn run_terminal_host_server(
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
-        orchestration_activity_last_recorded: HashMap::new(),
+        orchestration_output_activity: Default::default(),
         pending_dispatch_installs: HashMap::new(),
         pending_drift_probes: HashSet::new(),
         coordinators: HashMap::new(),

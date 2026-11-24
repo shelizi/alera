@@ -108,45 +108,11 @@ impl ServerActor {
     }
 
     fn record_orchestration_output_activity(&mut self, session_id: &str) {
-        if self
-            .orchestration_activity_last_recorded
-            .get(session_id)
-            .is_some_and(|last| last.elapsed() < ORCHESTRATION_ACTIVITY_WRITE_INTERVAL)
-        {
-            return;
-        }
-        self.orchestration_activity_last_recorded
-            .insert(session_id.to_string(), Instant::now());
-
-        let runtime_store = self.runtime_store.clone();
-        let task_session_id = session_id.to_string();
-        let log_session_id = task_session_id.clone();
-        let task = async move {
-            let dispatch = match runtime_store
-                .active_orchestration_dispatch_for_handle(&task_session_id)
-                .await
-            {
-                Ok(dispatch) => dispatch,
-                Err(_) => return,
-            };
-            if let Some(dispatch) = dispatch {
-                let _ = runtime_store
-                    .record_orchestration_activity(&dispatch.id)
-                    .await;
-            }
-        };
-        if let Err(error) = self.deferred_admission.schedule(
-            super::deferred_admission::DeferredRequestClass::Maintenance,
-            "terminal.orchestrationActivity.persist",
-            None,
-            task,
-        ) {
-            tracing::debug!(
-                session_id = %log_session_id,
-                "terminal orchestration activity persistence deferred: {}",
-                error.wire_message()
-            );
-        }
+        self.orchestration_output_activity.record(
+            session_id,
+            &self.runtime_store,
+            &self.deferred_admission,
+        );
     }
 
     async fn handle_pty_input_written(

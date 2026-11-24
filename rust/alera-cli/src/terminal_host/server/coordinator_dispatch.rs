@@ -407,7 +407,7 @@ impl ServerActor {
                 profile_quota_group.as_deref(),
             )
             .await?;
-        self.orchestration_activity_last_recorded.remove(handle);
+        self.orchestration_output_activity.remove(handle);
         let preamble = build_dispatch_preamble(&PreambleParams {
             task_id,
             dispatch_id: &dispatch.id,
