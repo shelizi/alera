@@ -259,6 +259,85 @@ fn history_read_tail_keeps_offset_allocation_without_final_relocation() {
 }
 
 #[tokio::test]
+async fn bounded_blob_projection_limits_sqlx_row_payload_before_tail_assembly() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.upsert(sample("other")).await.unwrap();
+
+    let oversized: Vec<u8> = (0..8 * 1024 * 1024)
+        .map(|offset| (offset % 251) as u8)
+        .collect();
+    let newer = [0x1b, 0xff, 0x00, 0x80, 0x07];
+    store.append_output("s1", 0, &oversized).await.unwrap();
+    store.append_output("s1", 1, &newer).await.unwrap();
+    store.append_output("other", 2, b"unrelated").await.unwrap();
+
+    // Inspect the SQLx row itself, not just the final Rust-side tail.
+    let cap = 31;
+    let rows = history_rows_query("s1", cap)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].try_get::<&[u8], _>("data").unwrap(), &newer);
+    assert_eq!(
+        rows[1].try_get::<&[u8], _>("data").unwrap(),
+        &oversized[oversized.len() - cap..]
+    );
+    let (read, maintenance_required) = store
+        .read_with_maintenance("s1", cap)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut expected = oversized[oversized.len() - (cap - newer.len())..].to_vec();
+    expected.extend_from_slice(&newer);
+    assert_eq!(Vec::from(read.buffer), expected);
+    assert!(maintenance_required);
+
+    // An unlimited reader still sees the complete unmodified persisted row.
+    let rows = history_rows_query("s1", usize::MAX)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows[1].try_get::<&[u8], _>("data").unwrap(), oversized);
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn bounded_blob_projection_keeps_ordinary_and_empty_rows_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store
+        .append_output("s1", 0, &[0xff, 0x00, 0x80])
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO outputChunks (sessionId, sequence, createdAt, data) VALUES ('s1', 1, '2026-01-01', X'')")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let rows = history_rows_query("s1", 16)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].try_get::<&[u8], _>("data").unwrap().is_empty());
+    assert_eq!(
+        rows[1].try_get::<&[u8], _>("data").unwrap(),
+        &[0xff, 0x00, 0x80]
+    );
+    let (read, maintenance_required) = store
+        .read_with_maintenance("s1", 16)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(Vec::from(read.buffer), [0xff, 0x00, 0x80]);
+    assert!(!maintenance_required);
+    store.close_for_test().await;
+}
+
+#[tokio::test]
 async fn bounded_history_read_preserves_binary_rows_and_sequence_ties() {
     let dir = tempfile::tempdir().unwrap();
     let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();

@@ -374,6 +374,30 @@ async fn read_buffer_from<'e>(
     ))
 }
 
+/// Cap the payload of an oversized legacy BLOB before SQLx copies the row
+/// out of SQLite. Normal coalesced rows are returned unchanged. Truncating
+/// any individual row to the entire requested tail cannot change the final
+/// suffix, even when newer rows already consumed part of that budget.
+fn history_rows_query(
+    session_id: &str,
+    max_bytes: usize,
+) -> sqlx::query::Query<'_, Sqlite, sqlx::sqlite::SqliteArguments> {
+    if max_bytes >= i32::MAX as usize {
+        // SQLite cannot contain a BLOB this large; no projection is needed.
+        sqlx::query(
+            "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
+        )
+        .bind(session_id)
+    } else {
+        sqlx::query(
+            "SELECT CASE WHEN length(data) > ?2 THEN substr(data, -?2) ELSE data END AS data \
+             FROM outputChunks WHERE sessionId = ?1 ORDER BY sequence DESC, id DESC",
+        )
+        .bind(session_id)
+        .bind(max_bytes as i64)
+    }
+}
+
 async fn read_buffer_with_maintenance<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     session_id: &'e str,
@@ -387,11 +411,7 @@ async fn read_buffer_with_maintenance<'e>(
     // tail is complete. This uses the (sessionId, sequence, id) index and
     // avoids the expensive window-function trim on the latency-sensitive
     // restore/read path.
-    let mut rows = sqlx::query(
-        "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
-    )
-    .bind(session_id)
-    .fetch(executor);
+    let mut rows = history_rows_query(session_id, max_bytes).fetch(executor);
     let mut tail = HistoryReadTail::new(max_bytes);
     let mut row_count = 0_i64;
     while tail.remaining() > 0 {
