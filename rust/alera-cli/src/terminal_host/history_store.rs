@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use alera_core::runtime::{
@@ -195,7 +196,7 @@ impl TerminalHostHistoryStore {
         &self,
         session_id: &str,
         checkpoint: Option<&TerminalHostCheckpoint>,
-        outputs: &[(i64, Vec<u8>)],
+        outputs: &[(i64, impl AsRef<[u8]>)],
     ) -> Result<()> {
         if checkpoint.is_none() && outputs.is_empty() {
             return Ok(());
@@ -235,7 +236,7 @@ impl TerminalHostHistoryStore {
             .await?;
         }
 
-        if outputs.iter().any(|(_, data)| !data.is_empty()) {
+        if outputs.iter().any(|(_, data)| !data.as_ref().is_empty()) {
             append_output_rows(&mut transaction, session_id, outputs).await?;
         }
         transaction.commit().await?;
@@ -401,7 +402,7 @@ impl TerminalHostHistoryStore {
 async fn append_output_rows(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session_id: &str,
-    outputs: &[(i64, Vec<u8>)],
+    outputs: &[(i64, impl AsRef<[u8]>)],
 ) -> Result<()> {
     let has_checkpoint = sqlx::query("SELECT 1 FROM checkpoints WHERE sessionId = ?")
         .bind(session_id)
@@ -412,42 +413,46 @@ async fn append_output_rows(
         return Ok(());
     }
     let newest = sqlx::query(
-        "SELECT id, sequence, data FROM outputChunks WHERE sessionId = ? \
-         ORDER BY sequence DESC, id DESC LIMIT 1",
+        "SELECT id, sequence, CASE WHEN length(data) < ? THEN data END AS appendableData \
+         FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC LIMIT 1",
     )
+    .bind(OUTPUT_CHUNK_TARGET_BYTES as i64)
     .bind(session_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    let mut rows: Vec<PendingOutputRow> = Vec::new();
+    let mut rows: Vec<PendingOutputRow<'_>> = Vec::new();
     let mut persisted_sequence = None;
     if let Some(row) = newest {
         let sequence: i64 = row.try_get("sequence")?;
         persisted_sequence = Some(sequence);
-        let data: Vec<u8> = row.try_get("data")?;
-        if data.len() < OUTPUT_CHUNK_TARGET_BYTES {
+        // A full or oversized newest row cannot be extended. Do not decode
+        // or transfer its BLOB to Rust just to discard it.
+        let data: Option<Vec<u8>> = row.try_get("appendableData")?;
+        if let Some(data) = data {
             rows.push(PendingOutputRow {
                 existing_id: Some(row.try_get("id")?),
                 sequence,
-                data,
+                data: Cow::Owned(data),
                 dirty: false,
             });
         }
     }
 
     for (sequence, data) in outputs {
+        let data = data.as_ref();
         if data.is_empty() || persisted_sequence.is_some_and(|newest| *sequence <= newest) {
             continue;
         }
         match rows.last_mut() {
             Some(row) if row.data.len() + data.len() <= OUTPUT_CHUNK_TARGET_BYTES => {
-                row.data.extend_from_slice(data);
+                row.data.to_mut().extend_from_slice(data);
                 row.sequence = *sequence;
                 row.dirty = true;
             }
             _ => rows.push(PendingOutputRow {
                 existing_id: None,
                 sequence: *sequence,
-                data: data.clone(),
+                data: Cow::Borrowed(data),
                 dirty: true,
             }),
         }
@@ -462,7 +467,7 @@ async fn append_output_rows(
                 )
                 .bind(row.sequence)
                 .bind(&created_at)
-                .bind(row.data)
+                .bind(row.data.as_ref())
                 .bind(id)
                 .execute(&mut **transaction)
                 .await?;
@@ -474,7 +479,7 @@ async fn append_output_rows(
                 .bind(session_id)
                 .bind(row.sequence)
                 .bind(&created_at)
-                .bind(row.data)
+                .bind(row.data.as_ref())
                 .execute(&mut **transaction)
                 .await?;
             }
@@ -483,10 +488,10 @@ async fn append_output_rows(
     Ok(())
 }
 
-struct PendingOutputRow {
+struct PendingOutputRow<'a> {
     existing_id: Option<i64>,
     sequence: i64,
-    data: Vec<u8>,
+    data: Cow<'a, [u8]>,
     dirty: bool,
 }
 

@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::Result;
+use bytes::Bytes;
 use tokio::sync::Semaphore;
 
 pub use super::history_store::TerminalHostCheckpoint;
@@ -27,7 +28,8 @@ struct SessionPersistenceState {
     checkpoint: Option<TerminalHostCheckpoint>,
     checkpoint_revision: Option<u64>,
     outputs: BTreeMap<i64, PendingOutput>,
-    memory_tail: Vec<u8>,
+    pending_bytes: usize,
+    memory_tail: VecDeque<u8>,
     max_bytes: usize,
     delete_revision: Option<u64>,
     trim_revision: Option<u64>,
@@ -39,7 +41,7 @@ struct SessionPersistenceState {
 #[derive(Clone)]
 struct PendingOutput {
     revision: u64,
-    data: Vec<u8>,
+    data: Bytes,
 }
 
 #[derive(Clone)]
@@ -49,7 +51,7 @@ enum FlushSnapshot {
     },
     Persist {
         checkpoint: Option<(u64, Box<TerminalHostCheckpoint>)>,
-        outputs: Vec<(i64, u64, Vec<u8>)>,
+        outputs: Vec<(i64, u64, Bytes)>,
         trim_revision: Option<u64>,
         max_bytes: usize,
     },
@@ -88,32 +90,42 @@ impl SessionPersistenceState {
         })
     }
 
+    fn insert_pending_output(&mut self, sequence: i64, output: PendingOutput) {
+        let len = output.data.len();
+        if let Some(previous) = self.outputs.insert(sequence, output) {
+            self.pending_bytes -= previous.data.len();
+        }
+        self.pending_bytes += len;
+    }
+
+    fn remove_pending_output(&mut self, sequence: i64) {
+        if let Some(output) = self.outputs.remove(&sequence) {
+            self.pending_bytes -= output.data.len();
+        }
+    }
+
     fn trim_pending_outputs(&mut self) {
-        let mut total = self
-            .outputs
-            .values()
-            .map(|output| output.data.len())
-            .sum::<usize>();
-        while total > self.max_bytes {
+        while self.pending_bytes > self.max_bytes {
             let Some(sequence) = self.outputs.keys().next().copied() else {
                 break;
             };
-            let excess = total - self.max_bytes;
+            let excess = self.pending_bytes - self.max_bytes;
             let len = self
                 .outputs
                 .get(&sequence)
                 .map_or(0, |output| output.data.len());
             if len <= excess {
-                self.outputs.remove(&sequence);
-                total = total.saturating_sub(len);
+                self.remove_pending_output(sequence);
                 continue;
             }
 
             let revision = self.next_revision();
             if let Some(output) = self.outputs.get_mut(&sequence) {
-                output.data.drain(..excess);
+                // Preserve any in-flight snapshot and release the discarded
+                // allocation rather than retaining an arbitrarily large backing buffer.
+                output.data = Bytes::copy_from_slice(&output.data[excess..]);
                 output.revision = revision;
-                total -= excess;
+                self.pending_bytes -= excess;
             }
         }
     }
@@ -144,7 +156,7 @@ impl TerminalHostHistoryRepository {
             let state = sessions.entry(session_id.clone()).or_default();
             state.max_bytes = max_bytes;
             state.delete_revision = None;
-            state.memory_tail = memory_tail;
+            state.memory_tail = memory_tail.into();
             let checkpoint_revision = state.next_revision();
             state.checkpoint = Some(checkpoint);
             state.checkpoint_revision = Some(checkpoint_revision);
@@ -167,9 +179,14 @@ impl TerminalHostHistoryRepository {
                 state.max_bytes = max_bytes;
                 append_tail(&mut state.memory_tail, &data, max_bytes);
                 let revision = state.next_revision();
-                state
-                    .outputs
-                    .insert(sequence, PendingOutput { revision, data });
+                // Bytes takes ownership of the Vec without copying its payload.
+                state.insert_pending_output(
+                    sequence,
+                    PendingOutput {
+                        revision,
+                        data: Bytes::from(data),
+                    },
+                );
                 state.trim_pending_outputs();
                 queued = true;
             }
@@ -188,7 +205,7 @@ impl TerminalHostHistoryRepository {
                 return;
             }
             state.max_bytes = max_bytes;
-            retain_tail(&mut state.memory_tail, max_bytes);
+            retain_deque_tail(&mut state.memory_tail, max_bytes);
             if let Some(checkpoint) = state.checkpoint.as_mut() {
                 retain_tail(&mut checkpoint.buffer, max_bytes);
             }
@@ -209,6 +226,7 @@ impl TerminalHostHistoryRepository {
             state.checkpoint = None;
             state.checkpoint_revision = None;
             state.outputs.clear();
+            state.pending_bytes = 0;
             state.trim_revision = None;
             state.memory_tail.clear();
             state.last_error = None;
@@ -221,7 +239,7 @@ impl TerminalHostHistoryRepository {
         session_id: &str,
         max_bytes: usize,
     ) -> Result<Option<TerminalHostCheckpoint>> {
-        if let Some(cached) = self.cached_checkpoint(session_id) {
+        if let Some(cached) = self.cached_checkpoint(session_id, max_bytes) {
             return Ok(cached);
         }
         if self.is_deleted(session_id) {
@@ -242,14 +260,16 @@ impl TerminalHostHistoryRepository {
             }
             if let Some(checkpoint) = state.checkpoint.as_ref() {
                 let mut checkpoint = checkpoint.clone();
-                checkpoint.buffer = state.memory_tail.clone();
+                checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
                 return Ok(Some(checkpoint));
             }
             state.max_bytes = max_bytes;
-            state.memory_tail = persisted.buffer.clone();
-            let mut cached = persisted.clone();
-            cached.buffer.clear();
-            state.checkpoint = Some(cached);
+            // Cache only the checkpoint metadata; avoid cloning its full
+            // scrollback just to clear it again.
+            let buffer = std::mem::take(&mut persisted.buffer);
+            state.checkpoint = Some(persisted.clone());
+            state.memory_tail = buffer.clone().into();
+            persisted.buffer = buffer;
         }
 
         // Cold reads return only the bounded tail. Physical compaction is
@@ -275,7 +295,11 @@ impl TerminalHostHistoryRepository {
             .max(pending_next))
     }
 
-    fn cached_checkpoint(&self, session_id: &str) -> Option<Option<TerminalHostCheckpoint>> {
+    fn cached_checkpoint(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+    ) -> Option<Option<TerminalHostCheckpoint>> {
         let sessions = self.lock_sessions();
         let state = sessions.get(session_id)?;
         if state.delete_revision.is_some() {
@@ -283,7 +307,7 @@ impl TerminalHostHistoryRepository {
         }
         let checkpoint = state.checkpoint.as_ref()?.clone();
         let mut checkpoint = checkpoint;
-        checkpoint.buffer = state.memory_tail.clone();
+        checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
         Some(Some(checkpoint))
     }
 
@@ -396,7 +420,7 @@ impl TerminalHostHistoryRepository {
             } => {
                 let output_rows = outputs
                     .iter()
-                    .map(|(sequence, _, data)| (*sequence, data.clone()))
+                    .map(|(sequence, _, data)| (*sequence, data.as_ref()))
                     .collect::<Vec<_>>();
                 self.inner
                     .store
@@ -451,7 +475,7 @@ impl TerminalHostHistoryRepository {
                         .get(sequence)
                         .is_some_and(|output| output.revision == *revision)
                     {
-                        state.outputs.remove(sequence);
+                        state.remove_pending_output(*sequence);
                     }
                 }
                 if let Some(revision) = trim_revision {
@@ -504,21 +528,35 @@ fn retain_tail(buffer: &mut Vec<u8>, max_bytes: usize) {
     buffer.drain(..start);
 }
 
-fn append_tail(buffer: &mut Vec<u8>, data: &[u8], max_bytes: usize) {
+fn retain_deque_tail(buffer: &mut VecDeque<u8>, max_bytes: usize) {
+    if buffer.len() > max_bytes {
+        buffer.drain(..buffer.len() - max_bytes);
+    }
+}
+
+fn copy_deque_tail(buffer: &VecDeque<u8>, max_bytes: usize) -> Vec<u8> {
+    buffer
+        .iter()
+        .skip(buffer.len().saturating_sub(max_bytes))
+        .copied()
+        .collect()
+}
+
+fn append_tail(buffer: &mut VecDeque<u8>, data: &[u8], max_bytes: usize) {
     if max_bytes == 0 {
         buffer.clear();
         return;
     }
     if data.len() >= max_bytes {
         buffer.clear();
-        buffer.extend_from_slice(&data[data.len() - max_bytes..]);
+        buffer.extend(data[data.len() - max_bytes..].iter().copied());
         return;
     }
     let required = buffer.len().saturating_add(data.len());
     if required > max_bytes {
         buffer.drain(..required - max_bytes);
     }
-    buffer.extend_from_slice(data);
+    buffer.extend(data.iter().copied());
 }
 
 #[cfg(test)]
@@ -696,26 +734,94 @@ mod tests {
             ..Default::default()
         };
         let first_revision = state.next_revision();
-        state.outputs.insert(
+        state.insert_pending_output(
             0,
             PendingOutput {
                 revision: first_revision,
-                data: b"abcd".to_vec(),
+                data: Bytes::from_static(b"abcd"),
             },
         );
         let second_revision = state.next_revision();
-        state.outputs.insert(
+        state.insert_pending_output(
             1,
             PendingOutput {
                 revision: second_revision,
-                data: b"efgh".to_vec(),
+                data: Bytes::from_static(b"efgh"),
             },
         );
 
+        let snapshot = state.snapshot().unwrap();
         state.trim_pending_outputs();
 
-        assert_eq!(state.outputs[&0].data, b"d");
+        assert_eq!(state.outputs[&0].data.as_ref(), b"d");
         assert_ne!(state.outputs[&0].revision, first_revision);
-        assert_eq!(state.outputs[&1].data, b"efgh");
+        assert_eq!(state.outputs[&1].data.as_ref(), b"efgh");
+        assert_eq!(state.pending_bytes, 5);
+        let FlushSnapshot::Persist { outputs, .. } = snapshot else {
+            panic!("expected persist snapshot");
+        };
+        assert_eq!(
+            outputs[0].2.as_ref(),
+            b"abcd",
+            "in-flight snapshot remains intact"
+        );
+        assert_eq!(
+            outputs[1].2.as_ptr(),
+            state.outputs[&1].data.as_ptr(),
+            "unchanged output shares allocation"
+        );
+        state.insert_pending_output(
+            1,
+            PendingOutput {
+                revision: second_revision,
+                data: Bytes::from_static(b"xyz"),
+            },
+        );
+        assert_eq!(state.pending_bytes, 4);
+        state.remove_pending_output(0);
+        state.remove_pending_output(1);
+        assert_eq!(state.pending_bytes, 0);
+    }
+
+    #[test]
+    fn ring_tail_retains_order_across_wrap_and_smaller_read_limits() {
+        let mut ring: VecDeque<u8> = VecDeque::from(b"abcd".to_vec());
+        for byte in b"efghijkl" {
+            append_tail(&mut ring, &[*byte], 4);
+        }
+        assert_eq!(copy_deque_tail(&ring, 4), b"ijkl");
+        assert_eq!(copy_deque_tail(&ring, 2), b"kl");
+        assert!(copy_deque_tail(&ring, 0).is_empty());
+        retain_deque_tail(&mut ring, 3);
+        assert_eq!(copy_deque_tail(&ring, 9), b"jkl");
+        append_tail(&mut ring, b"oversized", 4);
+        assert_eq!(copy_deque_tail(&ring, 4), b"ized");
+        append_tail(&mut ring, b"x", 0);
+        assert!(ring.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cached_history_read_respects_requested_tail_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        repository.queue_checkpoint(checkpoint("s1", b"abcdef"), 1024);
+        repository.queue_output("s1".into(), 0, b"ghij".to_vec(), 1024);
+        assert_eq!(
+            repository.read("s1", 3).await.unwrap().unwrap().buffer,
+            b"hij"
+        );
+        assert!(repository
+            .read("s1", 0)
+            .await
+            .unwrap()
+            .unwrap()
+            .buffer
+            .is_empty());
+        assert_eq!(
+            repository.read("s1", 1024).await.unwrap().unwrap().buffer,
+            b"abcdefghij"
+        );
     }
 }
