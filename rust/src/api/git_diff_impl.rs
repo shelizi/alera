@@ -20,6 +20,9 @@ use super::{
 mod git_diff_combined;
 #[path = "git_diff_render.rs"]
 mod git_diff_render;
+#[cfg(test)]
+#[path = "git_diff_selection_bench.rs"]
+mod git_diff_selection_bench;
 #[path = "git_diff_untracked.rs"]
 mod git_diff_untracked;
 #[path = "git_reading_diff_patch.rs"]
@@ -187,6 +190,7 @@ pub(super) fn git_diff_all_with_whitespace(
         return git_diff_all_for_file_with_whitespace(&repo, &paths, &file_path, whitespace_mode);
     }
     let entries = git_status_entries_with_options(&repo, &paths, &mut status_options(), false)?;
+    let mut selection_cache = (entries.len() > 1).then(DiffSelectionCache::default);
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
     let mut truncated = false;
@@ -234,12 +238,13 @@ pub(super) fn git_diff_all_with_whitespace(
             }
             continue;
         }
-        if let Some(file) = diff_file_for_area_with_whitespace(
+        if let Some(file) = diff_file_for_area_with_selection_cache(
             &repo,
             &paths,
             &entry.path,
             entry.area,
             whitespace_mode,
+            selection_cache.as_mut(),
         )? {
             if append_combined_diff_file(&mut files, &mut total_bytes, &mut truncated, file) {
                 break;
@@ -268,12 +273,14 @@ pub(super) fn git_diff_all_page_with_whitespace(
     let mut total_bytes = 0usize;
     let mut truncated = false;
 
+    let mut selection_cache = (file_paths.len() > 1).then(DiffSelectionCache::default);
     for file_path in file_paths {
         if append_combined_diff_for_path_with_whitespace(
             &repo,
             &paths,
             &file_path,
             whitespace_mode,
+            selection_cache.as_mut(),
             &mut files,
             &mut total_bytes,
             &mut truncated,
@@ -1172,6 +1179,24 @@ fn diff_file_for_area_with_whitespace(
     area: GitChangeArea,
     whitespace_mode: GitDiffWhitespaceMode,
 ) -> Result<Option<GitDiffFile>, GitError> {
+    diff_file_for_area_with_selection_cache(
+        repo,
+        paths,
+        workspace_file_path,
+        area,
+        whitespace_mode,
+        None,
+    )
+}
+
+fn diff_file_for_area_with_selection_cache(
+    repo: &Repository,
+    paths: &GitPathContext,
+    workspace_file_path: &str,
+    area: GitChangeArea,
+    whitespace_mode: GitDiffWhitespaceMode,
+    selection_cache: Option<&mut DiffSelectionCache>,
+) -> Result<Option<GitDiffFile>, GitError> {
     match git_submodule_impl::diff_file_for_submodule(repo, paths, workspace_file_path, area)? {
         git_submodule_impl::SubmoduleDiff::NotSubmodule => {}
         git_submodule_impl::SubmoduleDiff::NoDiff => return Ok(None),
@@ -1194,9 +1219,16 @@ fn diff_file_for_area_with_whitespace(
             }
         }
         GitChangeArea::Staged | GitChangeArea::Unstaged => {
-            let Some(selection) =
-                selected_delta_for_area_with_whitespace(repo, &file_path, area, whitespace_mode)?
-            else {
+            let selection = match selection_cache {
+                Some(cache) => cache.select(repo, &file_path, area, whitespace_mode)?,
+                None => selected_delta_for_area_with_whitespace(
+                    repo,
+                    &file_path,
+                    area,
+                    whitespace_mode,
+                )?,
+            };
+            let Some(selection) = selection else {
                 return Ok(None);
             };
             let mut pathspecs = vec![selection.path.as_str()];
@@ -1504,10 +1536,65 @@ fn short_oid(oid: Oid) -> String {
     oid.to_string().chars().take(7).collect()
 }
 
+#[derive(Clone)]
 struct DiffSelection {
     path: String,
     old_path: Option<String>,
     status: GitChangeStatus,
+}
+
+/// One batch request, one repository and one whitespace mode. Build each
+/// tracked area's rename/copy index lazily, never cache it across requests.
+/// Rendering still uses a fresh, literal pathspec diff for the chosen file.
+#[derive(Default)]
+struct DiffSelectionCache {
+    staged: Option<HashMap<String, DiffSelection>>,
+    unstaged: Option<HashMap<String, DiffSelection>>,
+}
+
+impl DiffSelectionCache {
+    fn select(
+        &mut self,
+        repo: &Repository,
+        file_path: &str,
+        area: GitChangeArea,
+        whitespace_mode: GitDiffWhitespaceMode,
+    ) -> Result<Option<DiffSelection>, GitError> {
+        let slot = match area {
+            GitChangeArea::Staged => &mut self.staged,
+            GitChangeArea::Unstaged => &mut self.unstaged,
+            GitChangeArea::Untracked => unreachable!("untracked files need no delta selection"),
+        };
+        if slot.is_none() {
+            let diff = diff_for_area_with_whitespace(repo, &[], area, whitespace_mode)?;
+            let mut by_path = HashMap::new();
+            for delta in diff.deltas() {
+                let new_path = delta_path(&delta, false)?;
+                let old_path = old_path_for_delta(&delta)?;
+                let delta_status = delta.status();
+                let selection = DiffSelection {
+                    path: new_path,
+                    old_path,
+                    status: change_status_for_delta(delta_status, area),
+                };
+                // The original scan returned the first matching delta in
+                // libgit2 order. Only renames, not copies, match a source alias.
+                if delta_status == Delta::Renamed {
+                    if let Some(old_path) = &selection.old_path {
+                        by_path
+                            .entry(old_path.clone())
+                            .or_insert_with(|| selection.clone());
+                    }
+                }
+                by_path.entry(selection.path.clone()).or_insert(selection);
+            }
+            *slot = Some(by_path);
+        }
+        Ok(slot
+            .as_ref()
+            .and_then(|index| index.get(file_path))
+            .cloned())
+    }
 }
 
 fn selected_delta_for_area_with_whitespace(
