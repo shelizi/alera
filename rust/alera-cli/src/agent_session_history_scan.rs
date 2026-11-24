@@ -14,7 +14,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 mod preview_cache;
-use preview_cache::PreviewScan;
+use preview_cache::{open_canonical_preview_file, PreviewScan};
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
 
 const MAX_FILES: usize = 256;
@@ -73,6 +73,8 @@ pub(crate) struct HistoryScanReport {
     metadata_probes: usize,
     #[cfg(test)]
     cwd_canonicalizations: usize,
+    #[cfg(test)]
+    reused_candidate_handles: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -325,8 +327,28 @@ fn discover_history_with_exact_id(
                     report.truncated = true;
                     return report;
                 }
-                let Ok(canonical_file) = fs::canonicalize(&path) else {
-                    continue;
+                // On Windows, normalize the path from the readable handle
+                // instead of opening it once for canonicalize and again to read.
+                // Oversized or unreadable files retain the original scan
+                // accounting, and exact verification stays on the old path.
+                let (canonical_file, opened) = match preview_scan
+                    .is_some()
+                    .then(|| {
+                        if skip_oversized_file(meta.len(), exact_id) {
+                            None
+                        } else {
+                            open_canonical_preview_file(&path)
+                        }
+                    })
+                    .flatten()
+                {
+                    Some((canonical, file)) => (canonical, Some(file)),
+                    None => {
+                        let Ok(canonical) = fs::canonicalize(&path) else {
+                            continue;
+                        };
+                        (canonical, None)
+                    }
                 };
                 if !canonical_file.starts_with(&canonical_root)
                     || !seen_files.insert((
@@ -347,7 +369,11 @@ fn discover_history_with_exact_id(
                 }
                 let mut cached_read = None;
                 let parsed = if let Some(scan) = preview_scan.as_deref_mut() {
-                    cached_read = scan.read(root, &canonical_file);
+                    #[cfg(test)]
+                    if opened.is_some() {
+                        report.reused_candidate_handles += 1;
+                    }
+                    cached_read = scan.read(root, &canonical_file, opened);
                     cached_read.as_ref().map(|read| read.value.clone())
                 } else {
                     read_provider_metadata(root.provider, &canonical_file, policy.index_user_text)
@@ -1017,6 +1043,8 @@ mod tests {
         let mut cache = HistoryPreviewCache::default();
         let first = discover_history_cached(&roots, &known, policy, &mut cache);
         assert_eq!(first.cwd_canonicalizations, 2);
+        #[cfg(windows)]
+        assert_eq!(first.reused_candidate_handles, 64);
         assert_eq!(first.records.len(), 48);
         assert_eq!(
             serde_json::to_value(&first.records).unwrap(),
@@ -1024,6 +1052,8 @@ mod tests {
         );
         let second = discover_history_cached(&roots, &known, policy, &mut cache);
         assert_eq!(second.cwd_canonicalizations, 2);
+        #[cfg(windows)]
+        assert_eq!(second.reused_candidate_handles, 64);
         assert_eq!(second.reused_files, 48);
         assert_eq!(second.parsed_files, 16);
         // Refresh both positive and negative path decisions when the
@@ -1044,7 +1074,47 @@ mod tests {
             "550e8400-e29b-41d4-a716-000000000000",
         );
         assert_eq!(exact.cwd_canonicalizations, 1);
+        assert_eq!(exact.reused_candidate_handles, 0);
         assert_eq!(exact.source_proofs.len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preview_handle_resolves_long_unicode_path_and_matches_legacy_scan() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let part = format!("{}{}", "a".repeat(105), "\u{6b77}\u{53f2}");
+        let folder = (0..5).fold(home.path().to_owned(), |path, _| path.join(&part));
+        fs::create_dir_all(&folder).unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let path = folder.join(format!("rollout-day-{id}.jsonl"));
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"session_meta","payload":{"id":id,"cwd":work.path()}})
+            ),
+        )
+        .unwrap();
+        let expected = fs::canonicalize(&path).unwrap();
+        let (actual, _file) = open_canonical_preview_file(&path).unwrap();
+        assert_eq!(actual, expected);
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            ..Default::default()
+        };
+        let legacy = discover_history(&roots, &known, policy);
+        let mut cache = HistoryPreviewCache::default();
+        let report = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(report.reused_candidate_handles, 1);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&report.records).unwrap(),
+            serde_json::to_value(&legacy.records).unwrap()
+        );
+        assert_eq!(report.source_proofs[0].canonical_file, expected);
     }
 
     #[test]

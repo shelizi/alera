@@ -10,6 +10,50 @@ const MAX_AGE: Duration = Duration::from_secs(60);
 
 type ProviderPreview = (String, PathBuf, Option<String>);
 
+/// Resolve the normalized DOS path on the very handle that will be read.
+/// Windows std::fs::canonicalize otherwise opens a separate metadata handle.
+/// Keep the verbatim spelling used by the scanner's canonical root; never
+/// infer the target path from the directory entry or strip a UNC prefix.
+#[cfg(windows)]
+pub(super) fn open_canonical_preview_file(path: &Path) -> Option<(PathBuf, File)> {
+    use std::ffi::OsString;
+    use std::os::windows::{ffi::OsStringExt, io::AsRawHandle};
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{GetFinalPathNameByHandleW, VOLUME_NAME_DOS};
+
+    let file = File::open(path).ok()?;
+    let handle = HANDLE(file.as_raw_handle());
+    // VOLUME_NAME_DOS also selects the default FILE_NAME_NORMALIZED (0).
+    let flags = VOLUME_NAME_DOS;
+    let mut stack = [0u16; 512];
+    // The handle remains open for both path resolution and content validation.
+    let len = unsafe { GetFinalPathNameByHandleW(handle, &mut stack, flags) } as usize;
+    if len == 0 {
+        return None;
+    }
+    let canonical = if len < stack.len() {
+        PathBuf::from(OsString::from_wide(&stack[..len]))
+    } else {
+        // Windows reports the required size including the terminator when the
+        // buffer is insufficient. Bound the retry and reject a changing path.
+        if len > 32_768 {
+            return None;
+        }
+        let mut buffer = vec![0u16; len];
+        let actual = unsafe { GetFinalPathNameByHandleW(handle, &mut buffer, flags) } as usize;
+        if actual == 0 || actual >= buffer.len() {
+            return None;
+        }
+        PathBuf::from(OsString::from_wide(&buffer[..actual]))
+    };
+    Some((canonical, file))
+}
+
+#[cfg(not(windows))]
+pub(super) fn open_canonical_preview_file(_path: &Path) -> Option<(PathBuf, File)> {
+    None
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileStamp {
     len: u64,
@@ -156,10 +200,15 @@ impl PreviewScan {
         self.next
     }
 
-    pub(super) fn read(&mut self, root: &ProviderHistoryRoot, path: &Path) -> Option<PreviewRead> {
-        // Reopen every candidate so missing or no-longer-readable sources never
-        // become visible merely because we have an old preview in memory.
-        let file = File::open(path).ok()?;
+    pub(super) fn read(
+        &mut self,
+        root: &ProviderHistoryRoot,
+        path: &Path,
+        opened: Option<File>,
+    ) -> Option<PreviewRead> {
+        // Every search opens a fresh readable handle, even on a cache hit.
+        // Windows can pass the already validated canonical-path handle.
+        let file = opened.or_else(|| File::open(path).ok())?;
         let key = PreviewKey {
             provider: root.provider,
             account: root.account_id.clone(),
