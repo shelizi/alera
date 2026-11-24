@@ -50,98 +50,174 @@ final class const TerminalHostOutputFrame(
 /// switch is driven from here, by the code that owns the bytes, so there is no
 /// window where the mode is ambiguous.
 class TerminalHostFrameReader {
-  final List<int> _buffer = <int>[];
+  // Complete frames are read directly from the socket's typed chunk. Only
+  // unfinished payloads are copied into owned storage, which grows amortized
+  // rather than shifting a boxed List<int> after every decoded frame.
+  final BytesBuilder _partial = BytesBuilder(copy: true);
+  final Uint8List _header = Uint8List(terminalHostFrameHeaderLength);
+  int _headerLength = 0;
+  int _kind = 0;
+  int? _remainingPayload;
   bool _binary = false;
 
   bool get isBinary => _binary;
 
+  /// The out-of-band test/compatibility hook is valid at a frame boundary.
+  /// The actual socket switches in band after consuming the complete sentinel.
   void upgradeToBinary() {
+    if (_binary) return;
+    if (_partial.isNotEmpty) {
+      throw const FormatException(
+        'Binary upgrade inside a terminal host line.',
+      );
+    }
     _binary = true;
   }
 
   /// Appends [chunk] and returns whatever frames are now complete.
+  ///
+  /// Neither retained fragments nor returned output alias the caller's mutable
+  /// input. JSON and session IDs decode from ranges without allocating slices.
   List<TerminalHostFrame> add(List<int> chunk) {
-    _buffer.addAll(chunk);
+    final bytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
     final frames = <TerminalHostFrame>[];
-    while (true) {
-      final frame = _binary ? _takeBinaryFrame() : _takeLine();
-      if (frame == null) {
+    var offset = 0;
+    while (offset < bytes.length) {
+      if (!_binary) {
+        // Each incoming fragment is searched exactly once, even for a large
+        // legacy snapshot response split into thousands of socket reads.
+        final newline = bytes.indexOf(0x0a, offset);
+        final end = newline < 0 ? bytes.length : newline;
+        if (_partial.length + end - offset > terminalHostMaxFramePayloadBytes) {
+          throw const FormatException('Terminal host line exceeds size limit.');
+        }
+        if (newline < 0) {
+          _appendPartial(bytes, offset, end);
+          break;
+        }
+        final String line;
+        if (_partial.isEmpty) {
+          line = _decodeUtf8(bytes, offset, end);
+        } else {
+          _appendPartial(bytes, offset, end);
+          final assembled = _partial.takeBytes();
+          line = _decodeUtf8(assembled, 0, assembled.length);
+        }
+        frames.add(TerminalHostJsonFrame(line));
+        offset = newline + 1;
+        if (_isUpgradeLine(line)) {
+          upgradeToBinary();
+        }
+        continue;
+      }
+
+      if (_remainingPayload == null) {
+        if (_headerLength == 0 &&
+            bytes.length - offset >= terminalHostFrameHeaderLength) {
+          // The normal path does not copy the header either.
+          _readHeader(bytes, offset);
+          offset += terminalHostFrameHeaderLength;
+        } else {
+          final missing = terminalHostFrameHeaderLength - _headerLength;
+          final available = bytes.length - offset;
+          final take = missing < available ? missing : available;
+          _header.setRange(_headerLength, _headerLength + take, bytes, offset);
+          _headerLength += take;
+          offset += take;
+          if (_headerLength < terminalHostFrameHeaderLength) {
+            break;
+          }
+          _readHeader(_header, 0);
+          _headerLength = 0;
+        }
+      }
+
+      final remaining = _remainingPayload!;
+      final available = bytes.length - offset;
+      final take = remaining < available ? remaining : available;
+      final end = offset + take;
+      final known =
+          _kind == terminalHostFrameKindJson ||
+          _kind == terminalHostFrameKindOutput;
+      if (take < remaining) {
+        // Never allocate the advertised frame size just because a header was
+        // received. Unknown kinds can be discarded without retaining payloads.
+        if (known) _appendPartial(bytes, offset, end);
+        _remainingPayload = remaining - take;
         break;
       }
-      frames.add(frame);
-      // The upgrade lands between frames, so re-check the mode every pass
-      // rather than deciding once per chunk.
+
+      if (known) {
+        final TerminalHostFrame? frame;
+        if (_partial.isEmpty) {
+          frame = _decodeFrame(_kind, bytes, offset, end);
+        } else {
+          _appendPartial(bytes, offset, end);
+          final assembled = _partial.takeBytes();
+          frame = _decodeFrame(_kind, assembled, 0, assembled.length);
+        }
+        if (frame != null) frames.add(frame);
+      }
+      _remainingPayload = null;
+      offset = end;
+      // Unknown kinds and malformed output payloads consume their advertised
+      // bytes, not the rest of this socket read. Continue with the next frame.
     }
     return frames;
   }
 
-  TerminalHostFrame? _takeLine() {
-    final newline = _buffer.indexOf(0x0a);
-    if ((newline < 0 ? _buffer.length : newline) >
-        terminalHostMaxFramePayloadBytes) {
-      throw const FormatException('Terminal host line exceeds size limit.');
-    }
-    if (newline < 0) {
-      return null;
-    }
-    final line = utf8.decode(_buffer.sublist(0, newline), allowMalformed: true);
-    _buffer.removeRange(0, newline + 1);
-    if (line.contains(terminalHostBinaryFramesEnabledLine)) {
-      _binary = true;
-    }
-    return TerminalHostJsonFrame(line);
-  }
-
-  TerminalHostFrame? _takeBinaryFrame() {
-    if (_buffer.length < terminalHostFrameHeaderLength) {
-      return null;
-    }
-    final kind = _buffer[0];
+  void _readHeader(Uint8List bytes, int start) {
     final length =
-        (_buffer[1] << 24) |
-        (_buffer[2] << 16) |
-        (_buffer[3] << 8) |
-        _buffer[4];
+        (bytes[start + 1] << 24) |
+        (bytes[start + 2] << 16) |
+        (bytes[start + 3] << 8) |
+        bytes[start + 4];
     if (length > terminalHostMaxFramePayloadBytes) {
       throw const FormatException('Terminal host frame exceeds size limit.');
     }
-    final end = terminalHostFrameHeaderLength + length;
-    if (_buffer.length < end) {
-      return null;
-    }
-    final payload = Uint8List.fromList(
-      _buffer.sublist(terminalHostFrameHeaderLength, end),
-    );
-    _buffer.removeRange(0, end);
-    switch (kind) {
-      case terminalHostFrameKindJson:
-        return TerminalHostJsonFrame(
-          utf8.decode(payload, allowMalformed: true),
-        );
-      case terminalHostFrameKindOutput:
-        return _decodeOutputFrame(payload);
-      default:
-        // Unknown kinds are skipped rather than fatal: the length prefix keeps
-        // the stream parseable, so a newer host adding a frame type must not
-        // break an older client.
-        return null;
+    _kind = bytes[start];
+    _remainingPayload = length;
+  }
+
+  void _appendPartial(Uint8List bytes, int start, int end) {
+    if (start < end) {
+      _partial.add(Uint8List.sublistView(bytes, start, end));
     }
   }
 
-  TerminalHostFrame? _decodeOutputFrame(Uint8List payload) {
-    if (payload.length < 2) {
-      return null;
+  static String _decodeUtf8(Uint8List bytes, int start, int end) =>
+      const Utf8Decoder(allowMalformed: true).convert(bytes, start, end);
+
+  static bool _isUpgradeLine(String line) {
+    // Avoid parsing ordinary lines twice. A mention in a message body is not
+    // the upgrade event and must not flip the transport into binary mode.
+    if (!line.contains(terminalHostBinaryFramesEnabledLine)) return false;
+    try {
+      final decoded = jsonDecode(line);
+      return decoded is Map &&
+          decoded['event'] == terminalHostBinaryFramesEnabledLine;
+    } on FormatException {
+      return false;
     }
-    final idLength = (payload[0] << 8) | payload[1];
-    final idEnd = 2 + idLength;
-    if (payload.length < idEnd) {
-      return null;
+  }
+
+  static TerminalHostFrame? _decodeFrame(
+    int kind,
+    Uint8List bytes,
+    int start,
+    int end,
+  ) {
+    if (kind == terminalHostFrameKindJson) {
+      return TerminalHostJsonFrame(_decodeUtf8(bytes, start, end));
     }
-    final sessionId = utf8.decode(
-      payload.sublist(2, idEnd),
-      allowMalformed: true,
-    );
-    return TerminalHostOutputFrame(sessionId, payload.sublist(idEnd));
+    if (end - start < 2) return null;
+    final idLength = (bytes[start] << 8) | bytes[start + 1];
+    final idEnd = start + 2 + idLength;
+    if (idEnd > end) return null;
+    final sessionId = _decodeUtf8(bytes, start + 2, idEnd);
+    // Exactly one owned output copy, even when the input chunk contains many
+    // frames. A small output cannot pin an entire large socket buffer.
+    return TerminalHostOutputFrame(sessionId, bytes.sublist(idEnd, end));
   }
 }
 
@@ -153,25 +229,28 @@ Uint8List encodeTerminalHostJsonFrame(String json) {
 
 Uint8List encodeTerminalHostOutputFrame(String sessionId, List<int> data) {
   final id = utf8.encode(sessionId);
-  final payload = Uint8List(2 + id.length + data.length)
-    ..[0] = (id.length >> 8) & 0xff
-    ..[1] = id.length & 0xff
-    ..setRange(2, 2 + id.length, id)
-    ..setRange(2 + id.length, 2 + id.length + data.length, data);
-  return _frame(terminalHostFrameKindOutput, payload);
+  final payloadLength = 2 + id.length + data.length;
+  final out = _frameBuffer(terminalHostFrameKindOutput, payloadLength);
+  const start = terminalHostFrameHeaderLength;
+  out[start] = (id.length >> 8) & 0xff;
+  out[start + 1] = id.length & 0xff;
+  final idEnd = start + 2 + id.length;
+  out.setRange(start + 2, idEnd, id);
+  out.setRange(idEnd, out.length, data);
+  return out;
 }
 
-Uint8List _frame(int kind, List<int> payload) {
-  final out = Uint8List(terminalHostFrameHeaderLength + payload.length)
-    ..[0] = kind
-    ..[1] = (payload.length >> 24) & 0xff
-    ..[2] = (payload.length >> 16) & 0xff
-    ..[3] = (payload.length >> 8) & 0xff
-    ..[4] = payload.length & 0xff
-    ..setRange(
+Uint8List _frame(int kind, List<int> payload) =>
+    _frameBuffer(kind, payload.length)..setRange(
       terminalHostFrameHeaderLength,
       terminalHostFrameHeaderLength + payload.length,
       payload,
     );
-  return out;
-}
+
+Uint8List _frameBuffer(int kind, int payloadLength) =>
+    Uint8List(terminalHostFrameHeaderLength + payloadLength)
+      ..[0] = kind
+      ..[1] = (payloadLength >> 24) & 0xff
+      ..[2] = (payloadLength >> 16) & 0xff
+      ..[3] = (payloadLength >> 8) & 0xff
+      ..[4] = payloadLength & 0xff;

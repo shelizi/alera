@@ -261,7 +261,11 @@ class _TerminalSessionOutputPump {
       return;
     }
     final chunkBudget = _adaptiveChunkBudget;
-    final frame = StringBuffer();
+    // A quiet/interactive terminal usually has one output segment per
+    // flush. Hand its existing String straight to the emulator; only allocate
+    // a concatenation buffer when a second segment actually fits the budget.
+    var firstPart = '';
+    StringBuffer? combined;
     var written = 0;
     var restoreWritten = 0;
     var liveWritten = 0;
@@ -270,25 +274,29 @@ class _TerminalSessionOutputPump {
       final head = segment.head;
       final available = segment.remaining;
       final remaining = chunkBudget - written;
+      final int consumed;
+      final String part;
       if (available <= remaining) {
-        frame.write(segment.remainingText);
-        pipeline.consume(segment, available);
-        written += available;
-        if (segment.source == _TerminalOutputSource.restore) {
-          restoreWritten += available;
-        } else if (segment.source == _TerminalOutputSource.live) {
-          liveWritten += available;
+        consumed = available;
+        part = segment.remainingText;
+      } else {
+        // Absolute index, because the budget is measured from the head, not
+        // from the start of the chunk.
+        final cutoff = _terminalOutputChunkCutoff(
+          segment.text,
+          head + remaining,
+        );
+        if (cutoff <= head) {
+          break;
         }
-        continue;
+        consumed = cutoff - head;
+        part = segment.text.substring(head, cutoff);
       }
-      // Absolute index, because the budget is measured from the head, not
-      // from the start of the chunk.
-      final cutoff = _terminalOutputChunkCutoff(segment.text, head + remaining);
-      if (cutoff <= head) {
-        break;
+      if (written == 0) {
+        firstPart = part;
+      } else {
+        (combined ??= StringBuffer(firstPart)).write(part);
       }
-      final consumed = cutoff - head;
-      frame.write(segment.text.substring(head, cutoff));
       pipeline.consume(segment, consumed);
       written += consumed;
       if (segment.source == _TerminalOutputSource.restore) {
@@ -306,7 +314,9 @@ class _TerminalSessionOutputPump {
     final shouldAdapt = adaptBudget && written >= chunkBudget - 1;
     final blockingClock = shouldAdapt ? (Stopwatch()..start()) : null;
     final generation = _writeGeneration;
-    final writeFuture = _host.writeToTerminal(frame.toString());
+    final writeFuture = _host.writeToTerminal(
+      combined?.toString() ?? firstPart,
+    );
     if (writeFuture == null) {
       _completeWrite(
         generation: generation,
