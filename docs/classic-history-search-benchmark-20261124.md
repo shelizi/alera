@@ -116,3 +116,24 @@ Interleaved Windows Debug A/B runs against `cbf721a0d` (before/after/after/befor
 Warm upsert check median declined 27.9%, warm total 7.0%, reopen upsert check 23.3%, reopen total 8.7%. Warm/reopen fast-path counters show one equality SELECT and no old document rows returned to Rust for every measured request (84 total warm/reopen requests across the three after runs). The previous path materializes up to 256 existing rows and executes two SELECTs in an explicit transaction. Warm/reopen SQL writes remain zero. Cold and one-file-change paths are unchanged; do not attribute their noisy elapsed-time differences to this optimization. Windows process read/write and other-I/O operation counts were unchanged; this improvement targets SQLite/Rust row materialization and query overhead, not physical disk transfers. Complete JSON serialization is still required. The fast path aggregates serialized JSON into one temporary buffer, with a threshold checked after each record; its peak capacity and RSS have not been measured.
 
 Validation: 33 history regressions passed (one benchmark ignored in the ordinary run), 10 exact resume tests, 2 Agent Context tests. New tests exercise exact canonical comparison, rejection of an over-retention snapshot, same-file persisted JSON repair, duplicate update/revert order, clear/recreation and invalid input rejection. The existing service test confirms the warm fast path with an unregistered file excluded. Six benchmark runs passed. Shared-host Debug timings remain noisy, especially the unusually fast second after run. No complete Rust suite, release benchmark or RSS measurement was performed.
+
+## Reusable ranking normalization and term coverage
+
+The shared core search ranking now normalizes the bounded query once, borrows query words from that normalized string, and reuses one normalization buffer and one matched-term set across candidate records. Bounded ASCII prefixes have a byte-oriented normalization path; non-ASCII input retains the original Unicode character classification and per-character lowercase expansion. Separator collapsing, query and field truncation, repeated-term scoring, distinct-term coverage, field weights, stable ranking, and session identity/deduplication are preserved. No FTS5 query, database schema, candidate limit, resume authorization, or session identity rule changed.
+
+Interleaved Windows Debug A/B runs against `6ea8d6aa3` (before/after/after/before/before/after), 42 measured requests per run, 252 total. Values are individual run p50 timings followed by their median, not pooled percentiles.
+
+| Scenario | Before run p50 (ms) | After run p50 (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold total | 71.622, 88.310, 71.310 | 69.828, 65.281, 116.171 | 71.622 | 69.828 |
+| Warm total | 69.024, 56.951, 63.160 | 27.363, 60.806, 61.171 | 63.160 | 60.806 |
+| Index reopen total | 70.460, 69.982, 93.587 | 31.006, 58.115, 66.913 | 70.460 | 58.115 |
+| One file changed total | 75.027, 89.168, 83.904 | 31.341, 88.522, 68.559 | 83.904 | 68.559 |
+| Cold ranking | 2.905, 3.440, 2.600 | 1.530, 1.757, 2.378 | 2.905 | 1.757 |
+| Warm ranking | 5.041, 4.578, 4.825 | 1.342, 2.712, 2.553 | 4.825 | 2.553 |
+| Index reopen ranking | 4.836, 5.281, 4.526 | 1.399, 2.561, 2.693 | 4.836 | 2.561 |
+| One file changed ranking | 4.778, 5.089, 5.260 | 1.335, 2.473, 2.558 | 5.089 | 2.473 |
+
+The warm ranking phase decreased by 47.1%; cold ranking by 39.5%, reopen ranking by 47.0%, and one-file-changed ranking by 51.4%. The warm end-to-end median decreased by 3.7%. The ranking phase includes current-observed identity filtering as well as the core scorer. Every after-run ranking p50 was lower than every before-run p50 within each scenario. The first after run had unusually fast scan and database phases, and cold scans still exhibited long tails. Only ranking code changed, so total, scan and database timing differences are not evidence of improvements to the unchanged stages. No allocator counts or RSS measurements were taken; scratch-buffer reuse is established by source inspection and pointer-stability regression checks, not a measured memory-footprint reduction.
+
+Validation: 13 core search tests, 33 history tests, 10 exact resume tests, and 2 Agent Context tests passed (58 total). The two new core tests compare normalization and scoring with independent copies of the prior algorithms, including ASCII, Unicode and mixed-script cases, bounded character prefixes, duplicate terms, ignored tails and milestones, and cross-record scratch reuse. All six benchmark runs passed; the CLI rebuilt the changed core rather than reusing its old build artifact. The normal history test run leaves the opt-in benchmark ignored. Shared build lock delayed CLI compilation but released without interrupting other work. No complete Rust suite, release benchmark, or process RAM measurement was performed.

@@ -148,39 +148,47 @@ pub struct AgentSessionSearchHit {
     pub open_action: SessionOpenAction,
 }
 
-fn searchable_text(value: &str) -> String {
-    value
-        .chars()
-        .take(MAX_FIELD_CHARS)
-        .flat_map(char::to_lowercase)
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' {
-                c
-            } else {
-                ' '
+/// Normalize exactly the original character prefix, folding case and
+/// collapsing separator runs without allocating a temporary string or word
+/// vector. The caller owns reusable scratch storage.
+fn normalize_into(value: &str, limit: usize, out: &mut String) {
+    out.clear();
+    // An ASCII byte prefix contains exactly the same number of characters.
+    // Check only the bounded prefix, not an arbitrarily large source string.
+    let prefix = &value.as_bytes()[..value.len().min(limit)];
+    if prefix.is_ascii() {
+        for &byte in prefix {
+            if byte.is_ascii_alphanumeric() || byte == b'_' {
+                out.push(char::from(byte.to_ascii_lowercase()));
+            } else if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
             }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn words(value: &str) -> Vec<String> {
-    searchable_text(value)
-        .split_whitespace()
-        .filter(|word| !word.is_empty())
-        .map(str::to_owned)
-        .collect()
+        }
+    } else {
+        // Keep per-character Unicode lowercase expansion and classification,
+        // including combining marks introduced by a lowercase expansion.
+        for c in value.chars().take(limit).flat_map(char::to_lowercase) {
+            if c.is_alphanumeric() || c == '_' {
+                out.push(c);
+            } else if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        }
+    }
+    if out.ends_with(' ') {
+        out.pop();
+    }
 }
 
 /// Exact technical names and full phrases are preferred to generic token overlap.
 /// A missing term is not a hard rejection so mixed Chinese/English queries remain
 /// useful before local semantic re-ranking becomes available.
-fn score_record(
+fn score_record<'a>(
     record: &AgentSessionSearchRecord,
     text: &str,
-    terms: &[String],
+    terms: &[&'a str],
+    haystack: &mut String,
+    matched_terms: &mut HashSet<&'a str>,
 ) -> Option<(u32, SessionMatchField)> {
     let fields = [
         (SessionMatchField::Title, 140, record.title.as_str()),
@@ -188,7 +196,8 @@ fn score_record(
         (SessionMatchField::Progress, 85, record.progress.as_str()),
     ];
     let mut best = (0, SessionMatchField::Title);
-    let mut matched_terms = HashSet::new();
+    matched_terms.clear();
+    let term_count = (terms.len() as u32).max(1);
     for (field, weight, source) in fields.into_iter().chain(
         record
             .milestones
@@ -196,7 +205,7 @@ fn score_record(
             .take(MAX_EVENTS)
             .map(|value| (SessionMatchField::Milestone, 55, value.as_str())),
     ) {
-        let haystack = searchable_text(source);
+        normalize_into(source, MAX_FIELD_CHARS, haystack);
         if haystack.is_empty() {
             continue;
         }
@@ -204,10 +213,11 @@ fn score_record(
         if !text.is_empty() && haystack.contains(text) {
             score += weight * 2;
         }
-        for term in terms {
+        let term_weight = weight / term_count;
+        for &term in terms {
             if haystack.contains(term) {
-                matched_terms.insert(term.as_str());
-                score += weight / (terms.len() as u32).max(1);
+                matched_terms.insert(term);
+                score += term_weight;
             }
         }
         if score > best.0 {
@@ -217,7 +227,7 @@ fn score_record(
     if best.0 == 0 {
         return None;
     }
-    let coverage = matched_terms.len() as u32 * 20 / (terms.len() as u32).max(1);
+    let coverage = matched_terms.len() as u32 * 20 / term_count;
     // Running sessions get a modest boost, not enough to outrank an exact
     // historical technical match.
     Some((best.0 + coverage + u32::from(record.running) * 5, best.1))
@@ -230,9 +240,11 @@ pub fn search_agent_sessions(
     records: impl IntoIterator<Item = AgentSessionSearchRecord>,
     query: &AgentSessionSearchQuery,
 ) -> Vec<AgentSessionSearchHit> {
-    let text = query.text.chars().take(MAX_QUERY_CHARS).collect::<String>();
-    let terms = words(&text);
-    let normalized = searchable_text(&text);
+    let mut normalized = String::new();
+    normalize_into(&query.text, MAX_QUERY_CHARS, &mut normalized);
+    let terms: Vec<&str> = normalized.split_whitespace().collect();
+    let mut haystack = String::new();
+    let mut matched_terms = HashSet::new();
     let max_results = query.max_results.clamp(1, MAX_RESULTS);
     let mut positions: HashMap<AgentSessionIdentity, usize> = HashMap::new();
     let mut hits: Vec<AgentSessionSearchHit> = Vec::new();
@@ -259,7 +271,13 @@ pub fn search_agent_sessions(
         if terms.is_empty() {
             continue;
         }
-        let Some((score, match_field)) = score_record(&record, &normalized, &terms) else {
+        let Some((score, match_field)) = score_record(
+            &record,
+            &normalized,
+            &terms,
+            &mut haystack,
+            &mut matched_terms,
+        ) else {
             continue;
         };
         let identity = record.identity();
@@ -330,6 +348,158 @@ mod tests {
             max_results: 20,
             ..Default::default()
         }
+    }
+
+    // Keep the old normalization/scoring algorithm as an independent oracle
+    // for the allocation-conscious ranking path.
+    fn reference_normalize(value: &str, limit: usize) -> String {
+        value
+            .chars()
+            .take(limit)
+            .flat_map(char::to_lowercase)
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn reference_score(
+        record: &AgentSessionSearchRecord,
+        query: &str,
+    ) -> Option<(u32, SessionMatchField)> {
+        let truncated = query.chars().take(MAX_QUERY_CHARS).collect::<String>();
+        let normalized = reference_normalize(&truncated, MAX_FIELD_CHARS);
+        let terms = normalized
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let fields = [
+            (SessionMatchField::Title, 140, record.title.as_str()),
+            (SessionMatchField::Goal, 110, record.goal.as_str()),
+            (SessionMatchField::Progress, 85, record.progress.as_str()),
+        ];
+        let mut best = (0, SessionMatchField::Title);
+        let mut matched_terms = HashSet::new();
+        for (field, weight, source) in fields.into_iter().chain(
+            record
+                .milestones
+                .iter()
+                .take(MAX_EVENTS)
+                .map(|v| (SessionMatchField::Milestone, 55, v.as_str())),
+        ) {
+            let haystack = reference_normalize(source, MAX_FIELD_CHARS);
+            if haystack.is_empty() {
+                continue;
+            }
+            let mut score = 0;
+            if !normalized.is_empty() && haystack.contains(&normalized) {
+                score += weight * 2;
+            }
+            for term in &terms {
+                if haystack.contains(term) {
+                    matched_terms.insert(term.as_str());
+                    score += weight / (terms.len() as u32).max(1);
+                }
+            }
+            if score > best.0 {
+                best = (score, field);
+            }
+        }
+        if best.0 == 0 {
+            return None;
+        }
+        Some((
+            best.0
+                + matched_terms.len() as u32 * 20 / (terms.len() as u32).max(1)
+                + u32::from(record.running) * 5,
+            best.1,
+        ))
+    }
+
+    #[test]
+    fn reusable_normalization_matches_original_unicode_and_bounded_prefixes() {
+        let samples = [
+            String::new(),
+            " -- Windows__IME / API\t\r\n ".to_owned(),
+            "\u{0130}\u{0307} A\u{00df} \u{03a3}\u{03c2} \u{212a} \u{4e2d}\u{6587} \u{2003}\u{1f680}".to_owned(),
+            format!("{}{}", "a".repeat(1024), "\u{4e2d}"),
+            format!("{}\u{0130}\u{4e2d}", "A".repeat(255)),
+            " !\u{00a0}\u{0301}\u{1f680} ".repeat(300),
+            (0..=127_u8).map(char::from).collect::<String>(),
+            (0..=0xffff).filter_map(char::from_u32).collect::<String>(),
+        ];
+        let mut scratch = String::with_capacity(8192);
+        let pointer = scratch.as_ptr();
+        for source in &samples {
+            for limit in [0, 1, 2, 16, 255, 256, 257, 1023, 1024, 1025, 2048] {
+                normalize_into(source, limit, &mut scratch);
+                assert_eq!(scratch, reference_normalize(source, limit));
+                assert_eq!(scratch.as_ptr(), pointer, "reuse existing allocation");
+            }
+        }
+    }
+
+    #[test]
+    fn reusable_ranking_preserves_scores_duplicate_terms_and_field_budgets() {
+        let mut record = sample("codex", false);
+        record.title = "Windows__IME  keyboard \u{0130} \u{4e2d}\u{6587}".to_owned();
+        record.goal = "keyboard IMM API \u{4e2d}\u{6587} windows".to_owned();
+        record.progress = format!("{} ignoredtail", "a".repeat(MAX_FIELD_CHARS));
+        record.milestones = (0..MAX_EVENTS)
+            .map(|i| format!("test milestone {i}"))
+            .collect();
+        record.milestones.push("ignoredmilestone".into());
+        let mut haystack = String::with_capacity(8192);
+        let pointer = haystack.as_ptr();
+        for running in [false, true] {
+            record.running = running;
+            for query in [
+                "Windows",
+                "keyboard keyboard",
+                "keyboard IMM API",
+                "\u{0130} \u{4e2d}\u{6587}",
+                "ignoredtail",
+                "ignoredmilestone",
+                "test milestone 15",
+                " -- ",
+                "",
+                "API keyboard API",
+                "notmatched",
+                "a a a",
+            ] {
+                let mut normalized = String::new();
+                normalize_into(query, MAX_QUERY_CHARS, &mut normalized);
+                let terms = normalized.split_whitespace().collect::<Vec<_>>();
+                let mut matched = HashSet::new();
+                let actual =
+                    score_record(&record, &normalized, &terms, &mut haystack, &mut matched);
+                assert_eq!(actual, reference_score(&record, query), "query: {query:?}");
+                assert_eq!(haystack.as_ptr(), pointer);
+                let hits = search_agent_sessions([record.clone()], &super::tests::query(query));
+                assert_eq!(hits.first().map(|hit| (hit.score, hit.match_field)), actual);
+            }
+        }
+        // Test reuse across records, especially disjoint term coverage.
+        let mut other = record.clone();
+        other.title = "API".into();
+        other.goal.clear();
+        other.progress.clear();
+        other.milestones.clear();
+        let text = "keyboard api";
+        let terms = ["keyboard", "api"];
+        let mut matched = HashSet::new();
+        let _ = score_record(&record, text, &terms, &mut haystack, &mut matched);
+        assert_eq!(
+            score_record(&other, text, &terms, &mut haystack, &mut matched),
+            reference_score(&other, text)
+        );
     }
 
     #[test]
