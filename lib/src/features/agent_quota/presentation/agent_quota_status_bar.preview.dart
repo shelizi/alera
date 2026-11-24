@@ -155,13 +155,6 @@ AgentQuotaSnapshot _antigravitySnapshot() {
         resetsAt: null,
         resetDescription: null,
       ),
-      AgentQuotaBucket(
-        name: 'Gemini 4 Argon - Weekly',
-        usedPercent: 31,
-        windowMinutes: 10080,
-        resetsAt: null,
-        resetDescription: null,
-      ),
     ],
   );
 }

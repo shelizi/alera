@@ -423,9 +423,7 @@ fn short_label(provider: &str, label: &str) -> String {
         "Q"
     };
     if provider == "agy" {
-        let model = if lower.contains("argon") {
-            "Ar"
-        } else if lower.contains("gemini") {
+        let model = if lower.contains("gemini") {
             "G"
         } else {
             "C/G"
@@ -464,9 +462,7 @@ fn reading_order(provider: &str, label: &str) -> i32 {
         3
     };
     if provider == "agy" {
-        let group = if lower.contains("argon") {
-            20
-        } else if lower.contains("gemini") {
+        let group = if lower.contains("gemini") {
             0
         } else {
             10
@@ -496,6 +492,11 @@ pub fn parse_quota_snapshots(payload: &Value) -> Result<Vec<QuotaSnapshot>, &'st
         };
         if snapshot.provider == "antigravity" {
             snapshot.provider = "agy".to_owned();
+        }
+        // Older Hosts or cached snapshots may still report the retired pool.
+        if snapshot.provider == "agy" {
+            snapshot.buckets.retain(|metric| !metric.label.to_ascii_lowercase().contains("argon"));
+            snapshot.windows.retain(|metric| !metric.label.to_ascii_lowercase().contains("argon"));
         }
         if !PROVIDERS.iter().any(|(id, _)| *id == snapshot.provider) {
             continue;
@@ -805,7 +806,7 @@ mod tests {
         assert!((work_extra.used_fraction as f64 - 0.95).abs() < 0.00001);
         assert_eq!(work_extra.remaining_text(), "US$2.50");
         let agy = snapshots.iter().find(|s| s.provider == "agy").unwrap();
-        assert_eq!(agy.readings().len(), 5);
+        assert_eq!(agy.readings().len(), 4);
         assert_eq!(agy.readings()[0].label, "G·5H");
         let unpinned = vec!["claude:work".to_owned(), "grok".to_owned()];
         let visible = status_bar_quotas(&snapshots, None, &unpinned);
@@ -815,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_five_antigravity_buckets_and_clamps_remaining() {
+    fn drops_retired_antigravity_argon_bucket_and_clamps_remaining() {
         let values = parse_quota_snapshots(&json!({ "snapshots": [{
             "provider": "antigravity", "accountId": "default", "displayName": "AGY", "status": "ok",
             "buckets": [
@@ -829,11 +830,11 @@ mod tests {
         .unwrap();
         assert_eq!(values[0].provider_label(), "Antigravity");
         let readings = values[0].readings();
-        assert_eq!(readings.len(), 5);
+        assert_eq!(readings.len(), 4);
         assert_eq!(readings[0].label, "G·5H");
         assert_eq!(readings[0].value, "90%");
-        assert_eq!(readings[4].label, "Ar·W");
-        assert_eq!(readings[4].value, "1%");
+        assert_eq!(readings[2].value, "0%");
+        assert_eq!(readings[3].value, "100%");
     }
 
     #[test]

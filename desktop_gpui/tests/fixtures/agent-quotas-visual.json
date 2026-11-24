@@ -7,7 +7,7 @@
     {"provider":"kimi","status":"ok","windows":[{"label":"Weekly","usedPercent":48}]},
     {"provider":"grok","status":"ok","windows":[{"label":"5 hour","usedPercent":49}]},
     {"provider":"cursor","status":"ok","windows":[{"label":"Monthly","usedPercent":26}]},
-    {"provider":"antigravity","status":"ok","buckets":[{"name":"Gemini Five Hour","usedPercent":3},{"name":"Gemini Weekly","usedPercent":30},{"name":"Claude and GPT Five Hour","usedPercent":65},{"name":"Claude and GPT Weekly","usedPercent":94},{"name":"Argon Weekly","usedPercent":12}]},
+    {"provider":"antigravity","status":"ok","buckets":[{"name":"Gemini Five Hour","usedPercent":3},{"name":"Gemini Weekly","usedPercent":30},{"name":"Claude and GPT Five Hour","usedPercent":65},{"name":"Claude and GPT Weekly","usedPercent":94}]},
     {"provider":"minimax","status":"ok","buckets":[{"name":"MiniMax-general Weekly","usedPercent":27},{"name":"MiniMax-video Weekly","usedPercent":53}]},
     {"provider":"zai","status":"ok","windows":[{"label":"Daily","usedPercent":44},{"label":"MCP Weekly","usedPercent":32}]},
     {"provider":"devin","status":"ok","windows":[{"label":"Daily","usedPercent":22},{"label":"Weekly","usedPercent":50}]},

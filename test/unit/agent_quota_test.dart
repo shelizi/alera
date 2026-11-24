@@ -328,6 +328,21 @@ void main() {
     expect(tolerant?.provider, AgentQuotaProviderId.agy);
   });
 
+  test('retired Argon quota is ignored for AGY, including legacy Host IDs', () {
+    for (final provider in ['agy', 'antigravity', 'claude']) {
+      final snapshot = AgentQuotaSnapshot.fromJson(<String, Object?>{
+        'provider': provider,
+        'status': 'stale',
+        'buckets': [
+          {'name': 'Gemini Models - Weekly', 'usedPercent': 20},
+          {'name': 'Gemini 4 Argon - Weekly', 'usedPercent': 99},
+        ],
+      });
+      expect(snapshot.buckets.length, provider == 'claude' ? 2 : 1);
+      expect(snapshot.remainingPercent, provider == 'claude' ? 1 : 80);
+    }
+  });
+
   test('tryFromJson parses known payloads like fromJson', () {
     final payload = <String, Object?>{
       'provider': 'claude',

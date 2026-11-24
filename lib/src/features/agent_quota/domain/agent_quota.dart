@@ -88,6 +88,10 @@ class const AgentQuotaBucket({
   double get remainingPercent => (100 - usedPercent).clamp(0, 100);
 }
 
+bool _isRetiredAgyQuota(AgentQuotaProviderId provider, String name) =>
+    provider == AgentQuotaProviderId.agy &&
+    name.toLowerCase().contains('argon');
+
 class const AgentQuotaSnapshot({
   required final AgentQuotaProviderId provider,
   required final String accountId,
@@ -127,9 +131,11 @@ class const AgentQuotaSnapshot({
       error: json['error'] as String?,
       windows: _objectList(json['windows'])
           .map(AgentQuotaWindow.fromJson)
+          .where((window) => !_isRetiredAgyQuota(provider, window.label))
           .toList(growable: false),
       buckets: _objectList(json['buckets'])
           .map(AgentQuotaBucket.fromJson)
+          .where((bucket) => !_isRetiredAgyQuota(provider, bucket.name))
           .toList(growable: false),
       rateLimitResetCredits: switch (json['rateLimitResetCredits']) {
         final Map value => CodexResetCredits.fromJson(
