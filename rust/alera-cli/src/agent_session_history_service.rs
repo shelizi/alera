@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use alera_core::global_agent_search::{
-    search_agent_sessions, AgentSessionSearchHit, AgentSessionSearchQuery,
+    search_agent_sessions, AgentSessionSearchHit, AgentSessionSearchQuery, AgentSessionSearchRecord,
 };
 use anyhow::{bail, Result};
 
@@ -73,6 +73,29 @@ pub(crate) struct HistorySearchResponse {
     pub index_reused: bool,
     pub scan_truncated: bool,
     pub writes: HistoryIndexWriteStats,
+}
+
+/// Identity of a currently observed historical record. Borrow the fields from
+/// the scan instead of allocating a second owned copy for post-FTS validation.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct ObservedHistoryKey<'a> {
+    runtime: &'a str,
+    project: &'a str,
+    workspace: &'a str,
+    provider: &'a str,
+    account: Option<&'a str>,
+    native: &'a str,
+}
+
+fn observed_history_key(record: &AgentSessionSearchRecord) -> Option<ObservedHistoryKey<'_>> {
+    Some(ObservedHistoryKey {
+        runtime: &record.runtime_instance_id,
+        project: &record.project_id,
+        workspace: &record.workspace_id,
+        provider: &record.provider,
+        account: record.provider_account_id.as_deref(),
+        native: record.provider_session_id.as_deref()?,
+    })
 }
 
 /// Never run at boot or as a background timer. The caller explicitly opts
@@ -155,27 +178,11 @@ pub(crate) async fn search_history_on_demand(
     let observed = scan
         .records
         .iter()
-        .filter_map(|record| {
-            Some((
-                record.runtime_instance_id.clone(),
-                record.project_id.clone(),
-                record.workspace_id.clone(),
-                record.provider.clone(),
-                record.provider_account_id.clone(),
-                record.provider_session_id.clone()?,
-            ))
-        })
+        .filter_map(observed_history_key)
         .collect::<HashSet<_>>();
-    let candidates = candidates.into_iter().filter(|record| {
-        observed.contains(&(
-            record.runtime_instance_id.clone(),
-            record.project_id.clone(),
-            record.workspace_id.clone(),
-            record.provider.clone(),
-            record.provider_account_id.clone(),
-            record.provider_session_id.clone().unwrap_or_default(),
-        ))
-    });
+    let candidates = candidates
+        .into_iter()
+        .filter(|record| observed_history_key(record).is_some_and(|key| observed.contains(&key)));
     empty.hits = search_agent_sessions(candidates, query);
     Ok(empty)
 }
@@ -273,6 +280,22 @@ mod tests {
         assert_eq!(first.parsed_files, 2);
         assert_eq!(first.reused_files, 0);
         assert_eq!(first.hits[0].session.workspace_id, "ws");
+        let record = &first.hits[0].session;
+        let key = observed_history_key(record).unwrap();
+        assert_eq!(
+            key.native.as_ptr(),
+            record.provider_session_id.as_ref().unwrap().as_ptr()
+        );
+        assert_eq!(key.project.as_ptr(), record.project_id.as_ptr());
+        let observed = HashSet::from([key]);
+        let mut foreign = record.clone();
+        foreign.provider_account_id = Some("other".to_owned());
+        assert!(!observed.contains(&observed_history_key(&foreign).unwrap()));
+        foreign.provider_account_id = record.provider_account_id.clone();
+        foreign.workspace_id = "another".to_owned();
+        assert!(!observed.contains(&observed_history_key(&foreign).unwrap()));
+        foreign.provider_session_id = None;
+        assert!(observed_history_key(&foreign).is_none());
         let second =
             search_history_on_demand(cache.path(), &state, &roots, &registered, &query, true)
                 .await

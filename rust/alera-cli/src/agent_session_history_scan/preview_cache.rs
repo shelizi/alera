@@ -242,16 +242,91 @@ impl PreviewScan {
     }
 
     /// Only cache after the scanner has revalidated the registered CWD.
-    pub(super) fn remember(&mut self, read: &PreviewRead) {
-        if let Some(stamp) = &read.stamp {
+    /// Move the existing allocations into the next generation. The response
+    /// needs only its own session ID and preview, not a second copy of the CWD.
+    pub(super) fn remember(&mut self, read: PreviewRead) -> (String, Option<String>) {
+        let PreviewRead {
+            key,
+            stamp,
+            parsed_at,
+            value,
+            ..
+        } = read;
+        if let Some(stamp) = stamp {
+            let output = (value.0.clone(), value.2.clone());
             self.next.entries.insert(
-                read.key.clone(),
+                key,
                 CachedPreview {
-                    stamp: stamp.clone(),
-                    parsed_at: read.parsed_at,
-                    value: read.value.clone(),
+                    stamp,
+                    parsed_at,
+                    value,
                 },
             );
+            output
+        } else {
+            let (native_id, _, preview) = value;
+            (native_id, preview)
         }
+    }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepted_preview_moves_allocations_into_cache_and_uncacheable_output() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("history.jsonl");
+        std::fs::write(&path, b"history").unwrap();
+        let file = File::open(&path).unwrap();
+        let stamp = FileStamp::read(&file).unwrap();
+        let key = PreviewKey {
+            provider: "codex",
+            account: "default".to_owned(),
+            path,
+        };
+        let value = (
+            "550e8400-e29b-41d4-a716-446655440000".to_owned(),
+            home.path().to_owned(),
+            Some("first user message".to_owned()),
+        );
+        let mut scan = PreviewScan::new(HistoryPreviewCache::default());
+        let key_ptr = key.account.as_ptr();
+        let id_ptr = value.0.as_ptr();
+        let preview_ptr = value.2.as_ref().unwrap().as_ptr();
+        let expected = (value.0.clone(), value.2.clone());
+        let output = scan.remember(PreviewRead {
+            key,
+            stamp: Some(stamp),
+            parsed_at: Instant::now(),
+            value,
+            reused: false,
+        });
+        assert_eq!(output, expected);
+        let next = scan.finish();
+        let (key, cached) = next.entries.iter().next().unwrap();
+        assert_eq!(key.account.as_ptr(), key_ptr);
+        assert_eq!(cached.value.0.as_ptr(), id_ptr);
+        assert_eq!(cached.value.2.as_ref().unwrap().as_ptr(), preview_ptr);
+        assert_ne!(output.0.as_ptr(), id_ptr);
+        assert_ne!(output.1.as_ref().unwrap().as_ptr(), preview_ptr);
+
+        // When stamps are unsupported or change while parsing, no cache
+        // entry is retained and the original output strings can be moved.
+        let mut scan = PreviewScan::new(HistoryPreviewCache::default());
+        let value = (output.0, home.path().to_owned(), output.1);
+        let id_ptr = value.0.as_ptr();
+        let preview_ptr = value.2.as_ref().unwrap().as_ptr();
+        let output = scan.remember(PreviewRead {
+            key: key.clone(),
+            stamp: None,
+            parsed_at: Instant::now(),
+            value,
+            reused: false,
+        });
+        assert_eq!(output.0.as_ptr(), id_ptr);
+        assert_eq!(output.1.as_ref().unwrap().as_ptr(), preview_ptr);
+        assert!(scan.finish().entries.is_empty());
     }
 }

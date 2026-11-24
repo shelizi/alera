@@ -388,18 +388,29 @@ fn discover_history_with_exact_id(
                     report.skipped_files += 1;
                     continue;
                 }
-                let mut cached_read = None;
-                let parsed = if let Some(scan) = preview_scan.as_deref_mut() {
+                let (cached_read, uncached_read) = if let Some(scan) = preview_scan.as_deref_mut() {
                     #[cfg(test)]
                     if opened.is_some() {
                         report.reused_candidate_handles += 1;
                     }
-                    cached_read = scan.read(root, &canonical_file, opened);
-                    cached_read.as_ref().map(|read| read.value.clone())
+                    (scan.read(root, &canonical_file, opened), None)
                 } else {
-                    read_provider_metadata(root.provider, &canonical_file, policy.index_user_text)
+                    (
+                        None,
+                        read_provider_metadata(
+                            root.provider,
+                            &canonical_file,
+                            policy.index_user_text,
+                        ),
+                    )
                 };
-                let Some((native_id, cwd, preview)) = parsed else {
+                // Borrow the CWD while checking scope. Rejected previews never
+                // need to duplicate their ID, path or user text.
+                let Some((_, cwd, _)) = cached_read
+                    .as_ref()
+                    .map(|read| &read.value)
+                    .or(uncached_read.as_ref())
+                else {
                     report.skipped_files += 1;
                     continue;
                 };
@@ -410,32 +421,41 @@ fn discover_history_with_exact_id(
                     report.parsed_files += 1;
                 }
                 let workspace_index = if preview_scan.is_some() {
-                    *preview_cwds
-                        .entry(cwd)
-                        .or_insert_with_key(|cwd| resolve_workspace_index(cwd, &known, &mut report))
+                    if let Some(index) = preview_cwds.get(cwd) {
+                        *index
+                    } else {
+                        let index = resolve_workspace_index(cwd, &known, &mut report);
+                        preview_cwds.insert(cwd.clone(), index);
+                        index
+                    }
                 } else {
-                    resolve_workspace_index(&cwd, &known, &mut report)
+                    resolve_workspace_index(cwd, &known, &mut report)
                 };
                 let Some(workspace) = workspace_index.map(|index| &known[index]) else {
                     // Never attribute a transcript from an unregistered folder.
                     continue;
                 };
-                if let (Some(scan), Some(read)) =
-                    (preview_scan.as_deref_mut(), cached_read.as_ref())
-                {
-                    scan.remember(read);
-                }
+                let (native_id, preview) = if let Some(read) = cached_read {
+                    preview_scan
+                        .as_deref_mut()
+                        .expect("cached read requires preview scan")
+                        .remember(read)
+                } else {
+                    let Some((native_id, _, preview)) = uncached_read else {
+                        continue;
+                    };
+                    (native_id, preview)
+                };
                 let updated_at_ms = meta
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
                     .unwrap_or(0);
-                let display = format!("{} {}", root.provider, &native_id[..8]);
                 let title = preview
                     .as_deref()
                     .map(|p| p.chars().take(96).collect())
-                    .unwrap_or(display);
+                    .unwrap_or_else(|| format!("{} {}", root.provider, &native_id[..8]));
                 // A cached search preview is never proof for a resume operation.
                 if !reused {
                     report.source_proofs.push(HistorySourceProof {
