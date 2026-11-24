@@ -155,6 +155,9 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
           await _syncWatchedDirectories();
           return;
         } catch (_) {
+          // An old projection may fail after a workspace switch. It must not
+          // retire the newer workspace's active native handle or fallback.
+          if (!mounted || generation != _nativeProjectionGeneration) return;
           // Older native binaries, lost handles or stale versions must never
           // strand the Explorer; the stateless Rust projection remains valid.
           _disposeNativeProjectionSession(bumpGeneration: false);
@@ -347,6 +350,10 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
 
   void _resetExplorerProjection() {
     _disposeNativeProjectionSession();
+    // Pending native requests from the previous workspace may be slow or
+    // unresponsive. Future requests belong to a new versioned session and
+    // must not wait on the retired workspace's serialization chain.
+    _nativeProjectionQueue = Future<void>.value();
     _nativeProjectionDisabled = false;
     _projection = null;
     _treeNodesById.clear();

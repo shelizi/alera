@@ -21,6 +21,7 @@ class WorkspaceExplorerWatchRefreshQueue {
   Timer? _timer;
   Timer? _maxWaitTimer;
   bool _inFlight = false;
+  int _generation = 0;
   bool _overdue = false;
   bool _urgent = false;
   bool _disposed = false;
@@ -57,31 +58,38 @@ class WorkspaceExplorerWatchRefreshQueue {
     _urgent = false;
     final batch = List<String>.unmodifiable(_pending);
     _pending.clear();
-    unawaited(_run(batch));
+    unawaited(_run(batch, _generation));
   }
 
-  Future<void> _run(List<String> batch) async {
+  Future<void> _run(List<String> batch, int generation) async {
     try {
       await refresh(batch);
     } catch (_) {
       // Watcher reads are best-effort; a later batch or explicit refresh can
       // recover without leaving the queue permanently stuck.
     } finally {
-      _inFlight = false;
-      if (!_disposed && _pending.isNotEmpty) {
-        if (_urgent || _overdue) {
-          _drainIfReady();
-        } else {
-          _timer ??= Timer(debounce, _drainIfReady);
-          _maxWaitTimer ??= Timer(maxWait, _drainIfReady);
+      // A workspace switch may already have started a different read.
+      // Completion of a retired read cannot clear the newer in-flight flag.
+      if (generation == _generation) {
+        _inFlight = false;
+        if (!_disposed && _pending.isNotEmpty) {
+          if (_urgent || _overdue) {
+            _drainIfReady();
+          } else {
+            _timer ??= Timer(debounce, _drainIfReady);
+            _maxWaitTimer ??= Timer(maxWait, _drainIfReady);
+          }
         }
       }
     }
   }
 
-  /// Drop stale paths on a workspace switch while allowing an existing read
-  /// to finish. No queued work will be replayed in the new workspace.
+  /// Retire old workspace reads without awaiting their I/O. The caller must
+  /// reject stale results using its own workspace generation guards; this
+  /// queue no longer lets a hung old scan block the next workspace.
   void clear() {
+    _generation += 1;
+    _inFlight = false;
     _timer?.cancel();
     _timer = null;
     _maxWaitTimer?.cancel();

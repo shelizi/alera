@@ -174,6 +174,7 @@ class _FakeWorkspaceFileService({
   int nativeProjectionUpdates = 0;
   int nativeProjectionStops = 0;
   bool failNextNativeProjection = false;
+  Completer<void>? nextProjectionUpdateGate;
   BigInt _nextProjectionId = BigInt.one;
   final Map<BigInt, _FakeExplorerNativeProjection> _nativeProjections = {};
 
@@ -210,6 +211,9 @@ class _FakeWorkspaceFileService({
     required native.WorkspaceExplorerDirectoryChildren replacement,
   }) async {
     nativeProjectionUpdates++;
+    final gate = nextProjectionUpdateGate;
+    nextProjectionUpdateGate = null;
+    await gate?.future;
     if (failNextNativeProjection) {
       failNextNativeProjection = false;
       throw StateError('synthetic stale native Explorer session');

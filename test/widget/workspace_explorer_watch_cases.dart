@@ -59,6 +59,88 @@ void _registerWorkspaceExplorerWatchTests() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
+  testWidgets('blocked old projection cannot stall the next workspace', (
+    tester,
+  ) async {
+    final first = _workspace();
+    final second = _workspace(
+      id: 'workspace-2',
+      path: '/repo/other',
+    ).copyWith(projectId: 'project-2');
+    final service = _FakeWorkspaceFileService()
+      ..childrenByWorkspacePath[first.path] =
+          <String, List<native.WorkspaceFileEntry>>{
+            '': <native.WorkspaceFileEntry>[_file('first.dart')],
+          }
+      ..childrenByWorkspacePath[second.path] =
+          <String, List<native.WorkspaceFileEntry>>{
+            '': <native.WorkspaceFileEntry>[_file('second.dart')],
+          };
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              height: 480,
+              child: _SwitchingWorkspaceExplorerHarness(
+                first: first,
+                second: second,
+                onOpenFile: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('first.dart'), findsOneWidget);
+
+    final blockedRead = Completer<void>();
+    service.nextProjectionUpdateGate = blockedRead;
+    service.childrenByWorkspacePath[first.path]![''] =
+        <native.WorkspaceFileEntry>[
+          _file('first.dart'),
+          _file('still-old.dart'),
+        ];
+    final before = service.nativeProjectionUpdates;
+    service.emitWatchBatch(const <String>['']);
+    await tester.pump(const Duration(milliseconds: 130));
+    for (
+      var attempt = 0;
+      attempt < 10 && service.nativeProjectionUpdates == before;
+      attempt++
+    ) {
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+    expect(service.nativeProjectionUpdates, before + 1);
+
+    await tester.tap(find.text('Switch workspace'));
+    await tester.pump(const Duration(milliseconds: 1000));
+    await tester.pumpAndSettle();
+    expect(find.text('second.dart'), findsOneWidget);
+    expect(find.text('still-old.dart'), findsNothing);
+
+    blockedRead.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('second.dart'), findsOneWidget);
+    expect(find.text('still-old.dart'), findsNothing);
+
+    // The retired request fails with a now-invalid native session. It must
+    // not disable the new workspace's native delta path.
+    final fallbacksBefore = service.projectionCalls;
+    service.childrenByWorkspacePath[second.path]![''] =
+        <native.WorkspaceFileEntry>[
+          _file('second.dart'),
+          _file('second-new.dart'),
+        ];
+    service.emitWatchBatch(const <String>['']);
+    await _pumpWatchedRefresh(tester);
+    expect(find.text('second-new.dart'), findsOneWidget);
+    expect(service.projectionCalls, fallbacksBefore);
+  });
+
   testWidgets(
     'closed native watcher reconnects and discovers newly created files',
     (tester) async {

@@ -165,4 +165,49 @@ void main() {
       queue.dispose();
     });
   });
+
+  test(
+    'switch detaches a blocked old read without releasing new in-flight work',
+    () {
+      fakeAsync((clock) {
+        final oldRead = Completer<void>();
+        final newRead = Completer<void>();
+        final batches = <List<String>>[];
+        final queue = WorkspaceExplorerWatchRefreshQueue(
+          refresh: (paths) {
+            batches.add(paths);
+            if (paths.contains('old')) return oldRead.future;
+            if (paths.contains('new')) return newRead.future;
+            return Future<void>.value();
+          },
+        );
+
+        queue.enqueue(const ['old'], immediate: true);
+        queue.enqueue(const ['old-trailing']);
+        queue.clear(); // Workspace changes while the old Git read is blocked.
+        queue.enqueue(const ['new'], immediate: true);
+        expect(batches, [
+          <String>['old'],
+          <String>['new'],
+        ]);
+
+        queue.enqueue(const ['new-trailing']);
+        clock.elapse(const Duration(milliseconds: 800));
+        expect(batches, hasLength(2));
+        oldRead.complete();
+        clock.flushMicrotasks();
+        // The retired read must not clear the new generation's in-flight flag.
+        expect(batches, hasLength(2));
+
+        newRead.complete();
+        clock.flushMicrotasks();
+        expect(batches, [
+          <String>['old'],
+          <String>['new'],
+          <String>['new-trailing'],
+        ]);
+        queue.dispose();
+      });
+    },
+  );
 }

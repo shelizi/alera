@@ -31,28 +31,43 @@ redundant background work while using the Classic Flutter workbench.
    stop the native watch handle with a 500-ms bounded wait. Workspace
    generation checks prevent a late old restart from reinitializing the wrong
    tree. Native cleanup is best-effort if the platform does not respond.
-6. **Regression tests:** Verify burst deduplication, bounded progress under
+6. **Isolated old I/O:** On Workspace replacement, the watcher queue retires
+   its in-flight generation immediately. A blocked old Git read cannot delay
+   the next Workspace's refresh, and its late completion cannot clear the new
+   generation's in-flight state.
+7. **Native projection isolation:** Reset the native projection serialization
+   chain when rebuilding a different projection. An outstanding old native
+   request does not delay the new workspace, and late native projection
+   failures cannot disable the new workspace's native session.
+8. **Regression tests:** Verify burst deduplication, bounded progress under
    sustained file changes, in-flight trailing batches, immediate watcher
    recovery, cancellation, unchanged notification suppression, manual refresh,
-   rapid workspace switching, and watcher restart behavior.
+   rapid workspace switching, old Git/projection stalls, and watcher restart.
 
 ## Verification
 
 - `flutter pub get --offline` completed using the project's existing lock.
 - `flutter test --no-pub` across the four focused watcher/Git test files:
-  **31/31 passed** on 2026-11-24 after the follow-up Widget changes.
+  **32/32 passed** on 2026-11-24, including a RED-to-GREEN regression for
+  an old in-flight scan blocking the new workspace after `clear()`.
 - Classic adjacent file service, editor watcher and Source Control tests:
   **41/41 passed**.
-- Complete Explorer Widget suite **91/91 passed** after updating fake-clock
-  tests to advance through the new native watch debounce; also includes
-  the new rapid A -> B -> A workspace-switch regression.
+- Complete Explorer Widget suite **92/92 passed**, including native projection
+  cancellation and a stalled previous workspace. A blocked native projection
+  reproduced a `pumpAndSettle` timeout before the fix; it now passes and
+  verifies the next workspace stays on the native delta path after old failure.
 - The previous baseline on `main` independently reproduced an Explorer
   `pumpAndSettle` timeout when switching workspaces. A bounded native watch
   teardown fixed that timeout in the isolated candidate.
-- Formatter and Git diff check passed. The six-file Dart analyzer request
-  reached its 180-second execution limit without reporting diagnostics; it is
-  **inconclusive**, not a clean analyzer result. A smaller focused analysis
-  can narrow this tool/environment bottleneck.
+- Dart static analysis of the two modified production source files and
+  the three changed test files completed in two smaller groups:
+  **No issues found** (both exit 0).
+- Formatter and Git diff check passed. The earlier six-file Dart analyzer
+  request hit its 180-second execution limit without reporting diagnostics,
+  but subsequent scoped analyzer runs passed; the former timeout is not
+  counted as a clean result.
+- The deterministic synthetic A/B benchmark still reports 200 -> 1 requests
+  for an immediate burst and 300 -> 2 for a sustained 5-ms stream.
 - No physical Windows GUI A/B was performed.
 
 ## Reproducible synthetic scheduling comparison (2026-11-24)
