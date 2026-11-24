@@ -129,6 +129,7 @@ pub async fn run_terminal_host_server(
         next_client_id,
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
     let hook_settings = actor.runtime_store.agent_status_hook_settings().await?;

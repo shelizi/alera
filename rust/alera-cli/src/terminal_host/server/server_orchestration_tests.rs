@@ -60,6 +60,7 @@ async fn run_stop_clears_persisted_run_without_in_memory_ticker() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -157,6 +158,7 @@ async fn terminal_exit_fails_active_orchestration_dispatch() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -276,6 +278,7 @@ async fn host_dispose_fails_active_orchestration_dispatch() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
@@ -368,6 +371,7 @@ async fn coordinator_does_not_spawn_worker_tab_for_cli_only_client() {
         next_client_id: Arc::new(AtomicU64::new(2)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
     let response = actor

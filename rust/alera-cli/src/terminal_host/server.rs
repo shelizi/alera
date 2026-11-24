@@ -375,6 +375,7 @@ struct ServerActor {
     next_client_id: Arc<AtomicU64>,
     mobile_gateway: Option<JoinHandle<()>>,
     shutdown_gen: u64,
+    shutdown_timer: lifecycle::ShutdownTimer,
     disposed: bool,
 }
 

@@ -126,6 +126,7 @@ pub(super) async fn test_actor(
         next_client_id: Arc::new(AtomicU64::new(10)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     }
 }

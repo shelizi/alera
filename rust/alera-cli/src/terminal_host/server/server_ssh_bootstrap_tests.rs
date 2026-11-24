@@ -63,6 +63,7 @@ async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
         next_client_id: Arc::new(AtomicU64::new(2)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 

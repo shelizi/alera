@@ -72,6 +72,7 @@ async fn mobile_gateway_rebinds_same_port_after_releasing_old_listener() {
         next_client_id: Arc::new(AtomicU64::new(1)),
         mobile_gateway: None,
         shutdown_gen: 0,
+        shutdown_timer: Default::default(),
         disposed: false,
     };
 
