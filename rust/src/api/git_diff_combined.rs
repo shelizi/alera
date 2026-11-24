@@ -62,7 +62,7 @@ pub(super) fn append_combined_diff_file(
     truncated: &mut bool,
     mut file: GitDiffFile,
 ) -> bool {
-    let preview_bytes = diff_lines_byte_len(&file.lines);
+    let mut preview_bytes = diff_lines_byte_len(&file.lines);
     if file.truncated {
         *truncated = true;
     }
@@ -71,8 +71,10 @@ pub(super) fn append_combined_diff_file(
         truncate_diff_lines_to_bytes(&mut file.lines, remaining);
         file.truncated = true;
         *truncated = true;
+        // Only a modified preview needs a second byte-count pass.
+        preview_bytes = diff_lines_byte_len(&file.lines);
     }
-    *total_bytes = total_bytes.saturating_add(diff_lines_byte_len(&file.lines));
+    *total_bytes = total_bytes.saturating_add(preview_bytes);
     files.push(file);
     if *total_bytes >= MAX_DIFF_PATCH_BYTES {
         *truncated = true;

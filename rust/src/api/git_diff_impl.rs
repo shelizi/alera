@@ -29,7 +29,7 @@ use git_diff_combined::{
     append_combined_diff_file, append_combined_diff_for_path_with_whitespace,
     git_diff_all_for_file_with_whitespace,
 };
-use git_diff_render::render_diff_for_path;
+use git_diff_render::{collect_diff_line_stats, render_diff_for_path};
 use git_diff_untracked::{build_untracked_patch, read_untracked_text_up_to, untracked_diff_file};
 
 #[path = "git_submodule_impl.rs"]
@@ -1637,11 +1637,7 @@ fn diff_line_stats_for_paths(
         pathspecs.push(old_path);
     }
     let mut diff = diff_for_area(repo, &pathspecs, area)?;
-    let rendered = render_diff_for_path(repo, &mut diff, path, Some(area))?;
-    if rendered.is_binary || rendered.lines.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some((rendered.added, rendered.removed)))
+    collect_diff_line_stats(repo, &mut diff, path, area)
 }
 
 fn status_result_from_entries(entries: Vec<GitChangeEntry>) -> GitStatusResult {

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 
-use git2::{Diff, DiffDelta, DiffFormat, DiffLineType, Oid, Repository};
+use git2::{Diff, DiffDelta, DiffFormat, DiffLine, DiffLineType, Oid, Repository};
 
 use crate::api::workspace_files::{decode_workspace_text_bytes, WorkspaceTextEncoding};
 
@@ -45,6 +45,73 @@ pub(super) struct RenderedDiff {
     pub(super) line_preview_truncated: bool,
 }
 
+#[derive(Default)]
+struct DiffLineStats {
+    added: u32,
+    removed: u32,
+    is_binary: bool,
+    has_visible_line: bool,
+}
+
+impl DiffLineStats {
+    fn observe(&mut self, line: &DiffLine<'_>) {
+        let origin = line.origin_value();
+        match origin {
+            // No final newline still represents one added/deleted line.
+            DiffLineType::Addition => {
+                self.added = self.added.saturating_add(line.num_lines().max(1));
+            }
+            DiffLineType::Deletion => {
+                self.removed = self.removed.saturating_add(line.num_lines().max(1));
+            }
+            DiffLineType::Binary => self.is_binary = true,
+            _ => {}
+        }
+        if !self.has_visible_line {
+            // Source rows always have a prefix, even for an empty line.
+            // Headers are only visible when they contain more than newlines.
+            // EOFNL pseudo-lines are metadata and are never rendered.
+            self.has_visible_line = match origin {
+                DiffLineType::Context | DiffLineType::Addition | DiffLineType::Deletion => true,
+                DiffLineType::FileHeader | DiffLineType::HunkHeader | DiffLineType::Binary => {
+                    line.content().iter().any(|byte| *byte != b'\n')
+                }
+                _ => false,
+            };
+        }
+    }
+
+    fn counts(&self) -> Option<(u32, u32)> {
+        (!self.is_binary && self.has_visible_line).then_some((self.added, self.removed))
+    }
+}
+
+/// Status needs counts, not preview rows. Do not allocate strings, decode
+/// legacy encodings or read entire blobs just to calculate line counts.
+/// Keep the same patch-origin rules as rendering, including missing newlines.
+pub(super) fn collect_diff_line_stats(
+    repo: &Repository,
+    diff: &mut Diff<'_>,
+    repo_path: &str,
+    area: GitChangeArea,
+) -> Result<Option<(u32, u32)>, GitError> {
+    let mut stats = DiffLineStats::default();
+    let result = diff.print(DiffFormat::Patch, |delta, _hunk, line| {
+        if delta_matches_repo_path(&delta, repo_path) {
+            stats.observe(&line);
+        }
+        true
+    });
+    if result.is_err() {
+        // Rare error path: preserve the renderer's existing tolerance of
+        // libgit2 errors after a preview was truncated.
+        let rendered = render_diff_for_path(repo, diff, repo_path, Some(area))?;
+        return Ok((!rendered.is_binary && !rendered.lines.is_empty())
+            .then_some((rendered.added, rendered.removed)));
+    }
+    Ok(stats.counts())
+}
+
 pub(super) fn render_diff_for_path(
     repo: &Repository,
     diff: &mut Diff<'_>,
@@ -53,9 +120,7 @@ pub(super) fn render_diff_for_path(
 ) -> Result<RenderedDiff, GitError> {
     let mut lines = Vec::new();
     let mut preview_bytes = 0usize;
-    let mut added = 0u32;
-    let mut removed = 0u32;
-    let mut is_binary = false;
+    let mut stats = DiffLineStats::default();
     let mut truncated = false;
     let mut line_preview_truncated = false;
     let mut old_encoding = SideEncodingCache::default();
@@ -65,14 +130,7 @@ pub(super) fn render_diff_for_path(
         if !delta_matches_repo_path(&delta, repo_path) {
             return true;
         }
-        match line.origin_value() {
-            // A content line without a final newline reports num_lines() == 0.
-            // It still represents one added/deleted line (EOFNL is metadata).
-            DiffLineType::Addition => added = added.saturating_add(line.num_lines().max(1)),
-            DiffLineType::Deletion => removed = removed.saturating_add(line.num_lines().max(1)),
-            DiffLineType::Binary => is_binary = true,
-            _ => {}
-        }
+        stats.observe(&line);
         // libgit2 emits EOFNL pseudo-lines to describe a missing final newline.
         // They are patch metadata, not extra additions/deletions or context.
         // Rendering them as text duplicates changed rows in full-file Diff.
@@ -147,9 +205,9 @@ pub(super) fn render_diff_for_path(
 
     Ok(RenderedDiff {
         lines,
-        added,
-        removed,
-        is_binary,
+        added: stats.added,
+        removed: stats.removed,
+        is_binary: stats.is_binary,
         truncated,
         line_preview_truncated,
     })
