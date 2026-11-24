@@ -65,9 +65,12 @@ This is an **experimental, independent Rust UI frontend**, not a replacement of 
 
 The Native Windows executable now embeds **the exact same icon** as Alera
 Classic: `windows/runner/resources/app_icon.ico` (Classic's `IDI_APP_ICON=101`).
-`desktop_gpui/native_app_icon.rc` references that existing tracked asset;
-the Windows build script compiles it into the Native EXE using the already
-locked `embed-resource` dependency. Do not replace it with the default
+`desktop_gpui/native_app_icon.rc` references that existing tracked asset
+as resource ID **1**, which the GPUI Windows backend explicitly loads into
+its window class. Classic keeps ID 101 in its own executable. The Windows
+build script compiles the Native icon using the already locked
+`embed-resource` dependency. The single icon group also serves Explorer
+and shortcut icon index 0. Do not replace it with the default
 GPUI/Rust icon or a re-drawn copy. Icon appearance is shared, but Native's
 AppUserModelID, shortcut grouping, application data and lifecycle remain
 separate from Classic.

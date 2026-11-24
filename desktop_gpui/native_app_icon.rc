@@ -1,3 +1,4 @@
 // Use exactly the same icon as the shipping Alera Classic Windows runner.
-// ID 101 is Classic's IDI_APP_ICON and the first/only icon group here.
-101 ICON "../windows/runner/resources/app_icon.ico"
+// GPUI's Windows backend loads RT_GROUP_ICON resource ID 1 (not Classic's 101).
+// Keep a single group so Explorer/shortcut icon index 0 is the same asset.
+1 ICON "../windows/runner/resources/app_icon.ico"
