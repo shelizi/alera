@@ -8,11 +8,14 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::agent_history_snapshots::{preserve_version, ArchiveResult};
+#[path = "agent_history_sync_io.rs"]
+mod sync_io;
 use alera_core::runtime::{
     RuntimeAgentHistorySyncMode, RuntimeAgentHistorySyncSettings, RuntimeAgentQuotaSettings,
     RuntimeStore,
 };
 use sha2::{Digest, Sha256};
+use sync_io::inspect_prefix;
 use uuid::Uuid;
 
 const INTERVAL: Duration = Duration::from_secs(3 * 60);
@@ -247,31 +250,50 @@ fn mirror_pair(
                     if !existing.file_type().is_file() || !original.file_type().is_file() {
                         stats.conflicts += 1;
                     } else if existing.len() < original.len() {
-                        if is_complete_line_prefix(&target_file, &path) {
-                            stats.stale += 1;
-                            if let Some(root) = snapshot_root {
-                                match archive_stale_copy(
-                                    root,
-                                    source,
-                                    target,
-                                    &child,
-                                    &path,
-                                    &target_file,
-                                    quiet,
-                                ) {
-                                    Ok(Some(ArchiveResult::Created)) => stats.archived += 1,
-                                    Ok(Some(ArchiveResult::AlreadyPresent)) | Ok(None) => {}
-                                    Ok(Some(ArchiveResult::CapacityReached)) => {
-                                        stats.archive_capacity += 1
+                        let capture = snapshot_root.is_some()
+                            && original
+                                .modified()
+                                .ok()
+                                .and_then(|time| SystemTime::now().duration_since(time).ok())
+                                .is_some_and(|age| age >= quiet);
+                        match inspect_prefix(
+                            &target_file,
+                            &existing,
+                            &path,
+                            &original,
+                            MAX_FILE_BYTES,
+                            capture,
+                        ) {
+                            Ok(Some(verified)) => {
+                                stats.stale += 1;
+                                if let Some(root) = snapshot_root {
+                                    let result = verified.snapshot.and_then(|bytes| {
+                                        archive_stale_copy(root, source, target, &child, bytes)
+                                    });
+                                    match result {
+                                        Ok(Some(ArchiveResult::Created)) => stats.archived += 1,
+                                        Ok(Some(ArchiveResult::AlreadyPresent)) | Ok(None) => {}
+                                        Ok(Some(ArchiveResult::CapacityReached)) => {
+                                            stats.archive_capacity += 1
+                                        }
+                                        Err(_) => stats.archive_errors += 1,
                                     }
-                                    Err(_) => stats.archive_errors += 1,
                                 }
                             }
-                        } else {
-                            stats.conflicts += 1;
+                            _ => stats.conflicts += 1,
                         }
                     } else if existing.len() > original.len()
-                        && !is_complete_line_prefix(&path, &target_file)
+                        && !matches!(
+                            inspect_prefix(
+                                &path,
+                                &original,
+                                &target_file,
+                                &existing,
+                                MAX_FILE_BYTES,
+                                false,
+                            ),
+                            Ok(Some(_))
+                        )
                     {
                         stats.conflicts += 1;
                     }
@@ -296,9 +318,7 @@ fn archive_stale_copy(
     source: &HistoryAccount,
     target: &HistoryAccount,
     relative: &Path,
-    source_file: &Path,
-    native_target: &Path,
-    quiet: Duration,
+    snapshot: Option<Vec<u8>>,
 ) -> io::Result<Option<ArchiveResult>> {
     if archive_root.starts_with(&source.history_root)
         || archive_root.starts_with(&target.history_root)
@@ -309,40 +329,9 @@ fn archive_stale_copy(
         ));
     }
 
-    let before = fs::symlink_metadata(source_file)?;
-    let target_before = fs::symlink_metadata(native_target)?;
-    if !before.file_type().is_file()
-        || !target_before.file_type().is_file()
-        || before.len() > MAX_FILE_BYTES
-        || before.len() <= target_before.len()
-    {
+    let Some(full) = snapshot else {
         return Ok(None);
-    }
-    let quiet_enough = before
-        .modified()
-        .ok()
-        .and_then(|time| SystemTime::now().duration_since(time).ok())
-        .is_some_and(|age| age >= quiet);
-    if !quiet_enough {
-        return Ok(None);
-    }
-
-    let full = fs::read(source_file)?;
-    let prefix = fs::read(native_target)?;
-    let after = fs::symlink_metadata(source_file)?;
-    let target_after = fs::symlink_metadata(native_target)?;
-    if full.len() as u64 != before.len()
-        || after.len() != before.len()
-        || after.modified().ok() != before.modified().ok()
-        || target_after.len() != target_before.len()
-        || target_after.modified().ok() != target_before.modified().ok()
-        || prefix.is_empty()
-        || prefix.last() != Some(&b'\n')
-        || full.last() != Some(&b'\n')
-        || !full.starts_with(&prefix)
-    {
-        return Ok(None);
-    }
+    };
 
     // Hash the complete scoped identity to avoid filesystem path traversal
     // and keep private account directory names out of snapshot filenames.
@@ -369,28 +358,6 @@ fn archive_stale_copy(
     }))
     .map_err(io::Error::other)?;
     preserve_version(archive_root, &identity, &version, &full, &metadata).map(Some)
-}
-
-/// Only classify an already existing transcript as a stale mirror if both
-/// inputs are normal bounded files and the shorter JSONL ends at a line break.
-/// Never mutate either file from this check.
-fn is_complete_line_prefix(shorter: &Path, longer: &Path) -> bool {
-    let (Ok(short), Ok(long)) = (fs::symlink_metadata(shorter), fs::symlink_metadata(longer))
-    else {
-        return false;
-    };
-    if !short.file_type().is_file()
-        || !long.file_type().is_file()
-        || short.len() == 0
-        || short.len() >= long.len()
-        || long.len() > MAX_FILE_BYTES
-    {
-        return false;
-    }
-    let (Ok(prefix), Ok(full)) = (fs::read(shorter), fs::read(longer)) else {
-        return false;
-    };
-    prefix.last() == Some(&b'\n') && full.starts_with(&prefix)
 }
 
 #[derive(PartialEq, Eq)]

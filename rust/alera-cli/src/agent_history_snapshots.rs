@@ -2,7 +2,7 @@
 //! This module deliberately uses only std so its file safety tests can run
 //! without linking the entire Alera Runtime Host on Windows.
 use std::fs::{self, OpenOptions};
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -92,7 +92,7 @@ fn verify_existing(path: &Path, expected: &[u8]) -> io::Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.file_type().is_file()
         || meta.len() != expected.len() as u64
-        || fs::read(path)? != expected
+        || !matches_content(&mut fs::File::open(path)?, expected)?
     {
         return Err(io::Error::new(
             ErrorKind::InvalidData,
@@ -100,6 +100,28 @@ fn verify_existing(path: &Path, expected: &[u8]) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Compare immutable data without allocating another full transcript. Verify
+/// every byte, including EOF, so content-addressing does not hide tampering
+/// or concurrent growth of an existing archive.
+fn matches_content(reader: &mut impl Read, expected: &[u8]) -> io::Result<bool> {
+    let mut block = [0u8; 64 * 1024];
+    for chunk in expected.chunks(block.len()) {
+        match reader.read_exact(&mut block[..chunk.len()]) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        if block[..chunk.len()] != *chunk {
+            return Ok(false);
+        }
+    }
+    match reader.read_exact(&mut block[..1]) {
+        Ok(()) => Ok(false),
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(true),
+        Err(error) => Err(error),
+    }
 }
 
 /// Bounded, metadata-only inventory. No transcript or account path leaves the
@@ -287,6 +309,46 @@ mod tests {
             b"{\"turn\":1}\n{\"turn\":2}\n"
         );
         assert_eq!(fs::read_dir(root.join(hash('a'))).unwrap().count(), 3);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn archive_comparison_reads_exactly_expected_content_and_stops_on_mismatch() {
+        use std::io::Cursor;
+        let expected = vec![b'x'; 256 * 1024];
+        let mut reader = Cursor::new(&expected);
+        assert!(matches_content(&mut reader, &expected).unwrap());
+        assert_eq!(reader.position(), expected.len() as u64);
+
+        let mut altered = expected.clone();
+        altered[0] = b'y';
+        let mut reader = Cursor::new(altered);
+        assert!(!matches_content(&mut reader, &expected).unwrap());
+        assert_eq!(reader.position(), 64 * 1024);
+        let mut reader = Cursor::new(&expected[..expected.len() - 1]);
+        assert!(!matches_content(&mut reader, &expected).unwrap());
+        let mut grown = expected.clone();
+        grown.push(b'z');
+        assert!(!matches_content(&mut Cursor::new(grown), &expected).unwrap());
+    }
+
+    #[test]
+    fn equal_length_archive_tampering_is_detected() {
+        let fixture = fixture();
+        let root = fixture.join("archive");
+        let data = vec![b'x'; 128 * 1024];
+        let mut data = data;
+        *data.last_mut().unwrap() = b'\n';
+        assert_eq!(store(&root, 'b', &data).unwrap(), ArchiveResult::Created);
+        let version = root.join(hash('a')).join(format!("{}.jsonl", hash('b')));
+        let mut changed = data.clone();
+        changed[64 * 1024] = b'y';
+        fs::write(&version, &changed).unwrap();
+        assert_eq!(
+            store(&root, 'b', &data).unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(&version).unwrap(), changed);
         fs::remove_dir_all(fixture).unwrap();
     }
 
