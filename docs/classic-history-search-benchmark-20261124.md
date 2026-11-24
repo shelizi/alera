@@ -157,3 +157,30 @@ Interleaved Windows Debug A/B runs (before/after/after/before/before/after), com
 For every single-file-change request in the new runs (21), the selective lookup ran once, returned one mismatch and materialized one previous document row, compared with 256 previous document rows per request in the old runs. This is a 99.61% reduction in previous-row materialization, not a measurement of total allocations, memory usage or bytes read from the physical disk. SQL write statements remained three; Windows process other-I/O counts remained 2807 at p50. The changed-case update-check median decreased 20.1%, and the end-to-end median decreased 12.4%. All three after-run changed-case upsert p50s are lower than all three before-run p50s. Unchanged paths showed noise (including faster and slower runs), so do not claim improvements in cold, warm, or reopen paths. The shared-host Debug results are not release performance guarantees.
 
 Validation on the integrated-main incremental branch: 35 history tests passed (one opt-in benchmark ignored in the ordinary run), 10 exact resume tests and 2 Agent Context tests passed, 47 total. New tests compare all stored document and FTS fields, row IDs and logical stats against the legacy path on a 256-record batch with text change, metadata change, noncanonical JSON repair and a new account record. They also verify that unobserved old records remain, unchanged rows are not returned, duplicate reverts preserve sequential statistics, and an oversized comparison falls back. Actual Windows symlink rejection passed. The same opt-in benchmark passed all six runs. Format and Git diff checks passed. No separate unmodified-main test executable, full Rust suite, release benchmark or RSS measurement was run.
+
+## FTS result ownership reuse after incremental merge (2026-11-25)
+
+Fast-forwarded main to `98617a588`; the incremental source branch was fully integrated and pre-existing dirty main documents were verified byte-identical. This follow-up branch starts at that exact commit.
+
+Reuse the canonical JSON buffer already built by the warm or selective incremental comparison for the lifetime of the current prepared batch. The scoped FTS query retains the existing MATCH, document-key scope, bm25 order, updated-time order and result limit. When comparison bytes are available, it additionally returns the selected document key. The final observed occurrence of that key is reused only if the actual stored JSON returned by the same FTS statement is byte-for-byte identical to its canonical JSON. Move the existing record into ranking instead of cloning or decoding it. Noncanonical, externally modified or malformed rows take the previous decoding path, including the original observed-identity filter and error behavior. Cold or over-budget requests do not serialize additional JSON solely for reuse. No cross-request cache, schema change, FTS ranking change or authorization change was introduced.
+
+Interleaved Windows Debug A/B runs (before/after/after/before/before/after) against the exact merged baseline `98617a588`. Both executables passed all 42 requests per run, 252 total. The table lists the individual run p50 milliseconds, followed by the median of the three run medians, not pooled percentiles.
+
+| Scenario | Before run p50 (ms) | After run p50 (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold total | 78.080, 105.690, 91.323 | 135.203, 76.376, 70.722 | 91.323 | 76.376 |
+| Warm total | 27.904, 67.338, 59.748 | 66.505, 65.371, 34.559 | 59.748 | 65.371 |
+| Index reopen total | 69.515, 68.108, 68.665 | 82.932, 66.814, 66.229 | 68.665 | 66.814 |
+| One file changed total | 76.367, 73.765, 77.248 | 91.672, 80.605, 73.562 | 76.367 | 80.605 |
+| Cold FTS | 2.665, 3.158, 4.698 | 5.797, 3.147, 3.398 | 3.158 | 3.398 |
+| Warm FTS | 2.567, 5.143, 4.710 | 5.178, 4.339, 3.339 | 4.710 | 4.339 |
+| Index reopen FTS | 5.405, 5.421, 6.268 | 10.237, 5.837, 4.718 | 5.421 | 5.837 |
+| One file changed FTS | 6.628, 5.081, 5.144 | 6.430, 4.236, 3.990 | 5.144 | 4.236 |
+| Cold rank | 2.529, 4.680, 4.751 | 5.110, 2.992, 2.991 | 4.680 | 2.992 |
+| Warm rank | 2.676, 5.255, 4.889 | 4.068, 3.907, 3.052 | 4.889 | 3.907 |
+| Index reopen rank | 5.016, 5.142, 5.162 | 4.136, 3.841, 3.870 | 5.142 | 3.870 |
+| One file changed rank | 5.748, 5.006, 4.905 | 4.263, 4.623, 3.676 | 5.006 | 4.263 |
+
+All 105 non-cold measured requests in the new executable reused exactly 100 FTS candidates and decoded zero records, versus 100 decoded records per request on the baseline path. The 21 cold requests still decoded 100 records with zero reuse. SQL writes and warm/selective update behavior are unchanged. The isolated pointer-stability regression proves movement of existing string allocations. This does not establish a total allocation or peak RSS reduction: the comparison buffer lives until FTS selection finishes, and the result representation and key projection also have overhead. Warm FTS median decreased about 7.9%, warm rank median about 20.1%, while warm total median increased about 9.4%. Index reopen FTS and changed total medians also increased. Host load varies substantially (some scan medians differ by more than 2x); no consistent end-to-end latency improvement is established. Retain this candidate on the separate branch for its deterministic elimination of redundant decoding, subject to review and release-profile measurement before claiming production gains.
+
+Validation: 36 history regressions passed (one benchmark ignored in ordinary runs), 10 exact resume and 2 Agent Context tests passed, 48 total. New test compares exact result order, duplicate last-write behavior, account/profile scoping, original string allocation pointers, fallback for same-file external JSON mutation and malformed JSON, and reuse after repair. Actual Windows symlink rejection passed. All six benchmark runs passed. Format and diff checks passed. No full Rust suite, release benchmark or process allocation/RSS measurement was run.
