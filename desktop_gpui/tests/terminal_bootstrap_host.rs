@@ -32,6 +32,46 @@ impl Drop for IsolatedHost {
 
 #[test]
 #[ignore = "requires ALERA_GPUI_TEST_CLI and starts an isolated temporary Alera Host"]
+fn native_only_project_registers_on_explicit_new_tab() {
+    let cli = std::env::var_os("ALERA_GPUI_TEST_CLI")
+        .map(PathBuf::from)
+        .expect("Set ALERA_GPUI_TEST_CLI to this branch's compatible alera.exe");
+    assert!(cli.is_absolute() && cli.is_file());
+    let temp = tempfile::tempdir().unwrap();
+    let repo_dir = temp.path().join("native-only");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    git2::Repository::init(&repo_dir).unwrap();
+    let root = dunce::canonicalize(&repo_dir).unwrap();
+    let runtime = temp.path().join("runtime");
+    let _cleanup = IsolatedHost { cli: cli.clone(), runtime: runtime.clone() };
+    let bridge = RuntimeCliBridge::new(&cli, &runtime);
+    let terminal = bridge.create_workbench_terminal_tracked(&root, None)
+        .expect("explicit New Terminal must register Native-only projects");
+    let shell = dunce::canonicalize(PathBuf::from(
+        std::env::var_os("ComSpec").expect("Windows ComSpec"),
+    )).unwrap();
+    let agent = bridge.create_workbench_terminal_tracked(
+        &root, Some(("agy", shell.to_str().unwrap())),
+    ).expect("explicit AGY uses the same registered workspace");
+    assert_eq!(terminal.workspace_id, agent.workspace_id);
+    assert_ne!(terminal.handle, agent.handle);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if sessions.iter().any(|session| terminal.matches_live_session(session))
+            && sessions.iter().any(|session| agent.matches_live_session(session)) {
+            assert_eq!(sessions.iter().filter(|session| session.running).count(), 2);
+            break;
+        }
+        assert!(Instant::now() < deadline, "new tabs were not listed as live");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let workspaces = bridge.list_registered_workspaces().unwrap();
+    assert_eq!(workspaces.iter().filter(|ws| ws.path == root).count(), 1);
+}
+
+#[test]
+#[ignore = "requires ALERA_GPUI_TEST_CLI and starts an isolated temporary Alera Host"]
 fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
     let cli = std::env::var_os("ALERA_GPUI_TEST_CLI")
         .map(PathBuf::from)
