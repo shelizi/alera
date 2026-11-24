@@ -3,7 +3,7 @@
 //! A provider transcript is evidence of a conversation, NOT authority to
 //! resume it. All results are PreviewOnly until the Host separately verifies
 //! provider account, registered checkout and session identity.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -71,6 +71,8 @@ pub(crate) struct HistoryScanReport {
     directories_read: usize,
     #[cfg(test)]
     metadata_probes: usize,
+    #[cfg(test)]
+    cwd_canonicalizations: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +109,19 @@ struct CanonicalWorkspace {
     project: String,
     workspace: String,
     path: PathBuf,
+}
+
+fn resolve_workspace_index(
+    cwd: &Path,
+    known: &[CanonicalWorkspace],
+    _report: &mut HistoryScanReport,
+) -> Option<usize> {
+    #[cfg(test)]
+    {
+        _report.cwd_canonicalizations += 1;
+    }
+    let verified_cwd = fs::canonicalize(cwd).ok()?;
+    known.iter().position(|w| w.path == verified_cwd)
 }
 
 /// Scan only caller-provided provider roots, strictly match a canonical CWD
@@ -186,6 +201,10 @@ fn discover_history_with_exact_id(
     if known.is_empty() {
         return report;
     }
+    // Preview search uses a request-local Workspace snapshot. Resolve each
+    // distinct raw CWD once, including misses. Never retain this mapping
+    // across searches or use it for exact native verification.
+    let mut preview_cwds: HashMap<PathBuf, Option<usize>> = HashMap::new();
     let mut seen_files = HashSet::new();
     let mut walked = 0_usize;
     // Every configured account must have a chance to contribute results.
@@ -343,10 +362,14 @@ fn discover_history_with_exact_id(
                 } else {
                     report.parsed_files += 1;
                 }
-                let Ok(verified_cwd) = fs::canonicalize(cwd) else {
-                    continue;
+                let workspace_index = if preview_scan.is_some() {
+                    *preview_cwds
+                        .entry(cwd)
+                        .or_insert_with_key(|cwd| resolve_workspace_index(cwd, &known, &mut report))
+                } else {
+                    resolve_workspace_index(&cwd, &known, &mut report)
                 };
-                let Some(workspace) = known.iter().find(|w| w.path == verified_cwd) else {
+                let Some(workspace) = workspace_index.map(|index| &known[index]) else {
                     // Never attribute a transcript from an unregistered folder.
                     continue;
                 };
@@ -960,6 +983,68 @@ mod tests {
         let replaced = discover_history_cached(&roots, &known, policy, &mut cache);
         assert_eq!(replaced.reused_files, 0);
         assert!(replaced.records.is_empty());
+    }
+
+    #[test]
+    fn cached_preview_search_resolves_each_cwd_once_per_request() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        for index in 0..64 {
+            let id = format!("550e8400-e29b-41d4-a716-{index:012}");
+            let cwd = if index < 48 {
+                work.path()
+            } else {
+                other.path()
+            };
+            fs::write(
+                home.path().join(format!("rollout-day-{id}.jsonl")),
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":cwd}})
+                ),
+            )
+            .unwrap();
+        }
+        let roots = [root("codex", home.path())];
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy {
+            index_user_text: true,
+            max_files: 128,
+        };
+        let uncached = discover_history(&roots, &known, policy);
+        assert_eq!(uncached.cwd_canonicalizations, 64);
+        let mut cache = HistoryPreviewCache::default();
+        let first = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(first.cwd_canonicalizations, 2);
+        assert_eq!(first.records.len(), 48);
+        assert_eq!(
+            serde_json::to_value(&first.records).unwrap(),
+            serde_json::to_value(&uncached.records).unwrap()
+        );
+        let second = discover_history_cached(&roots, &known, policy, &mut cache);
+        assert_eq!(second.cwd_canonicalizations, 2);
+        assert_eq!(second.reused_files, 48);
+        assert_eq!(second.parsed_files, 16);
+        // Refresh both positive and negative path decisions when the
+        // registered Workspace set changes; never carry a scope decision.
+        let changed =
+            discover_history_cached(&roots, &[workspace(other.path())], policy, &mut cache);
+        assert_eq!(changed.cwd_canonicalizations, 2);
+        assert_eq!(changed.records.len(), 16);
+        let uncached_other = discover_history(&roots, &[workspace(other.path())], policy);
+        assert_eq!(
+            serde_json::to_value(&changed.records).unwrap(),
+            serde_json::to_value(&uncached_other.records).unwrap()
+        );
+        let exact = discover_exact_native_history(
+            &roots,
+            &known,
+            policy,
+            "550e8400-e29b-41d4-a716-000000000000",
+        );
+        assert_eq!(exact.cwd_canonicalizations, 1);
+        assert_eq!(exact.source_proofs.len(), 1);
     }
 
     #[test]
