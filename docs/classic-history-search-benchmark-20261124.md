@@ -213,3 +213,30 @@ Measured whole-process memory for the existing exact Debug benchmark executable 
 | Median | After | 25300992 | 8830976 | |
 
 Observed peak working-set median increased by 131072 bytes (0.52%); sampled private-memory median decreased by 73728 bytes (0.83%). The runs overlap and these small changes do not demonstrate a material RAM improvement. Eliminating repeated FTS deserialization is established by the previous functional counters, not equivalent to lower process-wide memory. No release-profile benchmark was completed: the direct-test Release target had no prepared dependencies or test executable, and the full workspace build was blocked as described above. Do not extrapolate these Debug memory observations to production or to the complete cumulative optimization series.
+
+## Direct post-parse Windows snapshot (2026-11-25)
+
+On the previously verified ordinary-file no-follow handle path, reuse the same documented FileStandardInfo/FileBasicInfo/FileIdInfo snapshot after parsing rather than calling the broader std metadata-based stamp reader. Preserve the complete length, volume serial, 128-bit file ID, creation time, last write and nonzero change time equality check. The direct recheck also rejects directory, reparse, and delete-pending attributes. Failed direct rechecks do not retain a cached preview. Compatibility opens and non-Windows stamp checks retain the previous implementation; warm hits and exact verification are unchanged.
+
+Interleaved Windows Debug A/B comparison against `252b78a23`, before/after/after/before/before/after, six runs with 42 measured requests each (252 total). These are the medians of the three per-run p50 values, not pooled percentiles.
+
+| Scenario | Before p50s (ms) | After p50s (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold scan | 101.300, 40.635, 49.514 | 35.792, 45.027, 36.470 | 49.514 | 36.470 |
+| Cold total | 155.539, 72.894, 82.204 | 67.429, 85.551, 69.691 | 82.204 | 69.691 |
+| Warm total | 73.041, 31.622, 63.403 | 36.881, 37.868, 63.032 | 63.403 | 37.868 |
+| Reopen total | 76.991, 38.830, 69.216 | 85.697, 74.932, 71.188 | 69.216 | 74.932 |
+| One changed total | 80.744, 69.719, 67.139 | 95.675, 75.533, 77.741 | 69.719 | 77.741 |
+
+Windows process-wide other-I/O p50 counts were identical across all three runs of each version:
+
+| Scenario | Before | After | Reduction |
+|---|---:|---:|---:|
+| Cold | 3608 | 3096 | 512 |
+| Warm | 2804 | 2804 | 0 |
+| Index reopen | 2824 | 2824 | 0 |
+| One file changed | 2807 | 2805 | 2 |
+
+Two fewer counted other-I/O operations per newly parsed ordinary Windows candidate; 14.19% fewer cold other-I/O operations. This is a process counter, not a count of physical disk transfers or literal system calls. Read/write operation medians and SQL write counts remained unchanged. Cold scan median decreased 26.3%, total 15.2%, but shared-host noise is substantial: cold tails remain long, warm timings vary despite unchanged warm path, and the changed-case total median increased 11.5%. Retain the scoped change based on repeatable I/O reduction, not a claim of uniform latency gains.
+
+Validation: 37 history regressions passed (manual benchmark ignored in normal run), 10 exact resume tests, 2 Agent Context tests, 49 total. New Windows test exercises same open handle before/after a same-length rewrite with restored mtime; direct and compatibility stamps agree, and stable identity remains equal while change stamp differs. Actual symlink rejection exercised. All six benchmark runs passed. Build recompiled dependencies (6m55s), and all tests and benchmarks completed within the command deadline. No complete suite rerun, Release performance or new memory measurement.
