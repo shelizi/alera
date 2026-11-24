@@ -399,6 +399,218 @@ async fn output_row_count(store: &TerminalHostHistoryStore, session_id: &str) ->
         .unwrap()
 }
 
+/// Count commit markers in a freshly truncated SQLite WAL. Each frame
+/// starts with the page number and a nonzero database size on commit.
+fn wal_commit_frames(runtime_dir: &Path) -> (usize, usize, usize) {
+    let wal = std::fs::read(runtime_dir.join(format!("{HISTORY_DATABASE_FILE_NAME}-wal"))).unwrap();
+    if wal.is_empty() {
+        return (0, 0, 0);
+    }
+    assert!(wal.len() >= 32);
+    let magic = u32::from_be_bytes(wal[..4].try_into().unwrap());
+    assert!(matches!(magic, 0x377f0682 | 0x377f0683));
+    let page_size = u32::from_be_bytes(wal[8..12].try_into().unwrap()) as usize;
+    assert!(page_size.is_power_of_two() && page_size >= 512);
+    let frames = wal[32..].chunks_exact(24 + page_size);
+    assert!(frames.remainder().is_empty());
+    let frame_count = frames.len();
+    let commits = frames
+        .filter(|frame| u32::from_be_bytes(frame[4..8].try_into().unwrap()) != 0)
+        .count();
+    (commits, frame_count, wal.len())
+}
+
+#[tokio::test]
+async fn combined_checkpoint_and_trim_uses_one_wal_commit_instead_of_two() {
+    async fn run(combined: bool) -> (usize, usize, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        store
+            .persist_session("s1", Some(&sample("s1")), &[(0, b"abcdef")])
+            .await
+            .unwrap();
+        let reset: (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(reset.0, 0);
+        assert_eq!(wal_commit_frames(dir.path()), (0, 0, 0));
+        let mut metadata = sample("s1");
+        metadata.output_stream_bytes = 11;
+        let batch = [(1, b"ghijk")];
+        if combined {
+            store
+                .persist_session_with_trim("s1", Some(&metadata), &batch, Some(5))
+                .await
+                .unwrap();
+        } else {
+            store
+                .persist_session("s1", Some(&metadata), &batch)
+                .await
+                .unwrap();
+            store.trim_session("s1", 5).await.unwrap();
+        }
+        let persisted = store.read("s1", usize::MAX).await.unwrap().unwrap();
+        assert_eq!(persisted.buffer, b"ghijk");
+        assert_eq!(persisted.output_stream_bytes, 11);
+        assert_eq!(store.next_output_sequence("s1").await.unwrap(), 2);
+        let result = wal_commit_frames(dir.path());
+        // An empty batch and a trim-only no-op must not create another commit.
+        store
+            .persist_session_with_trim("s1", None, &[(2, b"" as &[u8])], Some(5))
+            .await
+            .unwrap();
+        assert_eq!(wal_commit_frames(dir.path()), result);
+        store.close_for_test().await;
+        result
+    }
+
+    let separate = run(false).await;
+    let combined = run(true).await;
+    eprintln!(
+        "separate commits={} frames={} wal_bytes={}; combined commits={} frames={} wal_bytes={}",
+        separate.0, separate.1, separate.2, combined.0, combined.1, combined.2
+    );
+    assert_eq!(separate.0, 2);
+    assert_eq!(combined.0, 1);
+}
+
+#[tokio::test]
+async fn combined_trim_failure_rolls_back_partial_cut_but_preserves_output_for_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    store.append_output("s1", 0, b"abcdefgh").await.unwrap();
+    store.append_output("s1", 1, b"ijklmnop").await.unwrap();
+    store.append_output("s1", 2, b"qrst").await.unwrap();
+    store.upsert(sample("other")).await.unwrap();
+    store
+        .append_output("other", 0, b"other history")
+        .await
+        .unwrap();
+    // The boundary row is shortened before the older rows are deleted.
+    // Reject the delete so the combined attempt must undo that partial cut.
+    sqlx::query(
+        "CREATE TRIGGER reject_trim_delete BEFORE DELETE ON outputChunks
+                 WHEN OLD.sessionId = 's1' BEGIN
+                 SELECT RAISE(ABORT, 'trim unavailable'); END",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let mut metadata = sample("s1");
+    metadata.output_stream_bytes = 23;
+    metadata.working_directory = "/tmp/new-location".into();
+    let batch = [(3, b"uvw")];
+    let error = store
+        .persist_session_with_trim("s1", Some(&metadata), &batch, Some(10))
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("trim failed after saving output"));
+    let persisted = store.read("s1", usize::MAX).await.unwrap().unwrap();
+    assert_eq!(persisted.buffer, b"abcdefghijklmnopqrstuvw");
+    assert_eq!(persisted.output_stream_bytes, 23);
+    assert_eq!(persisted.working_directory, metadata.working_directory);
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 4);
+
+    sqlx::query("DROP TRIGGER reject_trim_delete")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    // Retry the exact same snapshot; already committed output is not doubled.
+    store
+        .persist_session_with_trim("s1", Some(&metadata), &batch, Some(10))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.read("s1", usize::MAX).await.unwrap().unwrap().buffer,
+        b"nopqrstuvw"
+    );
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), 4);
+    assert_eq!(
+        store
+            .read("other", usize::MAX)
+            .await
+            .unwrap()
+            .unwrap()
+            .buffer,
+        b"other history"
+    );
+    store.close_for_test().await;
+}
+
+#[tokio::test]
+async fn combined_compaction_sees_uncommitted_rows_and_keeps_newest_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    store.upsert(sample("s1")).await.unwrap();
+    let rows = OUTPUT_COMPACTION_ROW_THRESHOLD + 10;
+    for sequence in 0..rows {
+        store
+            .append_output("s1", sequence, format!("{sequence};").as_bytes())
+            .await
+            .unwrap();
+    }
+    let mut expected = store.read("s1", usize::MAX).await.unwrap().unwrap().buffer;
+    let data = [0x80, 0xff, 0, b'x', b'y'];
+    expected.extend_from_slice(&data);
+    let mut metadata = sample("s1");
+    metadata.output_stream_bytes = expected.len() as u64;
+    store
+        .persist_session_with_trim("s1", Some(&metadata), &[(rows, data)], Some(5000))
+        .await
+        .unwrap();
+    let persisted = store.read("s1", usize::MAX).await.unwrap().unwrap();
+    assert_eq!(persisted.buffer, expected[expected.len() - 5000..]);
+    assert_eq!(persisted.output_stream_bytes, metadata.output_stream_bytes);
+    assert_eq!(store.next_output_sequence("s1").await.unwrap(), rows + 1);
+    assert_eq!(output_row_count(&store, "s1").await, 1);
+    store.close_for_test().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_combined_persists_keep_session_tails_isolated() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+    for session in ["s1", "s2"] {
+        store.upsert(sample(session)).await.unwrap();
+    }
+    let writer = |session: &'static str, tag: u8| {
+        let store = store.clone();
+        tokio::spawn(async move {
+            let mut expected = Vec::new();
+            for sequence in 0..100_i64 {
+                let batch = [tag, sequence as u8, 0xff, 0];
+                expected.extend_from_slice(&batch);
+                let mut metadata = sample(session);
+                metadata.output_stream_bytes = expected.len() as u64;
+                store
+                    .persist_session_with_trim(
+                        session,
+                        Some(&metadata),
+                        &[(sequence, batch)],
+                        Some(63),
+                    )
+                    .await?;
+            }
+            anyhow::Ok(expected)
+        })
+    };
+    let (first, second) = tokio::join!(writer("s1", b'a'), writer("s2", b'b'));
+    for (session, expected) in [
+        ("s1", first.unwrap().unwrap()),
+        ("s2", second.unwrap().unwrap()),
+    ] {
+        let persisted = store.read(session, usize::MAX).await.unwrap().unwrap();
+        assert_eq!(persisted.buffer, expected[expected.len() - 63..]);
+        assert_eq!(persisted.output_stream_bytes, expected.len() as u64);
+        assert_eq!(store.next_output_sequence(session).await.unwrap(), 100);
+    }
+    store.close_for_test().await;
+}
+
 #[tokio::test]
 async fn persist_session_coalesces_small_outputs_into_one_row() {
     let dir = tempfile::tempdir().unwrap();

@@ -192,52 +192,55 @@ impl TerminalHostHistoryStore {
         Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
     }
 
+    #[cfg(test)]
     pub async fn persist_session(
         &self,
         session_id: &str,
         checkpoint: Option<&TerminalHostCheckpoint>,
         outputs: &[(i64, impl AsRef<[u8]>)],
     ) -> Result<()> {
+        self.persist_session_with_trim(session_id, checkpoint, outputs, None)
+            .await
+    }
+
+    /// Persist a write-behind snapshot and its optional maintenance trim
+    /// with a single commit. The trim sees the just-appended, uncommitted
+    /// output, so no second writer admission or WAL commit is necessary.
+    pub(super) async fn persist_session_with_trim(
+        &self,
+        session_id: &str,
+        checkpoint: Option<&TerminalHostCheckpoint>,
+        outputs: &[(i64, impl AsRef<[u8]>)],
+        max_bytes: Option<usize>,
+    ) -> Result<()> {
+        let outputs = if outputs.iter().any(|(_, data)| !data.as_ref().is_empty()) {
+            outputs
+        } else {
+            &[]
+        };
         if checkpoint.is_none() && outputs.is_empty() {
-            return Ok(());
+            // A pure no-op trim must not acquire the writer lock.
+            return match max_bytes {
+                Some(limit) => self.trim_session(session_id, limit).await,
+                None => Ok(()),
+            };
         }
 
         let mut transaction = self.begin_write().await?;
-        if let Some(checkpoint) = checkpoint {
-            sqlx::query(
-                "INSERT INTO checkpoints \
-                 (sessionId, workspaceId, tabId, workingDirectory, running, exitCode, endedAt, outputStreamBytes, updatedAt) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(sessionId) DO UPDATE SET \
-                 workspaceId = excluded.workspaceId, \
-                 tabId = excluded.tabId, \
-                 workingDirectory = excluded.workingDirectory, \
-                 running = excluded.running, \
-                 exitCode = excluded.exitCode, \
-                 endedAt = excluded.endedAt, \
-                 outputStreamBytes = excluded.outputStreamBytes, \
-                 updatedAt = excluded.updatedAt",
-            )
-            .bind(&checkpoint.session_id)
-            .bind(&checkpoint.workspace_id)
-            .bind(&checkpoint.tab_id)
-            .bind(&checkpoint.working_directory)
-            .bind(if checkpoint.running { 1_i64 } else { 0_i64 })
-            .bind(checkpoint.exit_code.map(i64::from))
-            .bind(
-                checkpoint
-                    .ended_at
-                    .as_ref()
-                    .map(|value| format_timestamp(value.to_owned())),
-            )
-            .bind(i64::try_from(checkpoint.output_stream_bytes).unwrap_or(i64::MAX))
-            .bind(format_timestamp(checkpoint.updated_at.to_owned()))
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        if outputs.iter().any(|(_, data)| !data.as_ref().is_empty()) {
-            append_output_rows(&mut transaction, session_id, outputs).await?;
+        persist_session_rows(&mut transaction, session_id, checkpoint, outputs).await?;
+        if let Some(limit) = max_bytes {
+            if let Err(trim_error) = trim_output_rows(&mut transaction, session_id, limit).await {
+                // Preserve the previous durability contract on maintenance
+                // failure: roll back the combined attempt, persist the output
+                // without trimming, and report the trim failure for retry.
+                // The same monotonically increasing output sequences make
+                // that later retry idempotent.
+                transaction.rollback().await?;
+                let mut transaction = self.begin_write().await?;
+                persist_session_rows(&mut transaction, session_id, checkpoint, outputs).await?;
+                transaction.commit().await?;
+                return Err(trim_error.context("terminal history trim failed after saving output"));
+            }
         }
         transaction.commit().await?;
         Ok(())
@@ -256,86 +259,16 @@ impl TerminalHostHistoryStore {
     }
 
     pub async fn trim_session(&self, session_id: &str, max_bytes: usize) -> Result<()> {
-        // Find the cut in SQL rather than walking every row here. Retention is
-        // by bytes, not rows, so a chatty session persisting a batch every
-        // 100 ms accumulates six figures of rows, and this runs on the server
-        // actor: on every checkpoint tick, every detach, and every configure.
-        let row = sqlx::query(
-            "SELECT COUNT(*) AS rowCount, COALESCE(SUM(length(data)), 0) AS totalBytes \
-             FROM outputChunks WHERE sessionId = ?",
-        )
-        .bind(session_id)
-        .fetch_one(&self.pool)
-        .await?;
-        let row_count: i64 = row.try_get("rowCount")?;
-        let total_bytes: i64 = row.try_get("totalBytes")?;
-        if row_count > OUTPUT_COMPACTION_ROW_THRESHOLD {
-            // Compaction keeps only the retained tail, so it is the trim too.
-            return compact_output_rows(self, session_id, max_bytes).await;
-        }
-        let max_bytes_i64 = i64::try_from(max_bytes).unwrap_or(i64::MAX);
-        if total_bytes <= max_bytes_i64 {
-            // Most periodic checkpoints are under the configured cap. One
-            // aggregate is sufficient; no window function or write transaction.
+        // Standalone maintenance usually finds nothing to do. Check with a
+        // read connection first so it need not queue behind output writers.
+        if trim_action(&self.pool, session_id, max_bytes).await? == TrimAction::None {
             return Ok(());
         }
-        let row = sqlx::query(
-            "SELECT id, sequence, byteLen, running FROM ( \
-               SELECT id, sequence, length(data) AS byteLen, \
-                      SUM(length(data)) OVER ( \
-                        ORDER BY sequence DESC, id DESC \
-                      ) AS running \
-               FROM outputChunks WHERE sessionId = ? \
-             ) WHERE running > ? ORDER BY sequence DESC, id DESC LIMIT 1",
-        )
-        .bind(session_id)
-        .bind(max_bytes_i64)
-        .fetch_optional(&self.pool)
-        .await?;
-        if let Some(row) = row {
-            let id: i64 = row.try_get("id")?;
-            let sequence: i64 = row.try_get("sequence")?;
-            let byte_len: i64 = row.try_get("byteLen")?;
-            let running: i64 = row.try_get("running")?;
-            // Everything newer than this row, which is what stays whole.
-            let kept = running.saturating_sub(byte_len).max(0) as usize;
-            let remaining = max_bytes.saturating_sub(kept);
-            // The cut was found outside the write lock: the running sum is the
-            // slow part, and only this session's own worker removes its rows.
-            let mut transaction = self.begin_write().await?;
-            if remaining > 0 {
-                // SQLite substr operates on BLOB bytes, not Unicode characters.
-                // Keep the boundary data in SQLite instead of round-tripping
-                // the full chunk and copying its retained suffix through Rust.
-                sqlx::query("UPDATE outputChunks SET data = substr(data, -?) WHERE id = ?")
-                    .bind(i64::try_from(remaining).unwrap_or(i64::MAX))
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
-                sqlx::query(
-                    "DELETE FROM outputChunks \
-                     WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id < ?))",
-                )
-                .bind(session_id)
-                .bind(sequence)
-                .bind(sequence)
-                .bind(id)
-                .execute(&mut *transaction)
-                .await?;
-            } else {
-                sqlx::query(
-                    "DELETE FROM outputChunks \
-                     WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id <= ?))",
-                )
-                .bind(session_id)
-                .bind(sequence)
-                .bind(sequence)
-                .bind(id)
-                .execute(&mut *transaction)
-                .await?;
-            }
-            transaction.commit().await?;
-        }
+        let mut transaction = self.begin_write().await?;
+        // Recheck after admission; concurrent writes cannot make a stale cut
+        // delete data that arrived since the read-only preflight.
+        trim_output_rows(&mut transaction, session_id, max_bytes).await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -356,32 +289,40 @@ impl TerminalHostHistoryStore {
     }
 
     async fn read_buffer(&self, session_id: &str, max_bytes: usize) -> Result<Vec<u8>> {
-        if max_bytes == 0 {
-            return Ok(Vec::new());
-        }
-
-        // Read newest chunks first and stop as soon as the requested scrollback
-        // tail is complete. This uses the (sessionId, sequence, id) index and
-        // avoids the expensive window-function trim on the latency-sensitive
-        // restore/read path.
-        let mut rows = sqlx::query(
-            "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
-        )
-        .bind(session_id)
-        .fetch(&self.pool);
-        let mut tail = HistoryReadTail::new(max_bytes);
-        while tail.remaining() > 0 {
-            let Some(row) = rows.try_next().await? else {
-                break;
-            };
-            // Borrow the row's BLOB instead of allocating a Vec for each row.
-            // Only the retained suffix is copied into the growing tail.
-            let data: &[u8] = row.try_get("data")?;
-            tail.prepend(data);
-        }
-        drop(rows);
-        Ok(tail.finish())
+        read_buffer_from(&self.pool, session_id, max_bytes).await
     }
+}
+
+async fn read_buffer_from<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    session_id: &'e str,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if max_bytes == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Read newest chunks first and stop as soon as the requested scrollback
+    // tail is complete. This uses the (sessionId, sequence, id) index and
+    // avoids the expensive window-function trim on the latency-sensitive
+    // restore/read path.
+    let mut rows = sqlx::query(
+        "SELECT data FROM outputChunks WHERE sessionId = ? ORDER BY sequence DESC, id DESC",
+    )
+    .bind(session_id)
+    .fetch(executor);
+    let mut tail = HistoryReadTail::new(max_bytes);
+    while tail.remaining() > 0 {
+        let Some(row) = rows.try_next().await? else {
+            break;
+        };
+        // Borrow the row's BLOB instead of allocating a Vec for each row.
+        // Only the retained suffix is copied into the growing tail.
+        let data: &[u8] = row.try_get("data")?;
+        tail.prepend(data);
+    }
+    drop(rows);
+    Ok(tail.finish())
 }
 
 /// Builds a chronological tail from rows arriving newest first.
@@ -450,6 +391,154 @@ impl HistoryReadTail {
         }
         self.buffer
     }
+}
+
+async fn persist_session_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session_id: &str,
+    checkpoint: Option<&TerminalHostCheckpoint>,
+    outputs: &[(i64, impl AsRef<[u8]>)],
+) -> Result<()> {
+    if let Some(checkpoint) = checkpoint {
+        sqlx::query(
+            "INSERT INTO checkpoints \
+             (sessionId, workspaceId, tabId, workingDirectory, running, exitCode, endedAt, outputStreamBytes, updatedAt) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(sessionId) DO UPDATE SET \
+             workspaceId = excluded.workspaceId, \
+             tabId = excluded.tabId, \
+             workingDirectory = excluded.workingDirectory, \
+             running = excluded.running, \
+             exitCode = excluded.exitCode, \
+             endedAt = excluded.endedAt, \
+             outputStreamBytes = excluded.outputStreamBytes, \
+             updatedAt = excluded.updatedAt",
+        )
+        .bind(&checkpoint.session_id)
+        .bind(&checkpoint.workspace_id)
+        .bind(&checkpoint.tab_id)
+        .bind(&checkpoint.working_directory)
+        .bind(if checkpoint.running { 1_i64 } else { 0_i64 })
+        .bind(checkpoint.exit_code.map(i64::from))
+        .bind(
+            checkpoint
+                .ended_at
+                .as_ref()
+                .map(|value| format_timestamp(value.to_owned())),
+        )
+        .bind(i64::try_from(checkpoint.output_stream_bytes).unwrap_or(i64::MAX))
+        .bind(format_timestamp(checkpoint.updated_at.to_owned()))
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    if outputs.iter().any(|(_, data)| !data.as_ref().is_empty()) {
+        append_output_rows(transaction, session_id, outputs).await?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrimAction {
+    None,
+    Cut,
+    Compact,
+}
+
+/// An aggregate is much cheaper than the ordered running sum when there is
+/// no excess history. Keep that common no-op path free of mutations.
+async fn trim_action<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    session_id: &'e str,
+    max_bytes: usize,
+) -> Result<TrimAction> {
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS rowCount, COALESCE(SUM(length(data)), 0) AS totalBytes \
+         FROM outputChunks WHERE sessionId = ?",
+    )
+    .bind(session_id)
+    .fetch_one(executor)
+    .await?;
+    let row_count: i64 = row.try_get("rowCount")?;
+    let total_bytes: i64 = row.try_get("totalBytes")?;
+    if row_count > OUTPUT_COMPACTION_ROW_THRESHOLD {
+        Ok(TrimAction::Compact)
+    } else if total_bytes > i64::try_from(max_bytes).unwrap_or(i64::MAX) {
+        Ok(TrimAction::Cut)
+    } else {
+        Ok(TrimAction::None)
+    }
+}
+
+/// Determine and apply the cut using the same transaction as the append.
+/// Compaction also reads from this connection, including uncommitted rows.
+async fn trim_output_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    session_id: &str,
+    max_bytes: usize,
+) -> Result<()> {
+    match trim_action(&mut **transaction, session_id, max_bytes).await? {
+        TrimAction::None => return Ok(()),
+        TrimAction::Compact => {
+            return compact_output_rows(transaction, session_id, max_bytes).await
+        }
+        TrimAction::Cut => {}
+    }
+    let max_bytes_i64 = i64::try_from(max_bytes).unwrap_or(i64::MAX);
+    let row = sqlx::query(
+        "SELECT id, sequence, byteLen, running FROM ( \
+           SELECT id, sequence, length(data) AS byteLen, \
+                  SUM(length(data)) OVER ( \
+                    ORDER BY sequence DESC, id DESC \
+                  ) AS running \
+           FROM outputChunks WHERE sessionId = ? \
+         ) WHERE running > ? ORDER BY sequence DESC, id DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .bind(max_bytes_i64)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some(row) = row {
+        let id: i64 = row.try_get("id")?;
+        let sequence: i64 = row.try_get("sequence")?;
+        let byte_len: i64 = row.try_get("byteLen")?;
+        let running: i64 = row.try_get("running")?;
+        // Everything newer than this row, which is what stays whole.
+        let kept = running.saturating_sub(byte_len).max(0) as usize;
+        let remaining = max_bytes.saturating_sub(kept);
+        if remaining > 0 {
+            // SQLite substr operates on BLOB bytes, not Unicode characters.
+            // Keep the boundary data in SQLite instead of round-tripping
+            // the full chunk and copying its retained suffix through Rust.
+            sqlx::query("UPDATE outputChunks SET data = substr(data, -?) WHERE id = ?")
+                .bind(i64::try_from(remaining).unwrap_or(i64::MAX))
+                .bind(id)
+                .execute(&mut **transaction)
+                .await?;
+            sqlx::query(
+                "DELETE FROM outputChunks \
+                 WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id < ?))",
+            )
+            .bind(session_id)
+            .bind(sequence)
+            .bind(sequence)
+            .bind(id)
+            .execute(&mut **transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                "DELETE FROM outputChunks \
+                 WHERE sessionId = ? AND (sequence < ? OR (sequence = ? AND id <= ?))",
+            )
+            .bind(session_id)
+            .bind(sequence)
+            .bind(sequence)
+            .bind(id)
+            .execute(&mut **transaction)
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 /// Appends a flush's output to the session's newest row until it holds
@@ -565,16 +654,15 @@ struct PendingOutputRow<'a> {
 /// rows, and the trim's running sum over them took seconds on every
 /// maintenance pass.
 async fn compact_output_rows(
-    store: &TerminalHostHistoryStore,
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session_id: &str,
     max_bytes: usize,
 ) -> Result<()> {
-    let tail = store.read_buffer(session_id, max_bytes).await?;
-    let mut transaction = store.begin_write().await?;
+    let tail = read_buffer_from(&mut **transaction, session_id, max_bytes).await?;
     let newest: Option<i64> =
         sqlx::query("SELECT MAX(sequence) AS maxSequence FROM outputChunks WHERE sessionId = ?")
             .bind(session_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?
             .try_get("maxSequence")?;
     let Some(newest) = newest else {
@@ -582,7 +670,7 @@ async fn compact_output_rows(
     };
     sqlx::query("DELETE FROM outputChunks WHERE sessionId = ?")
         .bind(session_id)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     let chunks = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES);
     let first_sequence = newest.saturating_sub(chunks.len() as i64 - 1);
@@ -595,10 +683,9 @@ async fn compact_output_rows(
         .bind(first_sequence.saturating_add(index as i64))
         .bind(&created_at)
         .bind(chunk)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
-    transaction.commit().await?;
     Ok(())
 }
 

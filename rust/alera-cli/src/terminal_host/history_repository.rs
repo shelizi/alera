@@ -589,27 +589,19 @@ impl TerminalHostHistoryRepository {
                     .iter()
                     .map(|(sequence, _, data)| (*sequence, data.as_ref()))
                     .collect::<Vec<_>>();
+                // Output-only batches stay free of retention scans. At the
+                // maintenance cadence, append and trim share one transaction.
                 self.inner
                     .store
-                    .persist_session(
+                    .persist_session_with_trim(
                         session_id,
                         checkpoint
                             .as_ref()
                             .map(|(_, checkpoint)| checkpoint.as_ref()),
                         &output_rows,
+                        trim_request.map(|request| request.max_bytes),
                     )
-                    .await?;
-                // Output batches are frequent (currently ~100 ms). Persist them
-                // without running the expensive window-function trim each time;
-                // checkpoint/configuration events request trim at the slower
-                // maintenance cadence instead.
-                if let Some(request) = trim_request {
-                    self.inner
-                        .store
-                        .trim_session(session_id, request.max_bytes)
-                        .await?;
-                }
-                Ok(())
+                    .await
             }
         }
     }
