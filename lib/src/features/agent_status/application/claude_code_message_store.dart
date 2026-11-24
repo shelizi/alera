@@ -90,26 +90,23 @@ final class ClaudeCodeMessageStore extends ChangeNotifier {
         messageId,
         _ClaudeSourceMessage.new,
       );
-      message.chunks.putIfAbsent(index, () => delta);
+      message.addChunk(index, delta);
       if (event.payload['final'] == true) message.finalIndex = index;
       final end = message.finalIndex;
       if (end != null &&
           message.chunks.length == end + 1 &&
           message.chunks.keys.first == 0 &&
           message.chunks.keys.last == end) {
-        final text = message.chunks.values.join();
-        if (text.length <= _characterLimit) {
-          message.blocks = _parseCanonicalCodeBlocks(text, messageId);
+        if (message.pendingCharacters <= _characterLimit) {
+          message.blocks = _parseCanonicalCodeBlocks(
+            message.chunks.values.join(),
+            messageId,
+          );
         }
-        message.chunks.clear();
-        message.finalIndex = null;
+        message.clearChunks();
         _trimMessages(session);
         notifyListeners();
-      } else if (message.chunks.values.fold<int>(
-            0,
-            (total, value) => total + value.length,
-          ) >
-          _characterLimit) {
+      } else if (message.pendingCharacters > _characterLimit) {
         session.messages.remove(messageId);
       }
       return;
@@ -158,7 +155,23 @@ final class _ClaudeTerminalSource {
 final class _ClaudeSourceMessage {
   final SplayTreeMap<int, String> chunks = SplayTreeMap<int, String>();
   int? finalIndex;
+  int pendingCharacters = 0;
   List<ClaudeSourceCodeBlock> blocks = const [];
+
+  void addChunk(int index, String text) {
+    // Only the first occurrence of a chunk contributes to the budget.
+    // Counting on insertion avoids walking every prior chunk on each hook.
+    chunks.putIfAbsent(index, () {
+      pendingCharacters += text.length;
+      return text;
+    });
+  }
+
+  void clearChunks() {
+    chunks.clear();
+    finalIndex = null;
+    pendingCharacters = 0;
+  }
 }
 
 bool _sameCodeBlocks(
