@@ -9,6 +9,7 @@ mod explorer_tree;
 mod listing;
 mod source_control_watcher;
 mod text_encoding;
+mod watch_events;
 mod watcher;
 
 use crate::frb_generated::StreamSink;
@@ -1264,6 +1265,31 @@ mod tests {
         let mapped = shared_workspace_file_error(conflict);
         assert_eq!(mapped.kind, WorkspaceFileErrorKind::Conflict);
         assert_eq!(mapped.context, "the file changed on disk");
+    }
+
+    #[test]
+    fn native_watchers_can_start_and_stop_repeatedly_without_pending_events() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let workspace = tempfile::tempdir().expect("workspace");
+        let path = workspace_path(&workspace);
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..5 {
+                let explorer = start_workspace_explorer_watcher(path.clone())
+                    .expect("start real Explorer watcher");
+                let source_control = start_source_control_watcher(path.clone())
+                    .expect("start real source control watcher");
+                stop_workspace_explorer_watcher(explorer);
+                stop_source_control_watcher(source_control);
+            }
+            done_tx.send(()).unwrap();
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("all real watcher workers stopped");
+        worker.join().unwrap();
     }
 
     fn workspace_path(dir: &tempfile::TempDir) -> String {

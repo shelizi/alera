@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -14,9 +13,7 @@ use super::{
     WorkspaceExplorerWatcherHandle, WorkspaceFileError, WorkspaceFileErrorKind,
 };
 
-const WATCH_DEBOUNCE_MILLIS: u64 = 90;
-const WATCH_MAX_BATCH_MILLIS: u64 = 350;
-const WATCH_IDLE_POLL_MILLIS: u64 = 100;
+use super::watch_events::{watch_event_channel, WatchEventInbox, WatchStopper};
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
 static WATCHERS: OnceLock<Mutex<HashMap<String, WatcherSession>>> = OnceLock::new();
@@ -97,13 +94,13 @@ struct WatcherSession {
     recursive_root: bool,
     watched_paths: WatchedPaths,
     sink: Arc<Mutex<Option<StreamSink<WorkspaceExplorerWatchBatch>>>>,
-    shutdown_tx: mpsc::Sender<()>,
+    stop: WatchStopper,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl WatcherSession {
     fn stop(mut self) {
-        let _ = self.shutdown_tx.send(());
+        self.stop.request_stop();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -115,8 +112,7 @@ pub(super) fn start_workspace_explorer_watcher(
 ) -> Result<WorkspaceExplorerWatcherHandle, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed).to_string();
-    let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
-    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+    let (event_tx, stop, inbox) = watch_event_channel();
     let watched_paths = watched_paths_snapshot(HashMap::from([(String::new(), root.clone())]));
     let sink = Arc::new(Mutex::new(None));
     let mut watcher = notify::recommended_watcher(move |result| {
@@ -137,13 +133,7 @@ pub(super) fn start_workspace_explorer_watcher(
     let thread = thread::Builder::new()
         .name(format!("alera-explorer-watch-{id}"))
         .spawn(move || {
-            event_loop(
-                thread_root,
-                thread_watched_paths,
-                thread_sink,
-                event_rx,
-                shutdown_rx,
-            );
+            event_loop(thread_root, thread_watched_paths, thread_sink, inbox);
         })
         .map_err(|error| WorkspaceFileError::from_io(error, "workspace explorer watcher"))?;
 
@@ -153,7 +143,7 @@ pub(super) fn start_workspace_explorer_watcher(
         recursive_root,
         watched_paths,
         sink,
-        shutdown_tx,
+        stop,
         thread: Some(thread),
     };
     watchers()
@@ -262,40 +252,17 @@ fn event_loop(
     root: PathBuf,
     watched_paths: WatchedPaths,
     sink: Arc<Mutex<Option<StreamSink<WorkspaceExplorerWatchBatch>>>>,
-    event_rx: mpsc::Receiver<notify::Result<notify::Event>>,
-    shutdown_rx: mpsc::Receiver<()>,
+    inbox: WatchEventInbox,
 ) {
     loop {
-        if shutdown_rx.try_recv().is_ok() {
+        let mut pending = PendingWatchBatch::default();
+        if !inbox.collect_batch(|event| pending.push(&root, event)) {
             return;
         }
-        let first_event = match event_rx.recv_timeout(Duration::from_millis(WATCH_IDLE_POLL_MILLIS))
-        {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        };
-        let mut pending = PendingWatchBatch::default();
-        let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
-        pending.push(&root, first_event);
-
-        loop {
-            if shutdown_rx.try_recv().is_ok() {
+        if let Some(batch) = build_batch(&root, &watched_paths, pending) {
+            if inbox.is_stopping() {
                 return;
             }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)))
-            {
-                Ok(result) => pending.push(&root, result),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            }
-        }
-
-        if let Some(batch) = build_batch(&root, &watched_paths, pending) {
             emit_batch(&sink, batch);
         }
     }
@@ -375,6 +342,8 @@ fn normalize_relative_path(relative_path: &str) -> String {
 mod tests {
     use super::*;
     use notify::{Event, EventKind};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn batch_from_events(
         root: &Path,

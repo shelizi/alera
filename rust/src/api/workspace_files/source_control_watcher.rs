@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -14,9 +13,7 @@ use super::{
     WorkspaceFileErrorKind,
 };
 
-const WATCH_DEBOUNCE_MILLIS: u64 = 90;
-const WATCH_MAX_BATCH_MILLIS: u64 = 350;
-const WATCH_IDLE_POLL_MILLIS: u64 = 100;
+use super::watch_events::{watch_event_channel, WatchEventInbox, WatchStopper};
 
 #[derive(Debug, Clone)]
 struct LinkedGitMetadata {
@@ -95,13 +92,13 @@ struct SourceControlWatcherSession {
     #[allow(dead_code)]
     watcher: notify::RecommendedWatcher,
     sink: Arc<Mutex<Option<StreamSink<SourceControlWatchSignal>>>>,
-    shutdown_tx: mpsc::Sender<()>,
+    stop: WatchStopper,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl SourceControlWatcherSession {
     fn stop(mut self) {
-        let _ = self.shutdown_tx.send(());
+        self.stop.request_stop();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -113,8 +110,7 @@ pub(super) fn start_source_control_watcher(
 ) -> Result<SourceControlWatcherHandle, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed).to_string();
-    let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
-    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+    let (event_tx, stop, inbox) = watch_event_channel();
     let sink = Arc::new(Mutex::new(None));
     let event_root = root.clone();
     let metadata = linked_git_metadata(&root);
@@ -143,14 +139,14 @@ pub(super) fn start_source_control_watcher(
     let thread = thread::Builder::new()
         .name(format!("alera-source-control-watch-{id}"))
         .spawn(move || {
-            event_loop(thread_sink, event_rx, shutdown_rx);
+            event_loop(thread_sink, inbox);
         })
         .map_err(|error| WorkspaceFileError::from_io(error, "source control watcher"))?;
 
     let session = SourceControlWatcherSession {
         watcher,
         sink,
-        shutdown_tx,
+        stop,
         thread: Some(thread),
     };
     watchers()
@@ -236,63 +232,25 @@ pub(super) fn stop_source_control_watcher(handle: SourceControlWatcherHandle) {
 
 fn event_loop(
     sink: Arc<Mutex<Option<StreamSink<SourceControlWatchSignal>>>>,
-    event_rx: mpsc::Receiver<notify::Result<notify::Event>>,
-    shutdown_rx: mpsc::Receiver<()>,
+    inbox: WatchEventInbox,
 ) {
-    loop {
-        match collect_signal(&event_rx, &shutdown_rx) {
-            CollectOutcome::Signal(signal) => emit_signal(&sink, signal),
-            CollectOutcome::Idle => continue,
-            CollectOutcome::Shutdown => return,
+    while let Some(signal) = collect_signal(&inbox) {
+        if inbox.is_stopping() {
+            return;
         }
+        emit_signal(&sink, signal);
     }
 }
 
-enum CollectOutcome {
-    Signal(SourceControlWatchSignal),
-    Idle,
-    Shutdown,
-}
-
-/// Runs one debounce cycle: blocks (with idle polling) for a first event, then
-/// coalesces any further events arriving within the debounce window into a
-/// single signal. Kept independent of `notify` and `StreamSink` so the
-/// coalescing logic is unit-testable.
-fn collect_signal(
-    event_rx: &mpsc::Receiver<notify::Result<notify::Event>>,
-    shutdown_rx: &mpsc::Receiver<()>,
-) -> CollectOutcome {
-    if shutdown_rx.try_recv().is_ok() {
-        return CollectOutcome::Shutdown;
-    }
-    let _first_event = match event_rx.recv_timeout(Duration::from_millis(WATCH_IDLE_POLL_MILLIS)) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => return CollectOutcome::Idle,
-        Err(mpsc::RecvTimeoutError::Disconnected) => return CollectOutcome::Shutdown,
-    };
-    let mut coalesced_event_count = 1u32;
-    let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
-
-    loop {
-        if shutdown_rx.try_recv().is_ok() {
-            return CollectOutcome::Shutdown;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS))) {
-            Ok(_) => {
-                coalesced_event_count = coalesced_event_count.saturating_add(1);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => break,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return CollectOutcome::Shutdown,
-        }
-    }
-
-    CollectOutcome::Signal(SourceControlWatchSignal {
-        coalesced_event_count,
-    })
+fn collect_signal(inbox: &WatchEventInbox) -> Option<SourceControlWatchSignal> {
+    let mut coalesced_event_count = 0u32;
+    inbox
+        .collect_batch(|_| {
+            coalesced_event_count = coalesced_event_count.saturating_add(1);
+        })
+        .then_some(SourceControlWatchSignal {
+            coalesced_event_count,
+        })
 }
 
 fn emit_signal(
@@ -324,6 +282,8 @@ fn notify_error(error: notify::Error) -> WorkspaceFileError {
 mod tests {
     use super::*;
     use notify::{Event, EventKind};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn ok_event() -> notify::Result<Event> {
         Ok(Event::new(EventKind::Modify(
@@ -426,54 +386,42 @@ mod tests {
     }
     #[test]
     fn coalesces_a_burst_into_one_signal() {
-        let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
-        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        let (event_tx, _stop, inbox) = watch_event_channel();
         for _ in 0..4 {
-            event_tx.send(ok_event()).unwrap();
+            assert!(event_tx.send(ok_event()));
         }
 
-        match collect_signal(&event_rx, &shutdown_rx) {
-            CollectOutcome::Signal(signal) => {
-                assert_eq!(signal.coalesced_event_count, 4);
-            }
-            _ => panic!("expected a coalesced signal"),
-        }
+        let signal = collect_signal(&inbox).expect("coalesced signal");
+        assert_eq!(signal.coalesced_event_count, 4);
     }
 
     #[test]
     fn watcher_errors_still_trigger_reconciliation() {
-        let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
-        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-        event_tx
-            .send(Err(notify::Error::generic("watch overflow")))
-            .unwrap();
-        match collect_signal(&event_rx, &shutdown_rx) {
-            CollectOutcome::Signal(signal) => assert_eq!(signal.coalesced_event_count, 1),
-            _ => panic!("watcher errors must refresh status"),
-        }
+        let (event_tx, _stop, inbox) = watch_event_channel();
+        assert!(event_tx.send(Err(notify::Error::generic("watch overflow"))));
+        let signal = collect_signal(&inbox).expect("watcher errors must refresh status");
+        assert_eq!(signal.coalesced_event_count, 1);
     }
 
     #[test]
-    fn idles_when_no_events_arrive() {
-        let (_event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
-        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-
-        assert!(matches!(
-            collect_signal(&event_rx, &shutdown_rx),
-            CollectOutcome::Idle
-        ));
+    fn idle_worker_stops_without_an_event() {
+        let (_event_tx, stop, inbox) = watch_event_channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            done_tx.send(collect_signal(&inbox).is_none()).unwrap();
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(130)).is_err());
+        stop.request_stop();
+        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
     }
 
     #[test]
     fn shuts_down_when_event_channel_disconnects() {
-        let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
-        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        let (event_tx, _stop, inbox) = watch_event_channel();
         drop(event_tx);
 
-        assert!(matches!(
-            collect_signal(&event_rx, &shutdown_rx),
-            CollectOutcome::Shutdown
-        ));
+        assert!(collect_signal(&inbox).is_none());
     }
 
     #[test]
