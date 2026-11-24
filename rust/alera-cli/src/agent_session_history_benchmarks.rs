@@ -224,7 +224,7 @@ fn report(name: &str, samples: &[Sample]) {
                 .collect(),
         );
     }
-    let counts: [(&str, fn(&Sample) -> usize); 12] = [
+    let counts: [(&str, fn(&Sample) -> usize); 14] = [
         ("parsed", |s| s.response.parsed_files),
         ("reused", |s| s.response.reused_files),
         ("added", |s| s.response.writes.added),
@@ -249,6 +249,8 @@ fn report(name: &str, samples: &[Sample]) {
         ("selective_mismatches", |s| {
             s.response.writes.selective_mismatches
         }),
+        ("fts_reused_records", |s| s.response.fts_reused_records),
+        ("fts_decoded_records", |s| s.response.fts_decoded_records),
     ];
     for (metric, select) in counts {
         show(metric, samples.iter().map(|s| select(s) as u64).collect());
@@ -294,6 +296,8 @@ async fn history_search_phase_benchmark() {
         assert_eq!(s.response.parsed_files, FILES);
         assert_eq!(s.response.writes.added, FILES);
         assert!(!s.response.index_reused);
+        assert_eq!(s.response.fts_reused_records, 0);
+        assert_eq!(s.response.fts_decoded_records, 100);
         cold.push(s);
         state.lock().await.close_index().await;
     }
@@ -311,6 +315,8 @@ async fn history_search_phase_benchmark() {
         assert_eq!(s.response.writes.write_statements, 0);
         assert_eq!(s.response.writes.warm_check_hits, 1);
         assert_eq!(s.response.writes.existing_rows_loaded, 0);
+        assert_eq!(s.response.fts_reused_records, 100);
+        assert_eq!(s.response.fts_decoded_records, 0);
         warm.push(s);
     }
     report("warm", &warm);
@@ -322,6 +328,8 @@ async fn history_search_phase_benchmark() {
         assert!(!s.response.index_reused);
         assert_eq!(s.response.reused_files, FILES);
         assert_eq!(s.response.writes.unchanged, FILES);
+        assert_eq!(s.response.fts_reused_records, 100);
+        assert_eq!(s.response.fts_decoded_records, 0);
         reopen.push(s);
     }
     report("index_reopen", &reopen);
@@ -337,6 +345,8 @@ async fn history_search_phase_benchmark() {
         assert_eq!(s.response.writes.selective_lookup_queries, 1);
         assert_eq!(s.response.writes.selective_mismatches, 1);
         assert_eq!(s.response.writes.existing_rows_loaded, 1);
+        assert_eq!(s.response.fts_reused_records, 100);
+        assert_eq!(s.response.fts_decoded_records, 0);
         changed.push(s);
     }
     report("one_file_changed", &changed);

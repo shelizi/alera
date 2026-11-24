@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use alera_core::global_agent_search::{AgentSessionSearchQuery, AgentSessionSearchRecord};
@@ -79,6 +80,9 @@ fn document_key(record: &AgentSessionSearchRecord) -> serde_json::Result<String>
 pub(crate) struct PreparedHistoryBatch<'a> {
     records: &'a [AgentSessionSearchRecord],
     keys: Vec<String>,
+    // Request-local canonical bytes are immutable with the borrowed records.
+    // OnceLock keeps references Send/Sync across SQLite awaits.
+    comparison: OnceLock<Option<SerializedHistoryBatch>>,
 }
 
 impl<'a> PreparedHistoryBatch<'a> {
@@ -90,7 +94,22 @@ impl<'a> PreparedHistoryBatch<'a> {
             .iter()
             .map(document_key)
             .collect::<serde_json::Result<Vec<_>>>()?;
-        Ok(Self { records, keys })
+        Ok(Self {
+            records,
+            keys,
+            comparison: OnceLock::new(),
+        })
+    }
+
+    fn comparison(
+        &self,
+        stats: &mut HistoryIndexWriteStats,
+    ) -> Result<Option<&SerializedHistoryBatch>> {
+        if let Some(cached) = self.comparison.get() {
+            return Ok(cached.as_ref());
+        }
+        let serialized = SerializedHistoryBatch::new(self, stats)?;
+        Ok(self.comparison.get_or_init(|| serialized).as_ref())
     }
 
     fn iter(&self) -> impl Iterator<Item = (&AgentSessionSearchRecord, &str)> {
@@ -136,6 +155,28 @@ impl SerializedHistoryBatch {
 
     fn record_json(&self, position: usize) -> &str {
         &self.json[self.ranges[position].clone()]
+    }
+}
+
+/// Keep fallback records inline to avoid a separate heap allocation for each
+/// cold or changed stored result. The result list is capped at MAX_RESULTS.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PreparedHistoryMatch {
+    Observed(usize),
+    Decoded(AgentSessionSearchRecord),
+}
+
+impl PreparedHistoryMatch {
+    pub(crate) fn into_record(
+        self,
+        observed: &mut [Option<AgentSessionSearchRecord>],
+    ) -> AgentSessionSearchRecord {
+        match self {
+            Self::Observed(position) => observed[position]
+                .take()
+                .expect("each unique document key selects its observed record once"),
+            Self::Decoded(record) => record,
+        }
     }
 }
 
@@ -308,7 +349,7 @@ impl AgentSessionHistoryIndex {
         if batch.records.is_empty() {
             return Ok(false);
         }
-        let Some(serialized) = SerializedHistoryBatch::new(batch, _stats)? else {
+        let Some(serialized) = batch.comparison(_stats)? else {
             return Ok(false);
         };
         // Compare exact canonical text, not hashes or previously cached DB
@@ -375,12 +416,12 @@ impl AgentSessionHistoryIndex {
                 .len()
                 == batch.keys.len()
         {
-            SerializedHistoryBatch::new(batch, &mut stats)?
+            batch.comparison(&mut stats)?
         } else {
             None
         };
         let mut tx = self.pool.begin().await?;
-        let rows = if let Some(serialized) = &serialized {
+        let rows = if let Some(serialized) = serialized {
             // 512 parameters at most. Compare and write in the same
             // transaction so an intervening writer cannot invalidate the
             // classification. A missing document is returned with a NULL ID.
@@ -447,7 +488,7 @@ impl AgentSessionHistoryIndex {
         // storage rather than allocating an owned JSON string for each one.
         let mut json_scratch = Vec::new();
         for (position, (record, key)) in batch.iter().enumerate() {
-            let canonical = serialized.as_ref().map(|s| s.record_json(position));
+            let canonical = serialized.map(|s| s.record_json(position));
             if canonical.is_some() && !existing.contains_key(key) {
                 stats.unchanged += 1;
                 continue;
@@ -648,11 +689,28 @@ impl AgentSessionHistoryIndex {
             .await
     }
 
-    pub(crate) async fn search_prepared(
+    #[cfg(test)]
+    async fn search_prepared(
         &self,
         query: &AgentSessionSearchQuery,
         batch: &PreparedHistoryBatch<'_>,
     ) -> Result<Vec<AgentSessionSearchRecord>> {
+        Ok(self
+            .search_prepared_matches(query, batch)
+            .await?
+            .into_iter()
+            .map(|candidate| match candidate {
+                PreparedHistoryMatch::Observed(position) => batch.records[position].clone(),
+                PreparedHistoryMatch::Decoded(record) => record,
+            })
+            .collect())
+    }
+
+    pub(crate) async fn search_prepared_matches(
+        &self,
+        query: &AgentSessionSearchQuery,
+        batch: &PreparedHistoryBatch<'_>,
+    ) -> Result<Vec<PreparedHistoryMatch>> {
         let Some(fts) = query_terms(&query.text) else {
             return Ok(Vec::new());
         };
@@ -681,11 +739,18 @@ impl AgentSessionHistoryIndex {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let mut sql = QueryBuilder::<Sqlite>::new(
+        // Only reuse canonical bytes already produced by the update path.
+        // Cold or over-budget requests keep the original SELECT projection.
+        let serialized = batch.comparison.get().and_then(Option::as_ref);
+        let mut sql = QueryBuilder::<Sqlite>::new(if serialized.is_some() {
+            "SELECT d.document_key, d.record_json FROM history_search_fts
+             JOIN history_search_docs AS d ON history_search_fts.rowid=d.id
+             WHERE history_search_fts MATCH "
+        } else {
             "SELECT d.record_json FROM history_search_fts
              JOIN history_search_docs AS d ON history_search_fts.rowid=d.id
-             WHERE history_search_fts MATCH ",
-        );
+             WHERE history_search_fts MATCH "
+        });
         sql.push_bind(fts);
         sql.push(" AND d.document_key IN (");
         {
@@ -697,10 +762,31 @@ impl AgentSessionHistoryIndex {
         sql.push(") ORDER BY bm25(history_search_fts), d.updated_ms DESC LIMIT ");
         sql.push_bind(MAX_RESULTS as i64);
         let rows = sql.build().fetch_all(&self.pool).await?;
+        // The final occurrence wins for duplicate document keys, matching the
+        // sequential upsert. SQLite returns a given document ID at most once.
+        let positions = serialized.map(|_| {
+            batch
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| (key.as_str(), i))
+                .collect::<HashMap<_, _>>()
+        });
         rows.into_iter()
             .map(|row| {
                 let raw: &str = row.try_get("record_json")?;
-                serde_json::from_str(raw).map_err(Into::into)
+                if let (Some(serialized), Some(positions)) = (serialized, &positions) {
+                    let key: &str = row.try_get("document_key")?;
+                    if let Some(&position) = positions.get(key) {
+                        // Compare the actual JSON returned by this very FTS
+                        // statement, not an earlier write or cached identity.
+                        // Any intervening DB mutation must still be decoded.
+                        if raw.as_bytes() == serialized.record_json(position).as_bytes() {
+                            return Ok(PreparedHistoryMatch::Observed(position));
+                        }
+                    }
+                }
+                Ok(PreparedHistoryMatch::Decoded(serde_json::from_str(raw)?))
             })
             .collect()
     }
@@ -1251,6 +1337,100 @@ mod tests {
             .upsert_warm_prepared(&PreparedHistoryBatch::new(&invalid).unwrap())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn fts_exact_json_reuse_moves_observed_records_and_preserves_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let first = record(
+            "550e8400-e29b-41d4-a716-446655440000",
+            "keyboard \"quoted\"",
+            "keyboard \u{4e2d}\u{6587}",
+        );
+        let mut last = first.clone();
+        last.goal = "keyboard last duplicate".into();
+        last.updated_at_ms += 1;
+        let mut secondary = last.clone();
+        secondary.provider_account_id = Some("secondary".into());
+        let mut profile = last.clone();
+        profile.profile_id = Some("another-profile".into());
+        let mut records = vec![first, secondary, last, profile];
+        let query = AgentSessionSearchQuery {
+            text: "keyboard".into(),
+            provider_account_id: Some("primary".into()),
+            max_results: 10,
+            ..Default::default()
+        };
+        let batch = PreparedHistoryBatch::new(&records).unwrap();
+        index.upsert_prepared(&batch).await.unwrap();
+        let cold = index.search_prepared_matches(&query, &batch).await.unwrap();
+        assert!(cold
+            .iter()
+            .all(|m| matches!(m, PreparedHistoryMatch::Decoded(_))));
+        let expected = index.search_prepared(&query, &batch).await.unwrap();
+        assert_eq!(expected.len(), 2);
+        assert!(expected.contains(&records[2]));
+        assert!(expected.contains(&records[3]));
+        assert_eq!(
+            index
+                .upsert_warm_prepared(&batch)
+                .await
+                .unwrap()
+                .warm_check_hits,
+            0
+        );
+        let matches = index.search_prepared_matches(&query, &batch).await.unwrap();
+        assert_eq!(matches.len(), expected.len());
+        for (candidate, expected) in matches.iter().zip(&expected) {
+            match candidate {
+                PreparedHistoryMatch::Observed(position) => {
+                    assert!(*position == 2 || *position == 3);
+                    assert_eq!(&records[*position], expected);
+                }
+                _ => panic!("exact stored JSON should reuse the final observed record"),
+            }
+        }
+        // A later same-file modification must be decoded from the selected
+        // SQLite row. A noncanonical but valid representation also falls back.
+        let mut external = records[2].clone();
+        external.goal = "keyboard externally updated".into();
+        let key = document_key(&records[2]).unwrap();
+        sqlx::query("UPDATE history_search_docs SET record_json = ? WHERE document_key = ?")
+            .bind(serde_json::to_string_pretty(&external).unwrap())
+            .bind(&key)
+            .execute(&index.pool)
+            .await
+            .unwrap();
+        let matches = index.search_prepared_matches(&query, &batch).await.unwrap();
+        assert!(matches
+            .iter()
+            .any(|m| matches!(m, PreparedHistoryMatch::Decoded(r) if r == &external)));
+        assert!(matches
+            .iter()
+            .any(|m| matches!(m, PreparedHistoryMatch::Observed(3))));
+        sqlx::query("UPDATE history_search_docs SET record_json = ? WHERE document_key = ?")
+            .bind("{malformed")
+            .bind(&key)
+            .execute(&index.pool)
+            .await
+            .unwrap();
+        assert!(index.search_prepared_matches(&query, &batch).await.is_err());
+        index.upsert_prepared(&batch).await.unwrap();
+        let matches = index.search_prepared_matches(&query, &batch).await.unwrap();
+        drop(batch);
+        let pointers = records.iter().map(|r| r.title.as_ptr()).collect::<Vec<_>>();
+        let mut slots = records.drain(..).map(Some).collect::<Vec<_>>();
+        let mut actual = Vec::new();
+        for candidate in matches {
+            let PreparedHistoryMatch::Observed(position) = candidate else {
+                panic!("repaired canonical row should be reused");
+            };
+            let record = PreparedHistoryMatch::Observed(position).into_record(&mut slots);
+            assert_eq!(record.title.as_ptr(), pointers[position]);
+            actual.push(record);
+        }
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

@@ -14,7 +14,8 @@ use alera_core::global_agent_search::{
 use anyhow::{bail, Result};
 
 use crate::agent_session_history_fts::{
-    AgentSessionHistoryIndex, HistoryIndexWriteStats, PreparedHistoryBatch, HISTORY_INDEX_FILE,
+    AgentSessionHistoryIndex, HistoryIndexWriteStats, PreparedHistoryBatch, PreparedHistoryMatch,
+    HISTORY_INDEX_FILE,
 };
 use crate::agent_session_history_scan::{
     discover_history_cached, HistoryPreviewCache, HistoryScanPolicy, ProviderHistoryRoot,
@@ -88,6 +89,10 @@ pub(crate) struct HistorySearchResponse {
     pub writes: HistoryIndexWriteStats,
     #[cfg(test)]
     timings: SearchPhaseTimings,
+    #[cfg(test)]
+    fts_reused_records: usize,
+    #[cfg(test)]
+    fts_decoded_records: usize,
 }
 
 /// Identity of a currently observed historical record. Borrow the fields from
@@ -136,6 +141,10 @@ pub(crate) async fn search_history_on_demand(
         writes: HistoryIndexWriteStats::default(),
         #[cfg(test)]
         timings: SearchPhaseTimings::default(),
+        #[cfg(test)]
+        fts_reused_records: 0,
+        #[cfg(test)]
+        fts_decoded_records: 0,
     };
     if query.text.trim().is_empty() {
         return Ok(empty);
@@ -214,7 +223,7 @@ pub(crate) async fn search_history_on_demand(
         // otherwise other accounts can hide relevant rows from a filtered query.
         #[cfg(test)]
         let fts_started = Instant::now();
-        let result = index.search_prepared(query, &batch).await;
+        let result = index.search_prepared_matches(query, &batch).await;
         #[cfg(test)]
         {
             empty.timings.fts = fts_started.elapsed();
@@ -222,7 +231,7 @@ pub(crate) async fn search_history_on_demand(
         result
     }
     .await;
-    let candidates = match candidates {
+    let mut candidates = match candidates {
         Ok(candidates) => candidates,
         Err(error) => {
             // A failed connection/schema must not poison every later request.
@@ -232,14 +241,43 @@ pub(crate) async fn search_history_on_demand(
     };
     #[cfg(test)]
     let rank_started = Instant::now();
-    let observed = scan
-        .records
+    let has_decoded = candidates
         .iter()
-        .filter_map(observed_history_key)
-        .collect::<HashSet<_>>();
+        .any(|m| matches!(m, PreparedHistoryMatch::Decoded(_)));
+    #[cfg(test)]
+    {
+        empty.fts_reused_records = candidates
+            .iter()
+            .filter(|m| matches!(m, PreparedHistoryMatch::Observed(_)))
+            .count();
+        empty.fts_decoded_records = candidates.len() - empty.fts_reused_records;
+    }
+    if has_decoded {
+        // Exact matches already refer to a validated current scan record.
+        // Preserve the previous observed-identity filter for decoded rows.
+        let observed = scan
+            .records
+            .iter()
+            .filter_map(observed_history_key)
+            .collect::<HashSet<_>>();
+        candidates.retain(|candidate| match candidate {
+            PreparedHistoryMatch::Observed(_) => true,
+            PreparedHistoryMatch::Decoded(record) => {
+                observed_history_key(record).is_some_and(|key| observed.contains(&key))
+            }
+        });
+    }
+    let mut slots = if candidates
+        .iter()
+        .any(|m| matches!(m, PreparedHistoryMatch::Observed(_)))
+    {
+        scan.records.into_iter().map(Some).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let candidates = candidates
         .into_iter()
-        .filter(|record| observed_history_key(record).is_some_and(|key| observed.contains(&key)));
+        .map(|candidate| candidate.into_record(&mut slots));
     empty.hits = search_agent_sessions(candidates, query);
     #[cfg(test)]
     {
@@ -369,6 +407,8 @@ mod tests {
         assert_eq!(second.writes.unchanged, 1);
         assert_eq!(second.writes.warm_check_hits, 1);
         assert_eq!(second.writes.existing_rows_loaded, 0);
+        assert_eq!(second.fts_reused_records, 1);
+        assert_eq!(second.fts_decoded_records, 0);
         assert!(second.index_reused);
         assert_eq!(
             second.parsed_files, 1,
