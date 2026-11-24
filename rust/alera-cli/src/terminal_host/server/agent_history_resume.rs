@@ -554,6 +554,7 @@ impl ServerActor {
                     && tab.payload["automationOwned"] != true
             })
             .ok_or_else(|| HostError::state("Original resumed Agent Tab not found"))?;
+        super::agent_context_checkpoint::validate_context_owner(tab, payload)?;
         let (provider, native_id) = provider_resume_id(tab).ok_or_else(|| {
             HostError::state("Saved Agent Tab has no original Claude/Codex Session UUID")
         })?;

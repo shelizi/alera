@@ -63,7 +63,8 @@ fn verified_latest_report(
         return None;
     }
     let page =
-        super::agent_history_transcript::read_page(&canonical, provider, native, None, 60).ok()?;
+        super::agent_history_transcript::read_visible_page(&canonical, provider, native, None, 60)
+            .ok()?;
     // A newer user message without an assistant reply is not a report.
     page.messages
         .last()
@@ -77,6 +78,9 @@ pub(super) async fn completed_hook_report(
     store: &RuntimeStore,
     event: &AgentHookEvent,
 ) -> Option<String> {
+    if event.agent_type == "agy" {
+        return super::agent_context_agy::completed_agy_report(store, event).await;
+    }
     let name = event
         .event_name
         .as_deref()

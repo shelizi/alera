@@ -123,12 +123,18 @@ impl ServerActor {
         // Previous-turn text is a status fallback, not evidence of a new
         // completed reply. Resolve only the exact registered provider source
         // and native UUID; never trust a caller-supplied arbitrary path.
-        let fresh_report =
-            normalize_hook_event(&event, None).and_then(|value| value.last_assistant_message);
+        let fresh_status = normalize_hook_event(&event, None);
+        let fresh_prompt = fresh_status
+            .as_ref()
+            .map(|value| value.prompt.as_str())
+            .unwrap_or("");
+        let mut fresh_report = fresh_status
+            .as_ref()
+            .and_then(|value| value.last_assistant_message.clone());
         if fresh_report.is_none()
             && normalized.state == AgentPresenceState::Done
             && normalized.interrupted != Some(true)
-            && matches!(event.agent_type.as_str(), "claude" | "codex")
+            && matches!(event.agent_type.as_str(), "claude" | "codex" | "agy")
             && event
                 .event_name
                 .as_deref()
@@ -140,7 +146,8 @@ impl ServerActor {
                 super::agent_context_transcript::completed_hook_report(&self.runtime_store, &event)
                     .await
             {
-                normalized.last_assistant_message = Some(report);
+                normalized.last_assistant_message = Some(report.clone());
+                fresh_report = Some(report);
                 tracing::debug!(provider = %event.agent_type, "Agent Hook report recovered from verified native transcript");
             } else {
                 tracing::warn!(
@@ -195,6 +202,21 @@ impl ServerActor {
                 }],
             }))
             .await;
+        // Retain raw work reports even when presence is cleared on SessionEnd
+        // or the Host restarts. Never checkpoint an inherited or interrupted reply.
+        if identity.effective_agent_type == event.agent_type {
+            self.checkpoint_native_agent_context(
+                &event,
+                fresh_prompt,
+                if completed {
+                    fresh_report.as_deref()
+                } else {
+                    None
+                },
+                now,
+            )
+            .await;
+        }
         if completed {
             let current_report = self
                 .agent_presence

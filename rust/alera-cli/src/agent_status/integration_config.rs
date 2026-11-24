@@ -263,6 +263,18 @@ fn agy_hook_config_paths() -> anyhow::Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Restrict local AGY transcript access to the default CLI app-data root
+/// and the portable GEMINI directories already discovered for managed Hooks.
+pub(crate) fn agy_cli_history_roots() -> Vec<PathBuf> {
+    let mut dirs = discover_agy_gemini_dirs();
+    if let Ok(home) = home_dir() {
+        dirs.push(home.join(".gemini"));
+    }
+    dirs.into_iter()
+        .map(|dir| dir.join("antigravity-cli"))
+        .collect()
+}
+
 fn discover_agy_gemini_dirs() -> Vec<PathBuf> {
     discover_agy_gemini_dirs_from(&agy_launchers_on_path())
 }

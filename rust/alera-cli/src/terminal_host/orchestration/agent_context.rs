@@ -2,14 +2,14 @@
 //! A report is an observation, not proof of task completion. Only user
 //! prompts and Agent reports are retained; tool input/output is ignored.
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const GOAL_LIMIT: usize = 600;
 const PROGRESS_LIMIT: usize = 420;
 const EVENT_LIMIT: usize = 260;
 const TIMELINE_LIMIT: usize = 16;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentContextMilestone {
     pub kind: String,
@@ -17,8 +17,8 @@ pub struct AgentContextMilestone {
     pub at: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AgentContextOverview {
     pub goal: String,
     pub progress: String,

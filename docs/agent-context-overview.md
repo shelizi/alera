@@ -26,7 +26,7 @@ badge as the task summary.
   excerpt, 260 per milestone, 16 retained milestones. Long final answers
   retain a short opening and conclusion instead of losing their status at the
   truncation boundary. Tool input/output and hidden reasoning are excluded;
-  native fallback reads at most 1 MiB per verified Stop event.
+  native fallback reads at most four 1 MiB slices per verified Stop event.
 
 ## Optional AI Assist report summaries
 
@@ -58,11 +58,13 @@ Classic Settings > AI Assist > Agent Work Reports configures the opt-in automati
   Host inventory only on real Context changes. The existing periodic fallback
   still covers old Hosts, but no additional polling loop or unbounded refreshes
   are introduced.
-- This remains an in-memory, Hook-derived, **model-authored reply excerpt**
-  rather than a separate semantic whole-transcript AI summary. It is not yet a
-  user-editable locked goal or durable across Runtime Host restarts. Those
-  require a separate persistence, sensitive-text and rate-limited generation
-  review.
+- This remains a Hook-derived, **model-authored reply excerpt**, not a
+  semantic whole-transcript summary or user-editable locked goal. Verified
+  native conversations now have a bounded, private Host-owned checkpoint.
+  Live presence (including injection readiness) is never reconstructed
+  from an old report. Classic uses a local-only, exact-owner read to restore
+  the checkpoint, and may read source-verified Claude/Codex history if no
+  saved report exists.
 - The 16-event upper bound prevents history from growing during long sessions.
 
 ## Relevant validation
@@ -119,3 +121,68 @@ Deployment requires rebuilding both the Host and Classic UI. No live
 provider hooks or runtime settings were rewritten during this investigation;
 existing Agent processes remain undisturbed. Verify with fresh Codex and
 Claude turns on the updated Host before marking production recovery complete.
+
+## 2026-11-24 Agent Context display and restart recovery
+
+Production inspection after the native-Hook transport upgrade found 11
+live sessions, of which only the two Grok sessions had raw reports in the
+Host inventory. Three Antigravity sessions had presence without reports;
+the other sessions did not expose usable report data. Thus a successful
+isolated native relay test alone did not establish that the right-hand
+Agent Context displayed real production content.
+
+The new Classic panel recognizes a registered Agent tab even when its
+live presence is absent. The raw completed Hook overview is saved with
+the private native-conversation state, bounded by the same goal, report,
+and milestone limits. It is redacted from public tab payloads. Only a
+matching authenticated local tab/terminal/conversation lookup can read
+it. Foreign, child, ignored and unverified native identities do not
+qualify for checkpoint writes. An unrelated conversation cannot inherit
+the checkpoint. Neither restored report text nor a timestamp makes a
+terminal ready for orchestration injection.
+
+The visible selected-tab panel prioritizes current reports over older
+saved reports, labels the source, optionally reads the exact verified
+Claude/Codex native conversation when no checkpoint exists, and offers
+a manual refresh. SessionEnd invalidates a previously cached empty
+checkpoint result. History fallback does not use another account's
+conversation, infer text from terminal output, invent timestamps or
+make an additional AI call. A history reply is not evidence that a
+turn completed. Existing sessions that never saved a report and have
+no readable verified history may still show an explicit missing-report
+message. GPUI's sidebar checkpoint recovery remains separate work.
+
+Verification: 14/14 Flutter tests passed on the Windows feature worktree,
+including the actual selected-tab widget, exact scoped RPC arguments,
+switching Agent tabs, rendering raw reports with no summary, rendering
+verified history, and refreshing saved reports after SessionEnd.
+The production application has not been rebuilt or switched to this
+candidate.
+
+### Antigravity CLI
+
+The official Hook contract (https://antigravity.google/docs/hooks) exposes
+the conversation UUID, mounted workspace paths, transcript location and
+latest user input; Stop does not include final reply text. The Host now
+reads only the exact local CLI transcript in the documented
+brain/<UUID>/.system_generated/logs/transcript.jsonl layout, restricted
+to its default or discovered portable CLI roots. A live Stop fallback
+requires a fully idle successful completion, matching registered
+workspace and tab/native UUID. The reader uses 16 KiB reverse blocks,
+with a 4 MiB scan bound and 128 KiB line bound, and stops at a user-turn
+boundary or a model step still requesting tools. Only completed
+PLANNER_RESPONSE content without tool calls qualifies. Thinking,
+arguments, tool results, invalid records and interrupted turns are
+excluded. A restored tab without a checkpoint may recover from its
+already Host-bound UUID only when exactly one known local source exists;
+its history timestamp is preserved and labeled as a historical reply,
+not a new Done event. Unknown/remote roots or ambiguous accounts remain
+unavailable rather than guessed.
+
+Final feature verification: Rust 18/18 and Flutter 14/14 passed.
+The Rust suite includes three AGY source/reverse-reader regressions,
+the corrected initial-prompt fixture, and an integration case that
+receives a Hook, stores the report in SQLite, clears presence at
+SessionEnd, reopens the database, and refuses stale or foreign owners.
+Focused Dart static analysis reported no issues. These automated tests
+do not replace a live desktop/provider acceptance test.
