@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
 use serde_json::Value;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
+use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame, SharedJsonFrame};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
 use crate::terminal_host::server::{DisconnectReason, ServerCommand};
 
@@ -29,9 +30,10 @@ pub enum ClientFrame {
         frame: Box<ClientFrame>,
     },
     Json(Value),
+    SharedJson(Arc<SharedJsonFrame>),
     Output {
         session_id: String,
-        data: Vec<u8>,
+        data: Bytes,
     },
     UpgradeToBinary,
     /// Re-enters the actor only after this connection has written every frame
@@ -68,11 +70,16 @@ impl From<Value> for ClientFrame {
 }
 
 impl ClientFrame {
+    pub(crate) fn shared_json(value: Value) -> Self {
+        Self::SharedJson(Arc::new(SharedJsonFrame::new(value)))
+    }
+
     /// The JSON this frame would be on a text-only transport, or None for the
     /// upgrade marker, which has no representation there.
     pub fn as_json(&self) -> Option<Value> {
         match self.payload() {
             ClientFrame::Json(value) => Some(value.clone()),
+            ClientFrame::SharedJson(frame) => Some(frame.value().clone()),
             ClientFrame::Output { session_id, data } => {
                 Some(crate::terminal_host::protocol::event(
                     "output",
@@ -400,6 +407,14 @@ async fn write_frame(
         ClientFrame::ShutdownRuntimeAfterWrite { inbox } => {
             let _ = inbox.send(ServerCommand::RequestedShutdown);
             Ok(())
+        }
+        ClientFrame::SharedJson(frame) => {
+            let bytes = if *binary {
+                frame.binary_frame()?
+            } else {
+                frame.line()?
+            };
+            write_half.write_all(bytes).await
         }
         ClientFrame::Json(value) if *binary => {
             let bytes = encode_json_frame(&value)?;

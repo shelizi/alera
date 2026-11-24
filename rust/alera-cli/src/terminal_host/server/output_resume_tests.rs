@@ -13,7 +13,7 @@ use super::ServerActor;
 fn output(data: &[u8]) -> ClientFrame {
     ClientFrame::Output {
         session_id: "s1".to_string(),
-        data: data.to_vec(),
+        data: bytes::Bytes::copy_from_slice(data),
     }
 }
 
@@ -31,6 +31,44 @@ async fn actor_with_client(
         HashMap::from([("s1".to_string(), session)]),
     )
     .await
+}
+
+#[tokio::test]
+async fn output_batch_shares_raw_bytes_and_keeps_per_client_cursors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, mut ar) = ClientHandle::test_terminal_channels();
+    let (b, mut br) = ClientHandle::test_terminal_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.attach(1);
+    session.attach(2);
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(a)), (2, local_client(b))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    let data = vec![0xff, 0, 0x1b, 0x61];
+    actor.sessions.get_mut("s1").unwrap().append_output(&data);
+    actor.flush_output_batch("s1");
+    let unwrap = |frame: ClientFrame| match frame {
+        ClientFrame::SequencedTerminal { frame, .. } => match *frame {
+            ClientFrame::Output { data, .. } => data,
+            _ => panic!("expected output"),
+        },
+        _ => panic!("missing terminal ordering envelope"),
+    };
+    let a = unwrap(ar.try_recv().unwrap());
+    let b = unwrap(br.try_recv().unwrap());
+    assert_eq!(a.as_ref(), data.as_slice());
+    assert_eq!(a.as_ptr(), b.as_ptr());
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(1),
+        Some(data.len() as u64)
+    );
+    assert_eq!(
+        actor.sessions["s1"].delivered_output_cursor(2),
+        Some(data.len() as u64)
+    );
 }
 
 #[tokio::test]
@@ -87,7 +125,7 @@ async fn resume_serves_only_the_bytes_the_client_missed() {
     assert!(matches!(
         missed,
         ClientFrame::SequencedTerminal { frame, .. }
-            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data.as_ref() == b" world")
     ));
     let session = &actor.sessions["s1"];
     assert_eq!(session.delivered_output_cursor(2), Some(11));

@@ -150,7 +150,7 @@ pub(super) async fn exchange(
     loop {
         let frame = recv_frame(receiver).await;
         match frame_payload(&frame) {
-            ClientFrame::Json(_) | ClientFrame::Output { .. } => {
+            ClientFrame::Json(_) | ClientFrame::SharedJson(_) | ClientFrame::Output { .. } => {
                 let value = frame.as_json().expect("JSON-bearing frame");
                 if value["id"] == request_id {
                     return (value, events, markers);

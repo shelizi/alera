@@ -15,6 +15,10 @@ impl ServerActor {
             Some((batch.data, session.output_clients()))
         });
         if let Some((data, clients)) = broadcast {
+            if clients.is_empty() {
+                return;
+            }
+            let data = bytes::Bytes::from(data);
             for client_id in clients {
                 self.send_terminal_output(
                     session_id,
@@ -114,7 +118,7 @@ impl ServerActor {
                 client_id,
                 ClientFrame::Output {
                     session_id: session_id.to_string(),
-                    data,
+                    data: data.into(),
                 },
             );
         if accepted {
@@ -152,7 +156,7 @@ impl ServerActor {
         let result = self
             .clients
             .get(&client_id)
-            .map(|client| client.handle.try_send_terminal(frame.clone().into()));
+            .map(|client| client.handle.try_send_terminal(frame.into()));
         match result {
             Some(Ok(())) => {
                 if let Some(session) = self.sessions.get_mut(&session_id) {

@@ -31,7 +31,7 @@ async fn control_response_stays_between_its_causal_terminal_frames() {
         .try_send_terminal(json!({"event": "output-a"}).into())
         .unwrap();
     handle
-        .send_control(json!({"response": "attachment"}).into())
+        .send_control(ClientFrame::shared_json(json!({"response": "attachment"})))
         .unwrap();
     handle
         .try_send_terminal(json!({"event": "output-b"}).into())
@@ -58,6 +58,63 @@ async fn control_response_stays_between_its_causal_terminal_frames() {
 
     drop(handle);
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_broadcast_crosses_text_and_binary_local_connections_unchanged() {
+    use tokio::io::AsyncReadExt as _;
+    use tokio::time::{timeout, Duration};
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let value = json!({"event": "shared", "payload": {"text": "測試\n😀"}});
+    let shared = ClientFrame::shared_json(value.clone());
+    for binary in [false, true] {
+        let client = TcpStream::connect(address).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let (inbox, _inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (terminal_tx, terminal_rx) =
+            tokio::sync::mpsc::channel(CLIENT_TERMINAL_OUT_QUEUE_CAPACITY);
+        let handle = ClientHandle::new(control_tx, terminal_tx);
+        if binary {
+            handle.send_control(ClientFrame::UpgradeToBinary).unwrap();
+        }
+        handle.send_control(shared.clone()).unwrap();
+        let task = tokio::spawn(connection_loop(
+            server,
+            1,
+            inbox,
+            control_rx,
+            terminal_rx,
+            Arc::new(LocalClientIngressAdmission::new(
+                LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+                MAX_LOCAL_PENDING_REQUEST_BYTES,
+            )),
+        ));
+        let mut reader = BufReader::new(client);
+        timeout(Duration::from_secs(2), async {
+            if binary {
+                let mut sentinel = String::new();
+                reader.read_line(&mut sentinel).await.unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&sentinel).unwrap()["event"],
+                    BINARY_FRAMES_ENABLED_EVENT
+                );
+                let expected = encode_json_frame(&value).unwrap();
+                let mut actual = vec![0; expected.len()];
+                reader.read_exact(&mut actual).await.unwrap();
+                assert_eq!(actual, expected);
+            } else {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
+            }
+        })
+        .await
+        .unwrap();
+        drop(handle);
+        task.await.unwrap();
+    }
 }
 
 #[tokio::test]

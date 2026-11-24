@@ -138,44 +138,67 @@ impl ServerActor {
         }
     }
 
-    pub(super) fn broadcast(&self, client_ids: &[u64], message: Value) {
-        for id in client_ids {
-            if let Some(client) = self.clients.get(id) {
-                if client.handle.send_control(message.clone().into()).is_err() {
-                    self.disconnect_client_soon(*id, DisconnectReason::TransportWriteFailed);
-                }
+    fn broadcast_to<'a>(
+        &self,
+        recipients: impl Iterator<Item = (u64, &'a ClientState)>,
+        message: Value,
+    ) {
+        let mut recipients = recipients.peekable();
+        let Some((first_id, first)) = recipients.next() else {
+            return;
+        };
+        if recipients.peek().is_none() {
+            // The common one-app case needs neither a deep clone nor shared state.
+            if first.handle.send_control(message.into()).is_err() {
+                self.disconnect_client_soon(first_id, DisconnectReason::TransportWriteFailed);
+            }
+            return;
+        }
+        let frame = ClientFrame::shared_json(message);
+        for (id, client) in std::iter::once((first_id, first)).chain(recipients) {
+            if client.handle.send_control(frame.clone()).is_err() {
+                self.disconnect_client_soon(id, DisconnectReason::TransportWriteFailed);
             }
         }
+    }
+
+    pub(super) fn broadcast(&self, client_ids: &[u64], message: Value) {
+        self.broadcast_to(
+            client_ids
+                .iter()
+                .filter_map(|id| self.clients.get(id).map(|client| (*id, client))),
+            message,
+        );
     }
 
     pub(super) fn broadcast_authenticated(&self, message: Value) {
-        for (client_id, client) in &self.clients {
-            if client.authenticated && client.handle.send_control(message.clone().into()).is_err() {
-                self.disconnect_client_soon(*client_id, DisconnectReason::TransportWriteFailed);
-            }
-        }
+        self.broadcast_to(
+            self.clients
+                .iter()
+                .filter(|(_, client)| client.authenticated)
+                .map(|(id, client)| (*id, client)),
+            message,
+        );
     }
 
     pub(super) fn broadcast_authenticated_local(&self, message: Value) {
-        for (client_id, client) in &self.clients {
-            if client.authenticated
-                && client.kind == ClientKind::Local
-                && client.handle.send_control(message.clone().into()).is_err()
-            {
-                self.disconnect_client_soon(*client_id, DisconnectReason::TransportWriteFailed);
-            }
-        }
+        self.broadcast_to(
+            self.clients
+                .iter()
+                .filter(|(_, client)| client.authenticated && client.kind == ClientKind::Local)
+                .map(|(id, client)| (*id, client)),
+            message,
+        );
     }
 
     pub(super) fn broadcast_authenticated_mobile(&self, message: Value) {
-        for (client_id, client) in &self.clients {
-            if client.authenticated
-                && client.kind == ClientKind::Mobile
-                && client.handle.send_control(message.clone().into()).is_err()
-            {
-                self.disconnect_client_soon(*client_id, DisconnectReason::TransportWriteFailed);
-            }
-        }
+        self.broadcast_to(
+            self.clients
+                .iter()
+                .filter(|(_, client)| client.authenticated && client.kind == ClientKind::Mobile)
+                .map(|(id, client)| (*id, client)),
+            message,
+        );
     }
 }
 
@@ -238,6 +261,55 @@ mod tests {
             crate::terminal_host::host_error::OutcomeClass::Unauthorized
         );
         assert_eq!(error.wire_message(), "Terminal host authentication failed.");
+    }
+
+    #[tokio::test]
+    async fn broadcast_shares_json_only_among_eligible_recipients() {
+        use crate::terminal_host::server::actor_test_harness::{
+            local_client, mobile_client, test_actor,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (a, mut ar) = ClientHandle::test_channels();
+        let (b, mut br) = ClientHandle::test_channels();
+        let (c, mut cr) = ClientHandle::test_channels();
+        let (d, mut dr) = ClientHandle::test_channels();
+        let mut anonymous = local_client(d);
+        anonymous.authenticated = false;
+        let actor = test_actor(
+            &dir,
+            HashMap::from([
+                (1, local_client(a)),
+                (2, local_client(b)),
+                (3, mobile_client(c, "phone")),
+                (4, anonymous),
+            ]),
+            HashMap::new(),
+        )
+        .await;
+
+        let message = json!({"event": "changed", "payload": {"text": "測試".repeat(1024)}});
+        actor.broadcast_authenticated_local(message.clone());
+        let unwrap = |frame: ClientFrame| match frame {
+            ClientFrame::OrderedControl { frame, .. } => match *frame {
+                ClientFrame::SharedJson(shared) => shared,
+                _ => panic!("multi-recipient broadcast must share JSON"),
+            },
+            _ => panic!("missing control ordering envelope"),
+        };
+        let first = unwrap(ar.try_recv().unwrap());
+        let second = unwrap(br.try_recv().unwrap());
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(first.value(), &message);
+        assert!(cr.try_recv().is_err());
+        assert!(dr.try_recv().is_err());
+
+        actor.broadcast_authenticated_mobile(message.clone());
+        let only = cr.try_recv().unwrap();
+        assert!(matches!(only, ClientFrame::OrderedControl { frame, .. }
+            if matches!(*frame, ClientFrame::Json(ref value) if value == &message)));
+        assert!(ar.try_recv().is_err());
+        assert!(br.try_recv().is_err());
+        assert!(dr.try_recv().is_err());
     }
 
     #[tokio::test]

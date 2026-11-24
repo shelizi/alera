@@ -7,7 +7,10 @@ use futures_util::{stream::SplitSink, SinkExt as _, StreamExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{
+    accept_async,
+    tungstenite::{Message, Utf8Bytes},
+};
 
 use crate::terminal_host::client::{
     ClientFrame, ClientFrameOrdering, ClientHandle, MOBILE_CLIENT_TERMINAL_OUT_QUEUE_CAPACITY,
@@ -250,11 +253,17 @@ async fn send_mobile_value(
             return Ok(());
         }
     }
-    let Some(value) = frame.as_json() else {
-        return Ok(());
+    let text = match frame {
+        ClientFrame::SharedJson(shared) => Utf8Bytes::try_from(shared.json_payload()?)?,
+        ClientFrame::Json(value) => serde_json::to_string(value)?.into(),
+        _ => {
+            let Some(value) = frame.as_json() else {
+                return Ok(());
+            };
+            serde_json::to_string(&value)?.into()
+        }
     };
-    let text = serde_json::to_string(&value)?;
-    write.send(Message::Text(text.into())).await?;
+    write.send(Message::Text(text)).await?;
     Ok(())
 }
 
@@ -283,7 +292,7 @@ mod tests {
             .try_send_terminal(json!({"event": "output-a"}).into())
             .unwrap();
         handle
-            .send_control(json!({"response": "attachment"}).into())
+            .send_control(ClientFrame::shared_json(json!({"response": "attachment"})))
             .unwrap();
         handle
             .try_send_terminal(json!({"event": "output-b"}).into())

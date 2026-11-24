@@ -70,15 +70,18 @@ impl PeerWriter {
             }
             _ => {}
         }
-        let payload = match (&frame, *binary) {
+        let payload: bytes::Bytes = match (&frame, *binary) {
             (ClientFrame::Output { session_id, data }, true) => {
-                encode_output_payload(session_id, data)
+                encode_output_payload(session_id, data).into()
             }
+            (ClientFrame::SharedJson(shared), _) => shared.json_payload()?,
+            (ClientFrame::Json(value), _) => serde_json::to_vec(value)?.into(),
             _ => serde_json::to_vec(
                 &frame
                     .as_json()
                     .ok_or_else(|| anyhow::anyhow!("invalid relay frame"))?,
-            )?,
+            )?
+            .into(),
         };
         let encrypted = self
             .session
@@ -128,7 +131,9 @@ mod tests {
             let (control, control_rx) = mpsc::unbounded_channel();
             let (_terminal, terminal_rx) = mpsc::channel(2);
             control
-                .send(ClientFrame::Json(serde_json::json!({"id": 1, "ok": true})))
+                .send(ClientFrame::shared_json(
+                    serde_json::json!({"id": 1, "ok": true}),
+                ))
                 .unwrap();
             control
                 .send(ClientFrame::RestartRuntimeAfterWrite {

@@ -17,6 +17,10 @@
 //! kind 2 = output   payload = [u16be len][sessionId utf8][raw pty bytes]
 //! ```
 
+use std::io;
+use std::sync::OnceLock;
+
+use bytes::Bytes;
 use serde_json::Value;
 
 pub const FRAME_KIND_JSON: u8 = 1;
@@ -25,14 +29,73 @@ pub const FRAME_KIND_OUTPUT: u8 = 2;
 /// Header size: the kind byte plus the u32 length.
 pub const FRAME_HEADER_LEN: usize = 5;
 
-pub fn encode_json_frame(value: &Value) -> std::io::Result<Vec<u8>> {
-    let payload = serde_json::to_vec(value).map_err(std::io::Error::other)?;
-    Ok(frame(FRAME_KIND_JSON, &payload))
+pub fn encode_json_frame(value: &Value) -> io::Result<Vec<u8>> {
+    encode_json_with_header(value, false)
+}
+
+fn encode_json_with_header(value: &Value, newline: bool) -> io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(128);
+    out.extend_from_slice(&[FRAME_KIND_JSON, 0, 0, 0, 0]);
+    serde_json::to_writer(&mut out, value).map_err(io::Error::other)?;
+    let len = u32::try_from(out.len() - FRAME_HEADER_LEN).map_err(io::Error::other)?;
+    out[1..FRAME_HEADER_LEN].copy_from_slice(&len.to_be_bytes());
+    if newline {
+        out.push(b'\n');
+    }
+    Ok(out)
+}
+
+/// A single immutable broadcast, encoded lazily on the first transport writer.
+/// The same allocation contains the TCP frame, NDJSON line and bare WebSocket
+/// JSON as overlapping views. No work is done for dropped/unread broadcasts.
+#[derive(Debug)]
+pub struct SharedJsonFrame {
+    value: Value,
+    encoded: OnceLock<io::Result<Bytes>>,
+}
+
+impl SharedJsonFrame {
+    pub(crate) fn new(value: Value) -> Self {
+        Self {
+            value,
+            encoded: OnceLock::new(),
+        }
+    }
+
+    pub(crate) fn value(&self) -> &Value {
+        &self.value
+    }
+
+    fn encoded(&self) -> io::Result<&Bytes> {
+        self.encoded
+            .get_or_init(|| encode_json_with_header(&self.value, true).map(Bytes::from))
+            .as_ref()
+            .map_err(|error| io::Error::new(error.kind(), error.to_string()))
+    }
+
+    pub(crate) fn line(&self) -> io::Result<&[u8]> {
+        Ok(&self.encoded()?[FRAME_HEADER_LEN..])
+    }
+
+    pub(crate) fn binary_frame(&self) -> io::Result<&[u8]> {
+        let encoded = self.encoded()?;
+        Ok(&encoded[..encoded.len() - 1])
+    }
+
+    pub(crate) fn json_payload(&self) -> io::Result<Bytes> {
+        let encoded = self.encoded()?;
+        Ok(encoded.slice(FRAME_HEADER_LEN..encoded.len() - 1))
+    }
 }
 
 /// Encodes PTY output without base64, which is the whole point of the format.
 pub fn encode_output_frame(session_id: &str, data: &[u8]) -> Vec<u8> {
-    frame(FRAME_KIND_OUTPUT, &encode_output_payload(session_id, data))
+    let payload_len = 2 + session_id.len() + data.len();
+    let mut out = Vec::with_capacity(FRAME_HEADER_LEN + payload_len);
+    out.push(FRAME_KIND_OUTPUT);
+    out.extend_from_slice(&(payload_len as u32).to_be_bytes());
+    append_output_payload(&mut out, session_id, data);
+    out
 }
 
 /// The output payload on its own, without the length-prefixed header.
@@ -40,20 +103,16 @@ pub fn encode_output_frame(session_id: &str, data: &[u8]) -> Vec<u8> {
 /// Used by the mobile WebSocket transport, which already frames messages, so
 /// it needs the session id and the raw bytes but not a length prefix.
 pub fn encode_output_payload(session_id: &str, data: &[u8]) -> Vec<u8> {
-    let id = session_id.as_bytes();
-    let mut payload = Vec::with_capacity(2 + id.len() + data.len());
-    payload.extend_from_slice(&(id.len() as u16).to_be_bytes());
-    payload.extend_from_slice(id);
-    payload.extend_from_slice(data);
+    let mut payload = Vec::with_capacity(2 + session_id.len() + data.len());
+    append_output_payload(&mut payload, session_id, data);
     payload
 }
 
-fn frame(kind: u8, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
-    out.push(kind);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    out
+fn append_output_payload(payload: &mut Vec<u8>, session_id: &str, data: &[u8]) {
+    let id = session_id.as_bytes();
+    payload.extend_from_slice(&(id.len() as u16).to_be_bytes());
+    payload.extend_from_slice(id);
+    payload.extend_from_slice(data);
 }
 
 #[cfg(test)]
@@ -80,6 +139,33 @@ mod tests {
             value,
             "a JSON frame must carry exactly the object a line would have"
         );
+    }
+
+    #[test]
+    fn shared_json_frame_reuses_one_encoding_across_all_wire_formats() {
+        let value = json!({"event": "測試\n", "payload": {"text": "\u{0000}\"\\😀"}});
+        let frame = std::sync::Arc::new(SharedJsonFrame::new(value.clone()));
+        assert!(frame.encoded.get().is_none());
+        let peers = (0..8)
+            .map(|_| {
+                let frame = frame.clone();
+                std::thread::spawn(move || frame.json_payload().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let payload = frame.json_payload().unwrap();
+        for peer in peers {
+            let peer_payload = peer.join().unwrap();
+            assert_eq!(peer_payload.as_ptr(), payload.as_ptr());
+            assert_eq!(peer_payload, payload);
+        }
+        assert_eq!(payload.as_ref(), serde_json::to_vec(&value).unwrap());
+        assert_eq!(
+            frame.binary_frame().unwrap(),
+            encode_json_frame(&value).unwrap()
+        );
+        assert_eq!(frame.line().unwrap().last(), Some(&b'\n'));
+        assert_eq!(&frame.line().unwrap()[..payload.len()], payload.as_ref());
+        assert_eq!(frame.line().unwrap().as_ptr(), payload.as_ptr());
     }
 
     #[test]
