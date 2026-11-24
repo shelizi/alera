@@ -6,6 +6,7 @@ class _WorkbenchSidebarRowBuilder(
   required final Map<String, DateTime> lastActivityByWorkspaceId,
   required final Map<String, DateTime> acknowledgedCompletions,
   required final DateTime now,
+  required final WorkspaceAgentRunProjectionCache? agentRunCache,
 }) {
   this
     : prefs = state.viewPrefs, query = state.searchQuery.trim().toLowerCase();
@@ -440,10 +441,16 @@ class _WorkbenchSidebarRowBuilder(
   List<WorkspaceAgentRun> _agentRunsOf(String workspaceId) {
     return _agentRunsByWorkspaceId.putIfAbsent(
       workspaceId,
-      () => visibleWorkspaceAgentRuns(
-        tabs: state.tabsFor(workspaceId),
-        agentStatuses: agentStatuses,
-      ),
+      () =>
+          agentRunCache?.project(
+            workspaceId: workspaceId,
+            tabs: state.tabsFor(workspaceId),
+            agentStatuses: agentStatuses,
+          ) ??
+          visibleWorkspaceAgentRuns(
+            tabs: state.tabsFor(workspaceId),
+            agentStatuses: agentStatuses,
+          ),
     );
   }
 
@@ -460,11 +467,7 @@ class _WorkbenchSidebarRowBuilder(
   WorkspaceAttention _attentionOf(Workspace workspace) {
     return _attentionByWorkspaceId.putIfAbsent(
       workspace.id,
-      () => workspaceAttention(
-        tabs: state.tabsFor(workspace.id),
-        agentStatuses: agentStatuses,
-        now: now,
-      ),
+      () => workspaceAttentionFromRuns(_agentRunsOf(workspace.id), now: now),
     );
   }
 

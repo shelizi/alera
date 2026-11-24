@@ -6,6 +6,63 @@ class const WorkspaceAgentRun({
   required final AgentStatusEntry status,
 });
 
+/// Retains the last visible run list for each workspace. The controller
+/// publishes new entries for changed sessions and reuses unaffected entries.
+/// Compare actual matching tabs and status identities, so unrelated events
+/// do not allocate new run objects or lists for every background workspace.
+class WorkspaceAgentRunProjectionCache {
+  final _byWorkspace = <String, List<WorkspaceAgentRun>>{};
+
+  List<WorkspaceAgentRun> project({
+    required String workspaceId,
+    required Iterable<WorkspaceTabRecord> tabs,
+    required Map<String, AgentStatusEntry> agentStatuses,
+  }) {
+    final previous = _byWorkspace[workspaceId] ?? const <WorkspaceAgentRun>[];
+    List<WorkspaceAgentRun>? next;
+    var index = 0;
+    for (final tab in tabs) {
+      final status = matchingAgentStatusForTab(
+        tab: tab,
+        agentStatuses: agentStatuses,
+      );
+      if (status == null) {
+        continue;
+      }
+      final old = index < previous.length ? previous[index] : null;
+      final unchanged =
+          old != null &&
+          identical(old.tab, tab) &&
+          identical(old.status, status);
+      if (next == null && !unchanged) {
+        next = previous.sublist(0, index);
+      }
+      if (next != null) {
+        next.add(unchanged ? old : WorkspaceAgentRun(tab: tab, status: status));
+      }
+      index++;
+    }
+    if (next == null && index == previous.length) {
+      return previous;
+    }
+    final projected = List<WorkspaceAgentRun>.unmodifiable(
+      next ?? previous.sublist(0, index),
+    );
+    if (projected.isEmpty) {
+      _byWorkspace.remove(workspaceId);
+    } else {
+      _byWorkspace[workspaceId] = projected;
+    }
+    return projected;
+  }
+
+  void retainWorkspaces(Map<String, List<WorkspaceTabRecord>> tabsByWorkspace) {
+    _byWorkspace.removeWhere(
+      (workspaceId, _) => !tabsByWorkspace.containsKey(workspaceId),
+    );
+  }
+}
+
 // Runs keep the incoming tab order (creation order): sorting by status or
 // recency would reshuffle sidebar rows on every agent hook event.
 List<WorkspaceAgentRun> visibleWorkspaceAgentRuns({

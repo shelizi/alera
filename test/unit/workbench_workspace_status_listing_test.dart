@@ -3,6 +3,7 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_agent_run_groups.dart';
+import 'package:alera/src/features/workbench/application/workspace_agent_status_projection.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -133,6 +134,35 @@ void main() {
       alphaWorking = _tab('t-a2', alpha.id);
       betaWaiting = _tab('t-b1', beta.id);
       betaDone = _tab('t-b2', beta.id);
+    });
+
+    test('sidebar reuses unaffected workspace runs across status updates', () {
+      final cache = WorkspaceAgentRunProjectionCache();
+      final model = state();
+      final live = statuses();
+      List<WorkbenchWorkspaceRow> rows() => buildSidebarRows(
+        model,
+        agentStatuses: live,
+        agentRunCache: cache,
+        acknowledgedCompletions: acknowledgements(),
+        now: _t0,
+      ).whereType<WorkbenchWorkspaceRow>().toList();
+      final first = rows();
+      final alphaFirst = first.singleWhere(
+        (row) => row.workspace.id == alpha.id,
+      );
+      final betaFirst = first.singleWhere((row) => row.workspace.id == beta.id);
+      live[alphaWorking.terminalSessionId] = _status(alphaWorking, .blocked);
+      final next = rows();
+      final alphaNext = next.singleWhere((row) => row.workspace.id == alpha.id);
+      final betaNext = next.singleWhere((row) => row.workspace.id == beta.id);
+      expect(alphaNext.aggregateStatus?.state, AgentStatusState.blocked);
+      expect(alphaNext.agentRuns.first, same(alphaFirst.agentRuns.first));
+      expect(betaNext.agentRuns, same(betaFirst.agentRuns));
+      expect(
+        betaNext.agentRunGroups.map((group) => group.kind),
+        betaFirst.agentRunGroups.map((group) => group.kind),
+      );
     });
 
     test('project header row sums agent counts across its workspaces', () {

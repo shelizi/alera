@@ -4,6 +4,92 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('workspace agent run projection cache', () {
+    test('reuses unaffected workspace runs during 1000 unrelated updates', () {
+      final cache = WorkspaceAgentRunProjectionCache();
+      final tabs = <WorkspaceTabRecord>[_tab('stable-1'), _tab('stable-2')];
+      final statuses = <String, AgentStatusEntry>{
+        for (final tab in tabs) tab.terminalSessionId: _entry(tab, .working),
+      };
+      final first = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: tabs,
+        agentStatuses: statuses,
+      );
+      final other = _tab('other');
+      for (var i = 0; i < 1000; i++) {
+        final next = cache.project(
+          workspaceId: 'workspace-1',
+          tabs: tabs,
+          agentStatuses: {
+            ...statuses,
+            other.terminalSessionId: _entry(
+              other,
+              i.isEven ? .working : .waiting,
+            ),
+          },
+        );
+        expect(next, same(first));
+      }
+    });
+
+    test('preserves unchanged prefix and reflects additions, removals and new tabs', () {
+      final cache = WorkspaceAgentRunProjectionCache();
+      final a = _tab('a');
+      final b = _tab('b');
+      final c = _tab('c');
+      final statuses = <String, AgentStatusEntry>{
+        a.terminalSessionId: _entry(a, .working),
+        b.terminalSessionId: _entry(b, .working),
+      };
+      final first = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: [a, b, c],
+        agentStatuses: statuses,
+      );
+      statuses[b.terminalSessionId] = _entry(b, .done);
+      statuses[c.terminalSessionId] = _entry(c, .waiting);
+      final changed = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: [a, b, c],
+        agentStatuses: statuses,
+      );
+      expect(changed.first, same(first.first));
+      expect(changed.map((run) => run.status.state), <AgentStatusState>[
+        .working,
+        .done,
+        .waiting,
+      ]);
+      statuses.remove(c.terminalSessionId);
+      final removed = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: [a, b, c],
+        agentStatuses: statuses,
+      );
+      expect(removed, hasLength(2));
+      expect(removed.last, same(changed[1]));
+      final replacement = _tab('a');
+      final replaced = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: [replacement, b],
+        agentStatuses: statuses,
+      );
+      expect(replaced.first.tab, same(replacement));
+      expect(replaced.last, same(removed.last));
+      cache.retainWorkspaces({});
+      final afterPrune = cache.project(
+        workspaceId: 'workspace-1',
+        tabs: [replacement, b],
+        agentStatuses: statuses,
+      );
+      expect(afterPrune, isNot(same(replaced)));
+      expect(
+        afterPrune.map((run) => run.status),
+        replaced.map((run) => run.status),
+      );
+    });
+  });
+
   group('workspace agent status projection', () {
     test('prioritizes attention states over working and done', () {
       final doneTab = _tab('tab-done');

@@ -30,13 +30,16 @@ List<WorkbenchSidebarRow> buildSidebarRows(
   Map<String, DateTime> lastActivityByWorkspaceId = const <String, DateTime>{},
   Map<String, DateTime> acknowledgedCompletions = const <String, DateTime>{},
   DateTime? now,
+  WorkspaceAgentRunProjectionCache? agentRunCache,
 }) {
+  agentRunCache?.retainWorkspaces(state.tabsByWorkspace);
   return _WorkbenchSidebarRowBuilder(
     state,
     agentStatuses: agentStatuses,
     lastActivityByWorkspaceId: lastActivityByWorkspaceId,
     acknowledgedCompletions: acknowledgedCompletions,
     now: now ?? DateTime.now().toUtc(),
+    agentRunCache: agentRunCache,
   ).build();
 }
 

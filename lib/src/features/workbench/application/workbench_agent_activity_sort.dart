@@ -34,11 +34,18 @@ WorkspaceAttention workspaceAttention({
   required Map<String, AgentStatusEntry> agentStatuses,
   required DateTime now,
 }) {
-  var best = WorkspaceAttention.idle;
-  final runs = visibleWorkspaceAgentRuns(
-    tabs: tabs,
-    agentStatuses: agentStatuses,
+  return workspaceAttentionFromRuns(
+    visibleWorkspaceAgentRuns(tabs: tabs, agentStatuses: agentStatuses),
+    now: now,
   );
+}
+
+/// Classifies the same projection already used by sidebar rows.
+WorkspaceAttention workspaceAttentionFromRuns(
+  Iterable<WorkspaceAgentRun> runs, {
+  required DateTime now,
+}) {
+  var best = WorkspaceAttention.idle;
   for (final run in runs) {
     final status = run.status;
     if (now.difference(status.updatedAt) > agentActivityStaleness) {
