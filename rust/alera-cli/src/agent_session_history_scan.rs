@@ -61,6 +61,10 @@ pub(crate) struct HistoryScanReport {
     pub visited_files: usize,
     pub skipped_files: usize,
     pub truncated: bool,
+    #[cfg(test)]
+    directories_read: usize,
+    #[cfg(test)]
+    metadata_probes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +158,9 @@ fn discover_history_with_exact_id(
             })
         })
         .collect();
+    if known.is_empty() {
+        return report;
+    }
     let mut seen_files = HashSet::new();
     let mut walked = 0_usize;
     // Every configured account must have a chance to contribute results.
@@ -162,6 +169,7 @@ fn discover_history_with_exact_id(
     // Divide the REMAINING shared budget among remaining valid roots; spare
     // allowance from smaller roots rolls forward. Keep the exact UUID scan
     // unchanged: it uses a filename filter and must not be quota-starved.
+    let mut seen_roots = HashSet::new();
     let eligible_roots: Vec<_> = roots
         .iter()
         .take(24)
@@ -170,7 +178,9 @@ fn discover_history_with_exact_id(
                 return None;
             }
             let canonical = fs::canonicalize(&root.path).ok()?;
-            canonical.is_dir().then_some((root, canonical))
+            (canonical.is_dir()
+                && seen_roots.insert((root.provider, root.account_id.clone(), canonical.clone())))
+            .then_some((root, canonical))
         })
         .collect();
     for (root_index, (root, canonical_root)) in eligible_roots.iter().enumerate() {
@@ -201,11 +211,15 @@ fn discover_history_with_exact_id(
                 report.truncated = true;
                 break 'scan_root;
             }
+            #[cfg(test)]
+            {
+                report.directories_read += 1;
+            }
             let Ok(entries) = fs::read_dir(&directory) else {
                 continue;
             };
             let mut entries: Vec<_> = entries.flatten().collect();
-            entries.sort_by_key(|entry| entry.file_name());
+            entries.sort_by_cached_key(|entry| entry.file_name());
             for entry in entries.into_iter().rev() {
                 if exact_id.is_none()
                     && (report.visited_files - root_file_start >= root_file_budget
@@ -219,31 +233,48 @@ fn discover_history_with_exact_id(
                     report.truncated = true;
                     return report;
                 }
-                let path = entry.path();
-                let Ok(meta) = fs::symlink_metadata(&path) else {
+                // DirEntry already has the file type on Windows and most Unix filesystems.
+                // Filter irrelevant names before an additional metadata probe, but recheck
+                // candidates with symlink_metadata before descending or opening them.
+                let Ok(kind) = entry.file_type() else {
                     continue;
                 };
-                // Reject symlinks at every level to prevent out-of-root reads.
-                if meta.file_type().is_symlink() {
-                    continue;
-                }
-                if meta.is_dir() {
+                let path = entry.path();
+                if kind.is_dir() {
                     if depth < MAX_DEPTH
                         && !matches!(
                             entry.file_name().to_str(),
                             Some("subagents" | ".git" | "node_modules")
                         )
                     {
-                        pending.push((path, depth + 1));
+                        #[cfg(test)]
+                        {
+                            report.metadata_probes += 1;
+                        }
+                        if fs::symlink_metadata(&path)
+                            .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+                        {
+                            pending.push((path, depth + 1));
+                        }
                     }
                     continue;
                 }
-                if !meta.is_file() || !is_provider_filename(root.provider, &path) {
+                if !kind.is_file() || !is_provider_filename(root.provider, &path) {
                     continue;
                 }
                 if exact_id
                     .is_some_and(|native| !filename_matches_native_id(root.provider, &path, native))
                 {
+                    continue;
+                }
+                #[cfg(test)]
+                {
+                    report.metadata_probes += 1;
+                }
+                let Ok(meta) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if !meta.is_file() || meta.file_type().is_symlink() {
                     continue;
                 }
                 if report.visited_files >= cap {
@@ -759,6 +790,56 @@ mod tests {
         assert_eq!(bounded.visited_files, 2);
         assert!(bounded.truncated);
         assert_eq!(bounded.records.len(), 2);
+    }
+
+    #[test]
+    fn skips_irrelevant_metadata_probes_and_deduplicates_same_account_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let other_id = "550e8400-e29b-41d4-a716-446655440001";
+        for native in [id, other_id] {
+            fs::write(
+                home.path().join(format!("rollout-day-{native}.jsonl")),
+                format!(
+                    "{}\n",
+                    json!({"type":"session_meta","payload":{"id":native,"cwd":work.path()}})
+                ),
+            )
+            .unwrap();
+        }
+        for i in 0..100 {
+            fs::write(home.path().join(format!("ignored-{i}.txt")), b"irrelevant").unwrap();
+        }
+        fs::create_dir(home.path().join("subagents")).unwrap();
+        let first = root("codex", home.path());
+        let duplicate = root("codex", &home.path().join("."));
+        let known = [workspace(work.path())];
+        let policy = HistoryScanPolicy::default();
+        let report = discover_history(&[first.clone(), duplicate.clone()], &known, policy);
+        assert_eq!(report.records.len(), 2);
+        assert_eq!(report.directories_read, 1);
+        assert_eq!(report.metadata_probes, 2);
+
+        let exact =
+            discover_exact_native_history(&[first.clone(), duplicate.clone()], &known, policy, id);
+        assert_eq!(exact.records.len(), 1);
+        assert_eq!(exact.directories_read, 1);
+        assert_eq!(exact.metadata_probes, 1);
+
+        // Separate configured accounts may share a physical home but must
+        // remain separate search scopes.
+        let mut second_account = duplicate;
+        second_account.account_id = "secondary".into();
+        let separate = discover_history(&[first.clone(), second_account], &known, policy);
+        assert_eq!(separate.records.len(), 4);
+        assert_eq!(separate.directories_read, 2);
+        assert_eq!(separate.metadata_probes, 4);
+
+        let empty = discover_history(&[first], &[], policy);
+        assert_eq!(empty.directories_read, 0);
+        assert_eq!(empty.metadata_probes, 0);
+        assert_eq!(empty.visited_files, 0);
     }
 
     #[test]

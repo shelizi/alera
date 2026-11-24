@@ -2,6 +2,7 @@
 //!
 //! Provider JSONL files are never modified. Only summaries sanitized by
 //! agent_session_history_scan may be stored. No ambient startup indexing.
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -20,6 +21,25 @@ const MAX_QUERY_CHARS: usize = 256;
 
 pub(crate) struct AgentSessionHistoryIndex {
     pool: SqlitePool,
+}
+
+struct IndexedDocument {
+    id: i64,
+    record_json: String,
+    title: String,
+    goal: String,
+}
+
+fn document_key(record: &AgentSessionSearchRecord) -> serde_json::Result<String> {
+    serde_json::to_string(&(
+        &record.runtime_instance_id,
+        &record.project_id,
+        &record.workspace_id,
+        &record.provider,
+        &record.provider_account_id,
+        &record.profile_id,
+        &record.provider_session_id,
+    ))
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -93,8 +113,36 @@ impl AgentSessionHistoryIndex {
             bail!("history index batch exceeds bounded limit");
         }
         let mut stats = HistoryIndexWriteStats::default();
+        let keys = records
+            .iter()
+            .map(document_key)
+            .collect::<serde_json::Result<Vec<_>>>()?;
         let mut tx = self.pool.begin().await?;
-        for record in records {
+        let mut existing = HashMap::with_capacity(keys.len());
+        if !keys.is_empty() {
+            let mut sql = QueryBuilder::<Sqlite>::new(
+                "SELECT document_key, id, record_json, title, goal FROM history_search_docs WHERE document_key IN (",
+            );
+            {
+                let mut values = sql.separated(", ");
+                for key in &keys {
+                    values.push_bind(key);
+                }
+            }
+            sql.push(")");
+            for row in sql.build().fetch_all(&mut *tx).await? {
+                existing.insert(
+                    row.try_get::<String, _>("document_key")?,
+                    IndexedDocument {
+                        id: row.try_get("id")?,
+                        record_json: row.try_get("record_json")?,
+                        title: row.try_get("title")?,
+                        goal: row.try_get("goal")?,
+                    },
+                );
+            }
+        }
+        for (record, key) in records.iter().zip(keys) {
             if record.running
                 || record.provider_identity_verified
                 || !record.source_exists
@@ -117,15 +165,6 @@ impl AgentSessionHistoryIndex {
             if record.title.chars().count() > 1024 || record.goal.chars().count() > 1024 {
                 bail!("history search metadata exceeds the field budget");
             }
-            let key = serde_json::to_string(&(
-                &record.runtime_instance_id,
-                &record.project_id,
-                &record.workspace_id,
-                &record.provider,
-                &record.provider_account_id,
-                &record.profile_id,
-                &record.provider_session_id,
-            ))?;
             let scope = serde_json::to_string(&(
                 &record.runtime_instance_id,
                 &record.project_id,
@@ -134,17 +173,10 @@ impl AgentSessionHistoryIndex {
                 &record.provider_account_id,
             ))?;
             let record_json = serde_json::to_string(record)?;
-            let existing = sqlx::query(
-                "SELECT id, record_json FROM history_search_docs WHERE document_key = ?",
-            )
-            .bind(&key)
-            .fetch_optional(&mut *tx)
-            .await?;
-            match existing {
-                Some(row) => {
-                    let id: i64 = row.try_get("id")?;
-                    let previous: String = row.try_get("record_json")?;
-                    if previous == record_json {
+            let id = match existing.get(&key) {
+                Some(previous) => {
+                    let id = previous.id;
+                    if previous.record_json == record_json {
                         stats.unchanged += 1;
                         continue;
                     }
@@ -160,19 +192,23 @@ impl AgentSessionHistoryIndex {
                     .bind(id)
                     .execute(&mut *tx)
                     .await?;
-                    sqlx::query("DELETE FROM history_search_fts WHERE rowid=?")
+                    // Transcript appends can change recency without changing searchable text.
+                    if previous.title != record.title || previous.goal != record.goal {
+                        sqlx::query("DELETE FROM history_search_fts WHERE rowid=?")
+                            .bind(id)
+                            .execute(&mut *tx)
+                            .await?;
+                        sqlx::query(
+                            "INSERT INTO history_search_fts(rowid, title, goal) VALUES (?, ?, ?)",
+                        )
                         .bind(id)
+                        .bind(&record.title)
+                        .bind(&record.goal)
                         .execute(&mut *tx)
                         .await?;
-                    sqlx::query(
-                        "INSERT INTO history_search_fts(rowid, title, goal) VALUES (?, ?, ?)",
-                    )
-                    .bind(id)
-                    .bind(&record.title)
-                    .bind(&record.goal)
-                    .execute(&mut *tx)
-                    .await?;
+                    }
                     stats.updated += 1;
+                    id
                 }
                 None => {
                     let insert = sqlx::query(
@@ -198,8 +234,19 @@ impl AgentSessionHistoryIndex {
                     .execute(&mut *tx)
                     .await?;
                     stats.added += 1;
+                    id
                 }
-            }
+            };
+            // Preserve sequential upsert semantics even if a native UUID appears twice.
+            existing.insert(
+                key,
+                IndexedDocument {
+                    id,
+                    record_json,
+                    title: record.title.clone(),
+                    goal: record.goal.clone(),
+                },
+            );
         }
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM history_search_docs")
             .fetch_one(&mut *tx)
@@ -289,18 +336,7 @@ impl AgentSessionHistoryIndex {
                         .is_none_or(|id| record.provider_account_id.as_ref() == Some(id))
             })
             .take(MAX_BATCH)
-            .map(|record| {
-                serde_json::to_string(&(
-                    &record.runtime_instance_id,
-                    &record.project_id,
-                    &record.workspace_id,
-                    &record.provider,
-                    &record.provider_account_id,
-                    &record.profile_id,
-                    &record.provider_session_id,
-                ))
-                .map_err(Into::into)
-            })
+            .map(|record| document_key(record).map_err(Into::into))
             .collect::<Result<Vec<String>>>()?;
         if keys.is_empty() {
             return Ok(Vec::new());
@@ -410,6 +446,70 @@ mod tests {
             .is_ok());
         index.clear().await.unwrap();
         assert!(index.search("注音", 30).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn metadata_only_updates_do_not_rewrite_fts() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let mut r = record(
+            "550e8400-e29b-41d4-a716-446655440000",
+            "Windows",
+            "keyboard",
+        );
+        index.upsert_batch(&[r.clone()]).await.unwrap();
+        let changes_before: i64 = sqlx::query_scalar("SELECT total_changes()")
+            .fetch_one(&index.pool)
+            .await
+            .unwrap();
+        r.updated_at_ms += 1000;
+        let stats = index.upsert_batch(&[r.clone()]).await.unwrap();
+        assert_eq!(stats.updated, 1);
+        let changes_after: i64 = sqlx::query_scalar("SELECT total_changes()")
+            .fetch_one(&index.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            changes_after - changes_before,
+            1,
+            "only the document row changes"
+        );
+        let hits = index.search("keyboard", 30).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].updated_at_ms, r.updated_at_ms);
+
+        r.goal = "replacement".into();
+        index.upsert_batch(&[r.clone()]).await.unwrap();
+        assert!(index.search("keyboard", 30).await.unwrap().is_empty());
+        assert_eq!(index.search("replacement", 30).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_lookup_preserves_duplicate_key_order_and_account_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let first = record("550e8400-e29b-41d4-a716-446655440000", "first", "original");
+        let mut second = first.clone();
+        second.goal = "replacement".into();
+        let mut other = first.clone();
+        other.provider_account_id = Some("secondary".into());
+        let stats = index
+            .upsert_batch(&[first.clone(), second.clone(), second.clone(), other])
+            .await
+            .unwrap();
+        assert_eq!(stats.added, 2);
+        assert_eq!(stats.updated, 1);
+        assert_eq!(stats.unchanged, 1);
+        let hits = index.search("replacement", 30).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].provider_account_id.as_deref(), Some("primary"));
+        let hits = index.search("original", 30).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].provider_account_id.as_deref(), Some("secondary"));
+        let stats = index.upsert_batch(&[second, first]).await.unwrap();
+        assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.updated, 1);
+        assert!(index.search("replacement", 30).await.unwrap().is_empty());
     }
 
     #[tokio::test]
