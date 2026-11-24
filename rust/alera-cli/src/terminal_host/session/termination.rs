@@ -53,6 +53,7 @@ impl Session {
             self.worker_process = None;
         }
         self.checkpoint_armed = false;
+        self.last_queued_checkpoint = None;
         self.output_batch.clear();
         self.output_batch_armed = false;
         self.output_batch_gen = self.output_batch_gen.wrapping_add(1);

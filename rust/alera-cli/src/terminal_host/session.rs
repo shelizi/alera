@@ -192,6 +192,8 @@ pub struct Session {
     terminated: bool,
     checkpoint_gen: u64,
     checkpoint_armed: bool,
+    // Only small metadata is retained, never a second copy of scrollback.
+    last_queued_checkpoint: Option<Box<LiveCheckpointStamp>>,
     output_batch: Vec<u8>,
     output_batch_gen: u64,
     output_batch_armed: bool,
@@ -201,6 +203,42 @@ pub struct Session {
     durable_output_batch_sequence: i64,
     output_stream_bytes: u64,
     title_tracker: TerminalTitleTracker,
+}
+
+/// Identity of the last checkpoint handed to this session's write-behind
+/// repository. That repository owns retries even after the caller returns.
+/// The timestamp is deliberately excluded: a no-op detach is not a change
+/// to terminal history. Cursor plus tail length proves an unchanged ring
+/// because the live session only appends or trims its scrollback.
+#[derive(Default)]
+struct LiveCheckpointStamp {
+    session_id: String,
+    workspace_id: String,
+    tab_id: String,
+    working_directory: String,
+    running: bool,
+    exit_code: Option<i32>,
+    ended_at: Option<DateTime<Utc>>,
+    cursor: u64,
+    tail_len: usize,
+    max_bytes: usize,
+}
+
+impl LiveCheckpointStamp {
+    fn matches(&self, session: &Session, max_bytes: usize) -> bool {
+        // A saturated cursor no longer proves that the bytes are unchanged.
+        session.output_stream_bytes != u64::MAX
+            && self.cursor == session.output_stream_bytes
+            && self.tail_len == session.buffer.len()
+            && self.max_bytes == max_bytes
+            && self.session_id == session.id
+            && self.workspace_id == session.workspace_id
+            && self.tab_id == session.tab_id
+            && self.working_directory == session.working_directory
+            && self.running == session.running
+            && self.exit_code == session.exit_code
+            && self.ended_at == session.ended_at
+    }
 }
 
 impl Session {
@@ -369,6 +407,7 @@ impl Session {
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
+            last_queued_checkpoint: None,
             output_batch: Vec::new(),
             output_batch_gen: 0,
             output_batch_armed: false,
@@ -383,6 +422,7 @@ impl Session {
             title_tracker,
         };
         history.queue_checkpoint(session.checkpoint(None), max_bytes);
+        session.remember_queued_checkpoint(max_bytes);
         // A failure to allocate a PTY worker thread must fail just this
         // session, not panic the shared Host and disconnect every terminal.
         if let Err(error) = spawn_reader(
@@ -761,10 +801,34 @@ impl Session {
         history: &TerminalHostHistoryRepository,
         max_bytes: usize,
     ) {
+        if self
+            .last_queued_checkpoint
+            .as_ref()
+            .is_some_and(|stamp| stamp.matches(self, max_bytes))
+        {
+            return;
+        }
         let checkpoint = self.checkpoint_metadata(None);
         history.queue_checkpoint_from_live(checkpoint, self.buffer.len(), max_bytes, || {
             self.buffer.to_bytes()
         });
+        self.remember_queued_checkpoint(max_bytes);
+    }
+
+    fn remember_queued_checkpoint(&mut self, max_bytes: usize) {
+        let stamp = self
+            .last_queued_checkpoint
+            .get_or_insert_with(Default::default);
+        stamp.session_id.clone_from(&self.id);
+        stamp.workspace_id.clone_from(&self.workspace_id);
+        stamp.tab_id.clone_from(&self.tab_id);
+        stamp.working_directory.clone_from(&self.working_directory);
+        stamp.running = self.running;
+        stamp.exit_code = self.exit_code;
+        stamp.ended_at = self.ended_at;
+        stamp.cursor = self.output_stream_bytes;
+        stamp.tail_len = self.buffer.len();
+        stamp.max_bytes = max_bytes;
     }
 
     fn checkpoint_metadata(
