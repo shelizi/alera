@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::path::Path;
 
 use alera_core::runtime::{
@@ -48,7 +49,7 @@ CREATE INDEX IF NOT EXISTS outputChunksSessionIdSequenceIdx\n\
 ON outputChunks(sessionId, sequence, id);";
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TerminalHostCheckpoint {
+pub struct TerminalHostCheckpoint<B = Vec<u8>> {
     pub session_id: String,
     pub workspace_id: String,
     pub tab_id: String,
@@ -58,8 +59,29 @@ pub struct TerminalHostCheckpoint {
     pub ended_at: Option<DateTime<Utc>>,
     pub output_stream_bytes: u64,
     pub updated_at: DateTime<Utc>,
-    pub buffer: Vec<u8>,
+    pub buffer: B,
 }
+
+impl<B> TerminalHostCheckpoint<B> {
+    /// Preserve the checkpoint metadata while changing the buffer's ownership
+    /// representation. The durable writer still uses the ordinary Vec type.
+    pub(super) fn map_buffer<T>(self, map: impl FnOnce(B) -> T) -> TerminalHostCheckpoint<T> {
+        TerminalHostCheckpoint {
+            session_id: self.session_id,
+            workspace_id: self.workspace_id,
+            tab_id: self.tab_id,
+            working_directory: self.working_directory,
+            running: self.running,
+            exit_code: self.exit_code,
+            ended_at: self.ended_at,
+            output_stream_bytes: self.output_stream_bytes,
+            updated_at: self.updated_at,
+            buffer: map(self.buffer),
+        }
+    }
+}
+
+pub(super) type RestoredCheckpoint = TerminalHostCheckpoint<VecDeque<u8>>;
 
 #[derive(Clone)]
 pub struct TerminalHostHistoryStore {
@@ -119,7 +141,7 @@ impl TerminalHostHistoryStore {
         Ok(self
             .read_with_maintenance(session_id, max_bytes)
             .await?
-            .map(|(checkpoint, _)| checkpoint))
+            .map(|(checkpoint, _)| checkpoint.map_buffer(Vec::from)))
     }
 
     /// Report whether the cold read could prove that no retention or row
@@ -128,7 +150,7 @@ impl TerminalHostHistoryStore {
         &self,
         session_id: &str,
         max_bytes: usize,
-    ) -> Result<Option<(TerminalHostCheckpoint, bool)>> {
+    ) -> Result<Option<(RestoredCheckpoint, bool)>> {
         let row = sqlx::query(
             "SELECT sessionId, workspaceId, tabId, workingDirectory, running, exitCode, \
              endedAt, outputStreamBytes, updatedAt FROM checkpoints WHERE sessionId = ?",
@@ -339,25 +361,26 @@ impl TerminalHostHistoryStore {
     }
 }
 
+#[cfg(test)]
 async fn read_buffer_from<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     session_id: &'e str,
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
-    Ok(
+    Ok(Vec::from(
         read_buffer_with_maintenance(executor, session_id, max_bytes)
             .await?
             .0,
-    )
+    ))
 }
 
 async fn read_buffer_with_maintenance<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     session_id: &'e str,
     max_bytes: usize,
-) -> Result<(Vec<u8>, bool)> {
+) -> Result<(VecDeque<u8>, bool)> {
     if max_bytes == 0 {
-        return Ok((Vec::new(), true));
+        return Ok((VecDeque::new(), true));
     }
 
     // Read newest chunks first and stop as soon as the requested scrollback
@@ -386,7 +409,7 @@ async fn read_buffer_with_maintenance<'e>(
     // Keep maintenance in that case rather than fetching an extra BLOB.
     // Legacy tiny/empty rows may still need compaction below the byte cap.
     let maintenance_required = tail.remaining() == 0 || row_count > OUTPUT_COMPACTION_ROW_THRESHOLD;
-    Ok((tail.finish(), maintenance_required))
+    Ok((tail.finish_ring(), maintenance_required))
 }
 
 /// Builds a chronological tail from rows arriving newest first.
@@ -395,6 +418,7 @@ async fn read_buffer_with_maintenance<'e>(
 /// can be copied into the unused prefix. Grow geometrically from actual bytes
 /// read rather than allocating the requested limit (which can be usize::MAX).
 /// No per-row owned BLOBs or final concatenation allocation are needed.
+/// The final right-aligned allocation becomes a ring without moving its tail.
 struct HistoryReadTail {
     max_bytes: usize,
     buffer: Vec<u8>,
@@ -447,13 +471,17 @@ impl HistoryReadTail {
         self.start = start;
     }
 
-    fn finish(mut self) -> Vec<u8> {
-        if self.start > 0 {
-            let len = self.len();
-            self.buffer.copy_within(self.start.., 0);
-            self.buffer.truncate(len);
-        }
-        self.buffer
+    fn finish_ring(self) -> VecDeque<u8> {
+        let mut ring = VecDeque::from(self.buffer);
+        // Draining a prefix adjusts the ring's head rather than copying the
+        // remaining bytes. The restored Session can use this same allocation.
+        ring.drain(..self.start);
+        ring
+    }
+
+    #[cfg(test)]
+    fn finish(self) -> Vec<u8> {
+        Vec::from(self.finish_ring())
     }
 }
 
@@ -870,7 +898,8 @@ async fn compact_output_rows(
     session_id: &str,
     max_bytes: usize,
 ) -> Result<()> {
-    let tail = read_buffer_from(&mut **transaction, session_id, max_bytes).await?;
+    let (mut tail, _) =
+        read_buffer_with_maintenance(&mut **transaction, session_id, max_bytes).await?;
     let newest: Option<i64> =
         sqlx::query("SELECT MAX(sequence) AS maxSequence FROM outputChunks WHERE sessionId = ?")
             .bind(session_id)
@@ -884,7 +913,9 @@ async fn compact_output_rows(
         .bind(session_id)
         .execute(&mut **transaction)
         .await?;
-    let chunks = tail.chunks(OUTPUT_CHUNK_TARGET_BYTES);
+    // The cold reader returns one contiguous (possibly offset) slice.
+    // make_contiguous does not move a contiguous ring to the allocation base.
+    let chunks = tail.make_contiguous().chunks(OUTPUT_CHUNK_TARGET_BYTES);
     let first_sequence = newest.saturating_sub(chunks.len() as i64 - 1);
     let created_at = format_timestamp(Utc::now());
     let inserts: Vec<_> = chunks

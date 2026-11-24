@@ -10,7 +10,7 @@ impl Session {
         history: &TerminalHostHistoryRepository,
         max_bytes: usize,
     ) -> Option<Session> {
-        let checkpoint = match history.read(&session_id, max_bytes).await {
+        let checkpoint = match history.read_for_restore(&session_id, max_bytes).await {
             Ok(Some(checkpoint)) => checkpoint,
             _ => return None,
         };
@@ -20,7 +20,11 @@ impl Session {
             (Some(checkpoint.exit_code.unwrap_or(0)), checkpoint.ended_at)
         };
         let mut title_tracker = TerminalTitleTracker::default();
-        title_tracker.feed(&checkpoint.buffer);
+        let (first, second) = checkpoint.buffer.as_slices();
+        title_tracker.feed(first);
+        if !second.is_empty() {
+            title_tracker.feed(second);
+        }
         let output_stream_bytes = checkpoint
             .output_stream_bytes
             .max(checkpoint.buffer.len() as u64);

@@ -8,7 +8,7 @@ use tokio::sync::{Notify, Semaphore};
 
 use super::buffer::{append_deque_tail as append_tail, copy_deque_tail, retain_deque_tail};
 pub use super::history_store::TerminalHostCheckpoint;
-use super::history_store::TerminalHostHistoryStore;
+use super::history_store::{RestoredCheckpoint, TerminalHostHistoryStore};
 
 const HISTORY_FLUSH_CONCURRENCY: usize = 2;
 const HISTORY_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -124,13 +124,14 @@ enum FlushSnapshot {
 }
 
 impl SessionPersistenceState {
-    fn cached_checkpoint(&self, max_bytes: usize) -> Option<Option<TerminalHostCheckpoint>> {
+    fn cached_checkpoint(&self, max_bytes: usize) -> Option<Option<RestoredCheckpoint>> {
         if self.delete_revision.is_some() {
             return Some(None);
         }
-        let mut checkpoint = self.checkpoint.as_ref()?.clone();
-        checkpoint.buffer = copy_deque_tail(&self.memory_tail, max_bytes);
-        Some(Some(checkpoint))
+        let checkpoint = self.checkpoint.as_ref()?.clone();
+        Some(Some(checkpoint.map_buffer(|_| {
+            VecDeque::from(copy_deque_tail(&self.memory_tail, max_bytes))
+        })))
     }
 
     fn can_reuse_tail(&self, end: u64, len: usize) -> bool {
@@ -428,11 +429,23 @@ impl TerminalHostHistoryRepository {
         self.ensure_worker(session_id);
     }
 
+    #[cfg(test)]
     pub async fn read(
         &self,
         session_id: &str,
         max_bytes: usize,
     ) -> Result<Option<TerminalHostCheckpoint>> {
+        Ok(self
+            .read_for_restore(session_id, max_bytes)
+            .await?
+            .map(|checkpoint| checkpoint.map_buffer(Vec::from)))
+    }
+
+    pub(super) async fn read_for_restore(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<RestoredCheckpoint>> {
         if let Some(cached) = self.cached_checkpoint(session_id, max_bytes) {
             return Ok(cached);
         }
@@ -455,9 +468,9 @@ impl TerminalHostHistoryRepository {
         &self,
         session_id: &str,
         max_bytes: usize,
-        mut persisted: TerminalHostCheckpoint,
+        mut persisted: RestoredCheckpoint,
         maintenance_required: bool,
-    ) -> Option<TerminalHostCheckpoint> {
+    ) -> Option<RestoredCheckpoint> {
         debug_assert!(persisted.buffer.len() <= max_bytes);
         {
             let sessions = self.lock_sessions();
@@ -477,8 +490,8 @@ impl TerminalHostHistoryRepository {
         // Allocate and copy the potentially large tail outside the global
         // sessions lock, then recheck for a newer checkpoint or deletion.
         let buffer = std::mem::take(&mut persisted.buffer);
-        let metadata = persisted.clone();
-        let memory_tail = VecDeque::from(buffer.clone());
+        let metadata = persisted.clone().map_buffer(Vec::from);
+        let memory_tail = buffer.clone();
         persisted.buffer = buffer;
 
         let retired_tail = {
@@ -529,7 +542,7 @@ impl TerminalHostHistoryRepository {
         &self,
         session_id: &str,
         max_bytes: usize,
-    ) -> Option<Option<TerminalHostCheckpoint>> {
+    ) -> Option<Option<RestoredCheckpoint>> {
         self.lock_sessions()
             .get(session_id)?
             .cached_checkpoint(max_bytes)
@@ -1513,15 +1526,25 @@ mod tests {
         repository.queue_checkpoint(checkpoint("s1", b"new"), 100);
         for maintenance_required in [false, true] {
             let read = repository
-                .finish_cold_read("s1", 3, checkpoint("s1", b"old"), maintenance_required)
+                .finish_cold_read(
+                    "s1",
+                    3,
+                    checkpoint("s1", b"old").map_buffer(VecDeque::from),
+                    maintenance_required,
+                )
                 .unwrap();
-            assert_eq!(read.buffer, b"new");
+            assert_eq!(Vec::from(read.buffer), b"new");
             assert_eq!(repository.lock_sessions()["s1"].max_bytes, 100);
         }
         repository.queue_delete("s1");
         for maintenance_required in [false, true] {
             assert!(repository
-                .finish_cold_read("s1", 3, checkpoint("s1", b"old"), maintenance_required)
+                .finish_cold_read(
+                    "s1",
+                    3,
+                    checkpoint("s1", b"old").map_buffer(VecDeque::from),
+                    maintenance_required
+                )
                 .is_none());
         }
         drop(slots);

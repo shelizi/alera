@@ -106,7 +106,7 @@ async fn cold_read_reports_maintenance_conservatively_without_extra_blob_reads()
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(checkpoint.buffer, expected);
+        assert_eq!(Vec::from(checkpoint.buffer), expected);
         assert_eq!(required, maintenance, "cap={cap}");
     }
 
@@ -229,6 +229,33 @@ fn history_read_tail_copies_only_requested_suffix_of_oversized_blob() {
     let result = tail.finish();
     assert_eq!(result.as_ptr(), ptr);
     assert_eq!(result, b"tiny");
+}
+
+#[test]
+fn history_read_tail_keeps_offset_allocation_without_final_relocation() {
+    let mib = 1024 * 1024;
+    let cap = 4 * mib;
+    let chunk_size = OUTPUT_CHUNK_TARGET_BYTES;
+    let chunks = 3 * mib / chunk_size;
+    let mut tail = HistoryReadTail::new(cap);
+    for i in (0..chunks).rev() {
+        tail.prepend(&vec![i as u8; chunk_size]);
+    }
+    assert_eq!(tail.len(), 3 * mib);
+    assert_eq!(tail.start, mib);
+    let payload_start = tail.buffer[tail.start..].as_ptr();
+    let mut ring = tail.finish_ring();
+    assert_eq!(ring.len(), 3 * mib);
+    assert!(ring.capacity() <= cap);
+    let (first, second) = ring.as_slices();
+    assert!(second.is_empty());
+    // Old finish copied all 3 MiB down to the allocation base.
+    // The original payload pointer survives both restoration and compaction.
+    assert_eq!(first.as_ptr(), payload_start);
+    assert_eq!(ring.make_contiguous().as_ptr(), payload_start);
+    for (i, chunk) in ring.as_slices().0.chunks(chunk_size).enumerate() {
+        assert!(chunk.iter().all(|&byte| byte == i as u8));
+    }
 }
 
 #[tokio::test]

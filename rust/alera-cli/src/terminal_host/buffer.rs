@@ -89,9 +89,9 @@ impl ScrollbackBuffer {
     }
 
     /// Restore an already owned chronological tail without copying it into
-    /// a second allocation. Cold history reads return a bounded Vec.
-    pub(super) fn from_owned(max_bytes: usize, initial: Vec<u8>) -> Self {
-        let mut bytes = VecDeque::from(initial);
+    /// a second allocation. An offset ring can keep its existing head.
+    pub(super) fn from_owned(max_bytes: usize, initial: impl Into<VecDeque<u8>>) -> Self {
+        let mut bytes = initial.into();
         retain_deque_tail(&mut bytes, max_bytes);
         Self { bytes, max_bytes }
     }
@@ -216,6 +216,23 @@ mod tests {
         assert_eq!(buffer.to_bytes(), [0x1b, 0, 0xff, b'a', b'b', b'c']);
         buffer.append(b"de");
         assert_eq!(buffer.to_bytes(), [0xff, b'a', b'b', b'c', b'd', b'e']);
+    }
+
+    #[test]
+    fn owned_restore_preserves_offset_ring_and_wraps_on_append() {
+        let mut initial = VecDeque::from(b"00abcdef".to_vec());
+        initial.drain(..2);
+        let start = initial.as_slices().0.as_ptr();
+        let mut buffer = ScrollbackBuffer::from_owned(8, initial);
+        assert_eq!(buffer.bytes.as_slices().0.as_ptr(), start);
+        assert_eq!(buffer.to_bytes(), b"abcdef");
+        buffer.append(b"ghi");
+        assert_eq!(buffer.to_bytes(), b"bcdefghi");
+        assert!(!buffer.bytes.as_slices().1.is_empty());
+        assert_eq!(buffer.slice_from(5), b"ghi");
+        buffer.set_max_bytes(4);
+        assert_eq!(buffer.to_bytes(), b"fghi");
+        assert!(buffer.bytes.capacity() <= 4);
     }
 
     #[test]
