@@ -477,9 +477,18 @@ pub fn read_workspace_text_file(
     relative_path: String,
 ) -> Result<WorkspaceTextFile, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
-    let path = resolve_existing(&root, &relative_path)?;
+    read_workspace_text_file_in_root(&root, &relative_path)
+}
+
+// Save already has a canonical workspace root. Reuse it, but resolve the
+// target and read the actual disk contents again for authoritative readback.
+fn read_workspace_text_file_in_root(
+    root: &Path,
+    relative_path: &str,
+) -> Result<WorkspaceTextFile, WorkspaceFileError> {
+    let path = resolve_existing(root, relative_path)?;
     let metadata =
-        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
     if !metadata.is_file() {
         return Err(WorkspaceFileError::new(
             WorkspaceFileErrorKind::Unsupported,
@@ -492,16 +501,15 @@ pub fn read_workspace_text_file(
             format!("{} exceeds {} bytes", relative_path, MAX_TEXT_FILE_BYTES),
         ));
     }
-    let bytes = read_checked_text_bytes(&path, &relative_path, &metadata)?;
+    let bytes = read_checked_text_bytes(&path, relative_path, &metadata)?;
     if bytes.contains(&0) {
         return Err(WorkspaceFileError::new(
             WorkspaceFileErrorKind::Unsupported,
             relative_path,
         ));
     }
-    let content = String::from_utf8(bytes).map_err(|_| {
-        WorkspaceFileError::new(WorkspaceFileErrorKind::Unsupported, relative_path.clone())
-    })?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| WorkspaceFileError::new(WorkspaceFileErrorKind::Unsupported, relative_path))?;
     let modified_millis = modified_millis(&metadata);
     Ok(WorkspaceTextFile {
         content,
@@ -525,16 +533,25 @@ pub fn read_workspace_editor_text_file(
     encoding: Option<WorkspaceTextEncoding>,
 ) -> Result<WorkspaceEditorTextFile, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
-    let path = resolve_existing(&root, &relative_path)?;
+    read_workspace_editor_text_file_in_root(&root, &relative_path, tab_size, encoding)
+}
+
+fn read_workspace_editor_text_file_in_root(
+    root: &Path,
+    relative_path: &str,
+    tab_size: i32,
+    encoding: Option<WorkspaceTextEncoding>,
+) -> Result<WorkspaceEditorTextFile, WorkspaceFileError> {
+    let path = resolve_existing(root, relative_path)?;
     let metadata =
-        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
+        fs::metadata(&path).map_err(|error| WorkspaceFileError::from_io(error, relative_path))?;
     if !metadata.is_file() || metadata.len() > MAX_TEXT_FILE_BYTES {
         return Err(WorkspaceFileError::new(
             WorkspaceFileErrorKind::Unsupported,
             relative_path,
         ));
     }
-    let bytes = read_checked_text_bytes(&path, &relative_path, &metadata)?;
+    let bytes = read_checked_text_bytes(&path, relative_path, &metadata)?;
     let decoded = decode_workspace_text_bytes_impl(&bytes, encoding)?;
     let file = WorkspaceTextFile {
         content: decoded.content,
@@ -578,7 +595,7 @@ pub fn write_workspace_text_file(
     }
     fs::write(&path, content.as_bytes())
         .map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
-    read_workspace_text_file(workspace_path, canonical_relative_path)
+    read_workspace_text_file_in_root(&root, &canonical_relative_path)
 }
 
 // FRB exposes this as named arguments on the Dart side, so keep the boundary flat.
@@ -624,9 +641,9 @@ pub fn write_workspace_editor_text_file(
     // disk after the content-token check so unchanged lines still preserve
     // tabs exactly without paying that memory cost during normal editing.
     let disk_original = if original_raw_content.is_none() || original_display_content.is_none() {
-        Some(read_workspace_editor_text_file(
-            workspace_path.clone(),
-            canonical_relative_path.clone(),
+        Some(read_workspace_editor_text_file_in_root(
+            &root,
+            &canonical_relative_path,
             tab_size,
             Some(encoding),
         )?)
@@ -648,9 +665,9 @@ pub fn write_workspace_editor_text_file(
     );
     let bytes = encode_workspace_text_bytes_impl(&content, encoding)?;
     fs::write(&path, bytes).map_err(|error| WorkspaceFileError::from_io(error, &relative_path))?;
-    read_workspace_editor_text_file(
-        workspace_path,
-        canonical_relative_path,
+    read_workspace_editor_text_file_in_root(
+        &root,
+        &canonical_relative_path,
         tab_size,
         Some(encoding),
     )
@@ -1472,6 +1489,39 @@ mod tests {
         ));
 
         assert_eq!(kind, WorkspaceFileErrorKind::InvalidPath);
+    }
+
+    #[test]
+    fn pinned_workspace_root_reads_fresh_content_and_rechecks_target_scope() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        let root = workspace_root(&workspace_path(&workspace)).expect("root");
+        let path = root.join("file.txt");
+        fs::write(&path, b"first").expect("initial file");
+        let first = read_workspace_text_file_in_root(&root, "file.txt").expect("first read");
+        fs::write(&path, b"\tsecond revision\n").expect("external edit");
+        let second = read_workspace_editor_text_file_in_root(&root, "file.txt", 4, None)
+            .expect("fresh read");
+        assert_eq!(second.raw_content, "\tsecond revision\n");
+        assert_eq!(second.display_content, "    second revision\n");
+        assert_ne!(first.content_token, second.content_token);
+
+        fs::remove_file(&path).expect("remove target");
+        let secret = outside.path().join("secret.txt");
+        fs::write(&secret, b"outside").expect("outside fixture");
+        // Windows may not allow symlink creation for the current process.
+        if create_file_symlink(&secret, &path).is_ok() {
+            assert_eq!(
+                error_kind(read_workspace_text_file_in_root(&root, "file.txt")),
+                WorkspaceFileErrorKind::OutsideWorkspace
+            );
+            assert_eq!(
+                error_kind(read_workspace_editor_text_file_in_root(
+                    &root, "file.txt", 4, None
+                )),
+                WorkspaceFileErrorKind::OutsideWorkspace
+            );
+        }
     }
 
     #[test]
