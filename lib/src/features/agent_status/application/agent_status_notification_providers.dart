@@ -150,15 +150,10 @@ void agentStatusNotificationCoordinator(Ref ref) {
     }
     final pending = tracker.pendingNotifications(
       previous: previous,
-      next: Map<String, AgentStatusEntry>.fromEntries(
-        next.entries.where(
-          (entry) => isAgentStatusHookEnabled(
-            agents.agentStatusHooks,
-            entry.value.agentType,
-          ),
-        ),
-      ),
+      next: next,
       includeFinished: agents.agentStatusFinishedNotificationsEnabled,
+      isEnabled: (entry) =>
+          isAgentStatusHookEnabled(agents.agentStatusHooks, entry.agentType),
     );
     if (pending.isEmpty) {
       return;

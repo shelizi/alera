@@ -71,6 +71,74 @@ void main() {
       );
     });
 
+    test('checks settings only for changed notification candidates', () {
+      final now = DateTime.utc(2026, 5, 26, 12);
+      final tracker = AgentStatusNotificationTracker(
+        now: () => now,
+        notifiableFrom: now,
+      );
+      final previous = <String, AgentStatusEntry>{
+        for (var index = 0; index < 1000; index++)
+          'session-$index': _entry(.working, sessionId: 'session-$index'),
+      };
+      final waiting = previous['session-999']!.copyWith(state: .waiting);
+      final next = {...previous, 'session-999': waiting};
+      var settingsChecks = 0;
+      expect(
+        tracker.pendingNotifications(
+          previous: previous,
+          next: next,
+          includeFinished: true,
+          isEnabled: (entry) {
+            settingsChecks++;
+            return true;
+          },
+        ),
+        [waiting],
+      );
+      expect(settingsChecks, 1);
+    });
+
+    test('disabled sessions are forgotten just as filtered snapshots were', () {
+      var now = DateTime.utc(2026, 5, 26, 12);
+      final tracker = AgentStatusNotificationTracker(
+        now: () => now,
+        notifiableFrom: now,
+      );
+      final waiting = _entry(.waiting);
+      final snapshot = {'session-1': waiting};
+      expect(
+        tracker.pendingNotifications(
+          previous: null,
+          next: snapshot,
+          includeFinished: true,
+          isEnabled: (_) => true,
+        ),
+        [waiting],
+      );
+      expect(
+        tracker.pendingNotifications(
+          previous: snapshot,
+          next: snapshot,
+          includeFinished: true,
+          isEnabled: (_) => false,
+        ),
+        isEmpty,
+      );
+
+      now = now.add(const Duration(seconds: 1));
+      final restarted = waiting.copyWith(stateStartedAt: now, updatedAt: now);
+      expect(
+        tracker.pendingNotifications(
+          previous: snapshot,
+          next: {'session-1': restarted},
+          includeFinished: true,
+          isEnabled: (_) => true,
+        ),
+        [restarted],
+      );
+    });
+
     test('holds a repeat of the same state until the cooldown expires', () {
       var now = DateTime.utc(2026, 5, 26, 12);
       final tracker = AgentStatusNotificationTracker(
