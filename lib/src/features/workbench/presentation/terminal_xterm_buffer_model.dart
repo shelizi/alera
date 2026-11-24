@@ -45,6 +45,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   final TerminalXtermHeadList<_TerminalXtermBufferSearchLineId> _searchLineIds =
       TerminalXtermHeadList<_TerminalXtermBufferSearchLineId>();
   int _revision = 0;
+  int _retainedBytes = 0;
   int _cols = 0;
   int _rows = 0;
   int _cursorX = 0;
@@ -141,16 +142,10 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
   /// packed rows, the row text search reads and a fixed per-row overhead for
   /// headers and list slots. The eviction budget used to see only the
   /// replica's cells, which is less than half of what a mirrored tab retains.
-  int get retainedBytes {
-    var bytes = 0;
-    for (var row = 0; row < _renderRows.length; row++) {
-      bytes +=
-          _renderRows[row].lengthInBytes +
-          _rowTexts[row].length * 2 +
-          _retainedRowOverheadBytes;
-    }
-    return bytes;
-  }
+  int get retainedBytes => _retainedBytes;
+
+  int _rowRetainedBytes(String text, Uint32List cells) =>
+      cells.lengthInBytes + text.length * 2 + _retainedRowOverheadBytes;
 
   /// Exposes the logical backing head only to make amortized trim behavior
   /// deterministic in unit tests; UI/runtime code must not depend on it.
@@ -437,12 +432,16 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       nextRows[changed.row] = _freezeCells(changed.cells);
       nextWrapped[changed.row] = changed.isWrapped;
     }
-    if (nextRows.any((row) => row == null) ||
-        nextTexts.any((text) => text == null) ||
-        nextWrapped.any((wrapped) => wrapped == null)) {
-      throw StateError(
-        'Terminal xterm full buffer repaint did not include every row.',
-      );
+    var nextRetainedBytes = 0;
+    for (var row = 0; row < delta.bufferLength; row++) {
+      final cells = nextRows[row];
+      final text = nextTexts[row];
+      if (cells == null || text == null || nextWrapped[row] == null) {
+        throw StateError(
+          'Terminal xterm full buffer repaint did not include every row.',
+        );
+      }
+      nextRetainedBytes += _rowRetainedBytes(text, cells);
     }
     _rowTexts
       ..clear()
@@ -453,6 +452,7 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
     _wrappedRows
       ..clear()
       ..addAll(nextWrapped.cast<bool>());
+    _retainedBytes = nextRetainedBytes;
     _semanticPromptLines = <int>[
       for (final changed in delta.rowDeltas)
         if (changed.isSemanticPromptLine) changed.row,
@@ -479,6 +479,9 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
 
     _validatePartialBuffer(delta);
     if (delta.trimStart > 0) {
+      for (var row = 0; row < delta.trimStart; row++) {
+        _retainedBytes -= _rowRetainedBytes(_rowTexts[row], _renderRows[row]);
+      }
       _rowTexts.trimStart(delta.trimStart);
       _renderRows.trimStart(delta.trimStart);
       _wrappedRows.trimStart(delta.trimStart);
@@ -494,8 +497,10 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
       _validateRow(changed.row, delta.bufferLength);
       if (changed.row == _renderRows.length) {
         _validateFullRowCells(changed);
+        final cells = _freezeCells(changed.cells);
         _rowTexts.add(changed.text);
-        _renderRows.add(_freezeCells(changed.cells));
+        _renderRows.add(cells);
+        _retainedBytes += _rowRetainedBytes(changed.text, cells);
         _wrappedRows.add(changed.isWrapped);
         _searchLineIds.add(
           _TerminalXtermBufferSearchLineId(
@@ -504,11 +509,14 @@ final class TerminalXtermBufferModel implements TerminalSearchSource {
           ),
         );
       } else {
+        final oldCells = _renderRows[changed.row];
+        final oldText = _rowTexts[changed.row];
+        final cells = _mergeCellSpan(oldCells, changed);
         _rowTexts[changed.row] = changed.text;
-        _renderRows[changed.row] = _mergeCellSpan(
-          _renderRows[changed.row],
-          changed,
-        );
+        _renderRows[changed.row] = cells;
+        _retainedBytes +=
+            _rowRetainedBytes(changed.text, cells) -
+            _rowRetainedBytes(oldText, oldCells);
         _wrappedRows[changed.row] = changed.isWrapped;
       }
       _setSemanticPromptLine(changed.row, changed.isSemanticPromptLine);

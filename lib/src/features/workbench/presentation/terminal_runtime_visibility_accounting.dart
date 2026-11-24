@@ -86,12 +86,12 @@ class _TerminalSessionVisibilityAccounting {
     return TerminalBufferUsage(
       tabId: tabId,
       bytes: bufferResident
-          ? measureTerminalCellBufferBytes(terminal) +
-                switch (terminal) {
-                  TerminalXtermReplicaTerminal(:final replicaModel) =>
-                    replicaModel.retainedBytes,
-                  _ => 0,
-                }
+          ? switch (terminal) {
+              final TerminalXtermReplicaTerminal replica =>
+                replica.retainedCellBufferBytes +
+                    replica.replicaModel.retainedBytes,
+              _ => measureTerminalCellBufferBytes(terminal),
+            }
           : 0,
       lastVisibleAt: _lastVisibleAt,
     );
