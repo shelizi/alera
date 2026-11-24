@@ -21,9 +21,9 @@ impl Session {
         };
         let mut title_tracker = TerminalTitleTracker::default();
         let (first, second) = checkpoint.buffer.as_slices();
-        title_tracker.feed(first);
+        title_tracker.seed(first);
         if !second.is_empty() {
-            title_tracker.feed(second);
+            title_tracker.seed(second);
         }
         let output_stream_bytes = checkpoint
             .output_stream_bytes

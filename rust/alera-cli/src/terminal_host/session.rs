@@ -329,7 +329,7 @@ impl Session {
         let on_event: Arc<dyn Fn(PtyEvent) + Send + Sync> = Arc::new(on_event);
 
         let mut title_tracker = TerminalTitleTracker::default();
-        title_tracker.feed(initial_scrollback);
+        title_tracker.seed(initial_scrollback);
         let mut session = Session {
             #[cfg(unix)]
             child_reaper: Arc::default(),
