@@ -1,3 +1,7 @@
+import 'dart:collection';
+
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -61,6 +65,85 @@ WorkbenchState _state({
 }
 
 void main() {
+  test('indexes shared manual workspace order once per sidebar projection', () {
+    final order = _CountingOrder([
+      ...List<String>.generate(1000, (i) => 'hidden-$i'),
+      'main',
+      'feature',
+      'review',
+    ]);
+    final prefs = WorkbenchViewPrefs(
+      groupBy: WorkbenchGroupBy.project,
+      projectSort: WorkbenchSortBy.name,
+      workspaceSort: WorkbenchSortBy.manual,
+      workspaceOrder: order,
+      selectedProjectIds: {},
+      collapsedProjectIds: {},
+      expandedWorkspaceIds: {},
+    );
+    final rows = buildSidebarRows(_state(prefs: prefs));
+    expect(workspaceOrderOfRows(rows), ['main', 'feature', 'review']);
+    expect(
+      rows.whereType<WorkbenchWorkspaceRow>().where((r) => r.isPinnedCopy),
+      hasLength(1),
+    );
+    expect(order.reads, order.length);
+  });
+
+  test('collapsed pins do not project hidden agent runs in any grouping', () {
+    final project = _project('p');
+    final workspace = _workspace(
+      'w',
+      project.id,
+      name: 'Pinned',
+      isPinned: true,
+    );
+    final tab = WorkspaceTabRecord(
+      id: 't',
+      workspaceId: workspace.id,
+      title: 'Agent',
+      kind: WorkspaceTabKind.terminal,
+      createdAt: _now,
+      updatedAt: _now,
+    );
+    for (final grouping in WorkbenchGroupBy.values) {
+      final statuses = _CountingStatuses();
+      final prefs = WorkbenchViewPrefs.defaults.copyWith(
+        groupBy: grouping,
+        pinnedSectionCollapsed: true,
+        showPinnedWorkspacesBelow: false,
+      );
+      final state = WorkbenchState(
+        projects: [project],
+        workspacesByProject: {
+          project.id: [workspace],
+        },
+        tabsByWorkspace: {
+          workspace.id: [tab],
+        },
+        viewPrefs: prefs,
+      );
+      final rows = buildSidebarRows(state, agentStatuses: statuses);
+      expect(
+        rows.whereType<WorkbenchPinnedHeaderRow>().single.workspaceCount,
+        1,
+      );
+      expect(rows.whereType<WorkbenchWorkspaceRow>(), isEmpty);
+      expect(statuses.reads, 0);
+      final expanded = buildSidebarRows(
+        state.copyWith(
+          viewPrefs: prefs.copyWith(pinnedSectionCollapsed: false),
+        ),
+        agentStatuses: statuses,
+      );
+      expect(
+        expanded.whereType<WorkbenchWorkspaceRow>().single.isPinnedCopy,
+        isTrue,
+      );
+      expect(statuses.reads, greaterThan(0));
+    }
+  });
+
   test('adds a global duplicate without polluting regular order memory', () {
     final state = _state();
     final rows = buildSidebarRows(state);
@@ -363,4 +446,50 @@ void main() {
       expect(rows.whereType<WorkbenchWorkspaceRow>(), hasLength(3));
     });
   });
+}
+
+final class _CountingOrder extends ListBase<String> {
+  _CountingOrder(this._values);
+  final List<String> _values;
+  int reads = 0;
+
+  @override
+  int get length => _values.length;
+
+  @override
+  set length(int value) => throw UnsupportedError('read-only order');
+
+  @override
+  String operator [](int index) {
+    reads++;
+    return _values[index];
+  }
+
+  @override
+  void operator []=(int index, String value) =>
+      throw UnsupportedError('read-only order');
+}
+
+final class _CountingStatuses extends MapBase<String, AgentStatusEntry> {
+  int reads = 0;
+
+  @override
+  AgentStatusEntry? operator [](Object? key) {
+    reads++;
+    return null;
+  }
+
+  @override
+  Iterable<String> get keys => const [];
+
+  @override
+  void operator []=(String key, AgentStatusEntry value) =>
+      throw UnsupportedError('read-only statuses');
+
+  @override
+  AgentStatusEntry? remove(Object? key) =>
+      throw UnsupportedError('read-only statuses');
+
+  @override
+  void clear() => throw UnsupportedError('read-only statuses');
 }

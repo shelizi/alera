@@ -23,6 +23,7 @@ void _registerTerminalRuntimeViewBufferOwnerTests() {
       owner.enforceBufferBudget();
 
       expect(host.evictedTabIds, isEmpty);
+      expect(host.liveSessionReads, 0);
     });
 
     test('evicts coldest unpinned sessions when budget is exceeded', () {
@@ -68,6 +69,7 @@ void _registerTerminalRuntimeViewBufferOwnerTests() {
       owner.enforceBufferBudget();
 
       expect(host.evictedTabIds, isEmpty);
+      expect(visible.bufferUsageReads, 0);
     });
 
     test(
@@ -139,8 +141,13 @@ final class _FakeViewBufferOwnerHost
   final List<TerminalSessionHandle> sessions = <TerminalSessionHandle>[];
   final List<String> evictedTabIds = <String>[];
 
+  int liveSessionReads = 0;
+
   @override
-  Iterable<TerminalSessionHandle> get liveSessions => sessions;
+  Iterable<TerminalSessionHandle> get liveSessions {
+    liveSessionReads++;
+    return sessions;
+  }
 
   @override
   void evictSession(String tabId) {
@@ -168,12 +175,17 @@ final class _TestBufferSessionHandle extends TerminalSessionHandle {
   @override
   bool get isVisible => _visible;
 
+  int bufferUsageReads = 0;
+
   @override
-  TerminalBufferUsage get bufferUsage => TerminalBufferUsage(
-    tabId: tabId,
-    bytes: bufferBytes,
-    lastVisibleAt: lastVisibleAt,
-  );
+  TerminalBufferUsage get bufferUsage {
+    bufferUsageReads++;
+    return TerminalBufferUsage(
+      tabId: tabId,
+      bytes: bufferBytes,
+      lastVisibleAt: lastVisibleAt,
+    );
+  }
 
   @override
   String get displayTitle => 'Test';

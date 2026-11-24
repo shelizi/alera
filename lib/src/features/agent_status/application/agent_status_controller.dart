@@ -59,6 +59,17 @@ class AgentStatusController extends _$AgentStatusController
     }
     var next = state;
     var changed = false;
+
+    // A hook receiver can deliver a burst of events at once. Copy on the
+    // first accepted mutation, then apply the rest to that private map.
+    // Previously each accepted event copied every live session again.
+    void ensureMutable() {
+      if (!changed) {
+        next = <String, AgentStatusEntry>{...next};
+        changed = true;
+      }
+    }
+
     final receivedAt = _now();
     for (final event in events) {
       if (!_lifecycleGuard.shouldApply(event)) {
@@ -73,9 +84,8 @@ class AgentStatusController extends _$AgentStatusController
         if (previous == null) {
           continue;
         }
-        next = <String, AgentStatusEntry>{...next}
-          ..remove(event.terminalSessionId);
-        changed = true;
+        ensureMutable();
+        next.remove(event.terminalSessionId);
         continue;
       }
       if (isAgentSessionCloseHookEvent(event)) {
@@ -95,9 +105,8 @@ class AgentStatusController extends _$AgentStatusController
         if (identity.shouldIgnoreEvent || previous == null) {
           continue;
         }
-        next = <String, AgentStatusEntry>{...next}
-          ..remove(event.terminalSessionId);
-        changed = true;
+        ensureMutable();
+        next.remove(event.terminalSessionId);
         continue;
       }
       final normalized = normalizeAgentHookEvent(event, previous: previous);
@@ -131,9 +140,8 @@ class AgentStatusController extends _$AgentStatusController
         _lifecycleGuard.clearTerminal(event.terminalSessionId);
         _clearedAt[event.terminalSessionId] = receivedAt;
         if (previous != null) {
-          next = <String, AgentStatusEntry>{...next}
-            ..remove(event.terminalSessionId);
-          changed = true;
+          ensureMutable();
+          next.remove(event.terminalSessionId);
         }
         continue;
       }
@@ -169,11 +177,8 @@ class AgentStatusController extends _$AgentStatusController
           at: receivedAt,
         ).toJson(),
       );
-      next = <String, AgentStatusEntry>{
-        ...next,
-        event.terminalSessionId: entry,
-      };
-      changed = true;
+      ensureMutable();
+      next[event.terminalSessionId] = entry;
     }
     if (changed) {
       state = next;
@@ -313,7 +318,11 @@ class AgentStatusController extends _$AgentStatusController
           previous.state == AgentStatusState.done &&
           entry.state != AgentStatusState.done &&
           !entry.updatedAt.isAfter(previous.updatedAt);
-      next[sessionId] = resolvedLocally ? previous : entry;
+      // Reuse unchanged entries so a partial snapshot update does not
+      // replace all the other session objects (and their context maps).
+      next[sessionId] = resolvedLocally || previous == entry
+          ? previous!
+          : entry;
     }
     // Only forget a local clear once the host stops reporting that session,
     // otherwise the very next snapshot would resurrect what was cleared.

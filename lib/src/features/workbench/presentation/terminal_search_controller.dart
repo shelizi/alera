@@ -234,7 +234,7 @@ final class TerminalSearchController._(
     _indexedFirstLine = firstLine;
     _needsFullRefresh = false;
     if (canReusePrefix && changedStart != null) {
-      _rebuildTailMatches(changedStart, height, selected);
+      return _rebuildTailMatches(changedStart, height, selected);
     } else {
       _rebuildMatches(selected);
     }
@@ -273,7 +273,7 @@ final class TerminalSearchController._(
   /// buffer identity and first line ID are stable. Preserve the already-sorted
   /// prefix and build only the modified tail, rather than reindexing and
   /// sorting thousands of historic hits after every output batch.
-  void _rebuildTailMatches(int start, int end, TerminalSearchMatch? selected) {
+  bool _rebuildTailMatches(int start, int end, TerminalSearchMatch? selected) {
     var low = 0;
     var high = _matches.length;
     while (low < high) {
@@ -285,12 +285,27 @@ final class TerminalSearchController._(
       }
     }
     final prefixLength = low;
-    final next = _matches.sublist(0, prefixLength);
+    // Keep the immutable published list until the first actual difference.
+    // Unrelated output then costs only the tail scan even with thousands
+    // of historical hits in the unchanged prefix.
+    List<TerminalSearchMatch>? next;
+    var matchIndex = prefixLength;
     for (var index = start; index < end; index++) {
       final lineId = _source.lineIdAt(index);
       final hits = _matchesByLine[lineId];
       if (hits == null) continue;
       for (final hit in hits) {
+        if (next == null && matchIndex < _matches.length) {
+          final previous = _matches[matchIndex];
+          if (identical(previous.lineId, lineId) &&
+              previous.lineIndex == index &&
+              previous.start == hit.start &&
+              previous.end == hit.end) {
+            matchIndex++;
+            continue;
+          }
+        }
+        next ??= _matches.sublist(0, matchIndex);
         next.add(
           TerminalSearchMatch(
             lineId: lineId,
@@ -299,13 +314,17 @@ final class TerminalSearchController._(
             end: hit.end,
           ),
         );
+        matchIndex++;
       }
     }
+    if (next == null && matchIndex == _matches.length) return false;
+    // A removed suffix can be the only difference.
+    next ??= _matches.sublist(0, matchIndex);
     _matches = List<TerminalSearchMatch>.unmodifiableOf(next);
 
     if (_matches.isEmpty) {
       _selectedIndex = -1;
-      return;
+      return true;
     }
     if (selected != null) {
       // The prefix retained its object identities and match offsets, so its
@@ -314,7 +333,7 @@ final class TerminalSearchController._(
         final retained = _matches[_selectedIndex];
         if (identical(retained.lineId, selected.lineId) &&
             retained.start == selected.start) {
-          return;
+          return true;
         }
       }
       for (var index = prefixLength; index < _matches.length; index++) {
@@ -322,11 +341,12 @@ final class TerminalSearchController._(
         if (identical(candidate.lineId, selected.lineId) &&
             candidate.start == selected.start) {
           _selectedIndex = index;
-          return;
+          return true;
         }
       }
     }
     _selectedIndex = _selectedIndex.clamp(0, _matches.length - 1);
+    return true;
   }
 
   void _rebuildMatches(TerminalSearchMatch? selected) {
