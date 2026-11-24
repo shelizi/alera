@@ -20,6 +20,8 @@ use crate::agent_session_history_scan::HistoryFileStamp;
 pub(crate) const HISTORY_INDEX_FILE: &str = "agent-session-search.sqlite";
 const INDEX_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BATCH: usize = 256;
+// Six parameters per document; 128 rows also fit older SQLite's 999 limit.
+const SQL_WRITE_BATCH: usize = 128;
 const MAX_RESULTS: usize = 100;
 const MAX_INDEXED_RECORDS: i64 = 20_000;
 const MAX_QUERY_CHARS: usize = 256;
@@ -35,6 +37,22 @@ struct IndexedDocument {
     record_json: String,
     title: String,
     goal: String,
+}
+
+struct PendingDocument<'a> {
+    key: String,
+    scope: String,
+    record_json: String,
+    record: &'a AgentSessionSearchRecord,
+    previous: Option<IndexedDocument>,
+}
+
+impl PendingDocument<'_> {
+    fn needs_fts_write(&self) -> bool {
+        self.previous.as_ref().is_none_or(|previous| {
+            previous.title != self.record.title || previous.goal != self.record.goal
+        })
+    }
 }
 
 fn document_key(record: &AgentSessionSearchRecord) -> serde_json::Result<String> {
@@ -55,6 +73,8 @@ pub(crate) struct HistoryIndexWriteStats {
     pub updated: usize,
     pub unchanged: usize,
     pub trimmed: usize,
+    #[cfg(test)]
+    write_statements: usize,
 }
 
 impl AgentSessionHistoryIndex {
@@ -190,6 +210,8 @@ impl AgentSessionHistoryIndex {
                 );
             }
         }
+        let mut pending: Vec<PendingDocument<'_>> = Vec::new();
+        let mut pending_by_key: HashMap<String, usize> = HashMap::new();
         for (record, key) in records.iter().zip(keys) {
             if record.running
                 || record.provider_identity_verified
@@ -213,6 +235,34 @@ impl AgentSessionHistoryIndex {
             if record.title.chars().count() > 1024 || record.goal.chars().count() > 1024 {
                 bail!("history search metadata exceeds the field budget");
             }
+            let record_json = serde_json::to_string(record)?;
+            // Preserve the logical sequential statistics and last record
+            // for duplicate UUIDs, without materializing intermediate SQL
+            // writes that are invisible outside this transaction.
+            if let Some(&position) = pending_by_key.get(&key) {
+                let planned = &mut pending[position];
+                if planned.record_json == record_json {
+                    stats.unchanged += 1;
+                } else {
+                    stats.updated += 1;
+                    planned.record_json = record_json;
+                    planned.record = record;
+                }
+                continue;
+            }
+            if existing
+                .get(&key)
+                .is_some_and(|previous| previous.record_json == record_json)
+            {
+                stats.unchanged += 1;
+                continue;
+            }
+            let previous = existing.remove(&key);
+            if previous.is_some() {
+                stats.updated += 1;
+            } else {
+                stats.added += 1;
+            }
             let scope = serde_json::to_string(&(
                 &record.runtime_instance_id,
                 &record.project_id,
@@ -220,106 +270,104 @@ impl AgentSessionHistoryIndex {
                 &record.provider,
                 &record.provider_account_id,
             ))?;
-            let record_json = serde_json::to_string(record)?;
-            let id = match existing.get(&key) {
-                Some(previous) => {
-                    let id = previous.id;
-                    if previous.record_json == record_json {
-                        stats.unchanged += 1;
-                        continue;
-                    }
-                    sqlx::query(
-                        "UPDATE history_search_docs SET scope_id=?, record_json=?, title=?,
-                         goal=?, updated_ms=? WHERE id=?",
-                    )
-                    .bind(&scope)
-                    .bind(&record_json)
-                    .bind(&record.title)
-                    .bind(&record.goal)
-                    .bind(record.updated_at_ms.min(i64::MAX as u64) as i64)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-                    // Transcript appends can change recency without changing searchable text.
-                    if previous.title != record.title || previous.goal != record.goal {
-                        sqlx::query("DELETE FROM history_search_fts WHERE rowid=?")
-                            .bind(id)
-                            .execute(&mut *tx)
-                            .await?;
-                        sqlx::query(
-                            "INSERT INTO history_search_fts(rowid, title, goal) VALUES (?, ?, ?)",
-                        )
-                        .bind(id)
-                        .bind(&record.title)
-                        .bind(&record.goal)
-                        .execute(&mut *tx)
-                        .await?;
-                    }
-                    stats.updated += 1;
-                    id
-                }
-                None => {
-                    let insert = sqlx::query(
-                        "INSERT INTO history_search_docs(
-                            document_key, scope_id, record_json, title, goal, updated_ms
-                        ) VALUES (?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(&key)
-                    .bind(&scope)
-                    .bind(&record_json)
-                    .bind(&record.title)
-                    .bind(&record.goal)
-                    .bind(record.updated_at_ms.min(i64::MAX as u64) as i64)
-                    .execute(&mut *tx)
-                    .await?;
-                    let id = insert.last_insert_rowid();
-                    sqlx::query(
-                        "INSERT INTO history_search_fts(rowid, title, goal) VALUES (?, ?, ?)",
-                    )
-                    .bind(id)
-                    .bind(&record.title)
-                    .bind(&record.goal)
-                    .execute(&mut *tx)
-                    .await?;
-                    stats.added += 1;
-                    id
-                }
-            };
-            // Preserve sequential upsert semantics even if a native UUID appears twice.
-            existing.insert(
+            pending_by_key.insert(key.clone(), pending.len());
+            pending.push(PendingDocument {
                 key,
-                IndexedDocument {
-                    id,
-                    record_json,
-                    title: record.title.clone(),
-                    goal: record.goal.clone(),
-                },
-            );
+                scope,
+                record_json,
+                record,
+                previous,
+            });
         }
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM history_search_docs")
-            .fetch_one(&mut *tx)
-            .await?;
-        if count > MAX_INDEXED_RECORDS {
-            let remove = count - MAX_INDEXED_RECORDS;
-            let ids: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM history_search_docs
-                 ORDER BY updated_ms ASC, id ASC LIMIT ?",
-            )
-            .bind(remove)
-            .fetch_all(&mut *tx)
-            .await?;
-            for id in ids {
-                sqlx::query("DELETE FROM history_search_fts WHERE rowid=?")
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::query("DELETE FROM history_search_docs WHERE id=?")
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-                stats.trimmed += 1;
+        // If two updates to an existing document cancel each other, leave its
+        // original stored row/FTS text intact. Keep first-seen insertion order
+        // so rowid-based retention tie-breaking remains deterministic.
+        pending.retain(|planned| {
+            planned
+                .previous
+                .as_ref()
+                .is_none_or(|previous| previous.record_json != planned.record_json)
+        });
+
+        for batch in pending.chunks(SQL_WRITE_BATCH) {
+            let mut sql = QueryBuilder::<Sqlite>::new(
+                "INSERT INTO history_search_docs(document_key, scope_id, record_json, title, goal, updated_ms) ",
+            );
+            sql.push_values(batch, |mut values, planned| {
+                values
+                    .push_bind(&planned.key)
+                    .push_bind(&planned.scope)
+                    .push_bind(&planned.record_json)
+                    .push_bind(&planned.record.title)
+                    .push_bind(&planned.record.goal)
+                    .push_bind(planned.record.updated_at_ms.min(i64::MAX as u64) as i64);
+            });
+            sql.push(
+                " ON CONFLICT(document_key) DO UPDATE SET scope_id=excluded.scope_id,
+                 record_json=excluded.record_json, title=excluded.title,
+                 goal=excluded.goal, updated_ms=excluded.updated_ms
+                 RETURNING document_key, id",
+            );
+            let mut returned_ids = HashMap::with_capacity(batch.len());
+            for row in sql.build().fetch_all(&mut *tx).await? {
+                returned_ids.insert(
+                    row.try_get::<String, _>("document_key")?,
+                    row.try_get::<i64, _>("id")?,
+                );
+            }
+            #[cfg(test)]
+            {
+                stats.write_statements += 1;
+            }
+
+            let mut remove_fts = Vec::new();
+            let mut write_fts = Vec::new();
+            for planned in batch {
+                let id = returned_ids
+                    .remove(&planned.key)
+                    .context("history upsert did not return document ID")?;
+                if let Some(previous) = &planned.previous {
+                    if previous.id != id {
+                        bail!("history upsert changed existing document ID");
+                    }
+                }
+                if planned.needs_fts_write() {
+                    if planned.previous.is_some() {
+                        remove_fts.push(id);
+                    }
+                    write_fts.push((id, planned.record));
+                }
+            }
+            if !remove_fts.is_empty() {
+                delete_index_rows(
+                    &mut tx,
+                    "DELETE FROM history_search_fts WHERE rowid IN (",
+                    &remove_fts,
+                )
+                .await?;
+                #[cfg(test)]
+                {
+                    stats.write_statements += 1;
+                }
+            }
+            if !write_fts.is_empty() {
+                let mut sql = QueryBuilder::<Sqlite>::new(
+                    "INSERT INTO history_search_fts(rowid, title, goal) ",
+                );
+                sql.push_values(write_fts, |mut values, (id, record)| {
+                    values
+                        .push_bind(id)
+                        .push_bind(&record.title)
+                        .push_bind(&record.goal);
+                });
+                sql.build().execute(&mut *tx).await?;
+                #[cfg(test)]
+                {
+                    stats.write_statements += 1;
+                }
             }
         }
+        trim_index(&mut tx, MAX_INDEXED_RECORDS, &mut stats).await?;
         tx.commit().await?;
         Ok(stats)
     }
@@ -432,6 +480,53 @@ impl AgentSessionHistoryIndex {
         }
         Ok(())
     }
+}
+
+// The SQL prefix is a fixed internal literal, never caller input.
+async fn delete_index_rows(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    prefix: &'static str,
+    ids: &[i64],
+) -> Result<()> {
+    debug_assert!(!ids.is_empty() && ids.len() <= SQL_WRITE_BATCH);
+    let mut sql = QueryBuilder::<Sqlite>::new(prefix);
+    {
+        let mut values = sql.separated(", ");
+        for id in ids {
+            values.push_bind(id);
+        }
+    }
+    sql.push(")");
+    sql.build().execute(&mut **tx).await?;
+    Ok(())
+}
+
+async fn trim_index(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    limit: i64,
+    stats: &mut HistoryIndexWriteStats,
+) -> Result<()> {
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM history_search_docs")
+        .fetch_one(&mut **tx)
+        .await?;
+    if count > limit {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM history_search_docs ORDER BY updated_ms ASC, id ASC LIMIT ?",
+        )
+        .bind(count - limit)
+        .fetch_all(&mut **tx)
+        .await?;
+        for batch in ids.chunks(SQL_WRITE_BATCH) {
+            delete_index_rows(tx, "DELETE FROM history_search_fts WHERE rowid IN (", batch).await?;
+            delete_index_rows(tx, "DELETE FROM history_search_docs WHERE id IN (", batch).await?;
+            stats.trimmed += batch.len();
+            #[cfg(test)]
+            {
+                stats.write_statements += 2;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn query_terms(text: &str) -> Option<String> {
@@ -655,6 +750,116 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn bulk_writes_are_bounded_and_leave_unchanged_or_metadata_only_fts_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let mut records = (0..MAX_BATCH)
+            .map(|i| {
+                record(
+                    &format!("550e8400-e29b-41d4-a716-{i:012}"),
+                    "original",
+                    "keyboard",
+                )
+            })
+            .collect::<Vec<_>>();
+        let first = index.upsert_batch(&records).await.unwrap();
+        assert_eq!(first.added, MAX_BATCH);
+        assert_eq!(
+            first.write_statements, 4,
+            "two document batches and two FTS batches"
+        );
+        let repeated = index.upsert_batch(&records).await.unwrap();
+        assert_eq!(repeated.unchanged, MAX_BATCH);
+        assert_eq!(repeated.write_statements, 0);
+        for record in &mut records {
+            record.updated_at_ms += 1;
+        }
+        let metadata = index.upsert_batch(&records).await.unwrap();
+        assert_eq!(metadata.updated, MAX_BATCH);
+        assert_eq!(
+            metadata.write_statements, 2,
+            "no FTS rebuild for metadata-only changes"
+        );
+        for record in &mut records {
+            record.goal = "replacement".into();
+        }
+        let changed = index.upsert_batch(&records).await.unwrap();
+        assert_eq!(changed.updated, MAX_BATCH);
+        assert_eq!(
+            changed.write_statements, 6,
+            "bounded document, FTS delete, FTS insert batches"
+        );
+        assert!(index.search("keyboard", 100).await.unwrap().is_empty());
+        let matches: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM history_search_fts WHERE history_search_fts MATCH 'replacement'",
+        )
+        .fetch_one(&index.pool)
+        .await
+        .unwrap();
+        assert_eq!(matches, MAX_BATCH as i64);
+    }
+
+    #[tokio::test]
+    async fn duplicate_updates_that_revert_to_original_do_not_touch_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let first = record("550e8400-e29b-41d4-a716-446655440000", "first", "original");
+        index.upsert_batch(&[first.clone()]).await.unwrap();
+        let mut changed = first.clone();
+        changed.goal = "temporary".into();
+        let stats = index
+            .upsert_batch(&[changed, first.clone(), first])
+            .await
+            .unwrap();
+        assert_eq!(stats.updated, 2);
+        assert_eq!(stats.unchanged, 1);
+        assert_eq!(stats.write_statements, 0);
+        assert!(index.search("temporary", 30).await.unwrap().is_empty());
+        assert_eq!(index.search("original", 30).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_retention_deletes_matching_fts_rows_in_stable_id_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let rows = (0..MAX_BATCH)
+            .map(|i| {
+                record(
+                    &format!("550e8400-e29b-41d4-a716-{i:012}"),
+                    "retention",
+                    "keyboard",
+                )
+            })
+            .collect::<Vec<_>>();
+        index.upsert_batch(&rows).await.unwrap();
+        let mut tx = index.pool.begin().await.unwrap();
+        let mut stats = HistoryIndexWriteStats::default();
+        trim_index(&mut tx, 4, &mut stats).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(stats.trimmed, MAX_BATCH - 4);
+        assert_eq!(stats.write_statements, 4);
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT document_key FROM history_search_docs ORDER BY id ASC")
+                .fetch_all(&index.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining,
+            rows[MAX_BATCH - 4..]
+                .iter()
+                .map(|row| document_key(row).unwrap())
+                .collect::<Vec<_>>()
+        );
+        let fts_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM history_search_fts WHERE history_search_fts MATCH 'retention'",
+        )
+        .fetch_one(&index.pool)
+        .await
+        .unwrap();
+        assert_eq!(fts_count, 4);
     }
 
     #[tokio::test]
