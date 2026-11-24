@@ -19,6 +19,8 @@ use crate::terminal_host::resources::ShellProcess;
 use crate::terminal_host::resources::seal_shell_process;
 
 mod checkpoint_restore;
+#[cfg(any(windows, test))]
+mod conpty_cursor_query;
 #[cfg(test)]
 mod driver_test_stub;
 mod input_queue;
@@ -39,6 +41,8 @@ mod title_tracker;
 pub(crate) mod windows_process_job;
 pub(crate) mod workspace_shutdown;
 
+#[cfg(windows)]
+use conpty_cursor_query::StartupCursorQuery;
 #[cfg(test)]
 use input_queue::PtyDeferredWrite;
 use input_queue::PtyWrite;
@@ -184,9 +188,7 @@ pub struct Session {
     #[cfg(windows)]
     worker_process: Option<Arc<std::os::windows::io::OwnedHandle>>,
     #[cfg(windows)]
-    conpty_startup_cursor_query_tail: Vec<u8>,
-    #[cfg(windows)]
-    conpty_startup_cursor_query_answered: bool,
+    conpty_startup_cursor_query: StartupCursorQuery,
     terminated: bool,
     checkpoint_gen: u64,
     checkpoint_armed: bool,
@@ -363,9 +365,7 @@ impl Session {
             #[cfg(windows)]
             worker_process,
             #[cfg(windows)]
-            conpty_startup_cursor_query_tail: Vec::new(),
-            #[cfg(windows)]
-            conpty_startup_cursor_query_answered: false,
+            conpty_startup_cursor_query: StartupCursorQuery::default(),
             terminated: false,
             checkpoint_gen: 0,
             checkpoint_armed: false,
@@ -583,34 +583,24 @@ impl Session {
 
     #[cfg(windows)]
     pub(super) fn take_initial_conpty_cursor_query(&mut self, data: &[u8]) -> bool {
-        const QUERY: &[u8] = b"\x1b[6n";
-        if self.conpty_startup_cursor_query_answered {
-            return false;
-        }
-
-        let mut observed =
-            Vec::with_capacity(self.conpty_startup_cursor_query_tail.len() + data.len());
-        observed.extend_from_slice(&self.conpty_startup_cursor_query_tail);
-        observed.extend_from_slice(data);
-        if observed.windows(QUERY.len()).any(|window| window == QUERY) {
-            self.conpty_startup_cursor_query_answered = true;
-            self.conpty_startup_cursor_query_tail.clear();
-            return true;
-        }
-
-        let keep = QUERY.len().saturating_sub(1).min(observed.len());
-        self.conpty_startup_cursor_query_tail = observed[observed.len() - keep..].to_vec();
-        false
+        self.conpty_startup_cursor_query.take(data)
     }
 
-    /// Append PTY output to the scrollback and live-output batch. Returns a
-    /// timer generation when a delayed flush should be armed.
+    #[cfg(test)]
     pub fn append_output(&mut self, data: &[u8]) -> (Option<u64>, Option<u64>, Option<String>) {
+        self.append_owned_output(data.to_vec())
+    }
+
+    /// Append an owned PTY reader allocation to scrollback and both independent
+    /// output batches. Return timer generations when their flushes need arming.
+    pub(super) fn append_owned_output(
+        &mut self,
+        data: Vec<u8>,
+    ) -> (Option<u64>, Option<u64>, Option<String>) {
         self.output_stream_bytes = self.output_stream_bytes.saturating_add(data.len() as u64);
-        self.buffer.append(data);
-        self.output_batch.extend_from_slice(data);
-        self.durable_output_batch.extend_from_slice(data);
-        let title_change = self.title_tracker.feed(data);
+        self.buffer.append(&data);
+        let title_change = self.title_tracker.feed(&data);
+        self.append_output_batches(data);
         let output_generation = if self.output_batch_armed {
             None
         } else {

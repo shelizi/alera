@@ -91,9 +91,7 @@ fn test_session() -> Session {
         #[cfg(windows)]
         worker_process: None,
         #[cfg(windows)]
-        conpty_startup_cursor_query_tail: Vec::new(),
-        #[cfg(windows)]
-        conpty_startup_cursor_query_answered: false,
+        conpty_startup_cursor_query: StartupCursorQuery::default(),
         terminated: false,
         checkpoint_gen: 0,
         checkpoint_armed: false,
@@ -134,6 +132,58 @@ fn output_batch_coalesces_until_flush() {
     let durable = session.flush_durable_output_batch().expect("durable batch");
     assert_eq!(durable.data, b"abcd");
     assert_eq!(durable.sequence, 0);
+}
+
+#[test]
+fn owned_output_reuses_reader_allocation_across_independent_flushes() {
+    let mut session = test_session();
+    let first = vec![0xff; 16 * 1024];
+    let first_ptr = first.as_ptr();
+    assert_eq!(session.append_owned_output(first), (Some(0), Some(0), None));
+    assert_eq!(session.durable_output_batch.as_ptr(), first_ptr);
+    let live = session.flush_output_batch().unwrap();
+    assert_eq!(live.data, vec![0xff; 16 * 1024]);
+    assert!(session.durable_output_batch_due(0));
+
+    let second = vec![0x80; 8 * 1024];
+    let second_ptr = second.as_ptr();
+    assert_eq!(session.append_owned_output(second), (Some(1), None, None));
+    assert_eq!(session.output_batch.as_ptr(), second_ptr);
+    let durable = session.flush_durable_output_batch().unwrap();
+    assert_eq!(durable.sequence, 0);
+    assert_eq!(durable.end_cursor, 24 * 1024);
+    assert_eq!(&durable.data[..16 * 1024], &vec![0xff; 16 * 1024]);
+    assert_eq!(&durable.data[16 * 1024..], &vec![0x80; 8 * 1024]);
+    assert!(session.output_batch_due(1));
+
+    let third = vec![0x00; 4096];
+    let third_ptr = third.as_ptr();
+    assert_eq!(session.append_owned_output(third), (None, Some(1), None));
+    let durable = session.flush_durable_output_batch().unwrap();
+    assert_eq!(durable.data.as_ptr(), third_ptr);
+    assert_eq!(durable.data, vec![0; 4096]);
+    assert_eq!(durable.sequence, 1);
+    assert_eq!(durable.end_cursor, 28 * 1024);
+    let live = session.flush_output_batch().unwrap();
+    assert_eq!(&live.data[..8192], &vec![0x80; 8192]);
+    assert_eq!(&live.data[8192..], &vec![0; 4096]);
+    assert_eq!(session.output_stream_range(), (27 * 1024, 28 * 1024));
+    assert_eq!(session.buffer.to_bytes(), vec![0; 1024]);
+}
+
+#[test]
+fn owned_output_does_not_retain_disproportionate_reader_capacity() {
+    let mut session = test_session();
+    let mut data = Vec::with_capacity(1024 * 1024);
+    data.extend_from_slice(b"tiny");
+    let original = data.as_ptr();
+    session.append_owned_output(data);
+    assert_ne!(session.durable_output_batch.as_ptr(), original);
+    assert_ne!(session.output_batch.as_ptr(), original);
+    assert!(session.durable_output_batch.capacity() <= 8);
+    assert!(session.output_batch.capacity() <= 8);
+    assert_eq!(session.flush_output_batch().unwrap().data, b"tiny");
+    assert_eq!(session.flush_durable_output_batch().unwrap().data, b"tiny");
 }
 
 #[test]
