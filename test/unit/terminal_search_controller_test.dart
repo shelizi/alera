@@ -81,6 +81,77 @@ void main() {
     expect(controller.matches.last.start, 0);
   });
 
+  test('unchanged output retains the published match list and selection', () {
+    final source = _MutableTerminalSearchSource([
+      ...List<String>.generate(2000, (i) => 'needle $i'),
+      'plain',
+      'needle tail',
+    ]);
+    final controller = TerminalSearchController.fromSource(
+      source: source,
+      scrollToLine: (_) {},
+    );
+    addTearDown(source.dispose);
+    addTearDown(controller.dispose);
+    controller
+      ..open()
+      ..setQuery('needle')
+      ..previous();
+    final initialMatches = controller.matches;
+    final selected = controller.selectedMatch;
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+
+    // Same offsets in a rewritten tail, then output unrelated to the query.
+    source.rewriteTail('NEEDLE other');
+    for (var i = 0; i < 100; i++) {
+      source.append('unrelated $i');
+      source.rewriteTail('progress $i');
+    }
+    expect(controller.matches, same(initialMatches));
+    expect(controller.selectedMatch, same(selected));
+    expect(notifications, 0);
+
+    source.rewriteTail('new needle');
+    expect(controller.matchCount, 2002);
+    expect(controller.matches.last.start, 4);
+    expect(controller.selectedMatchNumber, 2001);
+    expect(notifications, 1);
+    // A same-count offset change must notify, too.
+    source.rewriteTail('needle new');
+    expect(controller.matches.last.start, 0);
+    expect(notifications, 2);
+    source.rewriteTail('plain again');
+    expect(controller.matchCount, 2001);
+    expect(controller.selectedMatch?.lineId, same(selected?.lineId));
+    expect(notifications, 3);
+    expect(initialMatches, hasLength(2001));
+    expect(() => initialMatches.clear(), throwsUnsupportedError);
+  });
+
+  test('no-result output stays quiet and the first hit notifies', () {
+    final source = _MutableTerminalSearchSource(['plain']);
+    final controller = TerminalSearchController.fromSource(
+      source: source,
+      scrollToLine: (_) {},
+    );
+    addTearDown(source.dispose);
+    addTearDown(controller.dispose);
+    controller
+      ..open()
+      ..setQuery('needle');
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    source.append('unrelated');
+    expect(notifications, 0);
+    source.rewriteTail('needle');
+    expect(controller.selectedMatchNumber, 1);
+    expect(notifications, 1);
+    source.rewriteTail('plain');
+    expect(controller.selectedMatch, isNull);
+    expect(notifications, 2);
+  });
+
   test('same-height scrollback head trim falls back to corrected indices', () {
     final source = _MutableTerminalSearchSource([
       'needle dropped',

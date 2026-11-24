@@ -3,7 +3,7 @@ part of 'workbench_listing.dart';
 List<Workspace> _sortSidebarWorkspaces(
   List<Workspace> workspaces, {
   required WorkbenchSortBy sortBy,
-  required List<String> manualOrder,
+  required Map<String, int> manualPositions,
   required bool pinMainOnRecent,
   required AgentActivityRank? Function(Workspace) activityOf,
   required DateTime Function(Workspace) lastActivityOf,
@@ -11,12 +11,14 @@ List<Workspace> _sortSidebarWorkspaces(
   final sorted = List<Workspace>.from(workspaces);
   switch (sortBy) {
     case WorkbenchSortBy.manual:
-      final positions = <String, int>{
-        for (var i = 0; i < manualOrder.length; i++) manualOrder[i]: i,
-      };
       sorted.sort(
-        (a, b) =>
-            _compareManualPositions(a.id, b.id, positions, a.name, b.name),
+        (a, b) => _compareManualPositions(
+          a.id,
+          b.id,
+          manualPositions,
+          a.name,
+          b.name,
+        ),
       );
     case WorkbenchSortBy.name:
       sorted.sort((a, b) {

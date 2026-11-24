@@ -54,14 +54,22 @@ final class TerminalRuntimeViewBufferOwner {
     final budget = TerminalBufferBudget(
       budgetBytes: _host.terminalSettings.bufferBudgetMegabytes * 1024 * 1024,
     );
+    if (budget.isUnbounded) {
+      return;
+    }
     final sessions = _host.liveSessions.toList(growable: false);
-    if (budget.isUnbounded || sessions.isEmpty) {
+    if (sessions.isEmpty) {
       return;
     }
     final pinned = <String>{
       for (final session in sessions)
         if (session.isVisible) session.tabId,
     };
+    // When every view is visible, there is no eligible eviction candidate.
+    // Avoid scanning all scrollback rows merely to compute an unusable total.
+    if (pinned.length == sessions.length) {
+      return;
+    }
     final evictions = budget.selectEvictions(
       live: <TerminalBufferUsage>[
         for (final session in sessions) session.bufferUsage,

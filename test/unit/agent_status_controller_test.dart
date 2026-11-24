@@ -43,6 +43,96 @@ void main() {
     _registerAgentStatusSnapshotTests(() => container);
 
     test(
+      'hook burst publishes once and preserves prior snapshots and reports',
+      () {
+        final at = DateTime.utc(2026, 5, 26, 2);
+        final batchContainer = ProviderContainer(
+          overrides: [agentStatusClockProvider.overrideWithValue(() => at)],
+        );
+        final serialContainer = ProviderContainer(
+          overrides: [agentStatusClockProvider.overrideWithValue(() => at)],
+        );
+        addTearDown(batchContainer.dispose);
+        addTearDown(serialContainer.dispose);
+        final batch = batchContainer.read(
+          agentStatusControllerProvider.notifier,
+        );
+        final serial = serialContainer.read(
+          agentStatusControllerProvider.notifier,
+        );
+        AgentHookEvent hook(
+          String id,
+          String name,
+          Map<String, Object?> payload,
+        ) => AgentHookEvent(
+          terminalSessionId: id,
+          workspaceId: 'workspace-$id',
+          tabId: 'tab-$id',
+          agentType: id == 'closed' ? AgentType.copilot : AgentType.codex,
+          hookEventName: name,
+          payload: payload,
+        );
+        final initial = [
+          for (var i = 0; i < 100; i++)
+            hook('idle-$i', 'UserPromptSubmit', {'prompt': 'Idle task $i'}),
+          hook('closed', 'userPromptSubmitted', {'prompt': 'Closing'}),
+          hook('interrupted', 'UserPromptSubmit', {'prompt': 'Interrupting'}),
+        ];
+        batch.applyHookEvents(initial);
+        serial.applyHookEvents(initial);
+        final old = batchContainer.read(agentStatusControllerProvider);
+        var updates = 0;
+        final subscription = batchContainer.listen(
+          agentStatusControllerProvider,
+          (_, _) {
+            updates++;
+          },
+        );
+        addTearDown(subscription.close);
+
+        final events = [
+          hook('closed', 'SessionEnd', {}),
+          hook('interrupted', 'Interrupt', {}),
+          hook('active', 'UserPromptSubmit', {
+            'prompt': 'Run regression tests',
+          }),
+          for (var i = 0; i < 200; i++)
+            hook('active', 'PostToolUse', {
+              'tool_name': 'Bash',
+              'tool_response': {'message': 'Output $i'},
+            }),
+          hook('active', 'Stop', {
+            'last_agent_message': 'All regressions passed.',
+          }),
+          hook('interrupted', 'UserPromptSubmit', {'prompt': 'Retry'}),
+        ];
+        batch.applyHookEvents(events);
+        for (final event in events) {
+          serial.applyHookEvent(event);
+        }
+        final next = batchContainer.read(agentStatusControllerProvider);
+        expect(updates, 1);
+        expect(next, serialContainer.read(agentStatusControllerProvider));
+        expect(old, hasLength(102));
+        expect(old['closed'], isNotNull);
+        expect(old['active'], isNull);
+        expect(next['closed'], isNull);
+        expect(next['interrupted']!.prompt, 'Retry');
+        for (var i = 0; i < 100; i++) {
+          expect(next['idle-$i'], same(old['idle-$i']));
+        }
+        final context = AgentContextOverview.fromRaw(
+          next['active']!.contextOverview,
+        );
+        expect(context.progress, 'All regressions passed.');
+        expect(
+          context.timeline.where((event) => event.kind == 'report'),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
       'Context timeline records only completed Codex replies, not tool output',
       () {
         final controller = container.read(

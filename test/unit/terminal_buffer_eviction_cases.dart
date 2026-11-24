@@ -197,6 +197,83 @@ void _registerTerminalBufferEvictionTests() {
     },
   );
 
+  for (final hardEviction in [false, true]) {
+    test(
+      'budget rechecks preserve evicted parser handle (hard=$hardEviction)',
+      () async {
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        final coldPty = _FakeTerminalPtySession();
+        final visiblePty = _FakeTerminalPtySession();
+        final runtime = XtermTerminalRuntime(
+          parserWorkerEnabled: true,
+          ptySessionFactory: _FakeTerminalPtySessionFactory(
+            sessions: [coldPty, visiblePty],
+          ),
+          shellLaunchesBuilder: () => [_launch('shell', shell: '/bin/sh')],
+        );
+        addTearDown(runtime.dispose);
+
+        final cold = runtime.sessionFor(
+          workspace: _workspace(id: 'workspace-1'),
+          tab: _tab(id: 'cold', workspaceId: 'workspace-1'),
+        );
+        final coldVisibility = acquireTerminalVisibilityForTesting(cold);
+        await cold.ensureStarted();
+        writeTerminalOutputForTesting(cold, 'preserved-history\r\n');
+        await waitForTerminalParserApplyForTesting(cold);
+        setTerminalParserWorkerHardEvictionEnabledForTesting(
+          cold,
+          hardEviction,
+        );
+        coldVisibility.dispose();
+        evictTerminalSessionForTesting(runtime, 'cold');
+        await waitForTerminalParserApplyForTesting(cold);
+        expect(cold.bufferUsage.bytes, 0);
+        expect(terminalParserWorkerHardEvictedForTesting(cold), hardEviction);
+
+        final visible = runtime.sessionFor(
+          workspace: _workspace(id: 'workspace-2'),
+          tab: _tab(id: 'visible', workspaceId: 'workspace-2'),
+        );
+        final visibleLease = acquireTerminalVisibilityForTesting(visible);
+        addTearDown(visibleLease.dispose);
+        await visible.ensureStarted();
+        // Worker writes are asynchronous. Keep each chunk below the minimum
+        // frame budget and wait for it before sending the next one.
+        for (var batch = 0; batch < 40; batch++) {
+          queueTerminalOutputForTesting(visible, '${'x' * 64}\r\n' * 50);
+          flushTerminalOutputForTesting(visible);
+          await waitForTerminalParserApplyForTesting(visible);
+          await _settleUntil(
+            () => !terminalOutputWriteInFlightForTesting(visible),
+          );
+          expect(terminalOutputWriteInFlightForTesting(visible), isFalse);
+        }
+        expect(visible.bufferUsage.bytes, greaterThan(1024 * 1024));
+
+        runtime.updateSettings(
+          TerminalSettings.defaults.copyWith(bufferBudgetMegabytes: 1),
+        );
+        runtime.setActiveWorkspace('workspace-2');
+        runtime.setActiveWorkspace('workspace-1');
+        expect(runtime.peekSession('cold'), same(cold));
+        expect(runtime.peekSession('visible'), same(visible));
+        expect(coldPty.disposed, isFalse);
+
+        final restored = acquireTerminalVisibilityForTesting(cold);
+        addTearDown(restored.dispose);
+        await waitForTerminalParserApplyForTesting(cold);
+        expect(
+          terminalBufferTextForTesting(cold),
+          contains('preserved-history'),
+        );
+        expect(terminalUiBufferEvictedForTesting(cold), isFalse);
+        expect(coldPty.terminated, isFalse);
+      },
+    );
+  }
+
   test('parser worker hard eviction can be disabled for profiling', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);

@@ -80,6 +80,54 @@ void main() {
     },
   );
 
+  test('index churn does not trigger catalog reconciliation', () async {
+    final repo = Directory(p.join(tempDir.path, 'repo'))..createSync();
+    final gitDir = Directory(p.join(repo.path, '.git'))..createSync();
+    final worktreesDir = Directory(p.join(gitDir.path, 'worktrees'))
+      ..createSync();
+    final watches = _FakeWatchFactory();
+    var refreshes = 0;
+    final watcher = GitWorktreeMetadataWatcher(
+      repoPath: repo.path,
+      onRefresh: () async => refreshes += 1,
+      debounce: Duration.zero,
+      pollInterval: Duration.zero,
+      watchDirectory: watches.call,
+    );
+    addTearDown(() async {
+      await watcher.dispose();
+      await watches.dispose();
+    });
+    watcher.start();
+
+    for (var i = 0; i < 200; i++) {
+      watches.emit(
+        worktreesDir.path,
+        p.join(worktreesDir.path, 'linked-${i % 10}', 'index'),
+      );
+      watches.emit(
+        worktreesDir.path,
+        p.join(worktreesDir.path, 'linked-${i % 10}', 'index.lock'),
+      );
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(refreshes, 0);
+
+    // Structural and HEAD events must still be observed, including a
+    // linked-worktree administrative directory literally named index.
+    for (final parts in [
+      ['index'],
+      ['linked', 'HEAD'],
+      ['linked', 'gitdir'],
+      ['linked', 'locked'],
+      ['linked', 'unknown', 'index'],
+    ]) {
+      watches.emit(worktreesDir.path, p.joinAll([worktreesDir.path, ...parts]));
+      await Future<void>.delayed(Duration.zero);
+    }
+    expect(refreshes, 5);
+  });
+
   test(
     'suspended refresh waits until an internal worktree mutation finishes',
     () async {

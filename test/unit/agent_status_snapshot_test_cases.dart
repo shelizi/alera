@@ -34,6 +34,34 @@ void _registerAgentStatusSnapshotTests(ProviderContainer Function() container) {
     expect(identical(controller.state, first), isTrue);
   });
 
+  test('partial snapshot updates reuse equal entries and context maps', () {
+    final controller = container().read(agentStatusControllerProvider.notifier);
+    final at = DateTime.utc(2026, 5, 26, 2);
+    AgentStatusEntry entry(String id) =>
+        _snapshotEntry(terminalSessionId: id, updatedAt: at).copyWith(
+          contextOverview: {
+            'goal': 'Run tests',
+            'timeline': [
+              {'kind': 'goal', 'text': 'Run tests', 'at': at.toIso8601String()},
+            ],
+          },
+        );
+    controller.replaceRuntimeSnapshot([entry('session-1'), entry('session-2')]);
+    final old = container().read(agentStatusControllerProvider);
+    final updated = entry('session-2')
+        .copyWith(state: AgentStatusState.waiting);
+    controller.replaceRuntimeSnapshot([entry('session-1'), updated]);
+    final next = container().read(agentStatusControllerProvider);
+    expect(next, isNot(same(old)));
+    expect(next['session-1'], same(old['session-1']));
+    expect(
+      next['session-1']!.contextOverview,
+      same(old['session-1']!.contextOverview),
+    );
+    expect(next['session-2'], same(updated));
+    expect(old['session-2']!.state, AgentStatusState.working);
+  });
+
   test('a stale snapshot does not resurrect a terminal that exited', () {
     // The host keeps a working presence for the life of the PTY when a
     // terminating hook never arrives, which is what left runs spinning

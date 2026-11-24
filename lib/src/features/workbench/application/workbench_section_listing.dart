@@ -61,10 +61,7 @@ extension _SectionListing on _WorkbenchSidebarRowBuilder {
       ...sections,
       if (members.containsKey(null)) null,
     ]) {
-      final workspaces = _sortWorkspaces(
-        members[section?.id]!,
-        pinMainOnRecent: true,
-      );
+      final workspaces = members[section?.id]!;
       final collapsed = section == null
           ? prefs.othersSectionCollapsed
           : prefs.collapsedSectionIds.contains(section.id);
@@ -78,7 +75,7 @@ extension _SectionListing on _WorkbenchSidebarRowBuilder {
       if (collapsed) continue;
       _appendWorkspaceTreeRows(
         rows,
-        workspaces: workspaces,
+        workspaces: _sortWorkspaces(workspaces, pinMainOnRecent: true),
         projectOf: (workspace) => projectById[workspace.projectId]!,
         baseIndent: 1,
         showProjectChip: true,

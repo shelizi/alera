@@ -671,6 +671,72 @@ fn git_file_revision_compare_uses_requested_branch_without_switching_head() {
 }
 
 #[test]
+fn git_combined_diff_matches_single_diff_for_mixed_ascii_and_unicode_changes() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("tracked.txt"), "before\n\nold\n").expect("write baseline");
+    run_git(repo.path(), &["add", "tracked.txt"]);
+    run_git(repo.path(), &["commit", "-m", "add mixed fixture"]);
+
+    std::fs::write(repo.path().join("tracked.txt"), "staged\n\nold\n").expect("write staged");
+    run_git(repo.path(), &["add", "tracked.txt"]);
+    std::fs::write(repo.path().join("tracked.txt"), "staged\n\n\u{65b0}\ttext")
+        .expect("write unstaged without final newline");
+    std::fs::write(repo.path().join("new.txt"), "new\n\nfile\n").expect("write untracked");
+
+    let root = path_str(repo.path());
+    let status = git_status(root.clone()).expect("status still includes line stats");
+    let combined = git_diff_all(root.clone(), None).expect("combined diff");
+    assert_eq!(combined.files.len(), 3);
+    for entry in &status.entries {
+        let single = git_diff(root.clone(), entry.path.clone(), entry.area).expect("single diff");
+        let expected = &single.files[0];
+        let actual = combined
+            .files
+            .iter()
+            .find(|file| file.path == entry.path && file.area == entry.area)
+            .expect("corresponding combined diff");
+        assert_eq!(actual.status, expected.status);
+        assert_eq!(actual.added, expected.added);
+        assert_eq!(actual.removed, expected.removed);
+        assert_eq!(actual.is_binary, expected.is_binary);
+        assert_eq!(diff_text(actual), diff_text(expected));
+        if entry.area != GitChangeArea::Untracked {
+            assert_eq!(entry.added, expected.added);
+            assert_eq!(entry.removed, expected.removed);
+        }
+    }
+}
+
+#[test]
+fn git_diff_keeps_ascii_blank_lines_and_trailing_spaces() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("ascii.txt"), "old\n").expect("write baseline");
+    run_git(repo.path(), &["add", "ascii.txt"]);
+    run_git(repo.path(), &["commit", "-m", "add ASCII fixture"]);
+    let long = "a".repeat(8192);
+    std::fs::write(repo.path().join("ascii.txt"), format!("\nline  \n{long}"))
+        .expect("write ASCII changes");
+    let diff = git_diff(
+        path_str(repo.path()),
+        "ascii.txt".to_string(),
+        GitChangeArea::Unstaged,
+    )
+    .expect("ASCII diff");
+    let file = &diff.files[0];
+    let additions: Vec<&str> = file
+        .lines
+        .iter()
+        .filter(|line| line.kind == GitDiffLineKind::Addition)
+        .map(|line| line.text.as_str())
+        .collect();
+    let prefixed_long = format!("+{long}");
+    assert_eq!(additions, vec!["+", "+line  ", prefixed_long.as_str()]);
+    assert_eq!(file.added, Some(3));
+    assert_eq!(file.removed, Some(1));
+    assert!(!file.truncated);
+}
+
+#[test]
 fn git_diff_truncates_large_unicode_without_panicking() {
     let repo = init_repo();
     let total_added_lines = 120_000u32;

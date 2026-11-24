@@ -464,3 +464,142 @@ fn git_commit_compare_ignores_copy_sources_outside_scoped_workspace() {
     assert_eq!(compare.entries[0].path, "lib/foo.dart");
     assert_eq!(compare.entries[0].status, GitChangeStatus::Modified);
 }
+
+#[test]
+fn git_diff_batch_preserves_requested_order_and_refreshes_between_requests() {
+    let repo = init_repo();
+    for i in 0..24 {
+        std::fs::write(
+            repo.path().join(format!("file-{i:02}.txt")),
+            format!("base {i}\n"),
+        )
+        .expect("write batch baseline");
+    }
+    std::fs::write(repo.path().join("rename-from.txt"), "rename fixture\n")
+        .expect("write rename fixture");
+    std::fs::write(repo.path().join("copy-source.txt"), "copy fixture\n")
+        .expect("write copy fixture");
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-m", "add batch fixtures"]);
+    run_git(repo.path(), &["mv", "rename-from.txt", "rename-to.txt"]);
+    std::fs::copy(
+        repo.path().join("copy-source.txt"),
+        repo.path().join("copy-destination.txt"),
+    )
+    .expect("copy fixture");
+    std::fs::write(
+        repo.path().join("copy-source.txt"),
+        "copy fixture\nsource change\n",
+    )
+    .expect("modify copy source");
+    run_git(
+        repo.path(),
+        &["add", "copy-source.txt", "copy-destination.txt"],
+    );
+    for i in 0..24 {
+        let name = format!("file-{i:02}.txt");
+        std::fs::write(repo.path().join(&name), format!("base {i}\nstaged {i}\n"))
+            .expect("write staged");
+        if i % 2 == 0 {
+            run_git(repo.path(), &["add", &name]);
+        }
+        std::fs::write(
+            repo.path().join(&name),
+            format!("base {i}\nstaged {i}\nworktree {i}\n"),
+        )
+        .expect("write worktree");
+    }
+    std::fs::write(repo.path().join("untracked.txt"), "new file\n").expect("write untracked");
+    let root = path_str(repo.path());
+    let mut requested = vec![
+        "rename-from.txt".to_string(),
+        "copy-destination.txt".to_string(),
+        "copy-source.txt".to_string(),
+        "untracked.txt".to_string(),
+        "missing.txt".to_string(),
+    ];
+    requested.extend((0..24).rev().map(|i| format!("file-{i:02}.txt")));
+    let signature = |file: &GitDiffFile| {
+        (
+            file.path.clone(),
+            file.old_path.clone(),
+            file.area,
+            file.status,
+            file.added,
+            file.removed,
+            file.is_binary,
+            diff_text(file),
+        )
+    };
+    let expected = requested
+        .iter()
+        .flat_map(|path| {
+            git_diff_all(root.clone(), Some(path.clone()))
+                .expect("single-path diff")
+                .files
+        })
+        .map(|file| signature(&file))
+        .collect::<Vec<_>>();
+    let page = git_diff_all_page(root.clone(), requested.clone()).expect("batch diff");
+    assert!(!page.truncated);
+    assert_eq!(
+        page.files.iter().map(signature).collect::<Vec<_>>(),
+        expected
+    );
+    // Different request must see newly staged and committed changes.
+    run_git(repo.path(), &["add", "untracked.txt"]);
+    let updated = git_diff_all_page(root.clone(), requested.clone()).expect("fresh batch");
+    assert!(updated
+        .files
+        .iter()
+        .any(|file| file.path == "untracked.txt" && file.area == GitChangeArea::Staged));
+    assert!(!updated
+        .files
+        .iter()
+        .any(|file| file.path == "untracked.txt" && file.area == GitChangeArea::Untracked));
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-m", "commit batch"]);
+    let clean = git_diff_all_page(root, requested).expect("clean batch");
+    assert!(clean.files.is_empty());
+}
+
+#[test]
+fn git_diff_batch_keeps_whitespace_mode_and_literal_paths() {
+    let repo = init_repo();
+    std::fs::write(repo.path().join("file[1].txt"), "alpha beta\n").expect("baseline");
+    std::fs::write(repo.path().join("file1.txt"), "before\n").expect("baseline");
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-m", "add literal path fixtures"]);
+    std::fs::write(repo.path().join("file[1].txt"), "alpha  beta\n").expect("whitespace change");
+    std::fs::write(repo.path().join("file1.txt"), "after\n").expect("content change");
+    let root = path_str(repo.path());
+    let files = vec!["file[1].txt".to_string(), "file1.txt".to_string()];
+    let page = git_diff_all_page_with_whitespace(
+        root.clone(),
+        files.clone(),
+        GitDiffWhitespaceMode::IgnoreAll,
+    )
+    .expect("whitespace batch");
+    let expected = files
+        .iter()
+        .flat_map(|path| {
+            git_diff_all_with_whitespace(
+                root.clone(),
+                Some(path.clone()),
+                GitDiffWhitespaceMode::IgnoreAll,
+            )
+            .expect("single-path whitespace diff")
+            .files
+        })
+        .map(|file| (file.path.clone(), diff_text(&file)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        page.files
+            .iter()
+            .map(|file| (file.path.clone(), diff_text(file)))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let normal = git_diff_all_page(root, files).expect("normal batch");
+    assert_eq!(normal.files.len(), 2);
+}

@@ -3,9 +3,9 @@ use git2::Repository;
 use super::super::git_diff_paths::GitPathContext;
 use super::git_diff_render::MAX_DIFF_PATCH_BYTES;
 use super::{
-    diff_file_for_area_with_whitespace,
+    diff_file_for_area_with_selection_cache,
     git_diff_render::{diff_lines_byte_len, truncate_diff_lines_to_bytes},
-    GitChangeArea, GitDiffFile, GitDiffResult, GitDiffWhitespaceMode, GitError,
+    DiffSelectionCache, GitChangeArea, GitDiffFile, GitDiffResult, GitDiffWhitespaceMode, GitError,
 };
 
 pub(super) fn git_diff_all_for_file_with_whitespace(
@@ -23,6 +23,7 @@ pub(super) fn git_diff_all_for_file_with_whitespace(
         paths,
         file_path,
         whitespace_mode,
+        None,
         &mut files,
         &mut total_bytes,
         &mut truncated,
@@ -36,6 +37,7 @@ pub(super) fn append_combined_diff_for_path_with_whitespace(
     paths: &GitPathContext,
     file_path: &str,
     whitespace_mode: GitDiffWhitespaceMode,
+    mut selection_cache: Option<&mut DiffSelectionCache>,
     files: &mut Vec<GitDiffFile>,
     total_bytes: &mut usize,
     truncated: &mut bool,
@@ -45,9 +47,14 @@ pub(super) fn append_combined_diff_for_path_with_whitespace(
         GitChangeArea::Unstaged,
         GitChangeArea::Staged,
     ] {
-        if let Some(file) =
-            diff_file_for_area_with_whitespace(repo, paths, file_path, area, whitespace_mode)?
-        {
+        if let Some(file) = diff_file_for_area_with_selection_cache(
+            repo,
+            paths,
+            file_path,
+            area,
+            whitespace_mode,
+            selection_cache.as_deref_mut(),
+        )? {
             if append_combined_diff_file(files, total_bytes, truncated, file) {
                 return Ok(true);
             }
@@ -62,7 +69,7 @@ pub(super) fn append_combined_diff_file(
     truncated: &mut bool,
     mut file: GitDiffFile,
 ) -> bool {
-    let preview_bytes = diff_lines_byte_len(&file.lines);
+    let mut preview_bytes = diff_lines_byte_len(&file.lines);
     if file.truncated {
         *truncated = true;
     }
@@ -71,8 +78,10 @@ pub(super) fn append_combined_diff_file(
         truncate_diff_lines_to_bytes(&mut file.lines, remaining);
         file.truncated = true;
         *truncated = true;
+        // Only a modified preview needs a second byte-count pass.
+        preview_bytes = diff_lines_byte_len(&file.lines);
     }
-    *total_bytes = total_bytes.saturating_add(diff_lines_byte_len(&file.lines));
+    *total_bytes = total_bytes.saturating_add(preview_bytes);
     files.push(file);
     if *total_bytes >= MAX_DIFF_PATCH_BYTES {
         *truncated = true;

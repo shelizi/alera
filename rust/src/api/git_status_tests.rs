@@ -315,3 +315,59 @@ fn git_status_uses_workspace_relative_paths_for_subdirectories() {
     assert_eq!(diff.files[0].path, "lib/foo.dart");
     assert!(diff_text(&diff.files[0]).contains("changed"));
 }
+
+#[test]
+fn git_status_line_counts_match_rendered_diffs_without_preview_limits() {
+    let repo = init_repo();
+    for (path, bytes) in [
+        ("ascii.txt", b"old\n\nlast".as_slice()),
+        ("legacy.txt", b"old\n".as_slice()),
+        ("large.txt", b"old\n".as_slice()),
+        ("binary.bin", b"\x00\x01\x02\x03".as_slice()),
+        ("rename.txt", b"unchanged rename\n".as_slice()),
+        ("deleted.txt", b"deleted without newline".as_slice()),
+    ] {
+        std::fs::write(repo.path().join(path), bytes).expect("write baseline");
+    }
+    run_git(repo.path(), &["add", "."]);
+    run_git(repo.path(), &["commit", "-m", "add line count fixtures"]);
+    run_git(repo.path(), &["mv", "rename.txt", "renamed.txt"]);
+    std::fs::write(repo.path().join("empty.txt"), b"").expect("add empty file");
+    std::fs::write(repo.path().join("ascii.txt"), b"stage\n\nlast").expect("stage ASCII");
+    run_git(repo.path(), &["add", "empty.txt", "ascii.txt"]);
+    std::fs::write(repo.path().join("ascii.txt"), b"stage\n\nnew last").expect("modify ASCII");
+    let (legacy, _, errors) = encoding_rs::BIG5.encode("\u{65b0}\u{5167}\u{5bb9}\n");
+    assert!(!errors);
+    std::fs::write(repo.path().join("legacy.txt"), legacy.as_ref()).expect("write Big5");
+    let large = (0..7000)
+        .map(|i| format!("\u{65b0}{i}\n"))
+        .collect::<String>();
+    std::fs::write(repo.path().join("large.txt"), large).expect("write large Unicode");
+    std::fs::write(repo.path().join("binary.bin"), b"\x00\x04\x05\x06").expect("modify binary");
+    std::fs::remove_file(repo.path().join("deleted.txt")).expect("delete fixture");
+    let root = path_str(repo.path());
+    let status = git_status(root.clone()).expect("status");
+    assert_eq!(status.entries.len(), 8);
+    for entry in &status.entries {
+        let result = git_diff(root.clone(), entry.path.clone(), entry.area).expect("render diff");
+        let file = result.files.first().expect("visible file");
+        if file.is_binary {
+            assert_eq!((entry.added, entry.removed), (None, None), "{}", entry.path);
+        } else {
+            assert_eq!(
+                (entry.added, entry.removed),
+                (file.added, file.removed),
+                "{}",
+                entry.path
+            );
+        }
+        if entry.path == "large.txt" {
+            assert_eq!(entry.added, Some(7000));
+            assert_eq!(entry.removed, Some(1));
+            assert!(file.line_preview_truncated);
+        }
+        if entry.path == "renamed.txt" || entry.path == "empty.txt" {
+            assert_eq!((entry.added, entry.removed), (Some(0), Some(0)));
+        }
+    }
+}

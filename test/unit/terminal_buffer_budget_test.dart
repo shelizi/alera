@@ -183,6 +183,31 @@ void main() {
       );
     });
 
+    test('zero-byte buffers are never selected for another eviction', () {
+      const budget = TerminalBufferBudget(budgetBytes: 10 * _mb);
+      expect(
+        budget.selectEvictions(
+          live: [
+            _usage('already-evicted', megabytes: 0),
+            _usage('cold', megabytes: 5, lastVisibleAt: now),
+            _usage('visible', megabytes: 40, lastVisibleAt: now),
+          ],
+          pinnedTabIds: {'visible'},
+        ),
+        ['cold'],
+      );
+      expect(
+        budget.selectEvictions(
+          live: [
+            _usage('already-evicted', megabytes: 0),
+            _usage('visible', megabytes: 40, lastVisibleAt: now),
+          ],
+          pinnedTabIds: {'visible'},
+        ),
+        isEmpty,
+      );
+    });
+
     test('everything pinned means nothing to evict', () {
       const budget = TerminalBufferBudget(budgetBytes: 1);
 

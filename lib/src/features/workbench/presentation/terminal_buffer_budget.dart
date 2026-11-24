@@ -68,7 +68,9 @@ class const TerminalBufferBudget({required this.budgetBytes}) {
     final candidates = <TerminalBufferUsage>[];
     for (final usage in live) {
       total += usage.bytes;
-      if (!pinnedTabIds.contains(usage.tabId)) {
+      // An already-evicted UI replica reports zero bytes. Selecting it again
+      // cannot relieve this budget and may detach its retained parser/PTY.
+      if (usage.bytes > 0 && !pinnedTabIds.contains(usage.tabId)) {
         candidates.add(usage);
       }
     }
