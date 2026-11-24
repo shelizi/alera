@@ -199,6 +199,10 @@ pub(crate) async fn search_history_on_demand(
         // but never prove that the persistent index still has the same rows.
         empty.writes = if scan.reused_files >= scan.records.len() {
             index.upsert_warm_prepared(&batch).await?
+        } else if scan.reused_files >= scan.records.len().div_ceil(2) {
+            // With most previews reused, an exact comparison inside the
+            // write transaction avoids materializing unchanged rows.
+            index.upsert_incremental_prepared(&batch).await?
         } else {
             index.upsert_prepared(&batch).await?
         };

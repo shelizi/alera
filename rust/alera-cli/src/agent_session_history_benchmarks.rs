@@ -224,7 +224,7 @@ fn report(name: &str, samples: &[Sample]) {
                 .collect(),
         );
     }
-    let counts: [(&str, fn(&Sample) -> usize); 10] = [
+    let counts: [(&str, fn(&Sample) -> usize); 12] = [
         ("parsed", |s| s.response.parsed_files),
         ("reused", |s| s.response.reused_files),
         ("added", |s| s.response.writes.added),
@@ -242,6 +242,12 @@ fn report(name: &str, samples: &[Sample]) {
         ("warm_check_hits", |s| s.response.writes.warm_check_hits),
         ("existing_rows_loaded", |s| {
             s.response.writes.existing_rows_loaded
+        }),
+        ("selective_lookup_queries", |s| {
+            s.response.writes.selective_lookup_queries
+        }),
+        ("selective_mismatches", |s| {
+            s.response.writes.selective_mismatches
         }),
     ];
     for (metric, select) in counts {
@@ -327,6 +333,10 @@ async fn history_search_phase_benchmark() {
         assert_eq!(s.response.parsed_files, 1);
         assert_eq!(s.response.reused_files, FILES - 1);
         assert_eq!(s.response.writes.updated, 1);
+        assert_eq!(s.response.writes.unchanged, FILES - 1);
+        assert_eq!(s.response.writes.selective_lookup_queries, 1);
+        assert_eq!(s.response.writes.selective_mismatches, 1);
+        assert_eq!(s.response.writes.existing_rows_loaded, 1);
         changed.push(s);
     }
     report("one_file_changed", &changed);

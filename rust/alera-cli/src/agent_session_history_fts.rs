@@ -2,8 +2,9 @@
 //!
 //! Provider JSONL files are never modified. Only summaries sanitized by
 //! agent_session_history_scan may be stored. No ambient startup indexing.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,8 +26,11 @@ const SQL_WRITE_BATCH: usize = 128;
 const MAX_RESULTS: usize = 100;
 const MAX_INDEXED_RECORDS: i64 = 20_000;
 const MAX_QUERY_CHARS: usize = 256;
-// Bound the transient serialized batch used by the read-only warm check.
-const MAX_WARM_JSON_BYTES: usize = 2 * 1024 * 1024;
+// Bound the transient serialized batch used by SQLite-side comparisons.
+const MAX_COMPARISON_JSON_BYTES: usize = 2 * 1024 * 1024;
+const DIFFERENT_DOCUMENT: &str = "d.id IS NULL OR typeof(d.record_json) != 'text'
+    OR typeof(d.title) != 'text' OR typeof(d.goal) != 'text'
+    OR d.record_json COLLATE BINARY IS NOT i.record_json";
 
 pub(crate) struct AgentSessionHistoryIndex {
     pool: SqlitePool,
@@ -96,6 +100,45 @@ impl<'a> PreparedHistoryBatch<'a> {
     }
 }
 
+/// Canonical JSON bytes for a single request, with ranges into one buffer.
+struct SerializedHistoryBatch {
+    json: String,
+    ranges: Vec<Range<usize>>,
+}
+
+impl SerializedHistoryBatch {
+    fn new(
+        batch: &PreparedHistoryBatch<'_>,
+        _stats: &mut HistoryIndexWriteStats,
+    ) -> Result<Option<Self>> {
+        for record in batch.records {
+            validate_index_record(record)?;
+        }
+        let mut bytes = Vec::new();
+        let mut ranges = Vec::with_capacity(batch.records.len());
+        #[cfg(test)]
+        {
+            _stats.json_buffer_starts += 1;
+        }
+        for record in batch.records {
+            let start = bytes.len();
+            serde_json::to_writer(&mut bytes, record)?;
+            if bytes.len() > MAX_COMPARISON_JSON_BYTES {
+                return Ok(None);
+            }
+            ranges.push(start..bytes.len());
+        }
+        Ok(Some(Self {
+            json: String::from_utf8(bytes)?,
+            ranges,
+        }))
+    }
+
+    fn record_json(&self, position: usize) -> &str {
+        &self.json[self.ranges[position].clone()]
+    }
+}
+
 #[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct HistoryIndexWriteStats {
     pub added: usize,
@@ -112,6 +155,10 @@ pub(crate) struct HistoryIndexWriteStats {
     pub(crate) warm_check_hits: usize,
     #[cfg(test)]
     pub(crate) existing_rows_loaded: usize,
+    #[cfg(test)]
+    pub(crate) selective_lookup_queries: usize,
+    #[cfg(test)]
+    pub(crate) selective_mismatches: usize,
     #[cfg(test)]
     retention_queries: usize,
     #[cfg(test)]
@@ -261,44 +308,26 @@ impl AgentSessionHistoryIndex {
         if batch.records.is_empty() {
             return Ok(false);
         }
-        // All records must satisfy exactly the same input rules as a write.
-        for record in batch.records {
-            validate_index_record(record)?;
-        }
-        // One bounded buffer, containing complete canonical JSON for each
-        // record. Bind slices only after the buffer has finished growing.
-        let mut bytes = Vec::new();
-        let mut ranges = Vec::with_capacity(batch.records.len());
-        #[cfg(test)]
-        {
-            _stats.json_buffer_starts += 1;
-        }
-        for record in batch.records {
-            let start = bytes.len();
-            serde_json::to_writer(&mut bytes, record)?;
-            if bytes.len() > MAX_WARM_JSON_BYTES {
-                return Ok(false);
-            }
-            ranges.push(start..bytes.len());
-        }
-        let json = std::str::from_utf8(&bytes)?;
+        let Some(serialized) = SerializedHistoryBatch::new(batch, _stats)? else {
+            return Ok(false);
+        };
         // Compare exact canonical text, not hashes or previously cached DB
         // state. Count retention in the same SQLite read snapshot. A missing,
         // changed, or noncanonical row forces the ordinary transaction.
         // 2 * MAX_BATCH + 1 bound values stay under the legacy 999 limit.
         let mut sql = QueryBuilder::<Sqlite>::new("WITH incoming(document_key, record_json) AS (");
-        sql.push_values(batch.keys.iter().zip(ranges), |mut row, (key, range)| {
-            row.push_bind(key.as_str()).push_bind(&json[range]);
+        sql.push_values(batch.keys.iter().enumerate(), |mut row, (position, key)| {
+            row.push_bind(key.as_str())
+                .push_bind(serialized.record_json(position));
         });
         sql.push(
             ") SELECT NOT EXISTS (
                 SELECT 1 FROM incoming AS i
                 LEFT JOIN history_search_docs AS d ON d.document_key = i.document_key
-                WHERE d.id IS NULL OR typeof(d.record_json) != 'text'
-                OR typeof(d.title) != 'text' OR typeof(d.goal) != 'text'
-                OR d.record_json COLLATE BINARY IS NOT i.record_json
-             ) AND (SELECT count(*) FROM history_search_docs) <= ",
+                WHERE ",
         );
+        sql.push(DIFFERENT_DOCUMENT);
+        sql.push(") AND (SELECT count(*) FROM history_search_docs) <= ");
         sql.push_bind(retention_limit);
         #[cfg(test)]
         {
@@ -318,9 +347,64 @@ impl AgentSessionHistoryIndex {
         &self,
         batch: &PreparedHistoryBatch<'_>,
     ) -> Result<HistoryIndexWriteStats> {
+        self.upsert_prepared_inner(batch, false).await
+    }
+
+    /// For partially changed previews, let SQLite return only mismatches.
+    /// Duplicate keys retain the sequential legacy path.
+    pub(crate) async fn upsert_incremental_prepared(
+        &self,
+        batch: &PreparedHistoryBatch<'_>,
+    ) -> Result<HistoryIndexWriteStats> {
+        self.upsert_prepared_inner(batch, true).await
+    }
+
+    async fn upsert_prepared_inner(
+        &self,
+        batch: &PreparedHistoryBatch<'_>,
+        prefer_selective: bool,
+    ) -> Result<HistoryIndexWriteStats> {
         let mut stats = HistoryIndexWriteStats::default();
+        let serialized = if prefer_selective
+            && !batch.keys.is_empty()
+            && batch
+                .keys
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>()
+                .len()
+                == batch.keys.len()
+        {
+            SerializedHistoryBatch::new(batch, &mut stats)?
+        } else {
+            None
+        };
         let mut tx = self.pool.begin().await?;
-        let rows = if !batch.keys.is_empty() {
+        let rows = if let Some(serialized) = &serialized {
+            // 512 parameters at most. Compare and write in the same
+            // transaction so an intervening writer cannot invalidate the
+            // classification. A missing document is returned with a NULL ID.
+            let mut sql =
+                QueryBuilder::<Sqlite>::new("WITH incoming(document_key, record_json) AS (");
+            sql.push_values(batch.keys.iter().enumerate(), |mut row, (position, key)| {
+                row.push_bind(key.as_str())
+                    .push_bind(serialized.record_json(position));
+            });
+            sql.push(
+                ") SELECT i.document_key, d.id, d.record_json, d.title, d.goal
+                FROM incoming AS i
+                LEFT JOIN history_search_docs AS d ON d.document_key = i.document_key
+                WHERE ",
+            );
+            sql.push(DIFFERENT_DOCUMENT);
+            let rows = sql.build().fetch_all(&mut *tx).await?;
+            #[cfg(test)]
+            {
+                stats.selective_lookup_queries += 1;
+                stats.selective_mismatches = rows.len();
+            }
+            rows
+        } else if !batch.keys.is_empty() {
             let mut sql = QueryBuilder::<Sqlite>::new(
                 "SELECT document_key, id, record_json, title, goal FROM history_search_docs WHERE document_key IN (",
             );
@@ -335,37 +419,52 @@ impl AgentSessionHistoryIndex {
         } else {
             Vec::new()
         };
-        #[cfg(test)]
-        {
-            stats.existing_rows_loaded = rows.len();
-        }
         // SQLite rows already own the returned text. Borrow it until the
         // transaction finishes instead of copying four strings per document.
+        // In the selective lookup a present key with no document marks an
+        // insert, while an absent key is already byte-for-byte unchanged.
         let mut existing = HashMap::with_capacity(rows.len());
         for row in &rows {
-            existing.insert(
-                row.try_get::<&str, _>("document_key")?,
-                IndexedDocument {
-                    id: row.try_get("id")?,
+            let previous = if let Some(id) = row.try_get::<Option<i64>, _>("id")? {
+                #[cfg(test)]
+                {
+                    stats.existing_rows_loaded += 1;
+                }
+                Some(IndexedDocument {
+                    id,
                     record_json: row.try_get("record_json")?,
                     title: row.try_get("title")?,
                     goal: row.try_get("goal")?,
-                },
-            );
+                })
+            } else {
+                None
+            };
+            existing.insert(row.try_get::<&str, _>("document_key")?, previous);
         }
         let mut pending: Vec<PendingDocument<'_>> = Vec::new();
         let mut pending_by_key: HashMap<&str, usize> = HashMap::new();
         // Most warm records are unchanged. Reuse the same serialization
         // storage rather than allocating an owned JSON string for each one.
         let mut json_scratch = Vec::new();
-        for (record, key) in batch.iter() {
-            validate_index_record(record)?;
+        for (position, (record, key)) in batch.iter().enumerate() {
+            let canonical = serialized.as_ref().map(|s| s.record_json(position));
+            if canonical.is_some() && !existing.contains_key(key) {
+                stats.unchanged += 1;
+                continue;
+            }
+            if canonical.is_none() {
+                validate_index_record(record)?;
+            }
             json_scratch.clear();
             #[cfg(test)]
             if json_scratch.capacity() == 0 {
                 stats.json_buffer_starts += 1;
             }
-            serde_json::to_writer(&mut json_scratch, record)?;
+            if let Some(canonical) = canonical {
+                json_scratch.extend_from_slice(canonical.as_bytes());
+            } else {
+                serde_json::to_writer(&mut json_scratch, record)?;
+            }
             // Preserve the logical sequential statistics and last record
             // for duplicate UUIDs, without materializing intermediate SQL
             // writes that are invisible outside this transaction.
@@ -386,12 +485,13 @@ impl AgentSessionHistoryIndex {
             }
             if existing
                 .get(key)
+                .and_then(Option::as_ref)
                 .is_some_and(|previous| previous.record_json.as_bytes() == json_scratch.as_slice())
             {
                 stats.unchanged += 1;
                 continue;
             }
-            let previous = existing.remove(key);
+            let previous = existing.remove(key).flatten();
             if previous.is_some() {
                 stats.updated += 1;
             } else {
@@ -1151,6 +1251,124 @@ mod tests {
             .upsert_warm_prepared(&PreparedHistoryBatch::new(&invalid).unwrap())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn selective_incremental_upsert_matches_legacy_and_loads_only_mismatches() {
+        let dir = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let reference = AgentSessionHistoryIndex::open(other_dir.path())
+            .await
+            .unwrap();
+        let mut records = (0..MAX_BATCH)
+            .map(|i| {
+                record(
+                    &format!("550e8400-e29b-41d4-a716-{i:012}"),
+                    "original",
+                    "keyboard",
+                )
+            })
+            .collect::<Vec<_>>();
+        for db in [&index, &reference] {
+            db.upsert_batch(&records).await.unwrap();
+            // Preserve the existing exact-byte repair behavior.
+            sqlx::query("UPDATE history_search_docs SET record_json = ? WHERE document_key = ?")
+                .bind(serde_json::to_string_pretty(&records[2]).unwrap())
+                .bind(document_key(&records[2]).unwrap())
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        records[0].goal = "replacement".into();
+        records[1].updated_at_ms += 1;
+        // A newly observed document is not confused with an unchanged row.
+        records[MAX_BATCH - 1].provider_account_id = Some("secondary".into());
+        let batch = PreparedHistoryBatch::new(&records).unwrap();
+        let actual = index.upsert_incremental_prepared(&batch).await.unwrap();
+        let expected = reference.upsert_prepared(&batch).await.unwrap();
+        assert_eq!(
+            (
+                actual.added,
+                actual.updated,
+                actual.unchanged,
+                actual.trimmed
+            ),
+            (
+                expected.added,
+                expected.updated,
+                expected.unchanged,
+                expected.trimmed
+            )
+        );
+        assert_eq!(
+            (actual.added, actual.updated, actual.unchanged),
+            (1, 3, MAX_BATCH - 4)
+        );
+        assert_eq!(actual.selective_lookup_queries, 1);
+        assert_eq!(actual.selective_mismatches, 4);
+        assert_eq!(actual.existing_rows_loaded, 3);
+        assert_eq!(expected.existing_rows_loaded, MAX_BATCH - 1);
+        assert_eq!(actual.write_statements, expected.write_statements);
+        assert_eq!(actual.retention_queries, 1);
+        type Stored = (i64, String, String, String, String, String, i64);
+        let sql = "SELECT id, document_key, scope_id, record_json, title, goal, updated_ms FROM history_search_docs ORDER BY id";
+        let stored: Vec<Stored> = sqlx::query_as(sql).fetch_all(&index.pool).await.unwrap();
+        let original: Vec<Stored> = sqlx::query_as(sql)
+            .fetch_all(&reference.pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, original);
+        assert_eq!(stored.len(), MAX_BATCH + 1, "unobserved older row survives");
+        let fts_sql = "SELECT rowid, title, goal FROM history_search_fts ORDER BY rowid";
+        let fts: Vec<(i64, String, String)> = sqlx::query_as(fts_sql)
+            .fetch_all(&index.pool)
+            .await
+            .unwrap();
+        let expected_fts: Vec<(i64, String, String)> = sqlx::query_as(fts_sql)
+            .fetch_all(&reference.pool)
+            .await
+            .unwrap();
+        assert_eq!(fts, expected_fts);
+        let repeated = index.upsert_incremental_prepared(&batch).await.unwrap();
+        assert_eq!(repeated.unchanged, MAX_BATCH);
+        assert_eq!(repeated.existing_rows_loaded, 0);
+        assert_eq!(repeated.selective_mismatches, 0);
+        assert_eq!(repeated.write_statements, 0);
+    }
+
+    #[tokio::test]
+    async fn selective_incremental_upsert_falls_back_for_duplicate_keys_and_large_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = AgentSessionHistoryIndex::open(dir.path()).await.unwrap();
+        let first = record("550e8400-e29b-41d4-a716-446655440000", "first", "original");
+        index
+            .upsert_batch(std::slice::from_ref(&first))
+            .await
+            .unwrap();
+        let mut changed = first.clone();
+        changed.goal = "temporary".into();
+        let duplicates = [changed, first.clone(), first.clone()];
+        let result = index
+            .upsert_incremental_prepared(&PreparedHistoryBatch::new(&duplicates).unwrap())
+            .await
+            .unwrap();
+        assert_eq!((result.updated, result.unchanged), (2, 1));
+        assert_eq!(result.selective_lookup_queries, 0);
+        assert_eq!(result.write_statements, 0);
+        assert!(index.search("temporary", 10).await.unwrap().is_empty());
+
+        let mut large = first;
+        // Force the transient aggregate over its threshold without changing
+        // the legacy index's validation rules or omitting retention.
+        large.progress = "x".repeat(MAX_COMPARISON_JSON_BYTES);
+        let batch = PreparedHistoryBatch::new(std::slice::from_ref(&large)).unwrap();
+        let result = index.upsert_incremental_prepared(&batch).await.unwrap();
+        assert_eq!(result.selective_lookup_queries, 0);
+        assert_eq!(result.updated, 1);
+        assert_eq!(result.existing_rows_loaded, 1);
+        assert_eq!(result.retention_queries, 1);
+        assert_eq!(index.search("original", 10).await.unwrap(), vec![large]);
     }
 
     #[tokio::test]
