@@ -80,17 +80,22 @@ pub(super) async fn completed_hook_report(
     let name = event
         .event_name
         .as_deref()
-        .or_else(|| event.payload["hook_event_name"].as_str());
-    if !matches!(name, Some("Stop" | "stop"))
+        .or_else(|| event.payload["hook_event_name"].as_str())
+        .or_else(|| event.payload["hookEventName"].as_str());
+    if !name.is_some_and(|name| name.eq_ignore_ascii_case("Stop"))
         || !matches!(event.agent_type.as_str(), "claude" | "codex")
     {
         return None;
     }
-    let native = event.payload["session_id"].as_str()?;
+    let native = event.payload["session_id"]
+        .as_str()
+        .or_else(|| event.payload["sessionId"].as_str())?;
     if Uuid::parse_str(native).ok()?.to_string() != native {
         return None;
     }
-    let path = event.payload["transcript_path"].as_str()?;
+    let path = event.payload["transcript_path"]
+        .as_str()
+        .or_else(|| event.payload["transcriptPath"].as_str())?;
     if path.is_empty() || path.len() > 4096 {
         return None;
     }

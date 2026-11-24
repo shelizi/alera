@@ -15,6 +15,7 @@ class const AgentHookReconciliationService({
   required final ManagedAgentHookInstallService managedHooks,
   required final CodexRuntimeHomeService codexRuntimeHome,
   required final ClaudeRuntimeHomeService claudeRuntimeHome,
+  final bool hostOwnsCodexHooks = false,
 }) implements AgentHookReconciler {
   @override
   Future<List<ManagedAgentHookInstallStatus>> reconcile(
@@ -24,11 +25,21 @@ class const AgentHookReconciliationService({
       enabledAgentTypes: _enabledGlobalManagedAgentStatusHookTypes(settings),
       agentTypes: agentTypesWithGlobalManagedHooks,
     );
-    results.add(
-      isAgentSettingEnabled(settings.values, .codex)
-          ? await codexRuntimeHome.install()
-          : await codexRuntimeHome.remove(),
-    );
+    if (hostOwnsCodexHooks) {
+      // The Host reconciles the effective CODEX_HOME on startup, settings
+      // changes and terminal launch. Classic must not replace its command or
+      // trust indices with the legacy per-provider script. The same native
+      // config can also be used by a different Host profile.
+      if (isAgentSettingEnabled(settings.values, .codex)) {
+        results.add(await codexRuntimeHome.status(hostManaged: true));
+      }
+    } else {
+      results.add(
+        isAgentSettingEnabled(settings.values, .codex)
+            ? await codexRuntimeHome.install()
+            : await codexRuntimeHome.remove(),
+      );
+    }
     results.add(
       isAgentSettingEnabled(settings.values, .claude)
           ? await claudeRuntimeHome.install()

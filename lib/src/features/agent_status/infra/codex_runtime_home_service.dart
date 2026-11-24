@@ -98,8 +98,16 @@ final class CodexRuntimeHomeService({
     );
   }
 
-  Future<ManagedAgentHookInstallStatus> status() async {
+  Future<ManagedAgentHookInstallStatus> status({
+    bool hostManaged = false,
+  }) async {
     final descriptor = await _descriptor();
+    final scriptPath = hostManaged
+        ? p.join(
+            p.dirname(descriptor.scriptPath),
+            'alera-runtime-agent-hook.${_platform == ManagedAgentHookPlatform.windows ? 'cmd' : 'sh'}',
+          )
+        : descriptor.scriptPath;
     final config = _readJsonObject(descriptor.configPath);
     if (config == null) {
       return ManagedAgentHookInstallStatus(
@@ -118,7 +126,9 @@ final class CodexRuntimeHomeService({
     final trustMissing = <String>[];
     final disabled = <String>[];
     for (final eventName in _codexEvents) {
-      final command = _managedCommand(descriptor.scriptPath, eventName);
+      final command = hostManaged && _platform == ManagedAgentHookPlatform.posix
+          ? "ALERA_AGENT_TYPE='codex' ALERA_AGENT_HOOK_EVENT=${_shQuote(eventName)} /bin/sh ${_shQuote(scriptPath)}"
+          : _managedCommand(scriptPath, eventName);
       final definitions = _definitionsFromValue(hooks[eventName]);
       var foundGroupIndex = -1;
       var foundHandlerIndex = -1;
@@ -159,12 +169,18 @@ final class CodexRuntimeHomeService({
     if (presentCount == 0) {
       return ManagedAgentHookInstallStatus(
         agentType: .codex,
-        state: .notInstalled,
+        state: hostManaged ? .partial : .notInstalled,
         configPath: descriptor.configPath,
         managedHooksPresent: false,
+        detail: hostManaged
+            ? 'Waiting for the Rust Host to reconcile Codex native hooks.'
+            : null,
       );
     }
-    if (missing.isEmpty && trustMissing.isEmpty && disabled.isEmpty) {
+    if (missing.isEmpty &&
+        trustMissing.isEmpty &&
+        disabled.isEmpty &&
+        (!hostManaged || File(scriptPath).existsSync())) {
       return ManagedAgentHookInstallStatus(
         agentType: .codex,
         state: .installed,
@@ -173,6 +189,8 @@ final class CodexRuntimeHomeService({
       );
     }
     final details = <String>[
+      if (hostManaged && !File(scriptPath).existsSync())
+        'Rust Host managed hook script is missing.',
       if (missing.isNotEmpty)
         'Managed hook missing for events: ${missing.join(', ')}.',
       if (trustMissing.isNotEmpty)
@@ -357,9 +375,7 @@ final class CodexRuntimeHomeService({
   Future<_CodexRuntimeHookDescriptor> _descriptor({
     Directory? runtimeHome,
   }) async {
-    final runtime =
-        runtimeHome ??
-        (Directory(_systemHomePath)..createSync(recursive: true));
+    final runtime = runtimeHome ?? Directory(_systemHomePath);
     final extension = switch (_platform) {
       ManagedAgentHookPlatform.posix => 'sh',
       ManagedAgentHookPlatform.windows => 'cmd',

@@ -43,6 +43,28 @@ fn completed_claude_and_codex_hooks_capture_native_final_assistant_text() {
 }
 
 #[test]
+fn native_stop_aliases_preserve_final_reply() {
+    for agent in ["codex", "claude"] {
+        for event_name in ["stop", "STOP", "Stop"] {
+            let status = normalize_hook_event(
+                &event(
+                    agent,
+                    event_name,
+                    json!({"last_agent_message":"native report"}),
+                ),
+                None,
+            )
+            .unwrap();
+            assert_eq!(status.state, AgentPresenceState::Done);
+            assert_eq!(
+                status.last_assistant_message.as_deref(),
+                Some("native report")
+            );
+        }
+    }
+}
+
+#[test]
 fn a_stop_message_is_not_mistaken_for_a_new_user_objective() {
     let previous = AgentPresence {
         agent_type: "claude".into(),

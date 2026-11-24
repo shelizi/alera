@@ -152,6 +152,7 @@ AgentHookReconciler agentHookReconciliationService(Ref ref) {
     managedHooks: ref.watch(managedAgentHookInstallServiceProvider),
     codexRuntimeHome: ref.watch(codexRuntimeHomeServiceProvider),
     claudeRuntimeHome: ref.watch(claudeRuntimeHomeServiceProvider),
+    hostOwnsCodexHooks: true,
   );
 }
 

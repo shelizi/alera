@@ -204,7 +204,11 @@ class AgentContextOverview {
       }
     }
     final report = _reportExcerpt(assistant, 420);
-    if (report.isNotEmpty && previousAssistant?.trim() != assistant?.trim()) {
+    // The status field may already contain the assistant's text from a
+    // working-state event; only the completed report is a dedupe baseline.
+    if (report.isNotEmpty &&
+        (progress != report ||
+            previousAssistant?.trim() != assistant?.trim())) {
       final recentReports = timeline.where((event) => event.kind == 'report');
       final latest = recentReports.isEmpty ? null : recentReports.first.at;
       // A delayed Hook must never replace a newer status already displayed.

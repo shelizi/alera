@@ -2,22 +2,63 @@ import 'package:alera/src/features/agent_status/domain/agent_context_overview.da
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('AI summary never overwrites original report and resets on fresh report', () {
-    final previous = AgentContextOverview.fromRaw(<String, Object?>{
-      'progress': 'Original detailed response',
-      'reportSummary': 'Short summary',
-    });
-    expect(previous.displayProgress, 'Short summary');
-    expect(previous.progress, 'Original detailed response');
-    expect(AgentContextOverview.fromRaw(previous.toJson()).displayProgress, 'Short summary');
-    final next = AgentContextOverview.observe(
-      previous: previous, previousPrompt: null,
-      previousAssistant: previous.progress, prompt: '',
-      assistant: 'New raw report', at: DateTime.utc(2026, 11, 24),
+  test('records completed report even when working status already had the same text', () {
+    final at = DateTime.utc(2026, 11, 24);
+    final working = AgentContextOverview.observe(
+      previous: const AgentContextOverview(),
+      previousPrompt: null,
+      previousAssistant: null,
+      prompt: 'Fix native hook',
+      assistant: null,
+      at: at,
     );
-    expect(next.displayProgress, 'New raw report');
-    expect(next.reportSummary, isEmpty);
+    final completed = AgentContextOverview.observe(
+      previous: working,
+      previousPrompt: 'Fix native hook',
+      previousAssistant: 'Raw report',
+      prompt: 'Fix native hook',
+      assistant: 'Raw report',
+      at: at.add(const Duration(seconds: 1)),
+    );
+    expect(completed.progress, 'Raw report');
+    expect(completed.reportSummary, isEmpty);
+    expect(completed.timeline.first.kind, 'report');
+    final duplicate = AgentContextOverview.observe(
+      previous: completed,
+      previousPrompt: 'Fix native hook',
+      previousAssistant: 'Raw report',
+      prompt: 'Fix native hook',
+      assistant: 'Raw report',
+      at: at.add(const Duration(seconds: 2)),
+    );
+    expect(duplicate.toJson(), completed.toJson());
   });
+
+  test(
+    'AI summary never overwrites original report and resets on fresh report',
+    () {
+      final previous = AgentContextOverview.fromRaw(<String, Object?>{
+        'progress': 'Original detailed response',
+        'reportSummary': 'Short summary',
+      });
+      expect(previous.displayProgress, 'Short summary');
+      expect(previous.progress, 'Original detailed response');
+      expect(
+        AgentContextOverview.fromRaw(previous.toJson()).displayProgress,
+        'Short summary',
+      );
+      final next = AgentContextOverview.observe(
+        previous: previous,
+        previousPrompt: null,
+        previousAssistant: previous.progress,
+        prompt: '',
+        assistant: 'New raw report',
+        at: DateTime.utc(2026, 11, 24),
+      );
+      expect(next.displayProgress, 'New raw report');
+      expect(next.reportSummary, isEmpty);
+    },
+  );
   test(
     'keeps the overall objective when a later user prompt narrows the task',
     () {

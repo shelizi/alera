@@ -62,6 +62,8 @@ async fn handle_hook(
     request: Request<Body>,
 ) -> StatusCode {
     if !http_hook_supported(&agent) || !valid_token(request.headers(), &state.token) {
+        // Never log the token, provider-supplied payload or arbitrary route.
+        tracing::debug!("Agent Hook receiver rejected an unsupported or unauthorized request");
         return StatusCode::FORBIDDEN;
     }
     let content_type = request
@@ -72,12 +74,25 @@ async fn handle_hook(
         .to_string();
     let body = match to_bytes(request.into_body(), REQUEST_MAX_BYTES).await {
         Ok(body) => body,
-        Err(_) => return StatusCode::NO_CONTENT,
+        Err(_) => {
+            tracing::debug!(provider = %agent, "Agent Hook body unreadable or too large");
+            return StatusCode::PAYLOAD_TOO_LARGE;
+        }
     };
     let Some(event) = parse_hook_event(&agent, &content_type, &body) else {
-        return StatusCode::NO_CONTENT;
+        tracing::debug!(provider = %agent, "Agent Hook envelope or payload invalid");
+        return StatusCode::BAD_REQUEST;
     };
-    let _ = state.inbox.send(ServerCommand::AgentHookEvent { event });
+    if state
+        .inbox
+        .send(ServerCommand::AgentHookEvent { event })
+        .is_err()
+    {
+        tracing::warn!(provider = %agent, "Agent Hook could not reach Host actor");
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    // 204 means accepted by the actor queue, not that the session identity
+    // passed its downstream validation or that a report was present.
     StatusCode::NO_CONTENT
 }
 
@@ -171,7 +186,57 @@ fn write_endpoint_file(runtime_dir: &Path, port: u16, token: &str) -> anyhow::Re
 
 #[cfg(test)]
 mod tests {
-    use super::http_hook_supported;
+    use super::*;
+
+    #[tokio::test]
+    async fn native_hook_ack_distinguishes_rejected_body_and_closed_actor() {
+        let (inbox, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let state = HookState {
+            token: "synthetic-test-token".into(),
+            inbox,
+        };
+        let request = |body: Body| {
+            Request::builder()
+                .header(TOKEN_HEADER, "synthetic-test-token")
+                .header("Content-Type", "application/json")
+                .body(body)
+                .unwrap()
+        };
+        let valid = r#"{"terminalSessionId":"test","workspaceId":"workspace","tabId":"tab","hookEventName":"Stop","payload":{"last_agent_message":"test report"}}"#;
+        assert_eq!(
+            handle_hook(
+                AxumPath("codex".into()),
+                State(state.clone()),
+                request(Body::from("{invalid"))
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            handle_hook(
+                AxumPath("codex".into()),
+                State(state.clone()),
+                request(Body::from(valid))
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            ServerCommand::AgentHookEvent { .. }
+        ));
+        drop(receiver);
+        assert_eq!(
+            handle_hook(
+                AxumPath("codex".into()),
+                State(state),
+                request(Body::from(valid))
+            )
+            .await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 
     #[test]
     fn http_hook_support_uses_canonical_http_strategies() {

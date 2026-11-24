@@ -207,7 +207,13 @@ void main() {
         final disabledClient = _FakeTerminalHostClient();
         final disabledContainer = ProviderContainer(
           overrides: [
-            settingsControllerProvider.overrideWithValue(.defaults),
+            settingsControllerProvider.overrideWithValue(
+              AleraSettings.defaults.copyWith(
+                terminal: AleraSettings.defaults.terminal.copyWith(
+                  showCodeBlockCopyButton: false,
+                ),
+              ),
+            ),
             terminalHostClientProvider.overrideWithValue(disabledClient),
             externalUriLauncherProvider.overrideWithValue(
               _FakeExternalUriLauncher(),
@@ -226,7 +232,12 @@ void main() {
         );
         disabledRuntime.dispose();
 
+        // Claude's local code-copy Hook is a separate feature. This test
+        // specifically exercises the native Host-owned status environment.
         final settings = AleraSettings.defaults.copyWith(
+          terminal: AleraSettings.defaults.terminal.copyWith(
+            showCodeBlockCopyButton: false,
+          ),
           agents: AleraSettings.defaults.agents.copyWith(
             agentStatusHooks: const AgentStatusHookSettings(
               values: {'copilot': true},
@@ -690,7 +701,7 @@ void main() {
       },
     );
 
-    test('agent hook installer coordinator reconciles runtime hooks', () async {
+    test('Classic reconciles legacy hooks without rewriting Host-owned Codex hooks', () async {
       final root = await Directory.systemTemp.createTemp(
         'alera-provider-hook-install-',
       );
@@ -728,6 +739,16 @@ void main() {
           ),
         ),
       );
+      // Simulate a native Hook file already owned by the Rust Host. Classic
+      // toggles must leave both that file and its trust configuration alone.
+      final codexHooks = File(p.join(home.path, '.codex', 'hooks.json'));
+      final codexToml = File(p.join(home.path, '.codex', 'config.toml'));
+      codexHooks.parent.createSync(recursive: true);
+      const hostHooks =
+          '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"alera-runtime-agent-hook.sh"}]}]}}';
+      const hostToml = '[features]\nhooks = true\n';
+      codexHooks.writeAsStringSync(hostHooks);
+      codexToml.writeAsStringSync(hostToml);
       final container = ProviderContainer(
         overrides: [
           settingsControllerProvider.overrideWith(() => settingsController),
@@ -740,7 +761,8 @@ void main() {
       );
       addTearDown(container.dispose);
 
-      container.read(agentHookInstallerCoordinatorProvider);
+      container.read(settingsControllerProvider);
+      final reconciler = container.read(agentHookReconciliationServiceProvider);
       settingsController.setState(
         settingsController.state.copyWith(
           agents: settingsController.state.agents.copyWith(
@@ -750,8 +772,9 @@ void main() {
           ),
         ),
       );
-      await Future.pause(.zero);
-      await Future.pause(.zero);
+      await reconciler.reconcile(
+        settingsController.state.agents.agentStatusHooks,
+      );
 
       expect(
         File(p.join(home.path, '.alera', 'agent-hooks', 'alera-agy-hook.sh'))
@@ -761,8 +784,10 @@ void main() {
       expect(
         File(p.join(home.path, '.alera', 'agent-hooks', 'alera-codex-hook.sh'))
             .existsSync(),
-        isTrue,
+        isFalse,
       );
+      expect(codexHooks.readAsStringSync(), hostHooks);
+      expect(codexToml.readAsStringSync(), hostToml);
       expect(
         File(p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.sh'))
             .existsSync(),
@@ -776,13 +801,16 @@ void main() {
           ),
         ),
       );
-      await Future.pause(.zero);
-      await Future.pause(.zero);
+      await reconciler.reconcile(
+        settingsController.state.agents.agentStatusHooks,
+      );
 
       expect(
         (await codexRuntimeHome.status()).state,
         ManagedAgentHookInstallState.notInstalled,
       );
+      expect(codexHooks.readAsStringSync(), hostHooks);
+      expect(codexToml.readAsStringSync(), hostToml);
       expect(
         (await claudeRuntimeHome.status()).state,
         ManagedAgentHookInstallState.notInstalled,

@@ -173,8 +173,12 @@ impl AgentContextOverview {
         }
         if let Some(message) = assistant {
             let report = report_excerpt(message, PROGRESS_LIMIT);
+            // Some providers emit assistant text in a working-state event
+            // before the completion Hook. That status field is not proof
+            // that Agent Context has already recorded the completed report.
             if !report.is_empty()
-                && previous_assistant.is_none_or(|old| old.trim() != message.trim())
+                && (next.progress != report
+                    || previous_assistant.is_none_or(|old| old.trim() != message.trim()))
             {
                 let newest_report = next
                     .timeline
@@ -307,6 +311,32 @@ mod tests {
             at,
         );
         assert_eq!(same, next);
+    }
+
+    #[test]
+    fn completed_report_is_not_deduped_against_working_status_text() {
+        let at = Utc::now();
+        let working = AgentContextOverview::observe(None, None, None, "Fix Hook", None, at);
+        let completed = AgentContextOverview::observe(
+            Some(&working),
+            Some("Fix Hook"),
+            Some("Raw final report"),
+            "Fix Hook",
+            Some("Raw final report"),
+            at + chrono::Duration::seconds(1),
+        );
+        assert_eq!(completed.progress, "Raw final report");
+        assert_eq!(completed.timeline[0].kind, "report");
+        assert!(completed.report_summary.is_none());
+        let duplicate = AgentContextOverview::observe(
+            Some(&completed),
+            Some("Fix Hook"),
+            Some("Raw final report"),
+            "Fix Hook",
+            Some("Raw final report"),
+            at + chrono::Duration::seconds(2),
+        );
+        assert_eq!(duplicate, completed);
     }
 
     #[test]

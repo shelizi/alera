@@ -11,6 +11,7 @@ use super::{agent_hook_settings::AgentHookSettingsQuery, ServerActor};
 impl ServerActor {
     pub(super) async fn handle_agent_hook_event(&mut self, mut event: AgentHookEvent) {
         let Some(session) = self.sessions.get(&event.terminal_session_id) else {
+            tracing::debug!(provider = %event.agent_type, reason = "unknown_session", "Agent Hook ignored");
             return;
         };
         let display_workspace_id = session.workspace_id.clone();
@@ -20,6 +21,7 @@ impl ServerActor {
             event.tab_id = tab_id.clone();
         }
         if tab_id != event.tab_id {
+            tracing::debug!(provider = %event.agent_type, reason = "tab_mismatch", "Agent Hook ignored");
             return;
         }
         if display_workspace_id != event.workspace_id {
@@ -39,6 +41,7 @@ impl ServerActor {
                         .map(str::to_owned)
                 });
             if recorded_origin.as_deref() != Some(event.workspace_id.as_str()) {
+                tracing::debug!(provider = %event.agent_type, reason = "workspace_mismatch", "Agent Hook ignored");
                 return;
             }
         }
@@ -67,6 +70,7 @@ impl ServerActor {
             return;
         };
         if !settings.is_enabled(&event.agent_type) && !pending_prompt {
+            tracing::debug!(provider = %event.agent_type, reason = "hook_disabled", "Agent Hook ignored");
             return;
         }
         let now = chrono::Utc::now();
@@ -112,6 +116,7 @@ impl ServerActor {
         }
         let previous = self.agent_presence.get(&event.terminal_session_id);
         let Some(mut normalized) = normalize_hook_event(&event, previous) else {
+            tracing::debug!(provider = %event.agent_type, reason = "unsupported_event", "Agent Hook ignored");
             return;
         };
         // Native Claude/Codex Stop hooks can omit the final model message.
@@ -120,12 +125,30 @@ impl ServerActor {
         // and native UUID; never trust a caller-supplied arbitrary path.
         let fresh_report =
             normalize_hook_event(&event, None).and_then(|value| value.last_assistant_message);
-        if fresh_report.is_none() {
+        if fresh_report.is_none()
+            && normalized.state == AgentPresenceState::Done
+            && normalized.interrupted != Some(true)
+            && matches!(event.agent_type.as_str(), "claude" | "codex")
+            && event
+                .event_name
+                .as_deref()
+                .or_else(|| event.payload["hook_event_name"].as_str())
+                .or_else(|| event.payload["hookEventName"].as_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("Stop"))
+        {
             if let Some(report) =
                 super::agent_context_transcript::completed_hook_report(&self.runtime_store, &event)
                     .await
             {
                 normalized.last_assistant_message = Some(report);
+                tracing::debug!(provider = %event.agent_type, "Agent Hook report recovered from verified native transcript");
+            } else {
+                tracing::warn!(
+                    provider = %event.agent_type,
+                    has_native_id = event.payload["session_id"].is_string(),
+                    has_transcript_path = event.payload["transcript_path"].is_string(),
+                    "Agent Stop Hook had no final reply and no verified transcript report; keeping last report"
+                );
             }
         }
         let identity = resolve_agent_status_identity(
@@ -136,18 +159,24 @@ impl ServerActor {
             AGENT_STATUS_IDENTITY_STALE_THRESHOLD,
         );
         if identity.should_ignore_event {
+            tracing::debug!(provider = %event.agent_type, reason = "stale_provider_identity", "Agent Hook ignored");
             return;
         }
         let state_started_at = previous
             .filter(|entry| entry.state == normalized.state)
             .map(|entry| entry.state_started_at)
             .unwrap_or(now);
-        let report_changed = identity.effective_agent_type == event.agent_type
+        let previous_report = previous.and_then(|entry| {
+            entry
+                .context
+                .timeline
+                .iter()
+                .find(|event| event.kind == "report")
+                .cloned()
+        });
+        let completed = identity.effective_agent_type == event.agent_type
             && normalized.state == AgentPresenceState::Done
-            && normalized.interrupted != Some(true)
-            && normalized.last_assistant_message.as_deref().is_some_and(|message| {
-                !message.trim().is_empty() && previous.and_then(|entry| entry.last_assistant_message.as_deref()) != Some(message)
-            });
+            && normalized.interrupted != Some(true);
         let _ = self
             .orchestration_agent_status(&json!({
                 "entries": [{
@@ -166,8 +195,20 @@ impl ServerActor {
                 }],
             }))
             .await;
-        if report_changed {
-            self.queue_agent_report(&event).await;
+        if completed {
+            let current_report = self
+                .agent_presence
+                .get(&event.terminal_session_id)
+                .and_then(|entry| {
+                    entry
+                        .context
+                        .timeline
+                        .iter()
+                        .find(|event| event.kind == "report")
+                });
+            if current_report.is_some() && current_report != previous_report.as_ref() {
+                self.queue_agent_report(&event).await;
+            }
         }
         self.deliver_pending_agent_prompt(&event.terminal_session_id)
             .await;
@@ -217,6 +258,14 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(
+            !actor
+                .runtime_store
+                .effective_ai_assist_settings()
+                .await
+                .unwrap()
+                .auto_summarize_agent_reports
+        );
         let mut first = native_hook("UserPromptSubmit");
         first.payload["prompt"] = json!("完成 GPUI 設定頁與 Classic 對齊");
         actor.handle_agent_hook_event(first).await;
@@ -252,6 +301,8 @@ mod tests {
             .timeline
             .iter()
             .any(|event| event.text.contains("SECRET TOOL")));
+        assert!(current.context.report_summary.is_none());
+        assert!(actor.agent_report_jobs.is_empty());
         let saved = current.context.clone();
         actor.handle_agent_hook_event(native_hook("Stop")).await;
         assert_eq!(

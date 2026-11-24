@@ -195,6 +195,25 @@ fn normalized_event_name(event: &AgentHookEvent) -> Option<String> {
             .to_string(),
         );
     }
+    if matches!(event.agent_type.as_str(), "claude" | "codex") {
+        let compact = raw.to_ascii_lowercase();
+        return Some(
+            match compact.as_str() {
+                "sessionstart" | "session_start" => "SessionStart",
+                "sessionend" | "session_end" => "SessionEnd",
+                "userpromptsubmit" | "user_prompt_submit" => "UserPromptSubmit",
+                "pretooluse" | "pre_tool_use" => "PreToolUse",
+                "posttooluse" | "post_tool_use" => "PostToolUse",
+                "posttoolusefailure" | "post_tool_use_failure" => "PostToolUseFailure",
+                "permissionrequest" | "permission_request" => "PermissionRequest",
+                "stop" => "Stop",
+                "stopfailure" | "stop_failure" => "StopFailure",
+                "interrupt" => "Interrupt",
+                _ => return Some(raw),
+            }
+            .to_string(),
+        );
+    }
     if event.agent_type == "grok" {
         let compact = raw
             .chars()

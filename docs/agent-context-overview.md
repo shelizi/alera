@@ -81,3 +81,41 @@ Classic Settings > AI Assist > Agent Work Reports configures the opt-in automati
 - GPUI native Context parser: 3/3 passed, including goal + two model reports; status-only stream boolean privacy/schema regression passed; GPUI and Host production-source compile checks passed.
 - Native sidecar redaction regression passed: sensitive prompt, tool input, reply and Context text never cross the status-only stream.
 - Still pending: physical Windows GUI click-through, true provider-version compatibility and history backfill after Host restart. This is Hook-derived model-reply excerpts, **not** a separate semantic AI summarizer or durable long-term context store.
+
+## 2026-11-24 native Hook report repair
+
+- Live inspection before the repair: the Classic runtime Host exposed no
+  contextOverview field, and two Codex sessions marked Done had no final
+  assistant message. Both Hook endpoint listeners were alive and the Stop
+  definitions existed. The registered Codex script was the older Classic
+  alera-codex-hook.cmd, while the Host uses alera-runtime-agent-hook.cmd.
+  This establishes the stale-host/data gap and a competing installer path;
+  it does not by itself prove the cause of every missing provider reply.
+- In production Classic, Codex reconciliation is now read-only. The Rust
+  Host owns the native CODEX_HOME integration on startup, settings changes,
+  and terminal launch. Legacy explicit installers remain available for
+  compatibility tests. Turning off a Host's Hook processing must not erase
+  another Host profile's shared Codex configuration.
+- Completed-report deduplication compares the recorded Context, not only
+  the lastAssistantMessage status field. A working-state text event can
+  precede completion without losing the final report. Native Claude/Codex
+  event aliases and camel-case transcript metadata are accepted.
+- HTTP 204 now means the authenticated, parsed envelope entered the Host
+  actor queue. Invalid body/envelope returns 413/400, unavailable actor
+  returns 503, and invalid authorization returns 403. Actor diagnostics
+  distinguish unknown session, tab/workspace mismatch, disabled Hooks,
+  unsupported events, stale provider identity and missing Stop replies.
+  Logs contain no prompt, report, transcript path, or authentication token.
+- AI Assist auto summaries stay opt-in and disabled by default. Raw native
+  Hook reports are independently tested with summaries disabled.
+
+Validation on the isolated Windows worktree: 73/73 Flutter regressions
+passed, including the actual managed Windows Codex Hook script, and
+36/36 Rust regressions passed, including authenticated HTTP Hook delivery,
+raw report generation with AI summaries disabled, verified transcript
+fallback, and completion retry behavior.
+
+Deployment requires rebuilding both the Host and Classic UI. No live
+provider hooks or runtime settings were rewritten during this investigation;
+existing Agent processes remain undisturbed. Verify with fresh Codex and
+Claude turns on the updated Host before marking production recovery complete.
