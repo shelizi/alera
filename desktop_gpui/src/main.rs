@@ -137,7 +137,7 @@ use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
-use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs};
+use alera_gpui_desktop::sidebar_manual_order::{order_project_groups, SidebarOrderPrefs, SidebarSortContext};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_cell_metrics, raw_key_reply_may_drain,
     resolve_registered_host_workspace_path, select_registered_host_workspace,
@@ -173,7 +173,7 @@ use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_sidebar_order::{
-    order_worktree_rows_with_manual, visible_worktree_rows,
+    order_worktree_rows_sorted, visible_worktree_rows,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
@@ -907,6 +907,7 @@ struct Workbench {
     runtime_catalog: Option<RuntimeCatalog>,
     sidebar_order_prefs: Option<SidebarOrderPrefs>,
     sidebar_order_busy: bool,
+    sidebar_sort_error: Option<String>,
     sidebar_reorder_hold: Arc<Mutex<SidebarReorderHoldGate>>,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
@@ -1531,7 +1532,9 @@ impl Workbench {
                         view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
                     }
                 }
-                view.sidebar_order_prefs = order_result.and_then(Result::ok);
+                if let Some(Ok(prefs)) = order_result {
+                    view.accept_sidebar_order_prefs(prefs);
+                }
                 order_project_groups(
                     &mut groups,
                     view.runtime_catalog.as_ref(),
@@ -12844,15 +12847,27 @@ impl Render for Workbench {
             .collect();
         let sidebar_filters = &self.sidebar_view_options;
         let sidebar_filtered = sidebar_filters.is_filtered();
+        let sidebar_sort_active = self.sidebar_order_prefs.as_ref().is_some_and(|prefs|
+            prefs.project_sort != "name" || prefs.workspace_sort != "name");
+        let sidebar_sort = if self.sidebar_order_prefs.as_ref().is_some_and(|prefs|
+            [&prefs.project_sort, &prefs.workspace_sort].iter().any(|mode|
+                matches!(mode.as_str(), "recent" | "activity"))) {
+            SidebarSortContext::new(
+                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref(),
+                &self.terminals.sessions, !self.terminals.session_list_is_stale(),
+                chrono::Utc::now().timestamp_millis(),
+            )
+        } else {
+            SidebarSortContext::default()
+        };
         let sidebar_git_project = self.project_tree_groups.iter()
             .find(|group| group.is_active && !group.worktrees.is_empty())
             .map(|group| group.root.clone());
         let sidebar_has_git_projects = self.project_tree_groups.iter()
             .any(|group| !group.worktrees.is_empty());
-        let project_tree_rows: Vec<_> = self
+        let mut project_tree_rows: Vec<_> = self
             .project_tree_groups
             .iter()
-            .take(45)
             .enumerate()
             .filter(|(_, group)| {
                 sidebar_filters.project_roots.is_empty() || sidebar_filters.project_roots.contains(&group.root)
@@ -12872,10 +12887,12 @@ impl Render for Workbench {
                 if entries.is_empty() && (sidebar_filtered || !show_all) {
                     return None;
                 }
-                let rows = order_worktree_rows_with_manual(
-                    &entries, catalog, self.sidebar_order_prefs.as_ref()
-                        .filter(|prefs| prefs.workspace_is_manual())
+                let order = self.sidebar_order_prefs.as_ref();
+                let rows = order_worktree_rows_sorted(
+                    &entries, catalog, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
+                    order.filter(|prefs| prefs.workspace_is_manual())
                         .map(|prefs| prefs.workspace_order.as_slice()),
+                    &sidebar_sort,
                 );
                 // Searching temporarily expands matching descendants without
                 // modifying the user's persisted collapse preference.
@@ -12884,6 +12901,11 @@ impl Render for Workbench {
                 Some((index, group.clone(), collapsed, rows))
             })
             .collect();
+        project_tree_rows.sort_by_cached_key(|(_, group, _, rows)| {
+            sidebar_sort.project_key(group, rows.iter().map(|row| row.entry.path.as_path()),
+                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref())
+        });
+        project_tree_rows.truncate(45);
         let sidebar_visible_workspace_count: usize = project_tree_rows.iter().map(|(_, _, _, rows)| rows.len()).sum();
         let sidebar_all_projects_collapsed = !project_tree_rows.is_empty()
             && project_tree_rows.iter().all(|(_, _, collapsed, _)| *collapsed);
@@ -17538,7 +17560,7 @@ impl Render for Workbench {
                                         .disabled(self.sidebar_forward.is_empty())
                                         .on_click(cx.listener(|view, _, _, cx| view.navigate_sidebar_history(true, cx))))
                                     .child(icon_button("projects-view-options", UiIcon::Sliders,
-                                        "View Options", sidebar_filtered)
+                                        "View Options", sidebar_filtered || sidebar_sort_active)
                                         .on_click(cx.listener(|view, _, window, cx| {
                                             view.open_sidebar_view_options(window, cx);
                                         })))
@@ -19217,6 +19239,7 @@ fn main() {
                             runtime_catalog: None,
                             sidebar_order_prefs: None,
                             sidebar_order_busy: false,
+                            sidebar_sort_error: None,
                             sidebar_reorder_hold: Arc::new(Mutex::new(SidebarReorderHoldGate::default())),
                             runtime_catalog_error: None,
                             project_settings_project_id: None,

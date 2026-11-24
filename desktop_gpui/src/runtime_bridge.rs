@@ -830,6 +830,28 @@ impl RuntimeCliBridge {
         SidebarOrderPrefs::from_json(&response)
     }
 
+    pub fn set_sidebar_sort(&self, kind: &str, mode: &str) -> io::Result<SidebarOrderPrefs> {
+        if !matches!(kind, "project" | "workspace")
+            || !matches!(mode, "name" | "recent" | "activity" | "manual")
+        {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid sidebar sort"));
+        }
+        let response = self.desktop_settings_command(&[
+            OsString::from("sidebar-sort-set"),
+            OsString::from("--kind"),
+            OsString::from(kind),
+            OsString::from("--mode"),
+            OsString::from(mode),
+        ])?;
+        let prefs = SidebarOrderPrefs::from_json(&response)?;
+        if (kind == "project" && prefs.project_sort != mode)
+            || (kind == "workspace" && prefs.workspace_sort != mode)
+        {
+            return Err(io::Error::new(ErrorKind::InvalidData, "Sidebar sort was not confirmed"));
+        }
+        Ok(prefs)
+    }
+
     pub fn move_sidebar_order(
         &self,
         kind: &str,
@@ -2108,7 +2130,7 @@ fn validate_desktop_settings_cas_readback(
 
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
-        Some("sidebar-order-get" | "sidebar-order-move") => {
+        Some("sidebar-order-get" | "sidebar-order-move" | "sidebar-sort-set") => {
             SidebarOrderPrefs::from_json(response).is_ok()
         }
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),

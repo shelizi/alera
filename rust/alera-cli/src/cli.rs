@@ -532,6 +532,13 @@ pub enum DesktopSettingsAction {
     Get,
     /// Read only the two sidebar sort modes and their stable ID order.
     SidebarOrderGet,
+    /// Update one sidebar sort mode in the shared Host preferences.
+    SidebarSortSet {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        mode: String,
+    },
     /// Rearrange one registered sidebar entry in shared Host prefs.
     SidebarOrderMove {
         #[arg(long)]

@@ -2,9 +2,12 @@
 //! Pure parsing/projection only: Native never saves a duplicate local order.
 use crate::project_tree::ProjectTreeGroup;
 use crate::runtime_catalog::RuntimeCatalog;
+use crate::terminal::{AgentActivityState, TerminalSession};
 use serde_json::Value;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, ErrorKind};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// A drag can only start after a stationary 500ms press on the visible grip.
@@ -67,7 +70,15 @@ pub struct SidebarOrderPrefs {
     pub workspace_sort: String,
     pub project_order: Vec<String>,
     pub workspace_order: Vec<String>,
+    pub workspace_activity_ms: HashMap<String, i64>,
 }
+
+pub const SIDEBAR_SORT_CHOICES: [(&str, &str); 4] = [
+    ("name", "Name"),
+    ("recent", "Recent"),
+    ("activity", "Agent Activity"),
+    ("manual", "Manual"),
+];
 
 impl SidebarOrderPrefs {
     /// Show the Project grip only when Project sort is explicitly Manual.
@@ -142,7 +153,177 @@ impl SidebarOrderPrefs {
             workspace_sort: sort_mode("workspaceSort")?,
             project_order: ids("projectOrder")?,
             workspace_order: ids("workspaceOrder")?,
+            workspace_activity_ms: value["workspaceActivity"]
+                .as_object()
+                .into_iter()
+                .flat_map(|entries| entries.iter().take(512))
+                .filter_map(|(id, at)| {
+                    if id.is_empty() || id.len() > 128 || id.chars().any(char::is_control) {
+                        return None;
+                    }
+                    let at = chrono::DateTime::parse_from_rfc3339(at.as_str()?).ok()?;
+                    Some((id.clone(), at.timestamp_millis()))
+                })
+                .collect(),
         })
+    }
+}
+
+/// Classic urgency: needs input/interrupted, done, working, idle, no terminal.
+pub type SidebarActivityRank = (u8, Reverse<i64>);
+pub const NO_ACTIVITY: SidebarActivityRank = (4, Reverse(i64::MIN));
+const STALE_AGENT_MS: i64 = 30 * 60 * 1000;
+
+/// Build one read-only rank snapshot per sidebar projection. Missing or stale
+/// Host data cannot make an agent look busy. No Git or IPC work happens here.
+#[derive(Default)]
+pub struct SidebarSortContext {
+    recent: HashMap<String, i64>,
+    activity: HashMap<String, SidebarActivityRank>,
+    ids_by_path: HashMap<PathBuf, String>,
+}
+
+impl SidebarSortContext {
+    pub fn new(
+        catalog: Option<&RuntimeCatalog>,
+        prefs: Option<&SidebarOrderPrefs>,
+        sessions: &[TerminalSession],
+        inventory_current: bool,
+        now_ms: i64,
+    ) -> Self {
+        let Some(catalog) = catalog else {
+            return Self::default();
+        };
+        let mut result = Self {
+            recent: catalog.workspace_updated_ms.clone(),
+            ids_by_path: catalog
+                .workspaces
+                .iter()
+                .map(|ws| (ws.path.clone(), ws.id.clone()))
+                .collect(),
+            ..Self::default()
+        };
+        if let Some(prefs) = prefs {
+            for (id, at) in &prefs.workspace_activity_ms {
+                result
+                    .recent
+                    .entry(id.clone())
+                    .and_modify(|current| *current = (*current).max(*at))
+                    .or_insert(*at);
+            }
+        }
+        if inventory_current {
+            for session in sessions.iter().filter(|session| session.running) {
+                let parse = |value: Option<&str>| {
+                    value
+                        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                        .map(|at| at.timestamp_millis())
+                };
+                let updated = parse(session.agent_updated_at.as_deref());
+                if let Some(at) = updated {
+                    result
+                        .recent
+                        .entry(session.workspace_id.clone())
+                        .and_modify(|current| *current = (*current).max(at))
+                        .or_insert(at);
+                }
+            }
+            for session in sessions.iter().filter(|session| session.running) {
+                let parse = |value: Option<&str>| {
+                    value
+                        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+                        .map(|at| at.timestamp_millis())
+                };
+                let updated = parse(session.agent_updated_at.as_deref());
+                let fresh = updated.is_some_and(|at| now_ms.saturating_sub(at) <= STALE_AGENT_MS);
+                let class = if fresh && session.agent_type.is_some() {
+                    match (session.interrupted, session.agent_state) {
+                        (true, Some(_))
+                        | (_, Some(AgentActivityState::Blocked | AgentActivityState::Waiting)) => 0,
+                        (_, Some(AgentActivityState::Done)) => 1,
+                        (_, Some(AgentActivityState::Working)) => 2,
+                        _ => 3,
+                    }
+                } else {
+                    3
+                };
+                let at = if class < 3 {
+                    parse(session.agent_state_started_at.as_deref())
+                        .or(updated)
+                        .unwrap_or_else(|| result.recent_for_id(&session.workspace_id))
+                } else {
+                    result.recent_for_id(&session.workspace_id)
+                };
+                let rank = (class, Reverse(at));
+                result
+                    .activity
+                    .entry(session.workspace_id.clone())
+                    .and_modify(|old| *old = (*old).min(rank))
+                    .or_insert(rank);
+            }
+        }
+        result
+    }
+
+    fn recent_for_id(&self, id: &str) -> i64 {
+        self.recent.get(id).copied().unwrap_or(i64::MIN)
+    }
+
+    pub fn recent_for_path(&self, path: &Path) -> i64 {
+        self.ids_by_path
+            .get(path)
+            .map_or(i64::MIN, |id| self.recent_for_id(id))
+    }
+
+    pub fn activity_for_path(&self, path: &Path) -> SidebarActivityRank {
+        self.ids_by_path
+            .get(path)
+            .and_then(|id| self.activity.get(id))
+            .copied()
+            .unwrap_or(NO_ACTIVITY)
+    }
+
+    /// Project recency and urgency aggregate only the visible workspace rows.
+    pub fn project_key<'a>(
+        &self,
+        group: &ProjectTreeGroup,
+        paths: impl Iterator<Item = &'a Path>,
+        catalog: Option<&RuntimeCatalog>,
+        prefs: Option<&SidebarOrderPrefs>,
+    ) -> (usize, u8, Reverse<i64>, String, PathBuf) {
+        let project = catalog.and_then(|cat| cat.projects.iter().find(|p| p.root == group.root));
+        let name = project
+            .map_or(group.label.as_str(), |p| p.name.as_str())
+            .to_lowercase();
+        let mode = prefs.map_or("name", |p| p.project_sort.as_str());
+        let mut manual = 0;
+        let mut class = 0;
+        let mut time = i64::MIN;
+        match mode {
+            "manual" => {
+                manual = project
+                    .and_then(|p| prefs?.project_order.iter().position(|id| id == &p.id))
+                    .unwrap_or(usize::MAX);
+            }
+            "recent" => {
+                time = project
+                    .and_then(|p| catalog?.project_updated_ms.get(&p.id).copied())
+                    .unwrap_or(i64::MIN);
+                for path in paths {
+                    time = time.max(self.recent_for_path(path));
+                }
+            }
+            "activity" => {
+                let rank = paths
+                    .map(|path| self.activity_for_path(path))
+                    .min()
+                    .unwrap_or(NO_ACTIVITY);
+                class = rank.0;
+                time = rank.1 .0;
+            }
+            _ => {}
+        }
+        (manual, class, Reverse(time), name, group.root.clone())
     }
 }
 
@@ -184,8 +365,6 @@ pub fn order_project_groups(
 mod tests {
     use super::*;
     use crate::runtime_catalog::RuntimeProject;
-    use std::path::PathBuf;
-
     #[test]
     fn long_press_requires_full_delay_before_first_drag_move() {
         let now = Instant::now();
@@ -273,6 +452,129 @@ mod tests {
         prefs.project_sort = "manual".into();
         assert!(prefs.project_is_manual());
         assert!(prefs.workspace_is_manual());
+    }
+
+    #[test]
+    fn project_sort_uses_classic_names_recency_urgency_and_manual_ids() {
+        use crate::runtime_catalog::RuntimeWorkspace;
+        let mut catalog = RuntimeCatalog::default();
+        for (id, root, name, workspace) in [("a", "A", "Zulu", "wa"), ("b", "B", "Alpha", "wb")] {
+            catalog.projects.push(RuntimeProject {
+                id: id.into(),
+                name: name.into(),
+                root: root.into(),
+            });
+            catalog.workspaces.push(RuntimeWorkspace {
+                id: workspace.into(),
+                project_id: id.into(),
+                name: workspace.into(),
+                path: PathBuf::from(root).join("work"),
+                branch: None,
+                is_pinned: false,
+                tag_names: vec![],
+                tag_ids: vec![],
+                section_id: None,
+                parent_workspace_id: None,
+                is_archived: false,
+            });
+        }
+        let mut prefs = SidebarOrderPrefs {
+            project_sort: "name".into(),
+            workspace_activity_ms: HashMap::from([("wa".into(), 400), ("wb".into(), 200)]),
+            project_order: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-24T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let session = |id: &str, state| TerminalSession {
+            handle: id.into(),
+            workspace_id: id.into(),
+            tab_id: id.into(),
+            running: true,
+            agent_type: Some("agy".into()),
+            agent_state: Some(state),
+            interrupted: false,
+            agent_state_started_at: Some("2026-11-24T11:59:00Z".into()),
+            agent_updated_at: Some("2026-11-24T11:59:00Z".into()),
+            agent_context: None,
+        };
+        let sessions = [
+            session("wa", AgentActivityState::Working),
+            session("wb", AgentActivityState::Waiting),
+        ];
+        let context = SidebarSortContext::new(Some(&catalog), Some(&prefs), &[], true, now);
+        let mut groups = vec![group("A"), group("B")];
+        let sort_groups = |groups: &mut Vec<ProjectTreeGroup>,
+                           prefs: &SidebarOrderPrefs,
+                           context: &SidebarSortContext| {
+            groups.sort_by_cached_key(|group| {
+                let paths = [group.root.join("work")];
+                context.project_key(
+                    group,
+                    paths.iter().map(|p| p.as_path()),
+                    Some(&catalog),
+                    Some(prefs),
+                )
+            });
+        };
+        sort_groups(&mut groups, &prefs, &context);
+        assert_eq!(groups[0].label, "B");
+        prefs.project_sort = "recent".into();
+        sort_groups(&mut groups, &prefs, &context);
+        assert_eq!(groups[0].label, "A");
+        prefs.project_sort = "activity".into();
+        let live = SidebarSortContext::new(Some(&catalog), Some(&prefs), &sessions, true, now);
+        sort_groups(&mut groups, &prefs, &live);
+        assert_eq!(groups[0].label, "B");
+        let stale = SidebarSortContext::new(
+            Some(&catalog),
+            Some(&prefs),
+            &sessions,
+            true,
+            now + STALE_AGENT_MS + 60_000,
+        );
+        assert_eq!(stale.activity_for_path(&PathBuf::from("B/work")).0, 3);
+        let offline = SidebarSortContext::new(Some(&catalog), Some(&prefs), &sessions, false, now);
+        assert_eq!(
+            offline.activity_for_path(&PathBuf::from("B/work")),
+            NO_ACTIVITY
+        );
+        prefs.project_sort = "manual".into();
+        sort_groups(&mut groups, &prefs, &context);
+        assert_eq!(groups[0].label, "A");
+    }
+
+    #[test]
+    fn sort_dropdowns_follow_classic_options_and_are_translated() {
+        use crate::native_i18n::{tr, UiLocale};
+        let classic = include_str!("../../lib/src/features/workbench/presentation/widgets/workbench_view_options_controls.dart");
+        let native = include_str!("native_sidebar_view_options.rs");
+        assert!(native.contains("Sort Projects By"));
+        assert!(native.contains("Then Workspaces By"));
+        for (_, label) in SIDEBAR_SORT_CHOICES {
+            assert!(classic.contains(label), "{label}");
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(tr(locale, label), label, "{label} / {}", locale.tag());
+            }
+        }
+    }
+
+    #[test]
+    fn shared_activity_projection_is_optional_and_validates_timestamps() {
+        let prefs = SidebarOrderPrefs::from_json(&serde_json::json!({
+            "kind": "sidebarOrder", "revision": 2,
+            "projectSort": "recent", "workspaceSort": "activity",
+            "projectOrder": [], "workspaceOrder": [],
+            "workspaceActivity": {"ok": "2026-11-24T12:00:00Z", "bad": "not-a-date"}
+        }))
+        .unwrap();
+        assert_eq!(prefs.workspace_activity_ms.len(), 1);
+        assert!(prefs.workspace_activity_ms.contains_key("ok"));
     }
 
     #[test]

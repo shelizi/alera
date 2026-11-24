@@ -181,6 +181,7 @@ dependencies = [
  "alacritty_terminal",
  "alera-core",
  "base64",
+ "chrono",
  "dunce",
  "embed-resource",
  "git2",

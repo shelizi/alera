@@ -1,7 +1,9 @@
 //! Read-only ordering for native project > section > worktree descendants.
 //! Classic RuntimeStore owns relationships; GPUI never duplicates persistence.
 use crate::runtime_catalog::RuntimeCatalog;
+use crate::sidebar_manual_order::{SidebarActivityRank, SidebarSortContext, NO_ACTIVITY};
 use crate::worktree_manager::WorktreeEntry;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -51,6 +53,28 @@ pub fn order_worktree_rows_with_manual(
     entries: &[WorktreeEntry],
     catalog: Option<&RuntimeCatalog>,
     manual_order: Option<&[String]>,
+) -> Vec<SidebarWorktreeRow> {
+    order_worktree_rows_sorted(
+        entries,
+        catalog,
+        if manual_order.is_some() {
+            "manual"
+        } else {
+            "name"
+        },
+        manual_order,
+        &SidebarSortContext::default(),
+    )
+}
+
+/// Keep the native section, archive, pin, and parent boundaries while
+/// applying Classic's four sort modes within the available sibling groups.
+pub fn order_worktree_rows_sorted(
+    entries: &[WorktreeEntry],
+    catalog: Option<&RuntimeCatalog>,
+    mode: &str,
+    manual_order: Option<&[String]>,
+    sort: &SidebarSortContext,
 ) -> Vec<SidebarWorktreeRow> {
     const LIMIT: usize = 96;
     let entries: Vec<WorktreeEntry> = entries.iter().take(LIMIT).cloned().collect();
@@ -107,10 +131,37 @@ pub fn order_worktree_rows_with_manual(
                 .map(|(index, id)| (id.as_str(), index))
         })
         .collect();
+    // A child requiring input promotes its visible parent, just as Classic.
+    let mut ranks: Vec<SidebarActivityRank> = nodes
+        .iter()
+        .map(|node| sort.activity_for_path(&node.0.path))
+        .collect();
+    if mode == "activity" {
+        let by_id: HashMap<_, _> = nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| id_by_path.get(&node.0.path).map(|id| (id.as_str(), index)))
+            .collect();
+        for index in 0..nodes.len() {
+            let rank = ranks[index];
+            if rank == NO_ACTIVITY {
+                continue;
+            }
+            let mut parent = nodes[index].1.as_deref();
+            let mut seen = HashSet::from([index]);
+            while let Some(parent_index) = parent.and_then(|id| by_id.get(id).copied()) {
+                if !seen.insert(parent_index) {
+                    break;
+                }
+                ranks[parent_index] = ranks[parent_index].min(rank);
+                parent = nodes[parent_index].1.as_deref();
+            }
+        }
+    }
     indices.sort_by(|&a, &b| {
         let x = &nodes[a];
         let y = &nodes[b];
-        if manual_order.is_some() {
+        if mode == "manual" {
             // A drag changes order only, not Project, section, pin, archive,
             // or parent membership; keep those grouping boundaries stable.
             let group_x = (x.5, !x.4, x.2.as_deref().unwrap_or("~"));
@@ -130,6 +181,26 @@ pub fn order_worktree_rows_with_manual(
                 return by_manual;
             }
             return x.3.to_lowercase().cmp(&y.3.to_lowercase());
+        }
+        if mode == "recent" || mode == "activity" {
+            let key = |i: usize| {
+                let n = &nodes[i];
+                let main_first = mode == "recent" && !n.0.is_primary;
+                let rank = if mode == "activity" {
+                    ranks[i]
+                } else {
+                    (0, Reverse(sort.recent_for_path(&n.0.path)))
+                };
+                (
+                    main_first,
+                    n.5,
+                    !n.4,
+                    n.2.as_deref().unwrap_or("~"),
+                    rank,
+                    n.3.to_lowercase(),
+                )
+            };
+            return key(a).cmp(&key(b));
         }
         let sort_key = |node: &(
             WorktreeEntry,
@@ -374,6 +445,64 @@ mod tests {
         assert_eq!(rows[0].section_header.as_deref(), Some("Feature"));
         assert_eq!(rows[1].entry.path, PathBuf::from("U"));
         assert_eq!(rows[1].section_header.as_deref(), Some("Other workspaces"));
+    }
+
+    #[test]
+    fn recent_and_agent_activity_sort_preserve_main_and_visible_descendants() {
+        use crate::terminal::{AgentActivityState, TerminalSession};
+        let mut catalog = RuntimeCatalog::default();
+        catalog.workspaces.extend([
+            workspace("M", "main", None),
+            workspace("A", "a", None),
+            workspace("B", "b", None),
+            workspace("C", "child", Some("b")),
+        ]);
+        catalog.workspace_updated_ms =
+            HashMap::from([("a".into(), 100), ("b".into(), 200), ("main".into(), 50)]);
+        let entries = [
+            git_entry("M", true),
+            git_entry("A", false),
+            git_entry("B", false),
+            git_entry("C", false),
+        ];
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-24T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let recency = SidebarSortContext::new(Some(&catalog), None, &[], true, now);
+        let rows = order_worktree_rows_sorted(&entries, Some(&catalog), "recent", None, &recency);
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.entry.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            ["M", "B", "C", "A"]
+        );
+        let session = |id: &str, state| TerminalSession {
+            handle: id.into(),
+            workspace_id: id.into(),
+            tab_id: id.into(),
+            running: true,
+            agent_type: Some("agy".into()),
+            agent_state: Some(state),
+            interrupted: false,
+            agent_state_started_at: Some("2026-11-24T11:59:00Z".into()),
+            agent_updated_at: Some("2026-11-24T11:59:00Z".into()),
+            agent_context: None,
+        };
+        let sessions = [
+            session("main", AgentActivityState::Working),
+            session("a", AgentActivityState::Done),
+            session("child", AgentActivityState::Waiting),
+        ];
+        let activity = SidebarSortContext::new(Some(&catalog), None, &sessions, true, now);
+        let rows =
+            order_worktree_rows_sorted(&entries, Some(&catalog), "activity", None, &activity);
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.entry.path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            ["B", "C", "A", "M"]
+        );
+        assert_eq!(rows[1].depth, 1);
     }
 
     #[test]
