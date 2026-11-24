@@ -16,6 +16,8 @@ use alera_core::runtime::{
 };
 use sha2::{Digest, Sha256};
 use sync_io::inspect_prefix;
+#[path = "agent_history_sync_walk.rs"]
+mod sync_walk;
 use uuid::Uuid;
 
 const INTERVAL: Duration = Duration::from_secs(3 * 60);
@@ -59,6 +61,8 @@ struct MirrorStats {
     archived: usize,
     archive_capacity: usize,
     archive_errors: usize,
+    #[cfg(test)]
+    directories_read: usize,
 }
 
 pub(crate) fn spawn(
@@ -168,145 +172,145 @@ fn mirror_accounts_with_snapshots(
     let mut stats = MirrorStats::default();
     let mut budget = MAX_FILES_PER_PASS;
     for source in accounts {
-        for target in accounts {
-            if budget == 0 {
-                break;
-            }
-            if source.provider != target.provider
-                || !policy.should_sync(source.provider, &source.account_id, &target.account_id)
-            {
-                continue;
-            }
-            mirror_pair(
-                source,
-                target,
-                quiet,
-                snapshot_root,
-                &mut budget,
-                &mut stats,
-            );
+        if budget == 0 {
+            break;
+        }
+        // Resolve the source only if a same-provider, policy-authorized
+        // destination exists. Separate mode and single-account providers
+        // must not touch the filesystem.
+        let mut targets = accounts
+            .iter()
+            .filter(|target| {
+                source.provider == target.provider
+                    && policy.should_sync(source.provider, &source.account_id, &target.account_id)
+            })
+            .peekable();
+        if targets.peek().is_none() || !real_directory(&source.history_root) {
+            continue;
+        }
+        let Ok(source_root) = fs::canonicalize(&source.history_root) else {
+            continue;
+        };
+        let targets: Vec<_> = targets
+            .filter(|target| {
+                if !real_directory(&target.history_root) {
+                    return false;
+                }
+                fs::canonicalize(&target.history_root).is_ok_and(|root| {
+                    // No recursive copying between overlapping roots.
+                    !source_root.starts_with(&root) && !root.starts_with(&source_root)
+                })
+            })
+            .collect();
+        if targets.is_empty() {
+            continue;
+        }
+
+        // One streaming directory traversal per source, not per directed
+        // account pair. Process destinations in their configured order for
+        // each file; no unbounded inventory or cross-pass cache of paths.
+        let walked =
+            sync_walk::walk_transcripts(&source.history_root, MAX_DEPTH, |path, relative| {
+                for target in &targets {
+                    if budget == 0 {
+                        return false;
+                    }
+                    mirror_transcript(
+                        source,
+                        target,
+                        path,
+                        relative,
+                        quiet,
+                        snapshot_root,
+                        &mut budget,
+                        &mut stats,
+                    );
+                }
+                budget > 0
+            });
+        stats.skipped += walked.skipped.saturating_mul(targets.len());
+        #[cfg(test)]
+        {
+            stats.directories_read += walked.directories_read;
         }
     }
     stats
 }
 
-fn mirror_pair(
+#[allow(clippy::too_many_arguments)]
+fn mirror_transcript(
     source: &HistoryAccount,
     target: &HistoryAccount,
+    path: &Path,
+    child: &Path,
     quiet: Duration,
     snapshot_root: Option<&Path>,
     budget: &mut usize,
     stats: &mut MirrorStats,
 ) {
-    if !real_directory(&source.history_root) || !real_directory(&target.history_root) {
-        return;
-    }
-    let (Ok(source_root), Ok(target_root)) = (
-        fs::canonicalize(&source.history_root),
-        fs::canonicalize(&target.history_root),
-    ) else {
-        return;
-    };
-    // No recursive copying when accounts point at overlapping roots.
-    if source_root.starts_with(&target_root) || target_root.starts_with(&source_root) {
-        return;
-    }
-    let mut stack = vec![(source.history_root.clone(), PathBuf::new(), 0)];
-    while let Some((directory, relative, depth)) = stack.pop() {
-        if *budget == 0 {
-            return;
-        }
-        let Ok(entries) = fs::read_dir(&directory) else {
-            stats.skipped += 1;
-            continue;
-        };
-        for entry in entries.flatten() {
-            if *budget == 0 {
-                return;
-            }
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_symlink() {
-                stats.skipped += 1;
-                continue;
-            }
-            let path = entry.path();
-            let child = relative.join(entry.file_name());
-            if kind.is_dir() {
-                if depth < MAX_DEPTH {
-                    stack.push((path, child, depth + 1));
-                }
-                continue;
-            }
-            if !kind.is_file() || path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-                continue;
-            }
-            // Previously mirrored files must not consume the copy budget.
-            // Otherwise, large histories starve newer sessions indefinitely.
-            let target_file = target.history_root.join(&child);
-            if let Ok(existing) = fs::symlink_metadata(&target_file) {
-                if let Ok(original) = fs::symlink_metadata(&path) {
-                    if !existing.file_type().is_file() || !original.file_type().is_file() {
-                        stats.conflicts += 1;
-                    } else if existing.len() < original.len() {
-                        let capture = snapshot_root.is_some()
-                            && original
-                                .modified()
-                                .ok()
-                                .and_then(|time| SystemTime::now().duration_since(time).ok())
-                                .is_some_and(|age| age >= quiet);
-                        match inspect_prefix(
-                            &target_file,
-                            &existing,
-                            &path,
-                            &original,
-                            MAX_FILE_BYTES,
-                            capture,
-                        ) {
-                            Ok(Some(verified)) => {
-                                stats.stale += 1;
-                                if let Some(root) = snapshot_root {
-                                    let result = verified.snapshot.and_then(|bytes| {
-                                        archive_stale_copy(root, source, target, &child, bytes)
-                                    });
-                                    match result {
-                                        Ok(Some(ArchiveResult::Created)) => stats.archived += 1,
-                                        Ok(Some(ArchiveResult::AlreadyPresent)) | Ok(None) => {}
-                                        Ok(Some(ArchiveResult::CapacityReached)) => {
-                                            stats.archive_capacity += 1
-                                        }
-                                        Err(_) => stats.archive_errors += 1,
-                                    }
+    // Previously mirrored files must not consume the copy budget.
+    // Otherwise, large histories starve newer sessions indefinitely.
+    let target_file = target.history_root.join(child);
+    if let Ok(existing) = fs::symlink_metadata(&target_file) {
+        if let Ok(original) = fs::symlink_metadata(path) {
+            if !existing.file_type().is_file() || !original.file_type().is_file() {
+                stats.conflicts += 1;
+            } else if existing.len() < original.len() {
+                let capture = snapshot_root.is_some()
+                    && original
+                        .modified()
+                        .ok()
+                        .and_then(|time| SystemTime::now().duration_since(time).ok())
+                        .is_some_and(|age| age >= quiet);
+                match inspect_prefix(
+                    &target_file,
+                    &existing,
+                    path,
+                    &original,
+                    MAX_FILE_BYTES,
+                    capture,
+                ) {
+                    Ok(Some(verified)) => {
+                        stats.stale += 1;
+                        if let Some(root) = snapshot_root {
+                            let result = verified.snapshot.and_then(|bytes| {
+                                archive_stale_copy(root, source, target, child, bytes)
+                            });
+                            match result {
+                                Ok(Some(ArchiveResult::Created)) => stats.archived += 1,
+                                Ok(Some(ArchiveResult::AlreadyPresent)) | Ok(None) => {}
+                                Ok(Some(ArchiveResult::CapacityReached)) => {
+                                    stats.archive_capacity += 1
                                 }
+                                Err(_) => stats.archive_errors += 1,
                             }
-                            _ => stats.conflicts += 1,
                         }
-                    } else if existing.len() > original.len()
-                        && !matches!(
-                            inspect_prefix(
-                                &path,
-                                &original,
-                                &target_file,
-                                &existing,
-                                MAX_FILE_BYTES,
-                                false,
-                            ),
-                            Ok(Some(_))
-                        )
-                    {
-                        stats.conflicts += 1;
                     }
+                    _ => stats.conflicts += 1,
                 }
-                continue;
-            }
-            *budget -= 1;
-            match mirror_file(&path, &target.history_root, &child, quiet) {
-                CopyOutcome::Copied => stats.copied += 1,
-                CopyOutcome::Exists => stats.conflicts += 1,
-                CopyOutcome::Skipped => stats.skipped += 1,
+            } else if existing.len() > original.len()
+                && !matches!(
+                    inspect_prefix(
+                        path,
+                        &original,
+                        &target_file,
+                        &existing,
+                        MAX_FILE_BYTES,
+                        false,
+                    ),
+                    Ok(Some(_))
+                )
+            {
+                stats.conflicts += 1;
             }
         }
+        return;
+    }
+    *budget -= 1;
+    match mirror_file(path, &target.history_root, child, quiet) {
+        CopyOutcome::Copied => stats.copied += 1,
+        CopyOutcome::Exists => stats.conflicts += 1,
+        CopyOutcome::Skipped => stats.skipped += 1,
     }
 }
 
@@ -677,6 +681,38 @@ mod tests {
         );
         assert_eq!(active.archived, 0);
         assert!(!archive.exists());
+    }
+
+    #[test]
+    fn fanout_walks_each_source_once_and_preserves_all_target_accounts() {
+        let (temp, mut accounts) = fixture();
+        for id in ["c", "d", "e"] {
+            let root = temp.path().join(id).join("sessions");
+            fs::create_dir_all(&root).unwrap();
+            accounts.push(account("codex", id, root));
+        }
+        let policy = sharing_all();
+        let first = mirror_accounts(&policy, &accounts, Duration::ZERO);
+        assert_eq!(first.copied, 4);
+        assert_eq!(
+            first.directories_read, 15,
+            "five sources with three directories each"
+        );
+        for account in &accounts {
+            assert_eq!(
+                fs::read(account.history_root.join("2026/11/first.jsonl")).unwrap(),
+                b"{\"type\":\"message\"}\n"
+            );
+        }
+        let second = mirror_accounts(&policy, &accounts, Duration::ZERO);
+        assert_eq!(second.copied, 0);
+        assert_eq!(second.directories_read, 15);
+        let separate = mirror_accounts(
+            &RuntimeAgentHistorySyncSettings::default(),
+            &accounts,
+            Duration::ZERO,
+        );
+        assert_eq!(separate.directories_read, 0);
     }
 
     #[test]
