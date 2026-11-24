@@ -184,3 +184,32 @@ Interleaved Windows Debug A/B runs (before/after/after/before/before/after) agai
 All 105 non-cold measured requests in the new executable reused exactly 100 FTS candidates and decoded zero records, versus 100 decoded records per request on the baseline path. The 21 cold requests still decoded 100 records with zero reuse. SQL writes and warm/selective update behavior are unchanged. The isolated pointer-stability regression proves movement of existing string allocations. This does not establish a total allocation or peak RSS reduction: the comparison buffer lives until FTS selection finishes, and the result representation and key projection also have overhead. Warm FTS median decreased about 7.9%, warm rank median about 20.1%, while warm total median increased about 9.4%. Index reopen FTS and changed total medians also increased. Host load varies substantially (some scan medians differ by more than 2x); no consistent end-to-end latency improvement is established. Retain this candidate on the separate branch for its deterministic elimination of redundant decoding, subject to review and release-profile measurement before claiming production gains.
 
 Validation: 36 history regressions passed (one benchmark ignored in ordinary runs), 10 exact resume and 2 Agent Context tests passed, 48 total. New test compares exact result order, duplicate last-write behavior, account/profile scoping, original string allocation pointers, fallback for same-file external JSON mutation and malformed JSON, and reuse after repair. Actual Windows symlink rejection passed. All six benchmark runs passed. Format and diff checks passed. No full Rust suite, release benchmark or process allocation/RSS measurement was run.
+
+## Broader regression and process memory verification (2026-11-25)
+
+Pinned the verification branch to main release commit `c52a3811c` (v0.91.37), which contains the merged history optimizations. Removed two production-build warnings in the history index: the mutable write statistics shadow is needed only in tests, and unscoped FTS search is now compiled only for tests. Production scoped-search behavior is unchanged.
+
+The ordinary full workspace test command (`cargo test --manifest-path rust/Cargo.toml --workspace --locked --offline --no-fail-fast -j 6 -- --test-threads=4 --format terse`) failed before testing: the mobile Whisper dependency could not find libclang.dll, and the running shared Debug alera.exe could not be replaced (Windows access denied). No existing application or agent was stopped, no build lock was removed, and no system tools were installed. Instead, built unique CLI and Core test executables with the normal test profile, retaining offline/locked dependency resolution and the documented local build-storage preparation.
+
+| Suite | Passed | Failed | Ignored | Test execution |
+|---|---:|---:|---:|---:|
+| CLI binary unit tests | 1513 | 0 | 13 | 178.50 s |
+| Core library (runtime feature) unit tests | 349 | 0 | 0 | 35.62 s |
+| Total | 1862 | 0 | 13 | 214.12 s |
+
+CLI test executable: alera-e999cb1d4078e82b.exe, unique cfg alera_history_full_validation_20261125. Core executable: alera_core-7d1381877d38ce18.exe, unique cfg alera_history_full_core_validation_20261125. This is the complete ordinary unit-test suite of those two targets, not the complete workspace suite or all CLI integration tests. The production warnings were identified in the attempted ordinary workspace build; a fresh non-test build after the fixes was not completed.
+
+Measured whole-process memory for the existing exact Debug benchmark executable pair: baseline `98617a588` (alera-6839e793f4ddcbd7.exe), result reuse `c8c566945` (alera-8e4f5b51a6337b29.exe). Six interleaved fresh processes (before/after/after/before/before/after), each running the same isolated 256-file, 42-request synthetic benchmark; all completed successfully. Windows Process.PeakWorkingSet64 and PrivateMemorySize64 sampled via an external PowerShell process monitor with a 20 ms wait between observations; actual sampling intervals vary. The peak working set is the largest OS high-water mark observed before exit; private memory is the maximum sampled private bytes, not an exact allocator or peak-commit counter. Includes process startup, fixture creation, SQLite and test harness, not individual requests or the desktop application.
+
+| Run | Version | Observed peak working set (bytes) | Maximum sampled private bytes | Observations |
+|---|---|---:|---:|---:|
+| 1 | Before | 25169920 | 8904704 | 149 |
+| 2 | After | 25145344 | 8601600 | 150 |
+| 3 | After | 25468928 | 9125888 | 113 |
+| 4 | Before | 25227264 | 9003008 | 125 |
+| 5 | Before | 25022464 | 8609792 | 145 |
+| 6 | After | 25300992 | 8830976 | 84 |
+| Median | Before | 25169920 | 8904704 | |
+| Median | After | 25300992 | 8830976 | |
+
+Observed peak working-set median increased by 131072 bytes (0.52%); sampled private-memory median decreased by 73728 bytes (0.83%). The runs overlap and these small changes do not demonstrate a material RAM improvement. Eliminating repeated FTS deserialization is established by the previous functional counters, not equivalent to lower process-wide memory. No release-profile benchmark was completed: the direct-test Release target had no prepared dependencies or test executable, and the full workspace build was blocked as described above. Do not extrapolate these Debug memory observations to production or to the complete cumulative optimization series.
