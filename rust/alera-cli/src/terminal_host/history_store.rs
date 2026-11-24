@@ -110,11 +110,25 @@ impl TerminalHostHistoryStore {
         })
     }
 
+    #[cfg(test)]
     pub async fn read(
         &self,
         session_id: &str,
         max_bytes: usize,
     ) -> Result<Option<TerminalHostCheckpoint>> {
+        Ok(self
+            .read_with_maintenance(session_id, max_bytes)
+            .await?
+            .map(|(checkpoint, _)| checkpoint))
+    }
+
+    /// Report whether the cold read could prove that no retention or row
+    /// compaction is needed, using only the rows it already reads.
+    pub(super) async fn read_with_maintenance(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<(TerminalHostCheckpoint, bool)>> {
         let row = sqlx::query(
             "SELECT sessionId, workspaceId, tabId, workingDirectory, running, exitCode, \
              endedAt, outputStreamBytes, updatedAt FROM checkpoints WHERE sessionId = ?",
@@ -125,10 +139,11 @@ impl TerminalHostHistoryStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let buffer = self.read_buffer(session_id, max_bytes).await?;
+        let (buffer, maintenance_required) =
+            read_buffer_with_maintenance(&self.pool, session_id, max_bytes).await?;
         let ended_at: Option<String> = row.try_get("endedAt")?;
         let updated_at: String = row.try_get("updatedAt")?;
-        Ok(Some(TerminalHostCheckpoint {
+        let checkpoint = TerminalHostCheckpoint {
             session_id: row.try_get("sessionId")?,
             workspace_id: row.try_get("workspaceId")?,
             tab_id: row.try_get("tabId")?,
@@ -140,7 +155,8 @@ impl TerminalHostHistoryStore {
             updated_at: parse_timestamp(Some(updated_at.as_str()))
                 .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().expect("epoch is valid")),
             buffer,
-        }))
+        };
+        Ok(Some((checkpoint, maintenance_required)))
     }
 
     #[cfg(test)]
@@ -317,6 +333,7 @@ impl TerminalHostHistoryStore {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn read_buffer(&self, session_id: &str, max_bytes: usize) -> Result<Vec<u8>> {
         read_buffer_from(&self.pool, session_id, max_bytes).await
     }
@@ -327,8 +344,20 @@ async fn read_buffer_from<'e>(
     session_id: &'e str,
     max_bytes: usize,
 ) -> Result<Vec<u8>> {
+    Ok(
+        read_buffer_with_maintenance(executor, session_id, max_bytes)
+            .await?
+            .0,
+    )
+}
+
+async fn read_buffer_with_maintenance<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    session_id: &'e str,
+    max_bytes: usize,
+) -> Result<(Vec<u8>, bool)> {
     if max_bytes == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), true));
     }
 
     // Read newest chunks first and stop as soon as the requested scrollback
@@ -341,17 +370,23 @@ async fn read_buffer_from<'e>(
     .bind(session_id)
     .fetch(executor);
     let mut tail = HistoryReadTail::new(max_bytes);
+    let mut row_count = 0_i64;
     while tail.remaining() > 0 {
         let Some(row) = rows.try_next().await? else {
             break;
         };
+        row_count = row_count.saturating_add(1);
         // Borrow the row's BLOB instead of allocating a Vec for each row.
         // Only the retained suffix is copied into the growing tail.
         let data: &[u8] = row.try_get("data")?;
         tail.prepend(data);
     }
     drop(rows);
-    Ok(tail.finish())
+    // A full tail can hide older rows, even if the last row fits exactly.
+    // Keep maintenance in that case rather than fetching an extra BLOB.
+    // Legacy tiny/empty rows may still need compaction below the byte cap.
+    let maintenance_required = tail.remaining() == 0 || row_count > OUTPUT_COMPACTION_ROW_THRESHOLD;
+    Ok((tail.finish(), maintenance_required))
 }
 
 /// Builds a chronological tail from rows arriving newest first.

@@ -124,6 +124,15 @@ enum FlushSnapshot {
 }
 
 impl SessionPersistenceState {
+    fn cached_checkpoint(&self, max_bytes: usize) -> Option<Option<TerminalHostCheckpoint>> {
+        if self.delete_revision.is_some() {
+            return Some(None);
+        }
+        let mut checkpoint = self.checkpoint.as_ref()?.clone();
+        checkpoint.buffer = copy_deque_tail(&self.memory_tail, max_bytes);
+        Some(Some(checkpoint))
+    }
+
     fn can_reuse_tail(&self, end: u64, len: usize) -> bool {
         self.delete_revision.is_none()
             && (len == 0
@@ -431,37 +440,72 @@ impl TerminalHostHistoryRepository {
             return Ok(None);
         }
 
-        let persisted = self.inner.store.read(session_id, max_bytes).await?;
-        let Some(mut persisted) = persisted else {
+        let persisted = self
+            .inner
+            .store
+            .read_with_maintenance(session_id, max_bytes)
+            .await?;
+        let Some((persisted, maintenance_required)) = persisted else {
             return Ok(None);
         };
-        retain_tail(&mut persisted.buffer, max_bytes);
+        Ok(self.finish_cold_read(session_id, max_bytes, persisted, maintenance_required))
+    }
 
+    fn finish_cold_read(
+        &self,
+        session_id: &str,
+        max_bytes: usize,
+        mut persisted: TerminalHostCheckpoint,
+        maintenance_required: bool,
+    ) -> Option<TerminalHostCheckpoint> {
+        debug_assert!(persisted.buffer.len() <= max_bytes);
         {
-            let mut sessions = self.lock_sessions();
-            let state = sessions.entry(session_id.to_string()).or_default();
-            if state.delete_revision.is_some() {
-                return Ok(None);
+            let sessions = self.lock_sessions();
+            if let Some(state) = sessions.get(session_id) {
+                if let Some(cached) = state.cached_checkpoint(max_bytes) {
+                    return cached;
+                }
+            } else if !maintenance_required {
+                // All rows fit and no write-behind state needs reconciling.
+                // Return the owned tail without creating a temporary cache
+                // or scheduling a worker that would only confirm a no-op.
+                return Some(persisted);
             }
-            if let Some(checkpoint) = state.checkpoint.as_ref() {
-                let mut checkpoint = checkpoint.clone();
-                checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
-                return Ok(Some(checkpoint));
-            }
-            state.max_bytes = max_bytes;
-            // Cache only the checkpoint metadata; avoid cloning its full
-            // scrollback just to clear it again.
-            let buffer = std::mem::take(&mut persisted.buffer);
-            state.checkpoint = Some(persisted.clone());
-            state.memory_tail = buffer.clone().into();
-            state.verified_tail = None;
-            persisted.buffer = buffer;
         }
 
-        // Cold reads return only the bounded tail. Physical compaction is
-        // maintenance and must not delay restore/liveness-sensitive requests.
-        self.queue_trim(session_id.to_string(), max_bytes);
-        Ok(Some(persisted))
+        // Only maintenance or existing pending state needs a memory cache.
+        // Allocate and copy the potentially large tail outside the global
+        // sessions lock, then recheck for a newer checkpoint or deletion.
+        let buffer = std::mem::take(&mut persisted.buffer);
+        let metadata = persisted.clone();
+        let memory_tail = VecDeque::from(buffer.clone());
+        persisted.buffer = buffer;
+
+        let retired_tail = {
+            let mut sessions = self.lock_sessions();
+            if !maintenance_required && !sessions.contains_key(session_id) {
+                return Some(persisted);
+            }
+            let state = sessions.entry(session_id.to_string()).or_default();
+            if let Some(cached) = state.cached_checkpoint(max_bytes) {
+                return cached;
+            }
+            state.max_bytes = max_bytes;
+            state.checkpoint = Some(metadata);
+            state.verified_tail = None;
+            let retired = std::mem::replace(&mut state.memory_tail, memory_tail);
+            state.trim_pending_outputs();
+            // Publish the cache and trim request atomically. Do not queue
+            // another trim after releasing the lock, which could overwrite
+            // a concurrent producer's newer retention configuration.
+            state.request_trim();
+            retired
+        };
+        drop(retired_tail);
+
+        // Physical compaction must not delay the restore.
+        self.ensure_worker(session_id.to_string());
+        Some(persisted)
     }
 
     pub async fn next_output_sequence(&self, session_id: &str) -> Result<i64> {
@@ -486,15 +530,9 @@ impl TerminalHostHistoryRepository {
         session_id: &str,
         max_bytes: usize,
     ) -> Option<Option<TerminalHostCheckpoint>> {
-        let sessions = self.lock_sessions();
-        let state = sessions.get(session_id)?;
-        if state.delete_revision.is_some() {
-            return Some(None);
-        }
-        let checkpoint = state.checkpoint.as_ref()?.clone();
-        let mut checkpoint = checkpoint;
-        checkpoint.buffer = copy_deque_tail(&state.memory_tail, max_bytes);
-        Some(Some(checkpoint))
+        self.lock_sessions()
+            .get(session_id)?
+            .cached_checkpoint(max_bytes)
     }
 
     fn is_deleted(&self, session_id: &str) -> bool {
@@ -1378,6 +1416,117 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(persisted.buffer, b"hello");
+    }
+
+    #[tokio::test]
+    async fn parallel_clean_cold_reads_do_not_create_cache_or_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        let cap = 512 * 1024;
+        let payload = vec![0x9b; cap / 2];
+        let ids: Vec<_> = (0..8).map(|index| format!("cold-{index}")).collect();
+        for id in &ids {
+            store.upsert(checkpoint(id, b"")).await.unwrap();
+            store.append_output(id, 0, &payload).await.unwrap();
+        }
+        let repository = TerminalHostHistoryRepository::from_store(store);
+        // Stop background workers from retiring so a spurious cache or
+        // trim request cannot disappear before we inspect it.
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+        let reads =
+            futures_util::future::join_all(ids.iter().map(|id| repository.read(id, cap))).await;
+        for read in reads {
+            assert_eq!(read.unwrap().unwrap().buffer, payload);
+        }
+        assert!(repository.lock_sessions().is_empty());
+        assert!(repository.flush_pending(Duration::from_millis(50)).await);
+        drop(slots);
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn bounded_cold_reads_keep_cache_and_trim_until_durable_ack() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TerminalHostHistoryStore::open(dir.path()).await.unwrap();
+        store.upsert(checkpoint("s1", b"")).await.unwrap();
+        store.append_output("s1", 0, b"abcdef").await.unwrap();
+        let repository = TerminalHostHistoryRepository::from_store(store);
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repository.read("s1", 3).await.unwrap().unwrap().buffer,
+            b"def"
+        );
+        {
+            let sessions = repository.lock_sessions();
+            let state = &sessions["s1"];
+            assert!(state.worker_running);
+            assert_eq!(state.trim_request.unwrap().max_bytes, 3);
+            assert_eq!(copy_deque_tail(&state.memory_tail, 100), b"def");
+            assert!(state.verified_tail.is_none());
+        }
+        // A larger read must not resurrect the already logically trimmed prefix.
+        assert_eq!(
+            repository.read("s1", 100).await.unwrap().unwrap().buffer,
+            b"def"
+        );
+        assert!(!repository.flush_pending(Duration::from_millis(20)).await);
+        drop(slots);
+        assert!(repository.flush_pending(Duration::from_secs(2)).await);
+        assert!(repository.lock_sessions().is_empty());
+        assert_eq!(
+            repository
+                .inner
+                .store
+                .read("s1", 100)
+                .await
+                .unwrap()
+                .unwrap()
+                .buffer,
+            b"def"
+        );
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn cold_read_completion_prefers_newer_pending_checkpoint_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        let slots = repository
+            .inner
+            .flush_slots
+            .acquire_many(HISTORY_FLUSH_CONCURRENCY as u32)
+            .await
+            .unwrap();
+        repository.queue_checkpoint(checkpoint("s1", b"new"), 100);
+        for maintenance_required in [false, true] {
+            let read = repository
+                .finish_cold_read("s1", 3, checkpoint("s1", b"old"), maintenance_required)
+                .unwrap();
+            assert_eq!(read.buffer, b"new");
+            assert_eq!(repository.lock_sessions()["s1"].max_bytes, 100);
+        }
+        repository.queue_delete("s1");
+        for maintenance_required in [false, true] {
+            assert!(repository
+                .finish_cold_read("s1", 3, checkpoint("s1", b"old"), maintenance_required)
+                .is_none());
+        }
+        drop(slots);
+        assert!(repository.flush_pending(Duration::from_secs(2)).await);
+        repository.inner.store.close_for_test().await;
     }
 
     #[tokio::test]
