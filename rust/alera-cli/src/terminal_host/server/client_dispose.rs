@@ -71,14 +71,37 @@ impl ServerActor {
         let admission_still_occupied = admission_occupied(&self.deferred_admission.snapshot());
         self.cancel_mobile_prompt_file_uploads(client_id);
         self.cancel_mobile_prompt_image_uploads(client_id);
-        let session_ids: Vec<String> = self.sessions.keys().cloned().collect();
+        // Preserve the full durability boundary when the last authenticated
+        // connection leaves. A short-lived CLI, mobile connection or failed
+        // authentication must not force unrelated live sessions to snapshot
+        // their rings and invalidate their existing debounce timers.
+        let last_authenticated = authenticated
+            && !self
+                .clients
+                .iter()
+                .any(|(id, client)| *id != client_id && client.authenticated);
         let mut sessions_detached = 0;
+        let session_ids: Vec<String> = self
+            .sessions
+            .iter_mut()
+            .filter_map(|(id, session)| {
+                let attached = session.clients.contains(&client_id);
+                if attached {
+                    sessions_detached += 1;
+                }
+                if attached || last_authenticated {
+                    Some(id.clone())
+                } else {
+                    // Some requests can leave cursor or pause state without an
+                    // attachment. Keep clearing those even on the no-I/O path.
+                    session.detach(client_id);
+                    None
+                }
+            })
+            .collect();
         for session_id in session_ids {
             self.flush_all_output(&session_id);
             if let Some(session) = self.sessions.get_mut(&session_id) {
-                if session.clients.contains(&client_id) {
-                    sessions_detached += 1;
-                }
                 session.detach(client_id);
             }
             self.immediate_checkpoint(&session_id).await;
