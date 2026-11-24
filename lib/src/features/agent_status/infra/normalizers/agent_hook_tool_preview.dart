@@ -68,11 +68,7 @@ String? _deriveToolInputPreview(String? toolName, Object? input) {
       }
     }
   }
-  try {
-    return _normalizeSingleLine(jsonEncode(input), 160);
-  } catch (_) {
-    return null;
-  }
+  return normalizeAgentHookJsonPreview(input, 160);
 }
 
 String? _deriveQuestionListPreview(List<Object?> questions) {
