@@ -31,12 +31,22 @@ struct SessionPersistenceState {
     outputs: BTreeMap<i64, PendingOutput>,
     pending_bytes: usize,
     memory_tail: VecDeque<u8>,
+    // Only the suffix covered by a full live snapshot or contiguous PTY
+    // batches is eligible for checkpoint reuse. A cold SQLite read cannot
+    // establish this proof: its checkpoint cursor may lag the output rows.
+    verified_tail: Option<VerifiedTail>,
     max_bytes: usize,
     delete_revision: Option<u64>,
     trim_revision: Option<u64>,
     next_revision: u64,
     worker_running: bool,
     last_error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct VerifiedTail {
+    end: u64,
+    len: usize,
 }
 
 #[derive(Clone)]
@@ -59,6 +69,46 @@ enum FlushSnapshot {
 }
 
 impl SessionPersistenceState {
+    fn can_reuse_tail(&self, end: u64, len: usize) -> bool {
+        self.delete_revision.is_none()
+            && (len == 0
+                || self.verified_tail.is_some_and(|tail| {
+                    tail.end == end && tail.len >= len && self.memory_tail.len() >= len
+                }))
+    }
+
+    fn verify_full_tail(&mut self, end: u64) {
+        let len = self.memory_tail.len();
+        self.verified_tail =
+            (end != u64::MAX && len as u64 <= end).then_some(VerifiedTail { end, len });
+    }
+
+    fn verify_appended_tail(&mut self, end: Option<u64>, appended: usize) {
+        self.verified_tail = end.filter(|end| *end != u64::MAX).and_then(|end| {
+            let start = end.checked_sub(appended as u64)?;
+            let previous = self
+                .verified_tail
+                .filter(|tail| tail.end == start)
+                .map_or(0, |tail| tail.len);
+            Some(VerifiedTail {
+                end,
+                len: previous
+                    .saturating_add(appended)
+                    .min(self.memory_tail.len()),
+            })
+        });
+    }
+
+    fn record_checkpoint(&mut self, checkpoint: TerminalHostCheckpoint, max_bytes: usize) {
+        debug_assert!(checkpoint.buffer.is_empty());
+        self.max_bytes = max_bytes;
+        self.delete_revision = None;
+        self.checkpoint = Some(checkpoint);
+        self.checkpoint_revision = Some(self.next_revision());
+        self.trim_pending_outputs();
+        self.trim_revision = Some(self.next_revision());
+    }
+
     fn next_revision(&mut self) -> u64 {
         self.next_revision = self.next_revision.wrapping_add(1).max(1);
         self.next_revision
@@ -155,20 +205,76 @@ impl TerminalHostHistoryRepository {
         {
             let mut sessions = self.lock_sessions();
             let state = sessions.entry(session_id.clone()).or_default();
-            state.max_bytes = max_bytes;
-            state.delete_revision = None;
             state.memory_tail = memory_tail.into();
-            let checkpoint_revision = state.next_revision();
-            state.checkpoint = Some(checkpoint);
-            state.checkpoint_revision = Some(checkpoint_revision);
-            state.trim_pending_outputs();
-            let trim_revision = state.next_revision();
-            state.trim_revision = Some(trim_revision);
+            state.verify_full_tail(checkpoint.output_stream_bytes);
+            state.record_checkpoint(checkpoint, max_bytes);
         }
         self.ensure_worker(session_id);
     }
 
+    /// The actor has flushed all durable output through checkpoint's cursor.
+    /// Reuse an exactly covered suffix without capturing the live ring. If
+    /// the write-behind worker already released its cache, a batch is missing
+    /// or the cursor cannot prove coverage, seed the original full snapshot.
+    /// Do not keep acknowledged caches alive merely to make this path hit.
+    pub(super) fn queue_checkpoint_from_live(
+        &self,
+        checkpoint: TerminalHostCheckpoint,
+        live_tail_len: usize,
+        max_bytes: usize,
+        capture: impl FnOnce() -> Vec<u8>,
+    ) {
+        debug_assert!(checkpoint.buffer.is_empty());
+        let session_id = checkpoint.session_id.clone();
+        let len = live_tail_len.min(max_bytes);
+        {
+            let mut sessions = self.lock_sessions();
+            let state = sessions.entry(session_id.clone()).or_default();
+            if state.can_reuse_tail(checkpoint.output_stream_bytes, len) {
+                if state.memory_tail.len() > len {
+                    state.memory_tail.drain(..state.memory_tail.len() - len);
+                }
+                retain_deque_tail(&mut state.memory_tail, max_bytes);
+                state.verify_full_tail(checkpoint.output_stream_bytes);
+                state.record_checkpoint(checkpoint, max_bytes);
+                drop(sessions);
+                self.ensure_worker(session_id);
+                return;
+            }
+        }
+
+        // Capture outside the repository lock, as before. The Host actor is
+        // the sole producer for this session; workers can only acknowledge or
+        // evict pending state while the fallback snapshot is materialized.
+        let mut checkpoint = checkpoint;
+        checkpoint.buffer = capture();
+        self.queue_checkpoint(checkpoint, max_bytes);
+    }
+
+    #[cfg(test)]
     pub fn queue_output(&self, session_id: String, sequence: i64, data: Vec<u8>, max_bytes: usize) {
+        self.queue_output_inner(session_id, sequence, data, max_bytes, None);
+    }
+
+    pub(super) fn queue_output_at_cursor(
+        &self,
+        session_id: String,
+        sequence: i64,
+        data: Vec<u8>,
+        max_bytes: usize,
+        end: u64,
+    ) {
+        self.queue_output_inner(session_id, sequence, data, max_bytes, Some(end));
+    }
+
+    fn queue_output_inner(
+        &self,
+        session_id: String,
+        sequence: i64,
+        data: Vec<u8>,
+        max_bytes: usize,
+        end: Option<u64>,
+    ) {
         if data.is_empty() {
             return;
         }
@@ -179,6 +285,7 @@ impl TerminalHostHistoryRepository {
             if state.delete_revision.is_none() {
                 state.max_bytes = max_bytes;
                 append_tail(&mut state.memory_tail, &data, max_bytes);
+                state.verify_appended_tail(end, data.len());
                 let revision = state.next_revision();
                 // Bytes takes ownership of the Vec without copying its payload.
                 state.insert_pending_output(
@@ -207,6 +314,9 @@ impl TerminalHostHistoryRepository {
             }
             state.max_bytes = max_bytes;
             retain_deque_tail(&mut state.memory_tail, max_bytes);
+            if let Some(tail) = state.verified_tail.as_mut() {
+                tail.len = tail.len.min(state.memory_tail.len());
+            }
             if let Some(checkpoint) = state.checkpoint.as_mut() {
                 retain_tail(&mut checkpoint.buffer, max_bytes);
             }
@@ -229,7 +339,8 @@ impl TerminalHostHistoryRepository {
             state.outputs.clear();
             state.pending_bytes = 0;
             state.trim_revision = None;
-            state.memory_tail.clear();
+            state.memory_tail = VecDeque::new();
+            state.verified_tail = None;
             state.last_error = None;
         }
         self.ensure_worker(session_id);
@@ -270,6 +381,7 @@ impl TerminalHostHistoryRepository {
             let buffer = std::mem::take(&mut persisted.buffer);
             state.checkpoint = Some(persisted.clone());
             state.memory_tail = buffer.clone().into();
+            state.verified_tail = None;
             persisted.buffer = buffer;
         }
 
@@ -548,6 +660,163 @@ mod tests {
             updated_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             buffer: buffer.to_vec(),
         }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_reuses_proven_contiguous_tail_during_write_backlog() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        // No worker can acknowledge or evict state while the actor queues
+        // these checkpoints. Cover the high-output / slow-disk path directly.
+        let cap = 2 * 1024 * 1024;
+        let initial = vec![b'x'; cap];
+        repository.queue_checkpoint(checkpoint("s1", &initial), cap);
+        let mut expected = VecDeque::from(initial);
+        let initial_capacity = repository.lock_sessions()["s1"].memory_tail.capacity();
+        let mut cursor = cap as u64;
+        let mut captures = 0;
+        for sequence in 0..256 {
+            let data = vec![(sequence % 256) as u8; 1024];
+            cursor += data.len() as u64;
+            append_tail(&mut expected, &data, cap);
+            repository.queue_output_at_cursor("s1".into(), sequence, data, cap, cursor);
+            let mut metadata = checkpoint("s1", b"");
+            metadata.output_stream_bytes = cursor;
+            metadata.working_directory = format!("/tmp/project-{sequence}");
+            repository.queue_checkpoint_from_live(metadata, cap, cap, || {
+                captures += 1;
+                expected.iter().copied().collect()
+            });
+        }
+        assert_eq!(
+            captures, 0,
+            "256 complete checkpoints must not capture the live ring"
+        );
+        {
+            let sessions = repository.lock_sessions();
+            let state = &sessions["s1"];
+            assert_eq!(state.memory_tail, expected);
+            assert_eq!(state.memory_tail.capacity(), initial_capacity);
+            assert!(state.checkpoint.as_ref().unwrap().buffer.is_empty());
+            assert_eq!(
+                state.checkpoint.as_ref().unwrap().output_stream_bytes,
+                cursor
+            );
+            assert_eq!(
+                state.checkpoint.as_ref().unwrap().working_directory,
+                "/tmp/project-255"
+            );
+            assert_eq!(state.verified_tail.unwrap().len, cap);
+        }
+        let read = repository.read("s1", 4096).await.unwrap().unwrap();
+        assert_eq!(read.buffer, copy_deque_tail(&expected, 4096));
+        assert_eq!(read.output_stream_bytes, cursor);
+        assert!(repository.flush_pending(Duration::from_secs(5)).await);
+        assert!(!repository.lock_sessions().contains_key("s1"));
+        let persisted = repository
+            .inner
+            .store
+            .read("s1", cap)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.output_stream_bytes, cursor);
+        assert_eq!(persisted.buffer, copy_deque_tail(&expected, 256 * 1024));
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_falls_back_after_eviction_and_incomplete_or_discontinuous_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        repository.queue_checkpoint(checkpoint("s1", b"abcdef"), 64);
+        repository.wait_until_idle("s1").await;
+        assert!(!repository.lock_sessions().contains_key("s1"));
+
+        let mut captures = 0;
+        let mut capture = |cursor: u64, expected: &[u8], max_bytes: usize| {
+            let mut metadata = checkpoint("s1", b"");
+            metadata.output_stream_bytes = cursor;
+            repository.queue_checkpoint_from_live(metadata, expected.len(), max_bytes, || {
+                captures += 1;
+                expected.to_vec()
+            });
+        };
+
+        // A worker acknowledged the older checkpoint; a new pending batch
+        // alone is not proof of the whole live tail.
+        repository.queue_output_at_cursor("s1".into(), 0, b"gh".to_vec(), 64, 8);
+        capture(8, b"abcdefgh", 64);
+        // Now there is a fully verified seed.
+        repository.queue_output_at_cursor("s1".into(), 1, b"ij".to_vec(), 64, 10);
+        capture(10, b"abcdefghij", 64);
+        // Equal byte counts are insufficient when the output cursor has a gap.
+        repository.queue_output_at_cursor("s1".into(), 2, b"kl".to_vec(), 64, 14);
+        capture(14, b"abcdefghij??kl", 64);
+        // Even after a gap, a known contiguous suffix can cover a reduced cap.
+        repository.queue_trim("s1", 4);
+        repository.queue_output_at_cursor("s1".into(), 3, b"mn".to_vec(), 4, 16);
+        capture(16, b"klmn", 4);
+        // Increasing the cap does not make discarded data authoritative.
+        capture(16, b"??klmn", 64);
+        // Saturating cursors cannot establish a unique position.
+        repository.queue_output_at_cursor("s1".into(), 4, b"z".to_vec(), 64, u64::MAX);
+        capture(u64::MAX, b"??klmnz", 64);
+        assert_eq!(captures, 4);
+
+        let read = repository.read("s1", 64).await.unwrap().unwrap();
+        assert_eq!(read.buffer, b"??klmnz");
+        assert_eq!(read.output_stream_bytes, u64::MAX);
+        repository.queue_delete("s1");
+        assert!(repository.read("s1", 64).await.unwrap().is_none());
+        assert!(repository.flush_pending(Duration::from_secs(5)).await);
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_reuses_new_pending_suffix_only_when_it_covers_entire_live_tail() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        repository.queue_checkpoint(checkpoint("s1", b"old"), 4);
+        repository.wait_until_idle("s1").await;
+        repository.queue_output_at_cursor("s1".into(), 0, b"abcdefgh".to_vec(), 4, 11);
+        let mut metadata = checkpoint("s1", b"");
+        metadata.output_stream_bytes = 11;
+        repository.queue_checkpoint_from_live(metadata, 4, 4, || {
+            panic!("new batch already covers all four retained bytes")
+        });
+        assert_eq!(
+            repository.read("s1", 4).await.unwrap().unwrap().buffer,
+            b"efgh"
+        );
+        repository.wait_until_idle("s1").await;
+        assert!(!repository.lock_sessions().contains_key("s1"));
+        repository.inner.store.close_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_metadata_reuses_complete_tail_when_sqlite_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let repository = TerminalHostHistoryRepository::open(dir.path())
+            .await
+            .unwrap();
+        repository.inner.store.close_for_test().await;
+        repository.queue_checkpoint(checkpoint("s1", b"hello"), 64);
+        repository.queue_output_at_cursor("s1".into(), 0, b" world".to_vec(), 64, 11);
+        let mut metadata = checkpoint("s1", b"");
+        metadata.output_stream_bytes = 11;
+        repository.queue_checkpoint_from_live(metadata, 11, 64, || {
+            panic!("unavailable SQLite must retain the complete in-memory tail")
+        });
+        let read = repository.read("s1", 64).await.unwrap().unwrap();
+        assert_eq!(read.buffer, b"hello world");
+        assert_eq!(read.output_stream_bytes, 11);
     }
 
     #[tokio::test]

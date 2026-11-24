@@ -58,6 +58,10 @@ impl Session {
         let data = std::mem::take(&mut self.durable_output_batch);
         let sequence = self.durable_output_batch_sequence;
         self.durable_output_batch_sequence = self.durable_output_batch_sequence.wrapping_add(1);
-        Some(DurableOutputBatch { data, sequence })
+        Some(DurableOutputBatch {
+            data,
+            sequence,
+            end_cursor: self.output_stream_bytes,
+        })
     }
 }

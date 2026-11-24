@@ -300,7 +300,13 @@ impl ServerActor {
             .get_mut(session_id)
             .and_then(Session::flush_durable_output_batch);
         if let Some(batch) = batch {
-            self.persist_output_batch(session_id.to_string(), batch.sequence, batch.data);
+            self.history.queue_output_at_cursor(
+                session_id.to_string(),
+                batch.sequence,
+                batch.data,
+                self.config.scrollback_bytes as usize,
+                batch.end_cursor,
+            );
         }
     }
 
@@ -319,9 +325,7 @@ impl ServerActor {
         }
         self.flush_durable_output_batch(&session_id);
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            let checkpoint = session.checkpoint(None);
-            self.history
-                .queue_checkpoint(checkpoint, self.config.scrollback_bytes as usize);
+            session.queue_live_checkpoint(&self.history, self.config.scrollback_bytes as usize);
         }
     }
 
@@ -329,18 +333,7 @@ impl ServerActor {
         self.flush_durable_output_batch(session_id);
         if let Some(session) = self.sessions.get_mut(session_id) {
             session.invalidate_checkpoint();
-            let checkpoint = session.checkpoint(None);
-            self.history
-                .queue_checkpoint(checkpoint, self.config.scrollback_bytes as usize);
+            session.queue_live_checkpoint(&self.history, self.config.scrollback_bytes as usize);
         }
-    }
-
-    fn persist_output_batch(&mut self, session_id: String, sequence: i64, data: Vec<u8>) {
-        self.history.queue_output(
-            session_id,
-            sequence,
-            data,
-            self.config.scrollback_bytes as usize,
-        );
     }
 }
