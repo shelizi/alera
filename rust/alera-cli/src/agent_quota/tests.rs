@@ -394,10 +394,10 @@ fn preserves_gpt_acronym_and_uses_normal_hyphens() {
         "agy",
         "default",
         "Antigravity",
-        "claude and gpt models\nWeekly limit\n75% left",
+        "Gemini Models\nWeekly limit\n99% left\n5 hour limit\n100% left\nclaude and gpt models\nWeekly limit\n75% left\n5 hour limit\n100% left",
     );
-    assert_eq!(snapshot.buckets.len(), 1);
-    assert_eq!(snapshot.buckets[0].name, "Claude And GPT Models - Weekly");
+    assert_eq!(snapshot.buckets.len(), 4);
+    assert!(snapshot.buckets.iter().any(|bucket| bucket.name == "Claude And GPT Models - Weekly"));
 }
 
 #[test]
@@ -480,6 +480,49 @@ fn detects_complete_agy_usage_without_fixed_delay() {
     .join("\n");
     assert!(agy_usage_complete(&complete));
     assert!(!agy_usage_complete("Gemini Models\nWeekly limit\n99% left"));
+}
+
+#[test]
+fn agy_rejects_partial_and_legacy_only_quota_output() {
+    for output in [
+        "Gemini Models\nWeekly limit\n99% left",
+        "Gemini Models\nWeekly limit\n99% left\nClaude and GPT Models\nWeekly limit\n100% left\n5 hour limit\n100% left",
+        "Gemini 4 Argon\nWeekly limit\n99% left\n5 hour limit\n100% left\nClaude and GPT Models\nWeekly limit\n100% left\n5 hour limit\n100% left",
+        "Gemini Models\nModels within this group: Gemini 4 Neon\nGemini 4 Argon\nWeekly limit\n99% left\n5 hour limit\n100% left\nClaude and GPT Models\nWeekly limit\n100% left\n5 hour limit\n100% left",
+    ] {
+        let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", output);
+        assert_eq!(snapshot.status, "error");
+        assert!(snapshot.buckets.is_empty());
+        assert!(snapshot.error.as_deref().unwrap().contains("missing:"));
+        assert!(!agy_usage_complete(output));
+    }
+}
+
+#[test]
+fn agy_parses_argon_inside_live_shared_gemini_model_list() {
+    for models in [
+        "Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash",
+        "Gemini 4 Neon, Gemini 4 Carbon,\nGemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash",
+        "Gemini 4 Neon, Gemini 4 Argon",
+    ] {
+        let output = format!(
+            "GEMINI MODELS\nModels within this group: {models}  Weekly Limit Remaining[###] 73.46%Refreshes in 143h 11m  Five Hour Limit Remaining[#####] 100.00%Quota availableCLAUDE AND GPT MODELS\nModels within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B  Weekly Limit Remaining[#####] 100.00%Quota available  Five Hour Limit Remaining[#####] 100.00%Quota available"
+        );
+        let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
+        assert!(agy_usage_complete(&output));
+        assert_eq!(snapshot.status, "ok");
+        assert_eq!(snapshot.buckets.len(), 4);
+        for (name, expected_used) in [
+            ("Gemini Models - Weekly", 26.54),
+            ("Gemini Models - 5 Hour", 0.0),
+            ("Claude And GPT Models - Weekly", 0.0),
+            ("Claude And GPT Models - 5 Hour", 0.0),
+        ] {
+            let quota = snapshot.buckets.iter().find(|bucket| bucket.name == name).unwrap();
+            assert!((quota.used_percent - expected_used).abs() < 0.001, "{name}");
+        }
+        assert!(snapshot.buckets[0].reset_description.as_deref().unwrap().contains("143h 11m"));
+    }
 }
 
 #[test]

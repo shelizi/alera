@@ -310,17 +310,7 @@ fn windows_tui_launches_through_alera_bootstrap_instead_of_cmd() {
 }
 
 fn agy_usage_complete(output: &str) -> bool {
-    const BASE_BUCKETS: [&str; 4] = [
-        "Gemini Models - Weekly",
-        "Gemini Models - 5 Hour",
-        "Claude And GPT Models - Weekly",
-        "Claude And GPT Models - 5 Hour",
-    ];
-    let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", output);
-    snapshot.status == "ok"
-        && BASE_BUCKETS.iter().all(|expected| {
-            snapshot.buckets.iter().any(|bucket| bucket.name == *expected)
-        })
+    parse_tui_snapshot("agy", "default", "Antigravity", output).status == "ok"
 }
 
 fn parse_tui_snapshot(
@@ -466,32 +456,56 @@ fn parse_tui_snapshot(
 /// Parse the full text as ordered quota/group tokens rather than assuming
 /// that each field occupies a separate line.
 fn parse_agy_tui_snapshot(account_id: &str, display_name: &str, clean: &str) -> QuotaSnapshot {
+    const REQUIRED_BUCKETS: [&str; 4] = [
+        "Gemini Models - Weekly",
+        "Gemini Models - 5 Hour",
+        "Claude And GPT Models - Weekly",
+        "Claude And GPT Models - 5 Hour",
+    ];
     let token_re = Regex::new(
-        r"(?i)(?:gemini\s+4\s+argon\s+weekly\s+limit|(?:five|5)\s+hour\s+limit|weekly\s+limit|claude\s+(?:and\s+)?gpt\s+models|gemini\s+models|gemini\s+4\s+argon)\b",
+        r"(?i)(?:models\s+within\s+this\s+group\s*:|(?:(?:five|5)\s+hour\s+limit|weekly\s+limit|claude\s+(?:and\s+)?gpt\s+models|gemini\s+models|gemini\s+4\s+argon)\b)",
     )
     .unwrap();
     let percent_re = Regex::new(r"(?i)(\d{1,3}(?:\.\d+)?)\s*%\s*(used|left|remaining)?").unwrap();
     let tokens = token_re.find_iter(clean).collect::<Vec<_>>();
     let mut group: Option<&str> = None;
+    let mut model_list_start: Option<usize> = None;
     let mut buckets: Vec<QuotaBucket> = Vec::new();
 
     for (index, token) in tokens.iter().enumerate() {
         let word = token.as_str().split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase();
+        if word.starts_with("models within this group") {
+            model_list_start = Some(token.end());
+            continue;
+        }
         if word == "gemini models" {
             group = Some("Gemini Models");
+            model_list_start = None;
             continue;
         }
         if word == "claude and gpt models" || word == "claude gpt models" {
             group = Some("Claude And GPT Models");
+            model_list_start = None;
             continue;
         }
-        // Recognize legacy headings only as token boundaries, so their
-        // percentages cannot overwrite the preceding supported pool.
-        if word.starts_with("gemini 4 argon") {
-            group = None;
+        // Argon is now listed among the shared Gemini models. Only an
+        // actual legacy heading (not a model-list entry) ends that pool.
+        if word == "gemini 4 argon" {
+            let listed_model = model_list_start.is_some_and(|start| {
+                let before = &clean[start..token.start()];
+                let after = &clean[token.end()..];
+                !before.contains(['\r', '\n'])
+                    || before.trim_end().ends_with(',')
+                    || after.trim_start().starts_with(',')
+            });
+            if !listed_model {
+                group = None;
+                model_list_start = None;
+            }
             continue;
         }
 
+        model_list_start = None;
         let Some(quota_group) = group else {
             continue;
         };
@@ -549,12 +563,17 @@ fn parse_agy_tui_snapshot(account_id: &str, display_name: &str, clean: &str) -> 
         });
     }
 
-    if buckets.is_empty() {
+    let missing = REQUIRED_BUCKETS
+        .iter()
+        .filter(|expected| !buckets.iter().any(|bucket| bucket.name == **expected))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
         QuotaSnapshot::error(
             "agy",
             account_id,
             display_name,
-            "Usage output did not include recognizable quota percentages",
+            format!("Incomplete Antigravity quota output; missing: {}", missing.join(", ")),
         )
     } else {
         QuotaSnapshot::ok("agy", account_id, display_name, Vec::new(), buckets)
