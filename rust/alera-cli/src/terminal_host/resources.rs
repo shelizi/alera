@@ -8,6 +8,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 #[cfg(test)]
 mod cache_release_tests;
 mod history;
+mod host_metrics;
 mod process_tree;
 mod sampling_cadence;
 mod snapshot_payload;
@@ -207,8 +208,7 @@ impl ResourceSampler {
         host_pid: u32,
         app_pid: Option<u32>,
     ) -> Value {
-        self.system.refresh_memory();
-        self.system.refresh_cpu_usage();
+        host_metrics::refresh_host_metrics(&mut self.system);
         // `nothing()` is not nothing: it defaults `tasks` on, and on Linux that
         // puts every thread in the table as a child process of its own. Each one
         // reports the whole process's RSS, because they share the address space,
