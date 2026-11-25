@@ -21,6 +21,9 @@ pub(super) struct ResourceMonitorState {
     release_sampler_when_ready: bool,
     /// Pid of the app process to attribute, as reported by the last caller.
     app_pid: Option<u32>,
+    /// Exact App generation supplied alongside its PID, never inferred.
+    app_creation: Option<u64>,
+    sample_app_identity: Option<(Option<u32>, Option<u64>)>,
     /// Cadence the ticker is currently running at, following what callers say
     /// they poll at rather than a fixed value.
     interval: Duration,
@@ -35,6 +38,8 @@ impl Default for ResourceMonitorState {
             sample_in_flight: false,
             release_sampler_when_ready: false,
             app_pid: None,
+            app_creation: None,
+            sample_app_identity: None,
             interval: RESOURCE_SAMPLE_INTERVAL,
         }
     }
@@ -45,6 +50,7 @@ impl ResourceMonitorState {
         self.ticker.stop();
         self.last_snapshot = None;
         self.app_pid = None;
+        self.app_creation = None;
         self.interval = RESOURCE_SAMPLE_INTERVAL;
         if self.sample_in_flight {
             self.release_sampler_when_ready = true;
@@ -55,6 +61,7 @@ impl ResourceMonitorState {
 
     fn finish_sample(&mut self, snapshot: Value) {
         self.sample_in_flight = false;
+        let sample_identity = self.sample_app_identity.take();
         if self.release_sampler_when_ready {
             self.release_sampler_when_ready = false;
             if let Ok(mut sampler) = self.sampler.lock() {
@@ -64,7 +71,18 @@ impl ResourceMonitorState {
                 return;
             }
         }
+        if sample_identity.is_some_and(|identity| identity != (self.app_pid, self.app_creation)) {
+            return;
+        }
         self.last_snapshot = Some(snapshot);
+    }
+
+    fn note_app_identity(&mut self, pid: Option<u32>, creation: Option<u64>) {
+        if pid.is_some() && (pid, creation) != (self.app_pid, self.app_creation) {
+            self.app_pid = pid;
+            self.app_creation = creation;
+            self.last_snapshot = None;
+        }
     }
 }
 
@@ -76,10 +94,9 @@ impl ServerActor {
     /// otherwise serialize behind a process-table walk.
     pub(super) fn handle_resource_snapshot(&mut self, payload: &Value) -> HostResult<Value> {
         let app_pid = parse_app_pid(payload)?;
-        if app_pid.is_some() {
-            self.resources.app_pid = app_pid;
-        }
+        let app_creation = parse_app_creation(payload, app_pid)?;
         let interval = parse_sample_interval(payload)?.unwrap_or(RESOURCE_SAMPLE_INTERVAL);
+        self.resources.note_app_identity(app_pid, app_creation);
         self.resources
             .ticker
             .set_idle_stop(resource_idle_stop_for(interval));
@@ -135,10 +152,14 @@ impl ServerActor {
         let sampler = Arc::clone(&self.resources.sampler);
         let host_pid = std::process::id();
         let app_pid = self.resources.app_pid;
+        let app_creation = self.resources.app_creation;
+        self.resources.sample_app_identity = Some((app_pid, app_creation));
         let inbox = self.inbox.clone();
         tokio::task::spawn_blocking(move || {
             let snapshot = match sampler.lock() {
-                Ok(mut sampler) => sampler.sample(&roots, host_pid, app_pid),
+                Ok(mut sampler) => {
+                    sampler.sample_with_app_identity(&roots, host_pid, app_pid, app_creation)
+                }
                 Err(_) => warming_snapshot(),
             };
             let _ = inbox.send(ServerCommand::ResourceSampleReady { snapshot });
@@ -193,6 +214,25 @@ fn parse_app_pid(payload: &Value) -> HostResult<Option<u32>> {
     }
 }
 
+/// Decimal string avoids loss of FILETIME's subsecond bits through JSON
+/// implementations that represent numbers as IEEE-754 doubles.
+fn parse_app_creation(payload: &Value, pid: Option<u32>) -> HostResult<Option<u64>> {
+    match payload.get("appCreationFiletime") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|ticks| pid.is_some() && *ticks >= 116_444_736_010_000_000)
+            .map(Some)
+            .ok_or_else(|| {
+                HostError::state(
+                    "appCreationFiletime must be a valid decimal FILETIME with appPid.",
+                )
+            }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +257,48 @@ mod tests {
         assert!(parse_app_pid(&json!({ "appPid": 0 })).is_err());
         assert!(parse_app_pid(&json!({ "appPid": -1 })).is_err());
         assert!(parse_app_pid(&json!({ "appPid": "one" })).is_err());
+    }
+
+    #[test]
+    fn app_creation_is_optional_lossless_and_bound_to_a_pid() {
+        let ticks = 133_500_000_000_000_123u64;
+        let payload = json!({"appPid": 42, "appCreationFiletime": ticks.to_string()});
+        assert_eq!(parse_app_creation(&payload, Some(42)).unwrap(), Some(ticks));
+        assert!(parse_app_creation(&payload, None).is_err());
+        for invalid in [
+            json!(ticks),
+            json!("0"),
+            json!("-1"),
+            json!("18446744073709551616"),
+            json!("abc"),
+        ] {
+            assert!(
+                parse_app_creation(&json!({"appCreationFiletime": invalid}), Some(42)).is_err()
+            );
+        }
+        assert_eq!(parse_app_creation(&json!({}), Some(42)).unwrap(), None);
+    }
+
+    #[test]
+    fn app_generation_changes_discard_stale_and_in_flight_snapshots() {
+        let mut resources = ResourceMonitorState::default();
+        resources.note_app_identity(Some(42), Some(133_500_000_000_000_123));
+        resources.last_snapshot = Some(json!({"old": true}));
+        resources.sample_app_identity = Some((resources.app_pid, resources.app_creation));
+        resources.sample_in_flight = true;
+        // A bare-PID client cannot accidentally reuse a prior exact seal.
+        resources.note_app_identity(Some(42), None);
+        assert!(resources.last_snapshot.is_none());
+        assert!(resources.app_creation.is_none());
+        resources.finish_sample(json!({"old": true}));
+        assert!(resources.last_snapshot.is_none());
+        resources.note_app_identity(None, None);
+        assert_eq!(resources.app_pid, Some(42));
+        resources.sample_app_identity = Some((resources.app_pid, resources.app_creation));
+        resources.finish_sample(json!({"new": true}));
+        assert_eq!(resources.last_snapshot, Some(json!({"new": true})));
+        resources.stop_ticker();
+        assert!(resources.app_pid.is_none() && resources.app_creation.is_none());
     }
 
     #[test]

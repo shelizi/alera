@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform, pid;
+
+import 'package:alera/src/features/resource_manager/application/resource_app_identity.dart';
 
 import 'package:alera/src/features/resource_manager/application/resource_manager_providers.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
@@ -52,6 +56,44 @@ void main() {
         expect(client.requests.single['appPid'], 1234);
         expect(snapshot.totalMemoryBytes, 42);
         expect(snapshot.hasReading, isTrue);
+      },
+    );
+
+    test(
+      'sends a lossless creation marker only for the caller itself',
+      () async {
+        final client = _FakeRuntimeHostClient(
+          payload: <String, Object?>{'warming': false},
+        );
+        await fetchResourceSnapshot(
+          client: client,
+          appPid: pid,
+          interval: resourceSnapshotOpenInterval,
+        );
+        final request = client.requests.single;
+        if (Platform.isWindows) {
+          final marker = resourceAppCreationFiletime(pid);
+          expect(marker, isNotNull);
+          expect(int.parse(marker!), greaterThanOrEqualTo(116444736010000000));
+          expect(request['appCreationFiletime'], marker);
+          expect(
+            (jsonDecode(jsonEncode(request)) as Map)['appCreationFiletime'],
+            marker,
+          );
+        } else {
+          expect(request.containsKey('appCreationFiletime'), isFalse);
+        }
+        final otherPid = pid == 1 ? 2 : 1;
+        expect(resourceAppCreationFiletime(otherPid), isNull);
+        await fetchResourceSnapshot(
+          client: client,
+          appPid: otherPid,
+          interval: resourceSnapshotOpenInterval,
+        );
+        expect(
+          client.requests.last.containsKey('appCreationFiletime'),
+          isFalse,
+        );
       },
     );
 

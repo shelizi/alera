@@ -16,8 +16,8 @@ mod shell_identity;
 mod snapshot_payload;
 #[cfg(windows)]
 pub use shell_identity::{recover_precise_shell, seal_shell_from_handle};
-#[cfg(all(test, windows))]
-mod windows_targeted_probe;
+#[cfg(windows)]
+mod windows_native;
 
 use history::ResourceHistory;
 use process_tree::{ProcessRow, SubtreeUsage};
@@ -174,6 +174,8 @@ pub struct ResourceSampler {
     system: System,
     history: ResourceHistory,
     refreshes: u32,
+    #[cfg(windows)]
+    native: Option<windows_native::NativeSampler>,
 }
 
 impl Default for ResourceSampler {
@@ -182,6 +184,15 @@ impl Default for ResourceSampler {
             system: System::new(),
             history: ResourceHistory::default(),
             refreshes: 0,
+            #[cfg(windows)]
+            native: if !cfg!(test)
+                && std::env::var_os("ALERA_RESOURCE_NATIVE_WINDOWS").as_deref()
+                    == Some(std::ffi::OsStr::new("1"))
+            {
+                Some(windows_native::NativeSampler::default())
+            } else {
+                None
+            },
         }
     }
 }
@@ -192,6 +203,10 @@ impl ResourceSampler {
     /// history as if it were the last two seconds.
     pub fn reset_cpu_baseline(&mut self) {
         self.refreshes = 0;
+        #[cfg(windows)]
+        if let Some(native) = &mut self.native {
+            native.reset();
+        }
     }
 
     /// Drop process rows once nobody is reading resource snapshots.
@@ -200,51 +215,30 @@ impl ResourceSampler {
     /// table and its CPU baseline are useful only while sampling is active.
     pub fn release_process_cache(&mut self) {
         self.system = System::new();
-        self.refreshes = 0;
+        self.reset_cpu_baseline();
     }
 
-    /// Sweep the process table and build the wire payload.
-    ///
-    /// Runs on a blocking thread: a full refresh walks every process on the
-    /// machine and must not sit on the async runtime.
+    #[cfg(test)]
     pub fn sample(
         &mut self,
         roots: &[SessionPidRoot],
         host_pid: u32,
         app_pid: Option<u32>,
     ) -> Value {
-        host_metrics::refresh_host_metrics(&mut self.system);
-        // `nothing()` is not nothing: it defaults `tasks` on, and on Linux that
-        // puts every thread in the table as a child process of its own. Each one
-        // reports the whole process's RSS, because they share the address space,
-        // so a subtree total scales with the thread count instead of measuring
-        // memory: the app read 26x its real size at 97 threads. Thread CPU
-        // double counts the same way, since the leader's `/proc/<pid>/stat` is
-        // already the thread-group aggregate.
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing()
-                .without_tasks()
-                .with_cpu()
-                .with_memory(),
-        );
-        self.refreshes = self.refreshes.saturating_add(1);
-        let warming = self.refreshes < REFRESHES_BEFORE_CPU_IS_VALID;
+        self.sample_with_app_identity(roots, host_pid, app_pid, None)
+    }
 
-        let index =
-            ProcessIndex::build(
-                self.system
-                    .processes()
-                    .iter()
-                    .map(|(pid, process)| ProcessRow {
-                        pid: pid.as_u32(),
-                        parent_pid: process.parent().map(|parent| parent.as_u32()),
-                        start_time: process.start_time(),
-                        cpu_percent: process.cpu_usage(),
-                        memory_bytes: process.memory(),
-                    }),
-            );
+    /// Collect resources on a blocking thread. Both backends share the same
+    /// attribution, history, and wire payload path.
+    pub fn sample_with_app_identity(
+        &mut self,
+        roots: &[SessionPidRoot],
+        host_pid: u32,
+        app_pid: Option<u32>,
+        app_creation: Option<u64>,
+    ) -> Value {
+        let (index, warming, native_used) =
+            self.collect_process_index(roots, host_pid, app_pid, app_creation);
 
         let now = Instant::now();
         let mut claimed: HashSet<u32> = HashSet::new();
@@ -260,6 +254,10 @@ impl ResourceSampler {
             let measured = root.shell.is_some_and(|shell| {
                 if !index.holds(shell) {
                     return false;
+                }
+                if native_used {
+                    // Native validated all exact generations in this frame.
+                    return true;
                 }
                 #[cfg(windows)]
                 {
@@ -291,6 +289,22 @@ impl ResourceSampler {
         let host_row = process_json(host_pid, host, host_history);
 
         let app = app_pid
+            .filter(|&pid| {
+                #[cfg(windows)]
+                if let Some(creation) = app_creation {
+                    // A supplied precise marker must not degrade to a bare
+                    // PID even if native collection rejects the frame.
+                    return ShellProcess::from_windows_creation_time(pid, creation).is_some_and(
+                        |seal| {
+                            index.holds(seal)
+                                && (native_used || shell_identity::matches_live_creation(seal))
+                        },
+                    );
+                }
+                #[cfg(not(windows))]
+                let _ = (pid, app_creation);
+                true
+            })
             .map(|pid| index.collect_subtree(pid, &mut claimed))
             .unwrap_or_default();
         accumulate(&mut totals, app);
@@ -320,6 +334,78 @@ impl ResourceSampler {
             },
         });
         attach_rows(snapshot, host_row, app_row, sessions)
+    }
+
+    fn collect_process_index(
+        &mut self,
+        roots: &[SessionPidRoot],
+        host_pid: u32,
+        app_pid: Option<u32>,
+        app_creation: Option<u64>,
+    ) -> (ProcessIndex, bool, bool) {
+        host_metrics::refresh_host_metrics(&mut self.system);
+        #[cfg(not(windows))]
+        let _ = (roots, host_pid, app_pid, app_creation);
+        #[cfg(windows)]
+        if let Some(native) = &mut self.native {
+            match native.sample(
+                roots,
+                host_pid,
+                app_pid,
+                app_creation,
+                self.system.cpus().len(),
+            ) {
+                windows_native::SampleOutcome::Native(index, warming) => {
+                    // Release the prior backend's rows/handles after a
+                    // successful switch. Keep history and host metrics.
+                    if !self.system.processes().is_empty() {
+                        self.system = System::new();
+                        host_metrics::refresh_host_metrics(&mut self.system);
+                    }
+                    self.refreshes = 0;
+                    return (index, warming, true);
+                }
+                windows_native::SampleOutcome::Legacy { reset } => {
+                    if reset {
+                        self.system = System::new();
+                        self.refreshes = 0;
+                        host_metrics::refresh_host_metrics(&mut self.system);
+                    }
+                }
+            }
+        }
+        // `nothing()` is not nothing: it defaults `tasks` on, and on Linux that
+        // puts every thread in the table as a child process of its own. Each one
+        // reports the whole process's RSS, because they share the address space,
+        // so a subtree total scales with the thread count instead of measuring
+        // memory: the app read 26x its real size at 97 threads. Thread CPU
+        // double counts the same way, since the leader's `/proc/<pid>/stat` is
+        // already the thread-group aggregate.
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing()
+                .without_tasks()
+                .with_cpu()
+                .with_memory(),
+        );
+        self.refreshes = self.refreshes.saturating_add(1);
+        let warming = self.refreshes < REFRESHES_BEFORE_CPU_IS_VALID;
+
+        let index =
+            ProcessIndex::build(
+                self.system
+                    .processes()
+                    .iter()
+                    .map(|(pid, process)| ProcessRow {
+                        pid: pid.as_u32(),
+                        parent_pid: process.parent().map(|parent| parent.as_u32()),
+                        start_time: process.start_time(),
+                        cpu_percent: process.cpu_usage(),
+                        memory_bytes: process.memory(),
+                    }),
+            );
+        (index, warming, false)
     }
 }
 

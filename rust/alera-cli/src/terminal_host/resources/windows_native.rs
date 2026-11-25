@@ -1,14 +1,16 @@
-//! Opt-in Windows process-collection experiment. Not a production sampler.
-//! Compare full refresh, two topology-first refreshes, and one native snapshot
-//! with direct reads. Never collect command lines or mutate inspected processes.
+//! Opt-in Windows topology-first resource sampling.
+//! Read a single process snapshot and query only selected descendants.
+//! Never collect command lines or mutate inspected processes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem::size_of;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, STILL_ACTIVE,
+    CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, WAIT_TIMEOUT,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -16,8 +18,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessTimes, GetSystemTimes, OpenProcess,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetProcessTimes, GetSystemTimes, OpenProcess, WaitForSingleObject,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
 struct OwnedHandle(HANDLE);
@@ -94,8 +96,16 @@ struct RawSample {
 }
 
 fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
-    let handle =
-        OwnedHandle(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?);
+    let handle = OwnedHandle(
+        unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+        }
+        .ok()?,
+    );
     let (mut creation, mut exit, mut kernel, mut user) = (
         FILETIME::default(),
         FILETIME::default(),
@@ -119,9 +129,8 @@ fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
         )
     }
     .ok()?;
-    let mut exit_code = 0;
-    unsafe { GetExitCodeProcess(handle.0, &mut exit_code) }.ok()?;
-    if exit_code != STILL_ACTIVE.0 as u32 {
+    // The signaled state is unambiguous even for exit code STILL_ACTIVE.
+    if unsafe { WaitForSingleObject(handle.0, 0) } != WAIT_TIMEOUT {
         return None;
     }
     Some(RawSample {
@@ -159,6 +168,7 @@ fn cpu_since(
     Some(100.0 * cores as f64 * delta as f64 / global_delta as f64)
 }
 
+#[cfg(test)]
 fn refresh(system: &mut System, targets: ProcessesToUpdate<'_>, metrics: bool) {
     let kind = ProcessRefreshKind::nothing().without_tasks();
     system.refresh_processes_specifics(
@@ -172,6 +182,7 @@ fn refresh(system: &mut System, targets: ProcessesToUpdate<'_>, metrics: bool) {
     );
 }
 
+#[cfg(test)]
 fn selected_sysinfo_pids(system: &System, roots: &[u32]) -> Vec<Pid> {
     let rows: Vec<_> = system
         .processes()
@@ -422,5 +433,95 @@ fn windows_targeted_collection_benchmark() {
     }
 }
 
-#[path = "windows_targeted_probe/candidate.rs"]
-mod candidate;
+mod backend;
+
+/// Optional production backend. Captures only the Host's own authoritative
+/// identity; the App and Session generations must come from their owners.
+#[derive(Default)]
+pub(super) struct NativeSampler {
+    controller: backend::BackendController,
+    host: Option<super::ShellProcess>,
+}
+
+pub(super) enum SampleOutcome {
+    Native(super::ProcessIndex, bool),
+    Legacy { reset: bool },
+}
+
+impl NativeSampler {
+    pub(super) fn reset(&mut self) {
+        self.controller.reset();
+        self.host = None;
+    }
+
+    pub(super) fn sample(
+        &mut self,
+        sessions: &[super::SessionPidRoot],
+        host_pid: u32,
+        app_pid: Option<u32>,
+        app_creation: Option<u64>,
+        cores: usize,
+    ) -> SampleOutcome {
+        use backend::{BackendResult, Reject, Root};
+
+        if self.host.is_none() && host_pid == std::process::id() {
+            // A running process cannot recycle its own PID while making this
+            // call. Open an owned, query-only handle, not a guessed App PID.
+            if let Ok(raw) = unsafe {
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                    false,
+                    host_pid,
+                )
+            } {
+                let handle = OwnedHandle(raw);
+                self.host = super::seal_shell_from_handle(host_pid, handle.0 .0);
+            }
+        }
+        let host = self.host.filter(|seal| seal.pid == host_pid);
+        let mut roots = Vec::with_capacity(sessions.len() + 2);
+        roots.push(host.map_or_else(|| Root::plain(host_pid), Root::shell));
+        if let Some(pid) = app_pid {
+            let seal = app_creation.and_then(|creation| {
+                super::ShellProcess::from_windows_creation_time(pid, creation)
+            });
+            roots.push(seal.map_or_else(|| Root::plain(pid), Root::shell));
+        }
+        for session in sessions {
+            if let Some(shell) = session.shell {
+                roots.push(Root::shell(shell));
+            } else if session.running {
+                // Unknown live Session identity must stay on the old path.
+                roots.push(Root::plain(0));
+            }
+        }
+        match self.controller.sample(
+            std::time::Instant::now(),
+            std::time::Instant::now,
+            &roots,
+            || {
+                let frame = backend::collect(&roots, cores)?;
+                if !frame.contains_pid(host_pid) {
+                    return Err(Reject::MissingMetric);
+                }
+                Ok(frame)
+            },
+            |reset| reset,
+        ) {
+            BackendResult::Native(measurement) => {
+                SampleOutcome::Native(measurement.index, measurement.warming)
+            }
+            BackendResult::Legacy {
+                value,
+                reason,
+                reset,
+            } => {
+                debug_assert_eq!(value, reset);
+                if reset {
+                    tracing::debug!(?reason, "resource sampler falling back to sysinfo");
+                }
+                SampleOutcome::Legacy { reset }
+            }
+        }
+    }
+}

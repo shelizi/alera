@@ -1,4 +1,4 @@
-//! Test-only candidate lifecycle for topology-first Windows accounting.
+//! Transactional CPU baseline and backend selection for Windows accounting.
 //! Reject an entire frame on ambiguity; never publish partially sampled trees.
 use super::super::process_tree::{ProcessIndex, ProcessRow, ShellProcess};
 use super::{
@@ -20,7 +20,7 @@ const CLOCK_TOLERANCE_TICKS: u64 = 2_500_000; // 250 ms
 const WARMUP_SWEEPS: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Reject {
+pub(super) enum Reject {
     Topology,
     UnsupportedCores,
     MissingMetric,
@@ -33,7 +33,7 @@ enum Reject {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Root {
+pub(super) struct Root {
     pid: u32,
     sealed: Option<ShellProcess>,
     // An additive marker, not a change to ShellProcess's persisted Unix seconds.
@@ -41,14 +41,14 @@ struct Root {
 }
 
 impl Root {
-    fn plain(pid: u32) -> Self {
+    pub(super) fn plain(pid: u32) -> Self {
         Self {
             pid,
             sealed: None,
             creation: None,
         }
     }
-    fn shell(shell: ShellProcess) -> Self {
+    pub(super) fn shell(shell: ShellProcess) -> Self {
         Self {
             pid: shell.pid,
             sealed: Some(shell),
@@ -56,6 +56,7 @@ impl Root {
         }
     }
 
+    #[cfg(test)]
     fn exact(pid: u32, creation: u64) -> Self {
         Self {
             pid,
@@ -64,6 +65,7 @@ impl Root {
         }
     }
 
+    #[cfg(test)]
     fn exact_shell(shell: ShellProcess, creation: u64) -> Self {
         Self {
             pid: shell.pid,
@@ -96,7 +98,7 @@ fn single_group_cores() -> Result<usize, Reject> {
     Ok(count)
 }
 
-struct Frame {
+pub(super) struct Frame {
     samples: HashMap<u32, RawSample>,
     parents: HashMap<u32, u32>,
     cores: usize,
@@ -106,6 +108,10 @@ struct Frame {
 }
 
 impl Frame {
+    pub(super) fn contains_pid(&self, pid: u32) -> bool {
+        self.samples.contains_key(&pid)
+    }
+
     // Validate exact closure, process generations and parent links before
     // building rows. Missing roots are allowed; missing *selected* rows are
     // not, because losing an intermediate node can hide an entire subtree.
@@ -186,7 +192,7 @@ impl Frame {
     }
 }
 
-fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
+pub(super) fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
     let start = Instant::now();
     let cores = single_group_cores()?;
     if cores != expected_cores {
@@ -228,9 +234,10 @@ fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
     Frame::validate(&topology, roots, samples, cores, system_ticks, at, wall_at)
 }
 
-struct Measurement {
-    index: ProcessIndex,
-    warming: bool,
+pub(super) struct Measurement {
+    pub(super) index: ProcessIndex,
+    pub(super) warming: bool,
+    #[cfg(test)]
     measured_count: usize,
 }
 
@@ -312,6 +319,7 @@ impl Baseline {
                 memory_bytes: sample.working_set,
             });
         }
+        #[cfg(test)]
         let measured_count = rows.len();
         let index = ProcessIndex::build(rows);
         self.previous = Some(frame); // replaces and evicts missing generations
@@ -319,16 +327,19 @@ impl Baseline {
         Ok(Measurement {
             index,
             warming,
+            #[cfg(test)]
             measured_count,
         })
     }
 }
 
+#[cfg(test)]
 enum Outcome<T> {
     Native(Measurement),
     Legacy(T),
 }
 
+#[cfg(test)]
 fn sample_or<T>(
     baseline: &mut Baseline,
     candidate: Result<Frame, Reject>,
@@ -346,13 +357,13 @@ fn sample_or<T>(
 const RETRY_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
-struct BackendController {
+pub(super) struct BackendController {
     native: Baseline,
     legacy_active: bool,
     retry_at: Option<Instant>,
 }
 
-enum BackendResult<T> {
+pub(super) enum BackendResult<T> {
     Native(Measurement),
     Legacy {
         value: T,
@@ -362,13 +373,14 @@ enum BackendResult<T> {
 }
 
 impl BackendController {
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         *self = Self::default();
     }
 
-    fn sample<T>(
+    pub(super) fn sample<T>(
         &mut self,
         now: Instant,
+        finished_at: impl FnOnce() -> Instant,
         roots: &[Root],
         native: impl FnOnce() -> Result<Frame, Reject>,
         legacy: impl FnOnce(bool) -> T,
@@ -395,7 +407,7 @@ impl BackendController {
         };
         self.native.reset();
         if reason.is_some() && !cooling_down {
-            self.retry_at = now.checked_add(RETRY_DELAY);
+            self.retry_at = finished_at().checked_add(RETRY_DELAY);
         }
         let reset = !self.legacy_active;
         self.legacy_active = true;
@@ -666,7 +678,7 @@ mod tests {
     }
 
     fn children(count: usize) -> Vec<ChildGuard> {
-        let parent = module_path!().rsplit_once("::candidate::tests").unwrap().0;
+        let parent = module_path!().rsplit_once("::backend::tests").unwrap().0;
         let parent = parent.split_once("::").unwrap().1;
         let child_test = format!("{parent}::hold_test_child");
         // Keep a direct reference to the helper so this spelling stays tied to
@@ -876,6 +888,7 @@ mod tests {
         let samples = [(10, raw(1, 10, 20))];
         let first = backend.sample(
             now,
+            || now,
             &roots,
             || frame(now, 0, &rows, &samples, &roots),
             |_| panic!("unexpected fallback"),
@@ -886,6 +899,7 @@ mod tests {
         }
         let failure = backend.sample(
             now + Duration::from_secs(2),
+            || now + Duration::from_secs(7),
             &roots,
             || Err(Reject::MissingMetric),
             |reset| {
@@ -902,9 +916,10 @@ mod tests {
             }
         ));
         assert!(backend.native.previous.is_none());
-        for second in [4, 10, 31] {
+        for second in [8, 10, 32, 36] {
             let legacy = backend.sample(
                 now + Duration::from_secs(second),
+                || now + Duration::from_secs(second),
                 &roots,
                 || panic!("must not retry during cooldown"),
                 |reset| {
@@ -922,15 +937,17 @@ mod tests {
             ));
         }
         let resumed = backend.sample(
-            now + Duration::from_secs(32),
+            now + Duration::from_secs(37),
+            || now + Duration::from_secs(37),
             &roots,
-            || frame(now, 32, &rows, &samples, &roots),
+            || frame(now, 37, &rows, &samples, &roots),
             |_| panic!("unexpected fallback"),
         );
         assert!(matches!(resumed,BackendResult::<()>::Native(m) if m.warming));
         let coarse = [Root::shell(ShellProcess::coarse(10, 1000))];
         let result = backend.sample(
-            now + Duration::from_secs(34),
+            now + Duration::from_secs(39),
+            || now + Duration::from_secs(39),
             &coarse,
             || panic!("unsealed root must not query native"),
             |reset| reset,
@@ -952,7 +969,7 @@ mod tests {
     }
 
     fn busy_children(count: usize) -> Vec<ChildGuard> {
-        let parent = module_path!().rsplit_once("::candidate::tests").unwrap().0;
+        let parent = module_path!().rsplit_once("::backend::tests").unwrap().0;
         let parent = parent.split_once("::").unwrap().1;
         let child_test = format!("{parent}::hold_test_child");
         (0..count)

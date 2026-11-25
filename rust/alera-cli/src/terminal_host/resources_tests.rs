@@ -278,3 +278,101 @@ fn precise_shell_resource_attribution_rejects_same_second_reuse() {
     assert_eq!(snapshot["sessions"][0]["memoryBytes"], json!(0));
     assert_eq!(snapshot["sessions"][0]["processCount"], json!(0));
 }
+
+#[cfg(windows)]
+#[test]
+fn opted_in_sampler_keeps_bare_app_pid_on_legacy_backend() {
+    let mut sampler = ResourceSampler::default();
+    sampler.native = Some(windows_native::NativeSampler::default());
+    let pid = std::process::id();
+    let first = sampler.sample_with_app_identity(&[], pid, Some(pid), None);
+    assert_eq!(first["warming"], json!(true));
+    assert!(!sampler.system.processes().is_empty());
+    assert_eq!(sampler.refreshes, 1);
+    sampler.sample_with_app_identity(&[], pid, Some(pid), None);
+    // Staying on legacy must not reset its CPU baseline every time.
+    assert_eq!(sampler.refreshes, 2);
+    sampler.release_process_cache();
+    assert!(sampler.system.processes().is_empty());
+    assert_eq!(sampler.refreshes, 0);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "opt-in native resource payload and fallback on a responsive single-group host"]
+fn opted_in_sampler_warms_falls_back_and_keeps_history_across_idle() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    let pid = std::process::id();
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .expect("self process");
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    let seal = seal_shell_from_handle(pid, handle.as_raw_handle()).expect("exact seal");
+    let creation = seal.creation_filetime().unwrap();
+    let mut sampler = ResourceSampler::default();
+    sampler.native = Some(windows_native::NativeSampler::default());
+    let roots = [root(Some(seal), true)];
+    for step in 0..3 {
+        let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+        assert_eq!(snapshot["warming"], json!(step < 2));
+        assert_eq!(snapshot["sessions"][0]["measured"], json!(true));
+        assert!(snapshot["sessions"][0]["memoryBytes"].as_u64().unwrap() > 0);
+        assert_eq!(
+            snapshot["totals"]["memoryBytes"],
+            snapshot["sessions"][0]["memoryBytes"]
+        );
+        assert!(
+            sampler.system.processes().is_empty(),
+            "native must not retain full-table rows"
+        );
+        assert_eq!(
+            snapshot["sessions"][0]["history"].as_array().unwrap().len(),
+            step + 1
+        );
+        if step < 2 {
+            std::thread::sleep(
+                sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(std::time::Duration::from_millis(250))
+                    + std::time::Duration::from_millis(30),
+            );
+        }
+    }
+    // The exact same PID and second, but wrong full FILETIME.
+    let wrong = if creation % 10_000_000 == 9_999_999 {
+        creation - 1
+    } else {
+        creation + 1
+    };
+    let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(wrong));
+    assert_eq!(snapshot["warming"], json!(true));
+    assert_eq!(snapshot["processes"]["app"]["memoryBytes"], json!(0));
+    assert!(
+        !sampler.system.processes().is_empty(),
+        "wrong generation must fall back"
+    );
+    assert_eq!(sampler.refreshes, 1);
+    sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+    assert_eq!(
+        sampler.refreshes, 2,
+        "cooldown must retain legacy CPU baseline"
+    );
+    sampler.release_process_cache();
+    assert!(sampler.system.processes().is_empty());
+    let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+    assert_eq!(snapshot["warming"], json!(true));
+    assert!(
+        sampler.system.processes().is_empty(),
+        "idle release must clear native cooldown"
+    );
+    assert_eq!(
+        snapshot["sessions"][0]["history"].as_array().unwrap().len(),
+        6
+    );
+}
