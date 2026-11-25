@@ -7,8 +7,9 @@ run-name: >-
 
 # The upstream Cut Release pipeline publishes to the upstream update bucket and
 # needs its signing keys, so it cannot run on this fork. This workflow only
-# builds Windows, macOS and Android and attaches them to one GitHub Release: no updater index,
-# no package managers. Android uses the fork's persistent APK signing key.
+# builds Windows, macOS and Android and attaches them to one GitHub Release.
+# Signed Classic updater assets are emitted only with the fork's own keys.
+# Android uses the fork's persistent APK signing key; no package managers.
 on:
   push:
     tags:
@@ -111,10 +112,22 @@ jobs:
           # Stamps the bundled runtime sidecar with the app version instead of
           # the Cargo crate version.
           ALERA_BUILD_VERSION: ${{ steps.version.outputs.version }}
-        run: >-
-          flutter build windows --release
-          --dart-define=ALERA_FLAVOR=release
-          --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+        run: |
+          $flags = @('--dart-define=ALERA_FLAVOR=release',
+            '--dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases')
+          if ($env:ALERA_FORK_UPDATE_PUBLIC_KEY) {
+            $flags += @(
+              '--dart-define=ALERA_FORK_CLASSIC_UPDATES=true',
+              '--dart-define=ALERA_UPDATE_ARCHIVE_URL=https://github.com/shelizi/alera/releases/latest/download/alera-classic-windows-x64-update-index.json',
+              '--dart-define=ALERA_UPDATE_AUTO_INSTALL_ENABLED=true',
+              '--dart-define=ALERA_SIGNED_RELEASE=true',
+              '--dart-define=ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID=shelizi-classic-v1',
+              "--dart-define=ALERA_UPDATE_MANIFEST_PUBLIC_KEY=$env:ALERA_FORK_UPDATE_PUBLIC_KEY"
+            )
+          }
+          flutter build windows --release @flags
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package release zip
         id: package
@@ -132,6 +145,17 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 "dist/$name").Hash.ToLowerInvariant()
           "$hash  $name" | Out-File -Encoding ascii -NoNewline "dist/$name.sha256"
           Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Sign Windows Classic update metadata
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+          ALERA_FORK_UPDATE_PRIVATE_KEY: ${{ secrets.ALERA_FORK_UPDATE_PRIVATE_KEY }}
+        run: |
+          if (-not $env:ALERA_FORK_UPDATE_PUBLIC_KEY -and -not $env:ALERA_FORK_UPDATE_PRIVATE_KEY) { exit 0 }
+          dart tool/release/fork_classic_update_metadata.dart generate windows-x64 $env:VERSION dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload release zip
         uses: actions/upload-artifact@v7
@@ -198,11 +222,20 @@ jobs:
         shell: bash
         env:
           ALERA_BUILD_VERSION: ${{ steps.version.outputs.version }}
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          flutter build macos --release \
-            --dart-define=ALERA_FLAVOR=release \
-            --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases
+          flags=(--dart-define=ALERA_FLAVOR=release
+            --dart-define=ALERA_RELEASE_PAGE_URL=https://github.com/${{ github.repository }}/releases)
+          if [[ -n "$ALERA_FORK_UPDATE_PUBLIC_KEY" ]]; then
+            flags+=(--dart-define=ALERA_FORK_CLASSIC_UPDATES=true
+              --dart-define=ALERA_UPDATE_ARCHIVE_URL=https://github.com/shelizi/alera/releases/latest/download/alera-classic-macos-arm64-update-index.json
+              --dart-define=ALERA_UPDATE_AUTO_INSTALL_ENABLED=true
+              --dart-define=ALERA_SIGNED_RELEASE=true
+              --dart-define=ALERA_UPDATE_MANIFEST_PUBLIC_KEY_ID=shelizi-classic-v1
+              "--dart-define=ALERA_UPDATE_MANIFEST_PUBLIC_KEY=$ALERA_FORK_UPDATE_PUBLIC_KEY")
+          fi
+          flutter build macos --release "${flags[@]}"
 
       - name: Verify macOS ARM64 bundle
         shell: bash
@@ -228,6 +261,24 @@ jobs:
           shasum -a 256 "dist/$name" | sed 's#  dist/#  #' >"dist/$name.sha256"
           ls -lh dist
 
+      - name: Package and sign macOS Classic update
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+          ALERA_FORK_UPDATE_PRIVATE_KEY: ${{ secrets.ALERA_FORK_UPDATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ALERA_FORK_UPDATE_PUBLIC_KEY" && -z "$ALERA_FORK_UPDATE_PRIVATE_KEY" ]]; then exit 0; fi
+          [[ -n "$ALERA_FORK_UPDATE_PUBLIC_KEY" && -n "$ALERA_FORK_UPDATE_PRIVATE_KEY" ]]
+          bundle="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
+          [[ -d "$bundle" ]]
+          release="${VERSION%%+*}"
+          name="alera-$release-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$bundle" "dist/$name"
+          shasum -a 256 "dist/$name" | sed 's#  dist/#  #' >"dist/$name.sha256"
+          dart tool/release/fork_classic_update_metadata.dart generate macos-arm64 "$VERSION" dist
+
       - name: Upload release archive
         uses: actions/upload-artifact@v7
         with:
@@ -246,12 +297,13 @@ jobs:
   publish:
     needs: [check-unix-runtime, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.build-windows.outputs.tag }}
+      DESKTOP_VERSION: ${{ needs.build-windows.outputs.version }}
       TARGET_SHA: ${{ needs.build-windows.outputs.target_sha }}
       MACOS_TAG: ${{ needs.build-macos.outputs.tag }}
       MACOS_TARGET_SHA: ${{ needs.build-macos.outputs.target_sha }}
@@ -327,8 +379,26 @@ jobs:
           name: fork-android-release
           path: dist
 
+      - name: Setup Flutter for Classic metadata verification
+        if: vars.ALERA_FORK_UPDATE_PUBLIC_KEY != ''
+        uses: ./.github/actions/setup-flutter-workspace
+        with:
+          linux-toolchain: 'false'
+          native-assets: 'false'
+          preflight: 'false'
+
       - name: Verify complete release assets
-        run: bash tool/release/verify_fork_release_assets.sh dist "${TAG#v}" "$MOBILE_VERSION"
+        env:
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          mode=manual
+          if [[ -n "$ALERA_FORK_UPDATE_PUBLIC_KEY" ]]; then mode=classic; fi
+          bash tool/release/verify_fork_release_assets.sh dist "${TAG#v}" "$MOBILE_VERSION" "$mode"
+          if [[ "$mode" == classic ]]; then
+            dart tool/release/fork_classic_update_metadata.dart verify windows-x64 "$DESKTOP_VERSION" dist
+            dart tool/release/fork_classic_update_metadata.dart verify macos-arm64 "$DESKTOP_VERSION" dist
+          fi
 
       - name: Publish release
         run: |

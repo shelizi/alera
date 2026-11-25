@@ -1,7 +1,9 @@
 import 'package:alera/src/features/app_window/application/app_window_providers.dart';
+import 'package:alera/src/features/updater/application/fork_auto_update_preference.dart';
 import 'package:alera/src/features/updater/application/update_check_scheduler.dart';
 import 'package:alera/src/features/updater/application/update_controller.dart';
 import 'package:alera/src/features/updater/application/update_service.dart';
+import 'package:alera/src/features/updater/domain/fork_classic_update_target.dart';
 import 'package:alera/src/features/updater/domain/package_install_method.dart';
 import 'package:alera/src/features/updater/infra/desktop_update_service.dart';
 import 'package:alera/src/shared/infra/process/process_providers.dart';
@@ -10,11 +12,17 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'update_providers.g.dart';
 
-/// Privacy portable builds never discover releases over the network.
-/// Kept as an explicit injected capability so offline production policy and
-/// the controller's result-handling behavior can be tested independently.
-/// The production composition root intentionally never overrides this.
-final updateDiscoveryAllowedProvider = Provider<bool>((ref) => false);
+/// Only explicitly enabled, signed fork Classic builds may discover updates.
+/// Privacy portable and development builds remain offline by default.
+final updateDiscoveryAllowedProvider = Provider<bool>((ref) {
+  final target = ForkClassicUpdateTarget.currentBuild;
+  if (target == null || ForkClassicUpdateTarget.networkDisabled) {
+    return false;
+  }
+  final service = ref.watch(aleraUpdateServiceProvider);
+  return !service.packageInstall.isPackageManaged &&
+      target.allowsDiscovery(service.config);
+});
 
 @Riverpod(keepAlive: true)
 AleraUpdateService aleraUpdateService(Ref ref) {
@@ -38,7 +46,11 @@ PackageManagerInstall packageManagerInstall(Ref ref) {
 /// recurring check, so the app shell watches it to keep it alive.
 @Riverpod(keepAlive: true)
 AleraUpdateCheckScheduler aleraUpdateCheckScheduler(Ref ref) {
+  final enabled =
+      ref.watch(updateDiscoveryAllowedProvider) &&
+      ref.watch(forkAutoUpdatePreferenceProvider).asData?.value == true;
   final scheduler = AleraUpdateCheckScheduler(
+    enabled: enabled,
     check: ref.read(aleraUpdateControllerProvider.notifier).checkForUpdates,
     foreground: ref.watch(appForegroundProvider),
   );
