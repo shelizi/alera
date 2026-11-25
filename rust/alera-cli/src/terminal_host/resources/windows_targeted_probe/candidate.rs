@@ -460,7 +460,7 @@ mod tests {
         let first = frame(origin, 0, &rows, &samples, &roots);
         assert!(matches!(
             sample_or(&mut baseline, first, |_| panic!("unexpected fallback")),
-            Outcome::<()>::Native(_)
+            Outcome::<()>::Native(measurement) if measurement.warming && measurement.measured_count == 3
         ));
         let mut calls = 0;
         let rejected = frame(origin, 1, &rows, &samples[..2], &roots);
