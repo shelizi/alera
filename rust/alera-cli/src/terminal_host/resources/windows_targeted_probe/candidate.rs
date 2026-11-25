@@ -25,6 +25,7 @@ enum Reject {
     UnsupportedCores,
     MissingMetric,
     ShellGeneration,
+    UnsealedRoot,
     ParentGeneration,
     Clock,
     Counter,
@@ -35,16 +36,39 @@ enum Reject {
 struct Root {
     pid: u32,
     sealed: Option<ShellProcess>,
+    // An additive marker, not a change to ShellProcess's persisted Unix seconds.
+    creation: Option<u64>,
 }
 
 impl Root {
     fn plain(pid: u32) -> Self {
-        Self { pid, sealed: None }
+        Self {
+            pid,
+            sealed: None,
+            creation: None,
+        }
     }
     fn shell(shell: ShellProcess) -> Self {
         Self {
             pid: shell.pid,
             sealed: Some(shell),
+            creation: None,
+        }
+    }
+
+    fn exact(pid: u32, creation: u64) -> Self {
+        Self {
+            pid,
+            sealed: None,
+            creation: Some(creation),
+        }
+    }
+
+    fn exact_shell(shell: ShellProcess, creation: u64) -> Self {
+        Self {
+            pid: shell.pid,
+            sealed: Some(shell),
+            creation: Some(creation),
         }
     }
 }
@@ -121,6 +145,11 @@ impl Frame {
             }
         }
         for root in roots {
+            if let (Some(creation), Some(sample)) = (root.creation, samples.get(&root.pid)) {
+                if creation == 0 || creation != sample.creation {
+                    return Err(Reject::ShellGeneration);
+                }
+            }
             if let (Some(sealed), Some(sample)) = (root.sealed, samples.get(&root.pid)) {
                 if sealed.pid != root.pid || unix_start(sample.creation) != Some(sealed.start_time)
                 {
@@ -174,6 +203,11 @@ fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
     let system_ticks = global_ticks().ok_or(Reject::Counter)?;
     let mut samples = HashMap::with_capacity(selected.len());
     for pid in selected {
+        // Stop starting further queries after the budget is spent. An
+        // individual OS call is still not interruptible by this check.
+        if start.elapsed() > MAX_SPAN {
+            return Err(Reject::SlowSweep);
+        }
         let sample = direct_sample(pid, topology.started).ok_or(Reject::MissingMetric)?;
         samples.insert(pid, sample);
     }
@@ -303,6 +337,73 @@ fn sample_or<T>(
     match baseline.accept(candidate) {
         Ok(measurement) => Outcome::Native(measurement),
         Err(reason) => Outcome::Legacy(legacy(reason)),
+    }
+}
+
+// Keep backend selection independent from persisted PTY identities. A
+// production caller must supply creation markers captured at authoritative
+// spawn/attachment, never manufacture trust by reading an arbitrary PID.
+const RETRY_DELAY: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+struct BackendController {
+    native: Baseline,
+    legacy_active: bool,
+    retry_at: Option<Instant>,
+}
+
+enum BackendResult<T> {
+    Native(Measurement),
+    Legacy {
+        value: T,
+        reason: Option<Reject>,
+        reset: bool,
+    },
+}
+
+impl BackendController {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn sample<T>(
+        &mut self,
+        now: Instant,
+        roots: &[Root],
+        native: impl FnOnce() -> Result<Frame, Reject>,
+        legacy: impl FnOnce(bool) -> T,
+    ) -> BackendResult<T> {
+        // Recovered/coarse-only seals must not be upgraded from a fresh PID
+        // observation. The original backend retains its existing semantics.
+        let unsealed = roots
+            .iter()
+            .any(|root| root.creation.is_none_or(|t| t == 0));
+        let cooling_down = self.retry_at.is_some_and(|retry| now < retry);
+        let reason = if unsealed {
+            Some(Reject::UnsealedRoot)
+        } else if cooling_down {
+            None
+        } else {
+            match self.native.accept(native()) {
+                Ok(measurement) => {
+                    self.legacy_active = false;
+                    self.retry_at = None;
+                    return BackendResult::Native(measurement);
+                }
+                Err(reason) => Some(reason),
+            }
+        };
+        self.native.reset();
+        if reason.is_some() && !cooling_down {
+            self.retry_at = now.checked_add(RETRY_DELAY);
+        }
+        let reset = !self.legacy_active;
+        self.legacy_active = true;
+        BackendResult::Legacy {
+            value: legacy(reset),
+            reason,
+            reset,
+        }
     }
 }
 
@@ -739,5 +840,249 @@ mod tests {
             }
             drop(holders);
         }
+    }
+
+    #[test]
+    fn precise_root_rejects_same_second_pid_reuse_without_changing_coarse_seal() {
+        let origin = Instant::now();
+        let shell = ShellProcess {
+            pid: 10,
+            start_time: 1000,
+        };
+        let root = Root::exact_shell(shell, START + 1);
+        let rows = [(10, 1)];
+        assert!(frame(origin, 0, &rows, &[(10, raw(1, 10, 10))], &[root]).is_ok());
+        // The persisted Unix-second seal still matches both generations.
+        assert_eq!(unix_start(START + 1), unix_start(START + 2));
+        assert!(frame(
+            origin,
+            0,
+            &rows,
+            &[(10, raw(2, 10, 10))],
+            &[Root::shell(shell)]
+        )
+        .is_ok());
+        assert!(matches!(
+            frame(origin, 0, &rows, &[(10, raw(2, 10, 10))], &[root]),
+            Err(Reject::ShellGeneration)
+        ));
+        assert!(frame(origin, 0, &[], &[], &[root]).is_ok()); // exited root
+    }
+
+    #[test]
+    fn backend_fallback_resets_once_and_skips_native_during_cooldown() {
+        let now = Instant::now();
+        let mut backend = BackendController::default();
+        let roots = [Root::exact(10, START + 1)];
+        let rows = [(10, 1)];
+        let samples = [(10, raw(1, 10, 20))];
+        let first = backend.sample(
+            now,
+            &roots,
+            || frame(now, 0, &rows, &samples, &roots),
+            |_| panic!("unexpected fallback"),
+        );
+        match first {
+            BackendResult::<()>::Native(m) => assert!(m.warming),
+            _ => panic!("expected native"),
+        }
+        let failure = backend.sample(
+            now + Duration::from_secs(2),
+            &roots,
+            || Err(Reject::MissingMetric),
+            |reset| {
+                assert!(reset);
+                42
+            },
+        );
+        assert!(matches!(
+            failure,
+            BackendResult::Legacy {
+                value: 42,
+                reason: Some(Reject::MissingMetric),
+                reset: true
+            }
+        ));
+        assert!(backend.native.previous.is_none());
+        for second in [4, 10, 31] {
+            let legacy = backend.sample(
+                now + Duration::from_secs(second),
+                &roots,
+                || panic!("must not retry during cooldown"),
+                |reset| {
+                    assert!(!reset);
+                    43
+                },
+            );
+            assert!(matches!(
+                legacy,
+                BackendResult::Legacy {
+                    value: 43,
+                    reason: None,
+                    reset: false
+                }
+            ));
+        }
+        let resumed = backend.sample(
+            now + Duration::from_secs(32),
+            &roots,
+            || frame(now, 32, &rows, &samples, &roots),
+            |_| panic!("unexpected fallback"),
+        );
+        assert!(matches!(resumed,BackendResult::<()>::Native(m) if m.warming));
+        let coarse = [Root::shell(ShellProcess {
+            pid: 10,
+            start_time: 1000,
+        })];
+        let result = backend.sample(
+            now + Duration::from_secs(34),
+            &coarse,
+            || panic!("unsealed root must not query native"),
+            |reset| reset,
+        );
+        assert!(matches!(
+            result,
+            BackendResult::Legacy {
+                value: true,
+                reason: Some(Reject::UnsealedRoot),
+                reset: true
+            }
+        ));
+        backend.reset();
+        assert!(
+            backend.retry_at.is_none()
+                && !backend.legacy_active
+                && backend.native.previous.is_none()
+        );
+    }
+
+    fn busy_children(count: usize) -> Vec<ChildGuard> {
+        let parent = module_path!().rsplit_once("::candidate::tests").unwrap().0;
+        let parent = parent.split_once("::").unwrap().1;
+        let child_test = format!("{parent}::hold_test_child");
+        (0..count)
+            .map(|_| {
+                ChildGuard(
+                    Command::new(std::env::current_exe().unwrap())
+                        .args(["--ignored", "--exact", &child_test, "--nocapture"])
+                        .env("ALERA_TEST_HOLD_PROCESS", "1")
+                        .env("ALERA_TEST_BUSY_PROCESS", "1")
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .expect("spawn bounded CPU worker"),
+                )
+            })
+            .collect()
+    }
+
+    // Compare cumulative per-process CPU ticks over their independently
+    // observed monotonic intervals, rather than treating the sysinfo and
+    // native sampling instants as identical.
+    fn reference_sample(pid: u32) -> (Instant, RawSample) {
+        let wall = ticks(unsafe { GetSystemTimePreciseAsFileTime() });
+        let start = Instant::now();
+        let raw = direct_sample(pid, wall).expect("private worker metrics");
+        (start + start.elapsed() / 2, raw)
+    }
+
+    #[test]
+    #[ignore = "opt-in sustained CPU accuracy comparison on a responsive single-group Windows host"]
+    fn sustained_cpu_accuracy_comparison() {
+        let cores = single_group_cores().expect("single processor group");
+        let holders = busy_children(2);
+        let pids: Vec<_> = holders.iter().map(|h| h.0.id()).collect();
+        let parent = std::process::id();
+        std::thread::sleep(Duration::from_millis(350));
+        let parent_raw = reference_sample(parent).1;
+        let shells: Vec<_> = pids
+            .iter()
+            .map(|&pid| {
+                let raw = reference_sample(pid).1;
+                (
+                    ShellProcess {
+                        pid,
+                        start_time: unix_start(raw.creation).unwrap(),
+                    },
+                    raw.creation,
+                )
+            })
+            .collect();
+        let roots: Vec<_> = std::iter::once(Root::exact(parent, parent_raw.creation))
+            .chain(
+                shells
+                    .iter()
+                    .map(|&(shell, creation)| Root::exact_shell(shell, creation)),
+            )
+            .collect();
+        let ids: Vec<_> = pids.iter().copied().map(Pid::from_u32).collect();
+        let mut system = System::new();
+        system.refresh_cpu_list(CpuRefreshKind::nothing());
+        assert_eq!(cores, system.cpus().len());
+        let mut baseline = Baseline::default();
+        let mut refs: HashMap<u32, (Instant, RawSample)> = HashMap::new();
+        let mut native_errors = Vec::new();
+        let mut legacy_errors = Vec::new();
+        let mut reference_values = Vec::new();
+        let mut total_native = 0.0;
+        let mut total_reference = 0.0;
+        for round in 0..6 {
+            let measurement = if round % 2 == 0 {
+                let m = baseline.accept(collect(&roots, cores)).unwrap();
+                refresh(&mut system, ProcessesToUpdate::Some(&ids), true);
+                m
+            } else {
+                refresh(&mut system, ProcessesToUpdate::Some(&ids), true);
+                baseline.accept(collect(&roots, cores)).unwrap()
+            };
+            assert_eq!(measurement.warming, round < 2);
+            for (worker, &pid) in pids.iter().enumerate() {
+                let (at, raw) = reference_sample(pid);
+                let previous = refs.insert(pid, (at, raw));
+                if measurement.warming {
+                    continue;
+                }
+                let (old_at, old) = previous.expect("reference baseline");
+                assert_eq!(old.creation, raw.creation);
+                let reference = (raw.cpu_ticks.checked_sub(old.cpu_ticks).unwrap() as f64
+                    / TICKS_PER_SECOND as f64)
+                    / at.duration_since(old_at).as_secs_f64()
+                    * 100.0;
+                let usage = measurement.index.collect_subtree(pid, &mut HashSet::new());
+                assert_eq!(usage.process_count, 1);
+                assert!(usage.memory_bytes > 0);
+                let native = usage.cpu_percent;
+                let legacy = system.process(Pid::from_u32(pid)).unwrap().cpu_usage() as f64;
+                assert!(reference.is_finite() && native.is_finite() && legacy.is_finite());
+                assert!(reference >= 0.0 && native >= 0.0 && legacy >= 0.0);
+                native_errors.push((native - reference).abs());
+                legacy_errors.push((legacy - reference).abs());
+                reference_values.push(reference);
+                total_native += native;
+                total_reference += reference;
+                println!("CPU_COMPARE round={round} worker={worker} reference={reference:.3} native={native:.3} legacy={legacy:.3} native_abs_error={:.3} legacy_abs_error={:.3}",(native-reference).abs(),(legacy-reference).abs());
+            }
+            if round < 5 {
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+        let average = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        assert_eq!(native_errors.len(), 8);
+        println!("CPU_COMPARE_SUMMARY samples={} reference_avg={:.3} native_avg={:.3} native_mae={:.3} legacy_mae={:.3} native_max_error={:.3}",native_errors.len(),average(&reference_values),total_native/native_errors.len() as f64,average(&native_errors),average(&legacy_errors),native_errors.iter().copied().fold(0.0,f64::max));
+        // Gate adoption on a useful workload and agreement with measured
+        // CPU-time deltas; do not assume a fully scheduled core on shared hosts.
+        assert!(
+            average(&reference_values) > 20.0,
+            "workload starved; rerun on a responsive host"
+        );
+        assert!(
+            average(&native_errors) <= 10.0,
+            "candidate mean error too high"
+        );
+        assert!(
+            (total_native - total_reference).abs() / total_reference <= 0.15,
+            "candidate aggregate error too high"
+        );
     }
 }

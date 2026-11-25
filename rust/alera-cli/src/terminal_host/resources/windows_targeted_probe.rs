@@ -281,7 +281,32 @@ fn hold_test_child() {
     use std::io::Read;
     // Running all ignored tests must not block on interactive stdin.
     if std::env::var_os("ALERA_TEST_HOLD_PROCESS").as_deref() == Some(std::ffi::OsStr::new("1")) {
-        let _ = std::io::stdin().read(&mut [0u8]);
+        if std::env::var_os("ALERA_TEST_BUSY_PROCESS").as_deref() == Some(std::ffi::OsStr::new("1"))
+        {
+            // Private, explicitly gated benchmark child. Bound the work even
+            // if the parent disappears before closing its control pipe.
+            use std::sync::{
+                atomic::{AtomicBool, Ordering},
+                Arc,
+            };
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = Arc::clone(&stop);
+            let worker = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(18);
+                let mut value = 0u64;
+                while !worker_stop.load(Ordering::Relaxed) && Instant::now() < deadline {
+                    for _ in 0..1024 {
+                        value = std::hint::black_box(value.wrapping_add(1));
+                    }
+                }
+                std::hint::black_box(value);
+            });
+            let _ = std::io::stdin().read(&mut [0u8]);
+            stop.store(true, Ordering::Relaxed);
+            let _ = worker.join();
+        } else {
+            let _ = std::io::stdin().read(&mut [0u8]);
+        }
     }
 }
 
