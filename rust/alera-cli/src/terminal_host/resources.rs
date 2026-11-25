@@ -12,6 +12,8 @@ mod host_metrics;
 mod process_tree;
 mod sampling_cadence;
 mod snapshot_payload;
+#[cfg(all(test, windows))]
+mod windows_targeted_probe;
 
 use history::ResourceHistory;
 use process_tree::{ProcessRow, SubtreeUsage};
