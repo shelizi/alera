@@ -80,7 +80,7 @@ use alera_gpui_desktop::git_branch_compare::{
     CompareDirection,
 };
 use alera_gpui_desktop::git_compare_tabs::GitFileCompareTabs;
-use alera_gpui_desktop::git_file_interop::selected_worktree_paths;
+use alera_gpui_desktop::git_file_interop::{preferred_visible_selection, selected_worktree_paths};
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_render::{PreparedGitGraph, PreparedGitGraphRow};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
@@ -2703,6 +2703,27 @@ impl Workbench {
         self.git_selection_anchor = Some(row);
     }
 
+    fn focus_git_context_row(
+        &mut self,
+        item: GitSidebarSelectionItem,
+        visible: &[GitSidebarSelectionItem],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !visible.contains(&item) {
+            return;
+        }
+        // Match Classic: right-clicking a selected row preserves the batch.
+        // Right-clicking an unselected row selects that item only.
+        if self.git_sidebar_item_selected(&item) {
+            self.git_selection_anchor = Some(item);
+        } else {
+            self.select_git_sidebar_item(item, visible, false, false);
+        }
+        window.focus(&self.git_keyboard_focus, cx);
+        cx.notify();
+    }
+
     /// Git status rows reference worktree files, not immutable staged blobs.
     /// Recompute visibility and revalidate paths before sharing Explorer's
     /// non-overwriting, workspace-bound Copy/Cut clipboard.
@@ -2724,15 +2745,13 @@ impl Workbench {
         let row = clicked
             .filter(|item| visible.contains(item))
             .or_else(|| {
-                self.git_selection_anchor
-                    .clone()
-                    .filter(|item| visible.contains(item) && self.git_sidebar_item_selected(item))
-            })
-            .or_else(|| {
-                visible
-                    .iter()
-                    .find(|item| self.git_sidebar_item_selected(item))
-                    .cloned()
+                preferred_visible_selection(
+                    self.git_selection_anchor.as_ref(),
+                    &self.git_selected_changes,
+                    &self.git_selected_folders,
+                    &visible,
+                )
+                .cloned()
             });
         let Some(row) = row else {
             self.model
@@ -2815,10 +2834,21 @@ impl Workbench {
     }
 
     fn paste_git_at_selection(&mut self, cx: &mut Context<Self>) {
-        let hovered = self
-            .git_selection_anchor
+        let mut options = self.git_sidebar_options.clone();
+        options.filter = self.git_filter_input.read(cx).query().to_owned();
+        let visible = self
+            .git_snapshot
             .as_ref()
-            .filter(|row| self.git_sidebar_item_selected(row))
+            .map(|snapshot| {
+                layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items()
+            })
+            .unwrap_or_default();
+        let hovered = preferred_visible_selection(
+            self.git_selection_anchor.as_ref(),
+            &self.git_selected_changes,
+            &self.git_selected_folders,
+            &visible,
+        )
             .map(|row| match row {
                 GitSidebarSelectionItem::Folder((_, path)) => self.model.root().join(path),
                 GitSidebarSelectionItem::File(file) => self
@@ -13304,7 +13334,7 @@ impl Render for Workbench {
                         let width =
                             primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
                         let height = inner_secondary_terminal_render_height(
-                            primary_terminal_area_height,
+                            primary_height,
                             terminal_split_horizontal,
                         );
                         if let Some((cols, rows)) = estimate_terminal_viewport_with_cell_metrics(
@@ -15448,6 +15478,8 @@ impl Render for Workbench {
                                                 let folder_for_click = key.clone();
                                                 let folder_for_toggle = key.clone();
                                                 let folder_for_menu = key.clone();
+                                                let folder_for_context = key.clone();
+                                                let folder_context_visible = Arc::clone(&git_visible_items);
                                                 let folder_visible = Arc::clone(&git_visible_items);
                                                 let folder_drag = ExplorerDragBatch::for_row(
                                                     &git_drag_root, git_drag_generation,
@@ -15508,6 +15540,9 @@ impl Render for Workbench {
                                                         cx.stop_propagation();
                                                         this.import_explorer_drop(paths.paths().to_vec(), Some(external_folder_target.clone()), cx);
                                                     }))
+                                                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, window, cx| {
+                                                        this.focus_git_context_row(GitSidebarSelectionItem::Folder(folder_for_context.clone()), folder_context_visible.as_ref(), window, cx);
+                                                    }))
                                                     .context_menu(Self::kit_git_folder_menu(cx.entity().downgrade(), folder_for_menu))
                                                     .into_any_element();
                                             }
@@ -15517,6 +15552,8 @@ impl Render for Workbench {
                                         let clicked_row = change.clone();
                                         let preview_area = change.area;
                                         let menu_row = change.clone();
+                                        let context_row = change.clone();
+                                        let visible_for_context = Arc::clone(&git_visible_items);
                                         let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
                                             self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
                                         let visible_for_click = Arc::clone(&git_visible_items);
@@ -15613,6 +15650,9 @@ impl Render for Workbench {
                                                 .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
                                                     cx.stop_propagation();
                                                     this.import_explorer_drop(paths.paths().to_vec(), Some(external_file_drop_parent.clone()), cx);
+                                                }))
+                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, window, cx| {
+                                                    this.focus_git_context_row(GitSidebarSelectionItem::File(context_row.clone()), visible_for_context.as_ref(), window, cx);
                                                 }))
                                                 .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
                                             .when(can_stage, |row| row.child(sidebar_icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
