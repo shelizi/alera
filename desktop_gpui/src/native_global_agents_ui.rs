@@ -2452,10 +2452,26 @@ impl Workbench {
 fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
     let busy = view.global_agent_history_busy;
     let consented = view.global_agent_history_consent;
+    let filter_count = usize::from(view.global_agent_history_provider.is_some())
+        + [
+            &view.global_agent_history_project_input,
+            &view.global_agent_history_workspace_input,
+            &view.global_agent_history_account_input,
+        ]
+        .into_iter()
+        .filter(|input| !input.read(cx).query().trim().is_empty())
+        .count();
+    let filter_label = match (view.global_agent_history_filters_expanded, filter_count) {
+        (true, 0) => "Filters ▴".to_owned(),
+        (false, 0) => "Filters ▾".to_owned(),
+        (true, count) => format!("Filters ({count}) ▴"),
+        (false, count) => format!("Filters ({count}) ▾"),
+    };
     // Keep search and consent visible while results scroll independently.
     let mut chips = div()
         .id("global-history-provider-chips")
-        .w_full()
+        .flex_1()
+        .min_w_0()
         .flex()
         .items_center()
         .gap_2();
@@ -2487,7 +2503,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 })
                 .child(label)
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    if view.global_agent_history_busy {
+                    if view.global_agent_history_busy || view.global_agent_history_provider == next {
                         return;
                     }
                     view.global_agent_history_provider = next.clone();
@@ -2525,6 +2541,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.agent_navigation.cancel();
                             view.global_agent_history_open = false;
+                            view.global_agent_history_filters_expanded = false;
                             view.global_agent_history_clear_armed = false;
                             view.global_agent_history_resume_expanded = None;
                             cx.notify();
@@ -2546,19 +2563,18 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.search_global_agent_history(cx);
                         })),
-                ),
-        )
-        .child(
-            div().w_full().flex().items_center().gap_2()
-                .child(chips)
+                )
                 .child(
                     div().id("global-history-advanced-toggle")
-                        .cursor_pointer().text_xs().text_color(rgb(TEXT))
-                        .child(if view.global_agent_history_filters_expanded {
-                            "▴ Filters"
+                        .cursor_pointer().flex_shrink_0().rounded_md()
+                        .border_1().border_color(rgb(BORDER))
+                        .bg(rgb(if view.global_agent_history_filters_expanded || filter_count > 0 {
+                            ELEVATED
                         } else {
-                            "⚙ Filters"
-                        })
+                            PANEL
+                        }))
+                        .px_3().py_2().text_xs().text_color(rgb(TEXT))
+                        .child(filter_label)
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.global_agent_history_filters_expanded =
                                 !view.global_agent_history_filters_expanded;
@@ -2570,10 +2586,44 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
             list.child(
                 div().id("global-history-advanced-filters")
                     .w_full().p_2().rounded_md().bg(rgb(PANEL))
-                    .flex().items_center().gap_3()
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_project_input.clone()))
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_workspace_input.clone()))
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_account_input.clone())),
+                    .flex().flex_col().gap_2()
+                    .child(
+                        div().w_full().flex().items_center().gap_2()
+                            .child(chips)
+                            .child(
+                                div().id("global-history-reset-filters")
+                                    .cursor_pointer().flex_shrink_0().text_xs()
+                                    .text_color(rgb(if busy { MUTED } else { TEXT }))
+                                    .child("Reset Filters")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        if view.global_agent_history_busy {
+                                            return;
+                                        }
+                                        view.global_agent_history_provider = None;
+                                        for input in [
+                                            view.global_agent_history_project_input.clone(),
+                                            view.global_agent_history_workspace_input.clone(),
+                                            view.global_agent_history_account_input.clone(),
+                                        ] {
+                                            input.update(cx, |input, cx| input.clear(cx));
+                                        }
+                                        view.global_agent_history_results.clear();
+                                        view.global_agent_history_located.clear();
+                                        view.global_agent_history_resume_expanded = None;
+                                        view.global_agent_history_resume_armed = None;
+                                        view.global_agent_history_clear_armed = false;
+                                        view.global_agent_history_status =
+                                            "Filters reset. Search again to refresh previews.".into();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div().w_full().flex().items_center().gap_2()
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_project_input.clone()))
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_workspace_input.clone()))
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_account_input.clone())),
+                    ),
             )
         })
         .child(
@@ -3425,6 +3475,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 .child("History")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.global_agent_history_open = true;
+                                    view.global_agent_history_filters_expanded = false;
                                     cx.notify();
                                 })),
                         )

@@ -6292,6 +6292,7 @@ impl Workbench {
     fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.global_agent_maximized = true;
         self.global_agent_history_open = true;
+        self.global_agent_history_filters_expanded = false;
         self.explorer_context_menu = None;
         window.focus(
             &self.global_agent_history_input.read(cx).focus_handle(cx),
