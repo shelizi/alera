@@ -7,10 +7,7 @@ mod writer_tests;
 /// A sealed shell that never existed, for the cases that only care that the
 /// field is cleared.
 fn test_shell() -> ShellProcess {
-    ShellProcess {
-        pid: 4242,
-        start_time: 1_700_000_000,
-    }
+    ShellProcess::coarse(4242, 1_700_000_000)
 }
 
 struct BlockingWriter {

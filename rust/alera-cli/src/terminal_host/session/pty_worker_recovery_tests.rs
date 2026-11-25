@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn worker_record_preserves_optional_precise_shell_marker_and_old_schema() {
+    let old = serde_json::json!({
+        "schemaVersion": SCHEMA_VERSION,
+        "sessionId": "s",
+        "workspaceId": "w",
+        "tabId": "t",
+        "workingDirectory": ".",
+        "workerPid": 12,
+        "workerStartTime": 1000,
+        "shellPid": 13,
+        "port": 1234,
+        "token": "00000000-0000-0000-0000-000000000000"
+    });
+    let mut record: WorkerRecord = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(record.shell_creation_filetime, None);
+    assert_eq!(serde_json::to_value(&record).unwrap(), old);
+    // Keep the entire 64-bit FILETIME, including the subsecond bits.
+    record.shell_creation_filetime = Some(133_500_000_000_000_123);
+    let value = serde_json::to_value(&record).unwrap();
+    assert_eq!(
+        value["shellCreationFiletime"].as_u64(),
+        record.shell_creation_filetime
+    );
+    let restored: WorkerRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.schema_version, SCHEMA_VERSION);
+    assert_eq!(
+        restored.shell_creation_filetime,
+        record.shell_creation_filetime
+    );
+    assert_eq!(restored.worker_start_time, 1000);
+    assert_eq!(restored.shell_pid, 13);
+}
+
+#[test]
 fn expired_worker_identity_is_replaceable_but_a_live_worker_is_not() {
     let this = seal_shell_process(std::process::id()).expect("test process is alive");
     let mut record = WorkerRecord {
@@ -12,6 +46,7 @@ fn expired_worker_identity_is_replaceable_but_a_live_worker_is_not() {
         worker_pid: this.pid,
         worker_start_time: this.start_time,
         shell_pid: this.pid,
+        shell_creation_filetime: None,
         port: 1234,
         token: uuid::Uuid::new_v4().to_string(),
     };
@@ -38,6 +73,7 @@ fn initial_worker_attachment_requires_authenticated_host_confirmation() {
         worker_pid: std::process::id(),
         worker_start_time: 1,
         shell_pid: 1234,
+        shell_creation_filetime: None,
         port: 1234,
         token: uuid::Uuid::new_v4().to_string(),
     };
@@ -107,6 +143,7 @@ fn recovery_server_reconnects_replays_and_removes_idle_listener() {
         "tab",
         sandbox.path().to_str().unwrap(),
         std::process::id(),
+        None,
         100,
         64 * 1024,
         Arc::new(Mutex::new(None)),

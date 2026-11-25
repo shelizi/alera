@@ -38,6 +38,45 @@ impl ProcessRow {
 pub struct ShellProcess {
     pub pid: u32,
     pub start_time: u64,
+    #[cfg(windows)]
+    creation_filetime: Option<u64>,
+}
+
+impl ShellProcess {
+    pub fn coarse(pid: u32, start_time: u64) -> Self {
+        Self {
+            pid,
+            start_time,
+            #[cfg(windows)]
+            creation_filetime: None,
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn from_windows_creation_time(pid: u32, creation: u64) -> Option<Self> {
+        let start_time = (creation / 10_000_000).checked_sub(11_644_473_600)?;
+        if pid == 0 || start_time == 0 {
+            return None;
+        }
+        Some(Self {
+            pid,
+            start_time,
+            creation_filetime: Some(creation),
+        })
+    }
+
+    /// An authoritative Windows child-handle marker, separate from the
+    /// legacy Unix-seconds start_time field.
+    pub fn creation_filetime(self) -> Option<u64> {
+        #[cfg(windows)]
+        {
+            self.creation_filetime
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
 }
 
 /// Aggregated usage of one process subtree.
@@ -154,7 +193,7 @@ mod tests {
     }
 
     fn shell(pid: u32, start_time: u64) -> ShellProcess {
-        ShellProcess { pid, start_time }
+        ShellProcess::coarse(pid, start_time)
     }
 
     #[test]

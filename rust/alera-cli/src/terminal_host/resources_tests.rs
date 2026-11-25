@@ -64,10 +64,7 @@ fn a_session_whose_pid_was_recycled_is_not_measured() {
     let mut sampler = ResourceSampler::default();
     let self_pid = std::process::id();
     let sealed = seal_shell_process(self_pid).expect("this process is live");
-    let recycled = ShellProcess {
-        pid: self_pid,
-        start_time: sealed.start_time + 1,
-    };
+    let recycled = ShellProcess::coarse(self_pid, sealed.start_time + 1);
 
     let snapshot = sampler.sample(&[root(Some(recycled), true)], self_pid, None);
 
@@ -241,10 +238,43 @@ async fn empty_shell_reports_no_running_processes() {
     let none = sweep_session_running_processes(None).await;
     assert!(none.is_empty());
 
-    let absent = ShellProcess {
-        pid: u32::MAX,
-        start_time: 1,
-    };
+    let absent = ShellProcess::coarse(u32::MAX, 1);
     let none = sweep_session_running_processes(Some(absent)).await;
     assert!(none.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn precise_shell_resource_attribution_rejects_same_second_reuse() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    let pid = std::process::id();
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .expect("self process");
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    let sealed = seal_shell_from_handle(pid, handle.as_raw_handle()).expect("exact seal");
+    let creation = sealed.creation_filetime().unwrap();
+    let other = if creation % 10_000_000 == 9_999_999 {
+        creation - 1
+    } else {
+        creation + 1
+    };
+    let wrong = ShellProcess::from_windows_creation_time(pid, other).unwrap();
+    assert_eq!(sealed.start_time, wrong.start_time);
+    let mut sampler = ResourceSampler::default();
+    let snapshot = sampler.sample(&[root(Some(sealed), true)], pid, None);
+    assert_eq!(snapshot["sessions"][0]["measured"], json!(true));
+    assert!(snapshot["sessions"][0]["memoryBytes"].as_u64().unwrap() > 0);
+    let snapshot = sampler.sample(&[root(Some(wrong), true)], pid, None);
+    assert_eq!(snapshot["sessions"][0]["measured"], json!(false));
+    assert_eq!(snapshot["sessions"][0]["memoryBytes"], json!(0));
+    assert_eq!(snapshot["sessions"][0]["processCount"], json!(0));
 }

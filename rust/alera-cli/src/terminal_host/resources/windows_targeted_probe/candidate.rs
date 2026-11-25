@@ -52,7 +52,7 @@ impl Root {
         Self {
             pid: shell.pid,
             sealed: Some(shell),
-            creation: None,
+            creation: shell.creation_filetime(),
         }
     }
 
@@ -491,10 +491,7 @@ mod tests {
     #[test]
     fn rejects_reused_shell_parent_cycles_and_inconsistent_snapshot() {
         let now = Instant::now();
-        let sealed = Root::shell(ShellProcess {
-            pid: 10,
-            start_time: 999,
-        });
+        let sealed = Root::shell(ShellProcess::coarse(10, 999));
         assert!(matches!(
             frame(now, 0, &[(10, 1)], &[(10, raw(1, 1, 1))], &[sealed]),
             Err(Reject::ShellGeneration)
@@ -717,12 +714,14 @@ mod tests {
         refresh(&mut system, ProcessesToUpdate::Some(&ids), true);
         let shells: Vec<_> = child_pids
             .iter()
-            .map(|&pid| ShellProcess {
-                pid,
-                start_time: system
-                    .process(Pid::from_u32(pid))
-                    .expect("live child")
-                    .start_time(),
+            .map(|&pid| {
+                ShellProcess::coarse(
+                    pid,
+                    system
+                        .process(Pid::from_u32(pid))
+                        .expect("live child")
+                        .start_time(),
+                )
             })
             .collect();
         let roots: Vec<_> = std::iter::once(Root::plain(parent))
@@ -790,9 +789,11 @@ mod tests {
             refresh(&mut system, ProcessesToUpdate::Some(&ids), true);
             let shells: Vec<_> = pids
                 .iter()
-                .map(|&pid| ShellProcess {
-                    pid,
-                    start_time: system.process(Pid::from_u32(pid)).unwrap().start_time(),
+                .map(|&pid| {
+                    ShellProcess::coarse(
+                        pid,
+                        system.process(Pid::from_u32(pid)).unwrap().start_time(),
+                    )
                 })
                 .collect();
             let roots: Vec<_> = std::iter::once(Root::plain(parent))
@@ -845,10 +846,7 @@ mod tests {
     #[test]
     fn precise_root_rejects_same_second_pid_reuse_without_changing_coarse_seal() {
         let origin = Instant::now();
-        let shell = ShellProcess {
-            pid: 10,
-            start_time: 1000,
-        };
+        let shell = ShellProcess::coarse(10, 1000);
         let root = Root::exact_shell(shell, START + 1);
         let rows = [(10, 1)];
         assert!(frame(origin, 0, &rows, &[(10, raw(1, 10, 10))], &[root]).is_ok());
@@ -930,10 +928,7 @@ mod tests {
             |_| panic!("unexpected fallback"),
         );
         assert!(matches!(resumed,BackendResult::<()>::Native(m) if m.warming));
-        let coarse = [Root::shell(ShellProcess {
-            pid: 10,
-            start_time: 1000,
-        })];
+        let coarse = [Root::shell(ShellProcess::coarse(10, 1000))];
         let result = backend.sample(
             now + Duration::from_secs(34),
             &coarse,
@@ -1001,10 +996,7 @@ mod tests {
             .map(|&pid| {
                 let raw = reference_sample(pid).1;
                 (
-                    ShellProcess {
-                        pid,
-                        start_time: unix_start(raw.creation).unwrap(),
-                    },
+                    ShellProcess::coarse(pid, unix_start(raw.creation).unwrap()),
                     raw.creation,
                 )
             })

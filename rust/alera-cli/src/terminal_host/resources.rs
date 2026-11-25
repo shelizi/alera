@@ -11,7 +11,11 @@ mod history;
 mod host_metrics;
 mod process_tree;
 mod sampling_cadence;
+#[cfg(windows)]
+mod shell_identity;
 mod snapshot_payload;
+#[cfg(windows)]
+pub use shell_identity::{recover_precise_shell, seal_shell_from_handle};
 #[cfg(all(test, windows))]
 mod windows_targeted_probe;
 
@@ -67,10 +71,9 @@ pub fn seal_shell_process(pid: u32) -> Option<ShellProcess> {
         true,
         ProcessRefreshKind::nothing(),
     );
-    system.process(sysinfo_pid).map(|process| ShellProcess {
-        pid,
-        start_time: process.start_time(),
-    })
+    system
+        .process(sysinfo_pid)
+        .map(|process| ShellProcess::coarse(pid, process.start_time()))
 }
 
 /// Index the whole process table for identity and parent links only.
@@ -254,7 +257,19 @@ impl ResourceSampler {
         for root in roots {
             // Identity, not just presence: a pid the OS has already recycled
             // would otherwise bill a stranger's memory to this terminal.
-            let measured = root.shell.is_some_and(|shell| index.holds(shell));
+            let measured = root.shell.is_some_and(|shell| {
+                if !index.holds(shell) {
+                    return false;
+                }
+                #[cfg(windows)]
+                {
+                    shell_identity::matches_live_creation(shell)
+                }
+                #[cfg(not(windows))]
+                {
+                    true
+                }
+            });
             let usage = match root.shell {
                 Some(shell) if root.running && measured => {
                     index.collect_subtree(shell.pid, &mut claimed)

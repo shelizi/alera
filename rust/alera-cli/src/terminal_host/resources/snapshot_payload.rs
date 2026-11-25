@@ -148,10 +148,7 @@ mod tests {
                 workspace_id: format!("workspace-{:03}", i / 4),
                 tab_id: format!("terminal-{i:04}"),
                 running: i % 5 != 0,
-                shell: (i % 7 != 0).then_some(ShellProcess {
-                    pid: i as u32 + 100,
-                    start_time: 1000,
-                }),
+                shell: (i % 7 != 0).then_some(ShellProcess::coarse(i as u32 + 100, 1000)),
             })
             .collect()
     }

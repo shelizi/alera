@@ -79,10 +79,19 @@ pub(super) fn spawn_pty(
     // The master must be the only remaining PTY endpoint owned by the host.
     drop(pair.slave);
     let killer = child.clone_killer();
+    // The Windows bootstrap is still waiting on its Job release gate.
+    // Read the original owned handle rather than re-opening a numeric PID.
+    #[cfg(windows)]
+    let shell = child.process_id().and_then(|pid| {
+        child
+            .as_raw_handle()
+            .and_then(|handle| crate::terminal_host::resources::seal_shell_from_handle(pid, handle))
+            .or_else(|| seal_shell_process(pid))
+    });
     #[cfg(windows)]
     process_job.assign_and_release(child.as_ref())?;
-    // Capture identity before the reader owns the child so resource samples can
-    // prove that a later PID still belongs to this shell process.
+    // On Unix retain the existing process-table seal.
+    #[cfg(not(windows))]
     let shell = child.process_id().and_then(seal_shell_process);
     let reader = pair
         .master

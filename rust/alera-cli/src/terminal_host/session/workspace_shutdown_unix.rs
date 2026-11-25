@@ -122,10 +122,7 @@ fn capture_owned(
             .session_id()
             .is_some_and(|sid| sessions.contains(&sid))
         {
-            processes.push(ShellProcess {
-                pid: pid.as_u32(),
-                start_time: process.start_time(),
-            });
+            processes.push(ShellProcess::coarse(pid.as_u32(), process.start_time()));
         }
     }
     Ok(capture_tree(system, processes))
@@ -197,10 +194,7 @@ fn capture_tree(system: &System, roots: Vec<ShellProcess>) -> Vec<ShellProcess> 
         if let Some(descendants) = children.get(&identity.pid) {
             for pid in descendants {
                 if let Some(child) = system.process(Pid::from_u32(*pid)) {
-                    pending.push(ShellProcess {
-                        pid: *pid,
-                        start_time: child.start_time(),
-                    });
+                    pending.push(ShellProcess::coarse(*pid, child.start_time()));
                 }
             }
         }
