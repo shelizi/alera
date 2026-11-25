@@ -172,10 +172,9 @@ mixin _ProjectWorkbenchSidebarActions
         }
       } catch (error) {
         if (!mounted) return;
-        AleraToast.show(
-          context,
-          message: 'Could not inspect workspace storage: $error',
-          tone: .error,
+        await _showWorkspaceRemovalError(
+          workspace,
+          '${context.tr('Could not inspect workspace storage')}: $error',
         );
         return;
       }
@@ -223,6 +222,52 @@ mixin _ProjectWorkbenchSidebarActions
             );
         return _WorkbenchSidebarMutationResult.applied;
       },
+      onError: (error) => _showWorkspaceRemovalError(workspace, error),
+    );
+  }
+
+  Future<void> _showWorkspaceRemovalError(
+    Workspace workspace,
+    Object error,
+  ) async {
+    if (!mounted) return;
+    final details = error.toString();
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AleraDialog(
+        maxWidth: 520,
+        child: Padding(
+          padding: const EdgeInsets.all(AleraTokens.space20),
+          child: Column(
+            mainAxisSize: .min,
+            crossAxisAlignment: .stretch,
+            children: [
+              Text(
+                dialogContext.tr('Worktree removal failed'),
+                style: Theme.of(dialogContext).textTheme.titleMedium
+                    ?.copyWith(color: AleraTokens.error),
+              ),
+              const SizedBox(height: AleraTokens.space12),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    '${workspace.name}\n${workspace.path}\n\n$details',
+                  ),
+                ),
+              ),
+              const SizedBox(height: AleraTokens.space20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: Text(dialogContext.tr('Close')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -362,6 +407,7 @@ mixin _ProjectWorkbenchSidebarActions
   Future<void> _runWorkbenchSidebarMutation({
     required _WorkbenchSidebarMutation mutation,
     required Future<_WorkbenchSidebarMutationResult> Function() execute,
+    Future<void> Function(Object error)? onError,
   }) async {
     try {
       final result = await execute();
@@ -377,7 +423,11 @@ mixin _ProjectWorkbenchSidebarActions
       if (!mounted) {
         return;
       }
-      AleraToast.show(context, message: error.toString(), tone: .error);
+      if (onError != null) {
+        await onError(error);
+      } else {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
     }
   }
 

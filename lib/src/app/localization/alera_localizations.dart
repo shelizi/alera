@@ -179,6 +179,8 @@ class AleraLocalizations {
   static String _lookupJapanese(String source) => _japanese[source] ?? source;
 
   static const Map<String, String> _traditionalChinese = <String, String>{
+    'Worktree removal failed': 'Worktree 移除失敗',
+    'Could not inspect workspace storage': '無法檢查工作區儲存空間',
     // Common actions and navigation.
     'Settings': '設定',
     'Close': '關閉',
@@ -219,6 +221,8 @@ class AleraLocalizations {
   };
 
   static const Map<String, String> _simplifiedChinese = <String, String>{
+    'Worktree removal failed': 'Worktree 移除失败',
+    'Could not inspect workspace storage': '无法检查工作区存储空间',
     // Common actions and navigation.
     'Settings': '设置',
     'Close': '关闭',
@@ -261,6 +265,8 @@ class AleraLocalizations {
   };
 
   static const Map<String, String> _japanese = <String, String>{
+    'Worktree removal failed': 'Worktree の削除に失敗しました',
+    'Could not inspect workspace storage': 'ワークスペースのストレージを確認できませんでした',
     // Common actions and navigation.
     'Settings': '設定',
     'Close': '閉じる',

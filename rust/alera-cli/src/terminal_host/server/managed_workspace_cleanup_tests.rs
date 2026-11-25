@@ -172,6 +172,10 @@ async fn managed_workspace_git_failure_retires_stopped_tabs_and_notifies_clients
         )
         .await;
     assert_eq!(response["ok"], false, "{response}");
+    assert!(
+        response.to_string().contains("git branch -D feature/remove failed:"),
+        "the RPC must include the underlying Git error: {response}"
+    );
     assert!(fixture
         .actor
         .runtime_store

@@ -106,7 +106,7 @@ void _registerAleraShellSidebarFeedbackTests() {
     expect(events.last.message, 'Bad state: rename workspace failed');
   });
 
-  testWidgets('workspace removal failures surface an error toast event', (
+  testWidgets('workspace removal failures show persistent error details', (
     tester,
   ) async {
     final events = <AleraToastData>[];
@@ -114,7 +114,7 @@ void _registerAleraShellSidebarFeedbackTests() {
     addTearDown(subscription.cancel);
     final state = _linkedWorkbenchState(linkedExpanded: true);
 
-    await _pumpShell(
+    final harness = await _pumpShell(
       tester,
       state: state,
       controller: _ShellTestWorkbenchController(
@@ -134,7 +134,28 @@ void _registerAleraShellSidebarFeedbackTests() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(events.last.message, 'Bad state: delete workspace failed');
+    expect(find.text('Worktree removal failed'), findsOneWidget);
+    final details = find.byWidgetPredicate(
+      (widget) =>
+          widget is SelectableText &&
+          (widget.data?.contains('Bad state: delete workspace failed') ??
+              false),
+    );
+    expect(details, findsOneWidget);
+    final text = tester.widget<SelectableText>(details).data!;
+    expect(text, contains('Feature login'));
+    expect(text, contains(state.workspacesFor('project-1').last.path));
+    expect(events.where((event) => event.tone == .success), isEmpty);
+    expect(
+      harness.controller.state.workspacesFor('project-1').map((w) => w.id),
+      contains('workspace-2'),
+    );
+    await tester.pump(const Duration(seconds: 10));
+    expect(find.text('Worktree removal failed'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('Worktree removal failed'), findsNothing);
+    expect(find.text('Feature login'), findsWidgets);
   });
 
   testWidgets('project removal failures surface an error toast event', (
