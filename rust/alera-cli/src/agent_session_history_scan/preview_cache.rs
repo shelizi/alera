@@ -71,6 +71,23 @@ impl OpenedPreviewFile {
     pub(super) fn from_file(file: File) -> Self {
         Self { file, stamp: None }
     }
+
+    /// The initial no-follow snapshot established an ordinary-file handle.
+    /// Revalidate that same handle using the matching bounded information
+    /// classes after parsing. Compatibility handles retain the old reader.
+    #[cfg(windows)]
+    fn stamp_after_parse(file: &File, regular: bool) -> Option<FileStamp> {
+        if regular {
+            read_regular_snapshot(file).map(|(_, stamp)| stamp)
+        } else {
+            FileStamp::read(file)
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn stamp_after_parse(file: &File, _regular: bool) -> Option<FileStamp> {
+        FileStamp::read(file)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -371,6 +388,7 @@ impl PreviewScan {
             account: root.account_id.clone(),
             path: path.to_owned(),
         };
+        let regular = stamp.is_some();
         let stamp = stamp.or_else(|| FileStamp::read(&file));
         let now = Instant::now();
         if let Some(old) = self.previous.entries.remove(&key) {
@@ -388,7 +406,9 @@ impl PreviewScan {
         }
         let value = read_provider_metadata_from_file(root.provider, path, true, &file)?;
         // Never retain a preview if the source changed during parsing.
-        let stamp = stamp.filter(|before| FileStamp::read(&file).as_ref() == Some(before));
+        let stamp = stamp.filter(|before| {
+            OpenedPreviewFile::stamp_after_parse(&file, regular).as_ref() == Some(before)
+        });
         Some(PreviewRead {
             key,
             stamp,
@@ -496,6 +516,44 @@ mod tests {
             );
             assert_eq!(Some(stamp), FileStamp::read(&file));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn post_parse_snapshot_detects_same_length_rewrite_and_preserves_compatibility() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("source.jsonl");
+        std::fs::write(&path, b"history").unwrap();
+        let (_, _, opened) = open_regular_preview_candidate(&path).unwrap();
+        let before = opened.stamp.as_ref().unwrap();
+        assert_eq!(
+            OpenedPreviewFile::stamp_after_parse(&opened.file, true).as_ref(),
+            Some(before)
+        );
+        assert_eq!(
+            OpenedPreviewFile::stamp_after_parse(&opened.file, false).as_ref(),
+            Some(before)
+        );
+
+        // Restore mtime after rewriting the same number of bytes. The full
+        // change-time/identity check, not just length and mtime, must reject
+        // the original parsed snapshot on this already-open file handle.
+        let modified = opened.file.metadata().unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(&path, b"changed").unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let after = OpenedPreviewFile::stamp_after_parse(&opened.file, true).unwrap();
+        assert_ne!(&after, before);
+        assert!(after.same_file_as(before));
+        assert_eq!(
+            Some(after),
+            OpenedPreviewFile::stamp_after_parse(&opened.file, false)
+        );
     }
 
     #[test]

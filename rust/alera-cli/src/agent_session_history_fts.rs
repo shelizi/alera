@@ -330,13 +330,15 @@ impl AgentSessionHistoryIndex {
             }
             return Ok(checked);
         }
-        let mut stats = self.upsert_prepared(batch).await?;
+        let stats = self.upsert_prepared(batch).await?;
         #[cfg(test)]
-        {
+        let stats = {
+            let mut stats = stats;
             stats.json_buffer_starts += checked.json_buffer_starts;
             stats.warm_check_queries += checked.warm_check_queries;
             stats.retention_queries += checked.retention_queries;
-        }
+            stats
+        };
         Ok(stats)
     }
 
@@ -648,13 +650,9 @@ impl AgentSessionHistoryIndex {
         Ok(stats)
     }
 
-    /// FTS input is tokenized and quoted; user input is never spliced into SQL.
-    /// Prefix matching keeps Chinese technical terms searchable with unicode61.
-    pub(crate) async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<AgentSessionSearchRecord>> {
+    /// Unscoped FTS assertions are test-only; production uses current-scan keys.
+    #[cfg(test)]
+    async fn search(&self, query: &str, limit: usize) -> Result<Vec<AgentSessionSearchRecord>> {
         let Some(fts) = query_terms(query) else {
             return Ok(Vec::new());
         };

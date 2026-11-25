@@ -184,3 +184,82 @@ Interleaved Windows Debug A/B runs (before/after/after/before/before/after) agai
 All 105 non-cold measured requests in the new executable reused exactly 100 FTS candidates and decoded zero records, versus 100 decoded records per request on the baseline path. The 21 cold requests still decoded 100 records with zero reuse. SQL writes and warm/selective update behavior are unchanged. The isolated pointer-stability regression proves movement of existing string allocations. This does not establish a total allocation or peak RSS reduction: the comparison buffer lives until FTS selection finishes, and the result representation and key projection also have overhead. Warm FTS median decreased about 7.9%, warm rank median about 20.1%, while warm total median increased about 9.4%. Index reopen FTS and changed total medians also increased. Host load varies substantially (some scan medians differ by more than 2x); no consistent end-to-end latency improvement is established. Retain this candidate on the separate branch for its deterministic elimination of redundant decoding, subject to review and release-profile measurement before claiming production gains.
 
 Validation: 36 history regressions passed (one benchmark ignored in ordinary runs), 10 exact resume and 2 Agent Context tests passed, 48 total. New test compares exact result order, duplicate last-write behavior, account/profile scoping, original string allocation pointers, fallback for same-file external JSON mutation and malformed JSON, and reuse after repair. Actual Windows symlink rejection passed. All six benchmark runs passed. Format and diff checks passed. No full Rust suite, release benchmark or process allocation/RSS measurement was run.
+
+## Broader regression and process memory verification (2026-11-25)
+
+Pinned the verification branch to main release commit `c52a3811c` (v0.91.37), which contains the merged history optimizations. Removed two production-build warnings in the history index: the mutable write statistics shadow is needed only in tests, and unscoped FTS search is now compiled only for tests. Production scoped-search behavior is unchanged.
+
+The ordinary full workspace test command (`cargo test --manifest-path rust/Cargo.toml --workspace --locked --offline --no-fail-fast -j 6 -- --test-threads=4 --format terse`) failed before testing: the mobile Whisper dependency could not find libclang.dll, and the running shared Debug alera.exe could not be replaced (Windows access denied). No existing application or agent was stopped, no build lock was removed, and no system tools were installed. Instead, built unique CLI and Core test executables with the normal test profile, retaining offline/locked dependency resolution and the documented local build-storage preparation.
+
+| Suite | Passed | Failed | Ignored | Test execution |
+|---|---:|---:|---:|---:|
+| CLI binary unit tests | 1513 | 0 | 13 | 178.50 s |
+| Core library (runtime feature) unit tests | 349 | 0 | 0 | 35.62 s |
+| Total | 1862 | 0 | 13 | 214.12 s |
+
+CLI test executable: alera-e999cb1d4078e82b.exe, unique cfg alera_history_full_validation_20261125. Core executable: alera_core-7d1381877d38ce18.exe, unique cfg alera_history_full_core_validation_20261125. This is the complete ordinary unit-test suite of those two targets, not the complete workspace suite or all CLI integration tests. The production warnings were identified in the attempted ordinary workspace build; a fresh non-test build after the fixes was not completed.
+
+Measured whole-process memory for the existing exact Debug benchmark executable pair: baseline `98617a588` (alera-6839e793f4ddcbd7.exe), result reuse `c8c566945` (alera-8e4f5b51a6337b29.exe). Six interleaved fresh processes (before/after/after/before/before/after), each running the same isolated 256-file, 42-request synthetic benchmark; all completed successfully. Windows Process.PeakWorkingSet64 and PrivateMemorySize64 sampled via an external PowerShell process monitor with a 20 ms wait between observations; actual sampling intervals vary. The peak working set is the largest OS high-water mark observed before exit; private memory is the maximum sampled private bytes, not an exact allocator or peak-commit counter. Includes process startup, fixture creation, SQLite and test harness, not individual requests or the desktop application.
+
+| Run | Version | Observed peak working set (bytes) | Maximum sampled private bytes | Observations |
+|---|---|---:|---:|---:|
+| 1 | Before | 25169920 | 8904704 | 149 |
+| 2 | After | 25145344 | 8601600 | 150 |
+| 3 | After | 25468928 | 9125888 | 113 |
+| 4 | Before | 25227264 | 9003008 | 125 |
+| 5 | Before | 25022464 | 8609792 | 145 |
+| 6 | After | 25300992 | 8830976 | 84 |
+| Median | Before | 25169920 | 8904704 | |
+| Median | After | 25300992 | 8830976 | |
+
+Observed peak working-set median increased by 131072 bytes (0.52%); sampled private-memory median decreased by 73728 bytes (0.83%). The runs overlap and these small changes do not demonstrate a material RAM improvement. Eliminating repeated FTS deserialization is established by the previous functional counters, not equivalent to lower process-wide memory. No release-profile benchmark was completed: the direct-test Release target had no prepared dependencies or test executable, and the full workspace build was blocked as described above. Do not extrapolate these Debug memory observations to production or to the complete cumulative optimization series.
+
+## Direct post-parse Windows snapshot (2026-11-25)
+
+On the previously verified ordinary-file no-follow handle path, reuse the same documented FileStandardInfo/FileBasicInfo/FileIdInfo snapshot after parsing rather than calling the broader std metadata-based stamp reader. Preserve the complete length, volume serial, 128-bit file ID, creation time, last write and nonzero change time equality check. The direct recheck also rejects directory, reparse, and delete-pending attributes. Failed direct rechecks do not retain a cached preview. Compatibility opens and non-Windows stamp checks retain the previous implementation; warm hits and exact verification are unchanged.
+
+Interleaved Windows Debug A/B comparison against `252b78a23`, before/after/after/before/before/after, six runs with 42 measured requests each (252 total). These are the medians of the three per-run p50 values, not pooled percentiles.
+
+| Scenario | Before p50s (ms) | After p50s (ms) | Before median (ms) | After median (ms) |
+|---|---|---|---:|---:|
+| Cold scan | 101.300, 40.635, 49.514 | 35.792, 45.027, 36.470 | 49.514 | 36.470 |
+| Cold total | 155.539, 72.894, 82.204 | 67.429, 85.551, 69.691 | 82.204 | 69.691 |
+| Warm total | 73.041, 31.622, 63.403 | 36.881, 37.868, 63.032 | 63.403 | 37.868 |
+| Reopen total | 76.991, 38.830, 69.216 | 85.697, 74.932, 71.188 | 69.216 | 74.932 |
+| One changed total | 80.744, 69.719, 67.139 | 95.675, 75.533, 77.741 | 69.719 | 77.741 |
+
+Windows process-wide other-I/O p50 counts were identical across all three runs of each version:
+
+| Scenario | Before | After | Reduction |
+|---|---:|---:|---:|
+| Cold | 3608 | 3096 | 512 |
+| Warm | 2804 | 2804 | 0 |
+| Index reopen | 2824 | 2824 | 0 |
+| One file changed | 2807 | 2805 | 2 |
+
+Two fewer counted other-I/O operations per newly parsed ordinary Windows candidate; 14.19% fewer cold other-I/O operations. This is a process counter, not a count of physical disk transfers or literal system calls. Read/write operation medians and SQL write counts remained unchanged. Cold scan median decreased 26.3%, total 15.2%, but shared-host noise is substantial: cold tails remain long, warm timings vary despite unchanged warm path, and the changed-case total median increased 11.5%. Retain the scoped change based on repeatable I/O reduction, not a claim of uniform latency gains.
+
+Validation: 37 history regressions passed (manual benchmark ignored in normal run), 10 exact resume tests, 2 Agent Context tests, 49 total. New Windows test exercises same open handle before/after a same-length rewrite with restored mtime; direct and compatibility stamps agree, and stable identity remains equal while change stamp differs. Actual symlink rejection exercised. All six benchmark runs passed. Build recompiled dependencies (6m55s), and all tests and benchmarks completed within the command deadline. No complete suite rerun, Release performance or new memory measurement.
+
+## Conservative provider-event prefilter (2026-11-25)
+
+Extracted the bounded provider parser into agent_session_history_scan/provider_metadata.rs. On the consented cached-preview parse path, skip full serde_json Value construction only when a line lacks necessary ASCII event-value markers (Codex event_msg and user_message, Claude user) and contains no Unicode-escape marker. Such a line cannot satisfy the original predicates. The filter is deliberately conservative: possible escaped values, nested markers and ambiguous lines still use the complete original JSON parser. Codex's first physical line is always parsed. Line reading, UTF-8 errors, oversized-line rejection, 128-line/256-KiB budgets, UUID/CWD checks, provider-specific predicates and privacy filtering are unchanged. Exact resume and uncached verification explicitly use the same parser with the filter disabled. No new dependencies or changes to cache identity, FTS, or authorization.
+
+Same-binary Windows Debug parser benchmark on repository-pinned Rust 1.98.0: six interleaved passes per workload (before/after/after/before/before/after), each parsing 512 in-memory synthetic transcripts, equally split between Claude and Codex. The before path is the unchanged Value parser with the prefilter disabled; both paths use the same reader and parser logic. Each fixture is checked for equality and the number of definitely irrelevant lines before timing. Light fixtures contain six irrelevant assistant events, tool-heavy fixtures contain forty irrelevant nested tool-output events before the first accepted user prompt. Values below are wall-clock milliseconds, not process CPU or allocated-byte counts.
+
+| Workload | Before run times (ms) | After run times (ms) | Before median (ms) | After median (ms) | Reduction |
+|---|---|---|---:|---:|---:|
+| Light | 23.875, 24.738, 20.936 | 16.280, 13.798, 11.351 | 23.875 | 13.798 | 42.2% |
+| Tool-heavy | 425.538, 443.577, 426.187 | 92.285, 93.394, 109.902 | 426.187 | 93.394 | 78.1% |
+
+Per 512-transcript pass, light fixtures avoid 3,072 full JSON parses (3,840 -> 768) and tool-heavy fixtures avoid 20,480 (21,248 -> 768). All twelve passes (6,144 transcript parses across both workloads) passed. The workload is synthetic and intentionally contains irrelevant events; ambiguous or candidate-heavy transcripts may save fewer parses or incur prefilter overhead. No measured allocation count, RSS reduction or Release speedup is implied.
+
+Three integrated history-search benchmark runs on the new pinned-toolchain executable passed all 126 requests (same 256-file fixture and cold/warm/reopen/changed assertions). Median of the three run p50s: cold total 121.469 ms, cold scan 53.282 ms, warm total 62.155 ms, warm scan 45.151 ms, reopen total 69.987 ms, changed total 76.000 ms. Process other-I/O p50 counts remained 3096/2804/2824/2805 for those four scenarios. The previous benchmark executable was built with the root default Rust 1.97.1 rather than the repository's nested pinned 1.98.0; no direct cross-toolchain end-to-end speedup is claimed. Host load also produced long cold tails. The pinned toolchain required a dependency rebuild (6m49s).
+
+Validation: 40 history regressions passed (two opt-in benchmarks ignored in ordinary run), 10 exact resume tests and 2 Agent Context tests, 52 total. Three new parser tests cover escaped event values/keys, duplicate fields, nested markers, malformed events, consent and privacy behavior, provider-specific message/identity filtering, arrays, UTF-8 failures, oversized lines and byte/line limits against the filter-disabled reference. Actual Windows symlink rejection passed. Both manual benchmark types passed. Unique test executable alera-b2ac5e69cb5b4a7d.exe, cfg alera_history_provider_prefilter_verification_20261125. No full Rust suite rerun, production Release benchmark, process CPU comparison or fresh memory measurement.
+
+### Follow-up pinned-toolchain regression
+
+Validated the complete CLI binary unit-test suite on commit `2409b23d2`, using the previously built Rust 1.98.0 executable alera-b2ac5e69cb5b4a7d.exe. All 1,531 enumerated tests were accounted for: 1,517 passed, zero failed, 14 ignored, in 122.44 seconds.
+
+The non-test target also passed `cargo +1.98.0 check --manifest-path rust/Cargo.toml --locked --offline -p alera-cli --bin alera -j 6` with no warnings, in 2m07s. This checks the ordinary production code path, including the earlier test-only warning fixes, without linking or replacing the running application. It is not a Release build or Release performance measurement. No full workspace/integration suite or new Core unit suite was run. Main advanced independently during validation; the tested source remains the isolated commit above.

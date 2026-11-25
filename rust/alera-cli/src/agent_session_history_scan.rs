@@ -4,30 +4,29 @@
 //! resume it. All results are PreviewOnly until the Host separately verifies
 //! provider account, registered checkout and session identity.
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::fs;
+#[cfg(test)]
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use alera_core::global_agent_search::AgentSessionSearchRecord;
-use serde_json::Value;
 use uuid::Uuid;
 
 mod directory_scan;
 mod preview_cache;
+mod provider_metadata;
 use directory_scan::read_descending_prefix;
 use preview_cache::{
     open_canonical_preview_file, open_regular_preview_candidate, CandidateMetadata,
     OpenedPreviewFile, PreviewScan,
 };
 pub(crate) use preview_cache::{FileStamp as HistoryFileStamp, HistoryPreviewCache};
+use provider_metadata::{read_provider_metadata, read_provider_metadata_from_file};
 
 const MAX_FILES: usize = 256;
 const MAX_ENTRIES: usize = 4096;
 const MAX_DEPTH: usize = 6;
-const MAX_READ_BYTES: u64 = 256 * 1024;
-const MAX_LINES: usize = 128;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_PREVIEW_CHARS: usize = 240;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ProviderHistoryRoot {
@@ -539,136 +538,6 @@ fn is_provider_filename(provider: &str, path: &Path) -> bool {
         "claude" => Uuid::parse_str(name.trim_end_matches(".jsonl")).is_ok(),
         _ => false,
     }
-}
-
-/// Parse the first bounded section only. Never touch tool results, assistant
-/// outputs, secrets in the full transcript or platform auth files.
-fn read_provider_metadata(
-    provider: &str,
-    path: &Path,
-    index_user_text: bool,
-) -> Option<(String, PathBuf, Option<String>)> {
-    let file = File::open(path).ok()?;
-    read_provider_metadata_from_file(provider, path, index_user_text, &file)
-}
-
-fn read_provider_metadata_from_file(
-    provider: &str,
-    path: &Path,
-    index_user_text: bool,
-    file: &File,
-) -> Option<(String, PathBuf, Option<String>)> {
-    let mut reader = BufReader::new(file.take(MAX_READ_BYTES));
-    let mut line = String::new();
-    let mut id: Option<String> = None;
-    let mut cwd: Option<PathBuf> = None;
-    let mut preview: Option<String> = None;
-    for line_index in 0..MAX_LINES {
-        line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
-            break;
-        }
-        if line.len() > 64 * 1024 {
-            return None;
-        }
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if provider == "codex" {
-            if line_index == 0 {
-                if event["type"] != "session_meta" {
-                    return None;
-                }
-                let native = event.pointer("/payload/id")?.as_str()?;
-                if Uuid::parse_str(native).is_err() {
-                    return None;
-                }
-                let filename = path.file_name()?.to_str()?;
-                if !filename.ends_with(&format!("-{native}.jsonl")) {
-                    return None;
-                }
-                id = Some(native.to_owned());
-                cwd = Some(PathBuf::from(event.pointer("/payload/cwd")?.as_str()?));
-            } else if index_user_text
-                && preview.is_none()
-                && event["type"] == "event_msg"
-                && event.pointer("/payload/type").and_then(Value::as_str) == Some("user_message")
-            {
-                preview = safe_preview(event.pointer("/payload/message")?.as_str()?);
-            }
-        } else if provider == "claude" {
-            if event["type"] != "user" || event["isSidechain"] == true || event["isMeta"] == true {
-                continue;
-            }
-            let native = event["sessionId"].as_str()?;
-            if Uuid::parse_str(native).is_err()
-                || path.file_stem()?.to_str()? != native
-                || event["message"]["role"] != "user"
-            {
-                continue;
-            }
-            let entry_cwd = PathBuf::from(event["cwd"].as_str()?);
-            if id.is_none() {
-                id = Some(native.to_owned());
-                cwd = Some(entry_cwd);
-            } else if cwd.as_ref() != Some(&entry_cwd) || id.as_deref() != Some(native) {
-                return None;
-            }
-            if index_user_text && preview.is_none() {
-                let content = &event["message"]["content"];
-                let message = content.as_str().or_else(|| {
-                    content
-                        .as_array()?
-                        .iter()
-                        .find(|part| part["type"] == "text")
-                        .and_then(|part| part["text"].as_str())
-                });
-                if let Some(text) = message {
-                    preview = safe_preview(text);
-                }
-            }
-        }
-        if id.is_some() && (provider == "claude" || !index_user_text || preview.is_some()) {
-            break;
-        }
-    }
-    Some((id?, cwd?, preview))
-}
-
-/// Conservative opt-in preview: discard lines that resemble embedded secrets
-/// or instructions rather than promising reversible perfect token redaction.
-fn safe_preview(value: &str) -> Option<String> {
-    let line = value.lines().find(|line| !line.trim().is_empty())?.trim();
-    if line.starts_with('<') || line.starts_with('{') || line.starts_with('[') {
-        return None;
-    }
-    let lower = line.to_ascii_lowercase();
-    if [
-        "api_key",
-        "apikey",
-        "password",
-        "authorization",
-        "bearer ",
-        "secret=",
-        "sk-",
-        "ghp_",
-        "-----begin",
-        "token=",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-    {
-        return None;
-    }
-    let preview: String = line.chars().take(MAX_PREVIEW_CHARS).collect();
-    if preview.len() < 3
-        || preview
-            .split_whitespace()
-            .any(|part| part.len() >= 64 && part.chars().all(|c| c.is_ascii_alphanumeric()))
-    {
-        return None;
-    }
-    Some(preview)
 }
 
 #[cfg(test)]
