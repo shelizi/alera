@@ -1,6 +1,28 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceRuntimeTests() {
+  testWidgets('terminal viewport is the first child without a history panel', (
+    tester,
+  ) async {
+    final session = _ImmediateNotifySessionHandle(tabId: 'tab-1');
+    await _pumpTerminalSurface(tester, session);
+
+    final viewportColumn = find.ancestor(
+      of: find.byKey(const ValueKey<String>('terminal-tab-1')),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Column &&
+            widget.children.any(
+              (child) => child is Expanded && child.child is LayoutBuilder,
+            ),
+      ),
+    );
+    expect(viewportColumn, findsOneWidget);
+    final column = tester.widget<Column>(viewportColumn);
+    expect(column.children.first, isA<Expanded>());
+    expect(session.ensureStartedCallCount, 1);
+  });
+
   testWidgets('refresh control is top right and invokes the current session', (
     tester,
   ) async {
