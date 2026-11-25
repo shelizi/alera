@@ -13,7 +13,6 @@ import 'package:alera/src/features/workbench/presentation/terminal_composer_work
 import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/features/workbench/domain/terminal_toolbar_placement.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
-import 'package:alera/src/features/workbench/presentation/terminal_restored_conversation_panel.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_overlay.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_surface_toolbar.dart';
@@ -223,9 +222,6 @@ class _TerminalSurfaceState extends ConsumerState<TerminalSurface> {
   }) {
     return Column(
       children: <Widget>[
-        // Pre-existing Claude/Codex messages appear directly in the original
-        // Tab. They are never replayed into the real interactive PTY.
-        RestoredTerminalConversationPanel(session: widget.session),
         Expanded(
           child: _buildTerminalViewport(
             context,
