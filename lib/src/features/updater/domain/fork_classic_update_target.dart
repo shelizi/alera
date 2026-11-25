@@ -10,7 +10,7 @@ enum ForkClassicUpdateTarget {
   windowsX64('windows', 'x64', 'wholeDirectoryReplace'),
   macosArm64('macos', 'arm64', 'wholeBundleReplace');
 
-  const ForkClassicUpdateTarget(
+  ForkClassicUpdateTarget(
     this.platform,
     this.architecture,
     this.strategy,

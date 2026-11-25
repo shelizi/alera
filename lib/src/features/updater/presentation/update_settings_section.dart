@@ -11,7 +11,6 @@ import 'package:alera/src/design_system/surfaces/alera_command_line.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
 import 'package:alera/src/features/command_terminal/presentation/command_terminal_launcher.dart';
 import 'package:alera/src/features/updater/application/fork_auto_update_preference.dart';
-import 'package:alera/src/features/updater/application/update_providers.dart';
 import 'package:alera/src/features/updater/domain/alera_update.dart';
 import 'package:alera/src/features/updater/domain/package_install_method.dart';
 import 'package:flutter/material.dart';
