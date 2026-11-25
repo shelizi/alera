@@ -22,9 +22,33 @@ pub struct ResourceHistory {
 }
 
 impl ResourceHistory {
-    /// Record a sample and return the series, oldest first, including the value
-    /// just pushed.
-    pub fn record(&mut self, key: &str, memory_bytes: u64, now: Instant) -> Vec<u64> {
+    /// Record a sample and borrow the chronological ring for serialization.
+    /// A warm key needs no owned String or intermediate Vec of samples.
+    pub fn record(&mut self, key: &str, memory_bytes: u64, now: Instant) -> &VecDeque<u64> {
+        if !self.series.contains_key(key) {
+            self.series.insert(
+                key.to_owned(),
+                HistorySeries {
+                    samples: VecDeque::with_capacity(HISTORY_CAPACITY),
+                    touched_at: now,
+                },
+            );
+        }
+        let series = self.series.get_mut(key).expect("history key is present");
+        Self::push_sample(series, memory_bytes, now);
+        &series.samples
+    }
+
+    fn push_sample(series: &mut HistorySeries, memory_bytes: u64, now: Instant) {
+        series.touched_at = now;
+        if series.samples.len() == HISTORY_CAPACITY {
+            series.samples.pop_front();
+        }
+        series.samples.push_back(memory_bytes);
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_legacy(&mut self, key: &str, memory_bytes: u64, now: Instant) -> Vec<u64> {
         let series = self
             .series
             .entry(key.to_string())
@@ -32,11 +56,7 @@ impl ResourceHistory {
                 samples: VecDeque::with_capacity(HISTORY_CAPACITY),
                 touched_at: now,
             });
-        series.touched_at = now;
-        if series.samples.len() == HISTORY_CAPACITY {
-            series.samples.pop_front();
-        }
-        series.samples.push_back(memory_bytes);
+        Self::push_sample(series, memory_bytes, now);
         series.samples.iter().copied().collect()
     }
 
@@ -64,7 +84,7 @@ mod tests {
         history.record("a", 2, now);
         let samples = history.record("a", 3, now);
 
-        assert_eq!(samples, vec![1, 2, 3]);
+        assert_eq!(samples, &VecDeque::from([1, 2, 3]));
     }
 
     #[test]
@@ -72,14 +92,14 @@ mod tests {
         let mut history = ResourceHistory::default();
         let now = Instant::now();
 
-        let mut samples = Vec::new();
-        for value in 0..(HISTORY_CAPACITY as u64 + 5) {
-            samples = history.record("a", value, now);
+        for value in 0..(HISTORY_CAPACITY as u64 + 4) {
+            history.record("a", value, now);
         }
+        let samples = history.record("a", HISTORY_CAPACITY as u64 + 4, now);
 
         assert_eq!(samples.len(), HISTORY_CAPACITY);
-        assert_eq!(samples.first(), Some(&5));
-        assert_eq!(samples.last(), Some(&(HISTORY_CAPACITY as u64 + 4)));
+        assert_eq!(samples.front(), Some(&5));
+        assert_eq!(samples.back(), Some(&(HISTORY_CAPACITY as u64 + 4)));
     }
 
     #[test]
@@ -90,8 +110,8 @@ mod tests {
         history.record("a", 1, now);
         history.record("b", 9, now);
 
-        assert_eq!(history.record("a", 2, now), vec![1, 2]);
-        assert_eq!(history.record("b", 8, now), vec![9, 8]);
+        assert_eq!(history.record("a", 2, now), &VecDeque::from([1, 2]));
+        assert_eq!(history.record("b", 8, now), &VecDeque::from([9, 8]));
     }
 
     #[test]
@@ -105,8 +125,8 @@ mod tests {
         history.evict_stale(later);
 
         assert_eq!(history.len(), 1);
-        assert_eq!(history.record("kept", 2, later), vec![1, 2]);
+        assert_eq!(history.record("kept", 2, later), &VecDeque::from([1, 2]));
         // The evicted key starts over rather than resurrecting old samples.
-        assert_eq!(history.record("gone", 5, later), vec![5]);
+        assert_eq!(history.record("gone", 5, later), &VecDeque::from([5]));
     }
 }

@@ -15,7 +15,8 @@ mod snapshot_payload;
 use history::ResourceHistory;
 use process_tree::{ProcessRow, SubtreeUsage};
 use snapshot_payload::{
-    accumulate, memory_usage_percent, process_json, APP_HISTORY_KEY, HOST_HISTORY_KEY,
+    accumulate, attach_rows, memory_usage_percent, process_json, session_json, APP_HISTORY_KEY,
+    HOST_HISTORY_KEY,
 };
 
 pub use process_tree::{ProcessIndex, ShellProcess};
@@ -262,18 +263,7 @@ impl ResourceSampler {
             let history = self
                 .history
                 .record(&root.session_id, usage.memory_bytes, now);
-            sessions.push(json!({
-                "sessionId": root.session_id,
-                "workspaceId": root.workspace_id,
-                "tabId": root.tab_id,
-                "running": root.running,
-                "shellPid": root.shell.map(|shell| shell.pid),
-                "measured": measured,
-                "cpuPercent": usage.cpu_percent,
-                "memoryBytes": usage.memory_bytes,
-                "processCount": usage.process_count,
-                "history": history,
-            }));
+            sessions.push(session_json(root, measured, usage, history));
         }
 
         let host = index.collect_subtree(host_pid, &mut claimed);
@@ -281,19 +271,21 @@ impl ResourceSampler {
         let host_history = self
             .history
             .record(HOST_HISTORY_KEY, host.memory_bytes, now);
+        let host_row = process_json(host_pid, host, host_history);
 
         let app = app_pid
             .map(|pid| index.collect_subtree(pid, &mut claimed))
             .unwrap_or_default();
         accumulate(&mut totals, app);
         let app_history = self.history.record(APP_HISTORY_KEY, app.memory_bytes, now);
+        let app_row = app_pid.map(|pid| process_json(pid, app, app_history));
 
         self.history.evict_stale(now);
 
         let total_memory = self.system.total_memory();
         let available_memory = self.system.available_memory();
         let load = System::load_average();
-        json!({
+        let snapshot = json!({
             "collectedAt": Utc::now().timestamp_millis(),
             "warming": warming,
             "host": {
@@ -305,16 +297,12 @@ impl ResourceSampler {
                 // Zero on Windows: the platform has no load average.
                 "loadAverage1m": load.one,
             },
-            "processes": {
-                "host": process_json(host_pid, host, host_history),
-                "app": app_pid.map(|pid| process_json(pid, app, app_history)),
-            },
-            "sessions": sessions,
             "totals": {
                 "cpuPercent": totals.cpu_percent,
                 "memoryBytes": totals.memory_bytes,
             },
-        })
+        });
+        attach_rows(snapshot, host_row, app_row, sessions)
     }
 }
 
