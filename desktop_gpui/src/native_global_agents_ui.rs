@@ -2449,24 +2449,73 @@ impl Workbench {
     }
 }
 
+fn history_filter_badge(
+    provider: Option<&str>,
+    fields: [&str; 3],
+    expanded: bool,
+) -> (usize, String) {
+    let count = usize::from(provider.is_some())
+        + fields
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .count();
+    let arrow = if expanded { "▴" } else { "▾" };
+    let label = if count == 0 {
+        format!("Filters {arrow}")
+    } else {
+        format!("Filters ({count}) {arrow}")
+    };
+    (count, label)
+}
+
+#[cfg(test)]
+mod compact_history_filter_tests {
+    use super::history_filter_badge;
+
+    #[test]
+    fn empty_and_whitespace_fields_do_not_count_as_filters() {
+        assert_eq!(
+            history_filter_badge(None, ["", " \t", "\u{3000}"], false),
+            (0, "Filters ▾".into())
+        );
+        assert_eq!(
+            history_filter_badge(None, ["", "", ""], true),
+            (0, "Filters ▴".into())
+        );
+    }
+
+    #[test]
+    fn collapsed_badge_retains_provider_and_field_counts() {
+        for (provider, fields, count) in [
+            (Some("claude"), ["", "", ""], 1),
+            (None, ["project", "worktree", ""], 2),
+            (None, ["project", "worktree", "account"], 3),
+            (Some("codex"), ["project", "worktree", "account"], 4),
+        ] {
+            assert_eq!(
+                history_filter_badge(provider, fields, false),
+                (count, format!("Filters ({count}) ▾"))
+            );
+            assert_eq!(
+                history_filter_badge(provider, fields, true),
+                (count, format!("Filters ({count}) ▴"))
+            );
+        }
+    }
+}
+
 fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
     let busy = view.global_agent_history_busy;
     let consented = view.global_agent_history_consent;
-    let filter_count = usize::from(view.global_agent_history_provider.is_some())
-        + [
-            &view.global_agent_history_project_input,
-            &view.global_agent_history_workspace_input,
-            &view.global_agent_history_account_input,
-        ]
-        .into_iter()
-        .filter(|input| !input.read(cx).query().trim().is_empty())
-        .count();
-    let filter_label = match (view.global_agent_history_filters_expanded, filter_count) {
-        (true, 0) => "Filters ▴".to_owned(),
-        (false, 0) => "Filters ▾".to_owned(),
-        (true, count) => format!("Filters ({count}) ▴"),
-        (false, count) => format!("Filters ({count}) ▾"),
-    };
+    let (filter_count, filter_label) = history_filter_badge(
+        view.global_agent_history_provider.as_deref(),
+        [
+            view.global_agent_history_project_input.read(cx).query(),
+            view.global_agent_history_workspace_input.read(cx).query(),
+            view.global_agent_history_account_input.read(cx).query(),
+        ],
+        view.global_agent_history_filters_expanded,
+    );
     // Keep search and consent visible while results scroll independently.
     let mut chips = div()
         .id("global-history-provider-chips")
@@ -2575,9 +2624,15 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         }))
                         .px_3().py_2().text_xs().text_color(rgb(TEXT))
                         .child(filter_label)
-                        .on_click(cx.listener(|view, _, _, cx| {
+                        .on_click(cx.listener(|view, _, window, cx| {
                             view.global_agent_history_filters_expanded =
                                 !view.global_agent_history_filters_expanded;
+                            if !view.global_agent_history_filters_expanded {
+                                window.focus(
+                                    &view.global_agent_history_input.read(cx).focus_handle(cx),
+                                    cx,
+                                );
+                            }
                             cx.notify();
                         })),
                 ),
