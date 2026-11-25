@@ -150,12 +150,18 @@ mixin _ProjectWorkbenchSidebarActions
                   .activeWorkspaceId,
             );
         impact = measuredImpact;
-        if (!mounted) return;
         final externalOnly =
             measuredImpact.blockers.length == 1 &&
             measuredImpact.blockers.single ==
                 'Workspace path is outside Alera-managed storage';
         if (!measuredImpact.safeToClean && !externalOnly) {
+          _logWorkspaceRemovalFailure(
+            workspace,
+            stage: 'storageBlocked',
+            error: measuredImpact.blockers.join('\n'),
+            level: Level.WARNING,
+          );
+          if (!mounted) return;
           await showDialog<bool>(
             context: context,
             builder: (_) => AleraConfirmDialog(
@@ -170,7 +176,13 @@ mixin _ProjectWorkbenchSidebarActions
           );
           return;
         }
-      } catch (error) {
+      } catch (error, stackTrace) {
+        _logWorkspaceRemovalFailure(
+          workspace,
+          stage: 'storageImpact',
+          error: error,
+          stackTrace: stackTrace,
+        );
         if (!mounted) return;
         await _showWorkspaceRemovalError(
           workspace,
@@ -179,6 +191,7 @@ mixin _ProjectWorkbenchSidebarActions
         return;
       }
     }
+    if (!mounted) return;
     final lastActivity =
         ref.read(workspaceActivityControllerProvider)[workspace.id] ??
         impact?.lastActivityAt ??
@@ -222,7 +235,32 @@ mixin _ProjectWorkbenchSidebarActions
             );
         return _WorkbenchSidebarMutationResult.applied;
       },
-      onError: (error) => _showWorkspaceRemovalError(workspace, error),
+      onError: (error, stackTrace) async {
+        _logWorkspaceRemovalFailure(
+          workspace,
+          stage: 'removeWorkspace',
+          error: error,
+          stackTrace: stackTrace,
+        );
+        await _showWorkspaceRemovalError(workspace, error);
+      },
+    );
+  }
+
+  void _logWorkspaceRemovalFailure(
+    Workspace workspace, {
+    required String stage,
+    required Object error,
+    StackTrace? stackTrace,
+    Level level = Level.SEVERE,
+  }) {
+    Logger('WorkspaceRemoval').log(
+      level,
+      'Worktree removal failed stage=$stage '
+      'workspaceId=${workspace.id} projectId=${workspace.projectId} '
+      'name=${workspace.name} branch=${workspace.branch} path=${workspace.path}',
+      error,
+      stackTrace,
     );
   }
 
@@ -407,7 +445,7 @@ mixin _ProjectWorkbenchSidebarActions
   Future<void> _runWorkbenchSidebarMutation({
     required _WorkbenchSidebarMutation mutation,
     required Future<_WorkbenchSidebarMutationResult> Function() execute,
-    Future<void> Function(Object error)? onError,
+    Future<void> Function(Object error, StackTrace stackTrace)? onError,
   }) async {
     try {
       final result = await execute();
@@ -419,13 +457,11 @@ mixin _ProjectWorkbenchSidebarActions
         message: mutation.successMessage,
         tone: .success,
       );
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
+    } catch (error, stackTrace) {
+      // The removal callback logs even if the sidebar was disposed mid-request.
       if (onError != null) {
-        await onError(error);
-      } else {
+        await onError(error, stackTrace);
+      } else if (mounted) {
         AleraToast.show(context, message: error.toString(), tone: .error);
       }
     }

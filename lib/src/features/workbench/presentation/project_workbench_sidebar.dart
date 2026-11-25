@@ -61,6 +61,7 @@ import 'package:alera/src/features/workbench/presentation/widgets/workbench_side
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:logging/logging.dart';
 
 part 'project_workbench_collapsed_sidebar.dart';
 part 'project_workbench_sidebar_body.dart';

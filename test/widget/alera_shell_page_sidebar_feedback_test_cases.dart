@@ -1,5 +1,31 @@
 part of 'alera_shell_page_test.dart';
 
+Future<Directory> _configureWorkspaceRemovalLog(WidgetTester tester) async {
+  final directory = (await tester.runAsync(() async {
+    final root = await Directory.systemTemp.createTemp('alera-removal-log-');
+    await AppLogger.configure(directory: root, consoleWriter: (_) {});
+    return root;
+  }))!;
+  addTearDown(() async {
+    await AppLogger.resetForTesting();
+    await directory.delete(recursive: true);
+  });
+  return directory;
+}
+
+Future<Map<String, dynamic>> _readWorkspaceRemovalLog(
+  WidgetTester tester,
+  Directory directory,
+) async {
+  return (await tester.runAsync(() async {
+    await AppLogger.flush();
+    final lines = await File(p.join(directory.path, 'alera.log')).readAsLines();
+    return lines
+        .map((line) => jsonDecode(line) as Map<String, dynamic>)
+        .singleWhere((record) => record['logger'] == 'WorkspaceRemoval');
+  }))!;
+}
+
 void _registerAleraShellSidebarFeedbackTests() {
   testWidgets('active workspace is visually emphasized in the sidebar', (
     tester,
@@ -106,9 +132,10 @@ void _registerAleraShellSidebarFeedbackTests() {
     expect(events.last.message, 'Bad state: rename workspace failed');
   });
 
-  testWidgets('workspace removal failures show persistent error details', (
+  testWidgets('workspace removal failures show and persist error details', (
     tester,
   ) async {
+    final directory = await _configureWorkspaceRemovalLog(tester);
     final events = <AleraToastData>[];
     final subscription = AleraToast.stream.listen(events.add);
     addTearDown(subscription.cancel);
@@ -156,7 +183,72 @@ void _registerAleraShellSidebarFeedbackTests() {
     await tester.pumpAndSettle();
     expect(find.text('Worktree removal failed'), findsNothing);
     expect(find.text('Feature login'), findsWidgets);
+    final log = await _readWorkspaceRemovalLog(tester, directory);
+    expect(log['level'], 'SEVERE');
+    expect(DateTime.tryParse(log['ts'] as String), isNotNull);
+    expect(log['msg'], contains('stage=removeWorkspace'));
+    expect(log['msg'], contains('workspaceId=workspace-2'));
+    expect(log['msg'], contains(state.workspacesFor('project-1').last.path));
+    expect(log['error'], 'Bad state: delete workspace failed');
+    expect(log['stack'], isNotEmpty);
   });
+
+  for (final blocked in [false, true]) {
+    testWidgets(
+      'workspace removal logs preflight ${blocked ? 'blockers' : 'errors'}',
+      (tester) async {
+        final directory = await _configureWorkspaceRemovalLog(tester);
+        final state = _linkedWorkbenchState(linkedExpanded: true);
+        final harness = await _pumpShell(
+          tester,
+          state: state,
+          managedWorkspaceRuntime: _FakeManagedWorkspaceRuntime(
+            storageImpactFailure: blocked
+                ? null
+                : StateError('storage RPC failed'),
+            blockers: blocked
+                ? const ['Workspace has an active automation']
+                : const [],
+          ),
+        );
+        await tester.tapAt(
+          tester.getCenter(find.text('Feature login').first),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text(
+            blocked ? 'Cleanup Unavailable' : 'Worktree removal failed',
+          ),
+          findsOneWidget,
+        );
+        expect(harness.runtime.closedWorkspaceIds, isEmpty);
+        await tester.tap(find.widgetWithText(FilledButton, 'Close'));
+        await tester.pumpAndSettle();
+        final log = await _readWorkspaceRemovalLog(tester, directory);
+        expect(log['level'], blocked ? 'WARNING' : 'SEVERE');
+        expect(
+          log['msg'],
+          contains(blocked ? 'stage=storageBlocked' : 'stage=storageImpact'),
+        );
+        expect(
+          log['msg'],
+          contains(state.workspacesFor('project-1').last.path),
+        );
+        expect(
+          log['error'],
+          contains(
+            blocked
+                ? 'Workspace has an active automation'
+                : 'storage RPC failed',
+          ),
+        );
+        if (!blocked) expect(log['stack'], isNotEmpty);
+      },
+    );
+  }
 
   testWidgets('project removal failures surface an error toast event', (
     tester,

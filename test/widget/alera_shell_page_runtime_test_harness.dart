@@ -12,8 +12,10 @@ class const _ShellPumpHarness({
   required final _ShellTestAgentStatusController agentStatus,
 });
 
-class const _FakeManagedWorkspaceRuntime()
-    implements ManagedWorkspaceRuntime, WorkspaceStorageRuntime {
+class const _FakeManagedWorkspaceRuntime({
+  final Object? storageImpactFailure,
+  final List<String> blockers = const <String>[],
+}) implements ManagedWorkspaceRuntime, WorkspaceStorageRuntime {
   @override
   Future<WorkspaceCreationResult> createLinkedWorkspace({
     required Project project,
@@ -41,16 +43,19 @@ class const _FakeManagedWorkspaceRuntime()
   Future<WorkspaceStorageImpact> storageImpact({
     required String workspaceId,
     String? activeWorkspaceId,
-  }) async => WorkspaceStorageImpact(
-    workspaceId: workspaceId,
-    path: '/host-owned/workspaces/$workspaceId',
-    sizeBytes: 4096,
-    entryCount: 3,
-    measuredAt: .utc(2026, 8, 22, 12),
-    lastActivityAt: .utc(2026, 8, 22, 11),
-    safeToClean: true,
-    blockers: const <String>[],
-  );
+  }) async {
+    if (storageImpactFailure case final Object failure) throw failure;
+    return WorkspaceStorageImpact(
+      workspaceId: workspaceId,
+      path: '/host-owned/workspaces/$workspaceId',
+      sizeBytes: 4096,
+      entryCount: 3,
+      measuredAt: .utc(2026, 8, 22, 12),
+      lastActivityAt: .utc(2026, 8, 22, 11),
+      safeToClean: blockers.isEmpty,
+      blockers: blockers,
+    );
+  }
 }
 
 class _FakeTerminalRuntime implements TerminalRuntime {

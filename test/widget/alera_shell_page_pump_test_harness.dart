@@ -8,6 +8,8 @@ Future<_ShellPumpHarness> _pumpShell(
   WidgetTester tester, {
   required WorkbenchState state,
   _FakeTerminalRuntime? terminalRuntime,
+  ManagedWorkspaceRuntime managedWorkspaceRuntime =
+      const _FakeManagedWorkspaceRuntime(),
   WorkspaceFolderOpener? workspaceFolderOpener,
   _ShellTestWorkbenchController? controller,
   EditorSessionRegistry? editorSessionRegistry,
@@ -58,7 +60,7 @@ Future<_ShellPumpHarness> _pumpShell(
           ),
         ),
         managedWorkspaceRuntimeProvider.overrideWithValue(
-          const _FakeManagedWorkspaceRuntime(),
+          managedWorkspaceRuntime,
         ),
         terminalRuntimeProvider.overrideWith((ref) => runtime),
         terminalHostClientProvider.overrideWithValue(terminalHostClient),
