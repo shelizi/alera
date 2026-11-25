@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, WAIT_TIMEOUT,
+    CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -95,7 +95,19 @@ struct RawSample {
     working_set: u64,
 }
 
-fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetricReadFailure {
+    Open(i32),
+    Times(i32),
+    CreationMissing,
+    CreatedAfterSnapshot { delta_ticks: u64 },
+    Memory(i32),
+    Exited,
+    Wait(u32),
+    Counter,
+}
+
+fn direct_sample(pid: u32, snapshot_started: u64) -> Result<RawSample, MetricReadFailure> {
     let handle = OwnedHandle(
         unsafe {
             OpenProcess(
@@ -104,7 +116,7 @@ fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
                 pid,
             )
         }
-        .ok()?,
+        .map_err(|error| MetricReadFailure::Open(error.code().0))?,
     );
     let (mut creation, mut exit, mut kernel, mut user) = (
         FILETIME::default(),
@@ -112,10 +124,16 @@ fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
         FILETIME::default(),
         FILETIME::default(),
     );
-    unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) }.ok()?;
+    unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) }
+        .map_err(|error| MetricReadFailure::Times(error.code().0))?;
     let creation = ticks(creation);
-    if creation == 0 || creation > snapshot_started {
-        return None;
+    if creation == 0 {
+        return Err(MetricReadFailure::CreationMissing);
+    }
+    if creation > snapshot_started {
+        return Err(MetricReadFailure::CreatedAfterSnapshot {
+            delta_ticks: creation - snapshot_started,
+        });
     }
     let mut memory = PROCESS_MEMORY_COUNTERS {
         cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
@@ -128,14 +146,18 @@ fn direct_sample(pid: u32, snapshot_started: u64) -> Option<RawSample> {
             size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
         )
     }
-    .ok()?;
+    .map_err(|error| MetricReadFailure::Memory(error.code().0))?;
     // The signaled state is unambiguous even for exit code STILL_ACTIVE.
-    if unsafe { WaitForSingleObject(handle.0, 0) } != WAIT_TIMEOUT {
-        return None;
+    match unsafe { WaitForSingleObject(handle.0, 0) } {
+        WAIT_TIMEOUT => {}
+        WAIT_OBJECT_0 => return Err(MetricReadFailure::Exited),
+        other => return Err(MetricReadFailure::Wait(other.0)),
     }
-    Some(RawSample {
+    Ok(RawSample {
         creation,
-        cpu_ticks: ticks(kernel).checked_add(ticks(user))?,
+        cpu_ticks: ticks(kernel)
+            .checked_add(ticks(user))
+            .ok_or(MetricReadFailure::Counter)?,
         working_set: memory.WorkingSetSize as u64,
     })
 }
@@ -259,7 +281,10 @@ fn native_self_identity_and_working_set_match_expected_metrics() {
     assert!(select_targets(&topology.rows, &[pid]).contains(&pid));
     let sample = direct_sample(pid, topology.started).expect("own process metrics");
     assert!(sample.working_set > 0);
-    assert!(direct_sample(pid, sample.creation - 1).is_none());
+    assert!(matches!(
+        direct_sample(pid, sample.creation - 1),
+        Err(MetricReadFailure::CreatedAfterSnapshot { .. })
+    ));
     let mut system = System::new();
     system.refresh_cpu_list(CpuRefreshKind::nothing());
     refresh(
@@ -414,7 +439,7 @@ fn windows_targeted_collection_benchmark() {
                     std::hint::black_box(system_ticks);
                     let mut saw_root = false;
                     for pid in ids {
-                        if let Some(sample) = direct_sample(pid, topology.started) {
+                        if let Ok(sample) = direct_sample(pid, topology.started) {
                             if pid == root {
                                 saw_root = sample.working_set > 0;
                             }

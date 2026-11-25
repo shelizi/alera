@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [features]
 default = []
+# Dedicated non-release executable for isolated local Host conformance.
+isolated-host-conformance = []
 local-whisper = ["dep:whisper-rs"]
 
 [dependencies]

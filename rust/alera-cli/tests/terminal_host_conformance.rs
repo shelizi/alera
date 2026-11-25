@@ -14,6 +14,9 @@ mod lifecycle;
 mod orchestration;
 #[path = "terminal_host_conformance/resources.rs"]
 mod resources;
+#[cfg(all(windows, feature = "isolated-host-conformance"))]
+#[path = "terminal_host_conformance/resources_native_windows.rs"]
+mod resources_native_windows;
 #[path = "terminal_host_conformance/ssh_bootstrap.rs"]
 mod ssh_bootstrap;
 #[path = "terminal_host_conformance/terminal_sessions.rs"]

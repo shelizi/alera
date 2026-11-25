@@ -2,8 +2,8 @@
 //! Reject an entire frame on ambiguity; never publish partially sampled trees.
 use super::super::process_tree::{ProcessIndex, ProcessRow, ShellProcess};
 use super::{
-    cpu_since, direct_sample, global_ticks, native_topology, select_targets, ticks, RawSample,
-    Topology,
+    cpu_since, direct_sample, global_ticks, native_topology, select_targets, ticks,
+    MetricReadFailure, RawSample, Topology,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -24,6 +24,10 @@ pub(super) enum Reject {
     Topology,
     UnsupportedCores,
     MissingMetric,
+    MetricRead {
+        failure: MetricReadFailure,
+        root: bool,
+    },
     ShellGeneration,
     UnsealedRoot,
     ParentGeneration,
@@ -192,7 +196,40 @@ impl Frame {
     }
 }
 
+/// A descendant may appear or exit during a Toolhelp snapshot. Re-read
+/// the entire topology at most once; never accept an incomplete closure or
+/// weaken the authoritative creation-marker checks.
+fn retry_collection<T>(
+    mut attempt: impl FnMut() -> Result<T, Reject>,
+    has_budget: impl FnOnce() -> bool,
+) -> Result<T, Reject> {
+    let first = attempt();
+    if matches!(
+        &first,
+        Err(Reject::MetricRead {
+            failure: MetricReadFailure::CreatedAfterSnapshot { .. } | MetricReadFailure::Exited,
+            root: false,
+        })
+    ) && has_budget()
+    {
+        return attempt();
+    }
+    first
+}
+
 pub(super) fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
+    let budget_start = Instant::now();
+    retry_collection(
+        || collect_once(roots, expected_cores, budget_start),
+        || budget_start.elapsed() < MAX_SPAN,
+    )
+}
+
+fn collect_once(
+    roots: &[Root],
+    expected_cores: usize,
+    budget_start: Instant,
+) -> Result<Frame, Reject> {
     let start = Instant::now();
     let cores = single_group_cores()?;
     if cores != expected_cores {
@@ -211,14 +248,18 @@ pub(super) fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Re
     for pid in selected {
         // Stop starting further queries after the budget is spent. An
         // individual OS call is still not interruptible by this check.
-        if start.elapsed() > MAX_SPAN {
+        if budget_start.elapsed() > MAX_SPAN {
             return Err(Reject::SlowSweep);
         }
-        let sample = direct_sample(pid, topology.started).ok_or(Reject::MissingMetric)?;
+        let sample =
+            direct_sample(pid, topology.started).map_err(|failure| Reject::MetricRead {
+                failure,
+                root: root_ids.contains(&pid),
+            })?;
         samples.insert(pid, sample);
     }
     let elapsed = start.elapsed();
-    if elapsed > MAX_SPAN {
+    if budget_start.elapsed() > MAX_SPAN {
         return Err(Reject::SlowSweep);
     }
     if !consistent_clock(
@@ -231,7 +272,11 @@ pub(super) fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Re
     if single_group_cores()? != cores {
         return Err(Reject::UnsupportedCores);
     }
-    Frame::validate(&topology, roots, samples, cores, system_ticks, at, wall_at)
+    let frame = Frame::validate(&topology, roots, samples, cores, system_ticks, at, wall_at)?;
+    if budget_start.elapsed() > MAX_SPAN {
+        return Err(Reject::SlowSweep);
+    }
+    Ok(frame)
 }
 
 pub(super) struct Measurement {
@@ -427,6 +472,78 @@ mod tests {
     use sysinfo::{CpuRefreshKind, Pid, ProcessesToUpdate, System};
 
     const START: u64 = (EPOCH_SECONDS + 1_000) * TICKS_PER_SECOND;
+
+    #[test]
+    fn transient_descendant_churn_retries_once_within_the_original_budget() {
+        let transient = Reject::MetricRead {
+            failure: MetricReadFailure::CreatedAfterSnapshot { delta_ticks: 1 },
+            root: false,
+        };
+        let mut attempts = 0;
+        let result = retry_collection(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(transient)
+                } else {
+                    Ok(7)
+                }
+            },
+            || true,
+        );
+        assert_eq!(result, Ok(7));
+        assert_eq!(attempts, 2);
+        for (reason, budget, expected_attempts) in [
+            (transient, true, 2),
+            (transient, false, 1),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::Exited,
+                    root: false,
+                },
+                true,
+                2,
+            ),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::Exited,
+                    root: true,
+                },
+                true,
+                1,
+            ),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::CreationMissing,
+                    root: false,
+                },
+                true,
+                1,
+            ),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::Open(-1),
+                    root: false,
+                },
+                true,
+                1,
+            ),
+            (Reject::ShellGeneration, true, 1),
+            (Reject::ParentGeneration, true, 1),
+            (Reject::SlowSweep, true, 1),
+        ] {
+            let mut attempts = 0;
+            let result = retry_collection::<()>(
+                || {
+                    attempts += 1;
+                    Err(reason)
+                },
+                || budget,
+            );
+            assert_eq!(result, Err(reason));
+            assert_eq!(attempts, expected_attempts);
+        }
+    }
 
     fn raw(offset: u64, cpu: u64, memory: u64) -> RawSample {
         RawSample {

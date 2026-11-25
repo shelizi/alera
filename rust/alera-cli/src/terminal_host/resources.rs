@@ -237,6 +237,8 @@ impl ResourceSampler {
         app_pid: Option<u32>,
         app_creation: Option<u64>,
     ) -> Value {
+        #[cfg(feature = "isolated-host-conformance")]
+        let sample_started = Instant::now();
         let (index, warming, native_used) =
             self.collect_process_index(roots, host_pid, app_pid, app_creation);
 
@@ -333,7 +335,20 @@ impl ResourceSampler {
                 "memoryBytes": totals.memory_bytes,
             },
         });
-        attach_rows(snapshot, host_row, app_row, sessions)
+        let snapshot = attach_rows(snapshot, host_row, app_row, sessions);
+        // Test-build-only phase telemetry; no production logging or wire
+        // fields, no PID/command data, and no timing overhead in normal builds.
+        #[cfg(feature = "isolated-host-conformance")]
+        tracing::debug!(
+            target: "resource_conformance",
+            backend = if native_used { "native" } else { "sysinfo" },
+            warming,
+            elapsed_us = sample_started.elapsed().as_micros() as u64,
+            collected_at = snapshot["collectedAt"].as_i64().unwrap_or_default(),
+            sessions = roots.len(),
+            "resource snapshot completed"
+        );
+        snapshot
     }
 
     fn collect_process_index(
