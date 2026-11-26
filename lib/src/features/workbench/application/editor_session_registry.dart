@@ -309,11 +309,15 @@ class EditorSessionRegistry extends ChangeNotifier
     final candidates = relativePaths.toSet();
     final reconcileAll = candidates.contains('');
     final observedTokens = <String, String?>{};
-    for (final entry in _documents.entries) {
+    // Awaiting disk metadata or a reload can allow tabs to close, move,
+    // or open. Do not hold a live map iterator across those awaits.
+    final documents = _documents.entries.toList(growable: false);
+    for (final entry in documents) {
       final tabId = entry.key;
       final document = entry.value;
       final relativePath = document.relativePath;
-      if (document.workspacePath != workspacePath ||
+      if (!identical(_documents[tabId], document) ||
+          document.workspacePath != workspacePath ||
           relativePath == null ||
           (!reconcileAll && !candidates.contains(relativePath)) ||
           isDirty(tabId)) {
@@ -334,7 +338,8 @@ class EditorSessionRegistry extends ChangeNotifier
         continue;
       }
       // The editor may have become dirty while the async metadata lookup ran.
-      if (isDirty(tabId) ||
+      if (!identical(_documents[tabId], document) ||
+          isDirty(tabId) ||
           document.workspacePath != workspacePath ||
           document.relativePath != relativePath) {
         continue;

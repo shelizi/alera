@@ -22,6 +22,9 @@ class WorkspaceEditorFileWatcher {
   StreamSubscription<native.WorkspaceExplorerWatchBatch>? _subscription;
   String? _workspacePath;
   Set<String> _watchedDirectories = <String>{};
+  // Native batches are bounded individually, but another batch can arrive
+  // while Dart awaits metadata/reload IO. Bound that downstream backlog too.
+  static const _maxPendingChangedPaths = 512;
   final Set<String> _pendingChangedPaths = <String>{};
   bool _reloadInFlight = false;
   bool _disposed = false;
@@ -81,7 +84,22 @@ class WorkspaceEditorFileWatcher {
     if (_disposed || batch.changedRelativePaths.isEmpty) {
       return;
     }
-    _pendingChangedPaths.addAll(batch.changedRelativePaths);
+    if (!_pendingChangedPaths.contains('')) {
+      for (final path in batch.changedRelativePaths) {
+        if (path.isEmpty ||
+            (_pendingChangedPaths.length >= _maxPendingChangedPaths &&
+                !_pendingChangedPaths.contains(path))) {
+          // Preserve the native root-rescan contract. The root dominates
+          // subsequent detail until drained; open documents and viewers
+          // are reconciled rather than dropping a potentially changed file.
+          _pendingChangedPaths
+            ..clear()
+            ..add('');
+          break;
+        }
+        _pendingChangedPaths.add(path);
+      }
+    }
     if (_reloadInFlight) {
       return;
     }

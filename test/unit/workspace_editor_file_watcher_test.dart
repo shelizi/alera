@@ -185,6 +185,310 @@ void main() {
     },
   );
 
+  test(
+    'editor watcher bounds accumulated paths and recovers with a root pass',
+    () async {
+      const workspace = '/repo/alera';
+      final service = _WatcherFileService()
+        ..contentTokens['busy.txt'] = 'busy-original'
+        ..contentTokens['target.txt'] = 'target-original'
+        ..contentTokens['dirty.txt'] = 'dirty-external'
+        ..contentTokens['other.txt'] = 'other-external';
+      final registry = _RecordingEditorRegistry();
+      addTearDown(registry.dispose);
+      registry.documentFor('busy')
+        ..attachFile(workspacePath: workspace, relativePath: 'busy.txt')
+        ..acceptLoaded(_editorFile('busy', token: 'busy-original'));
+      final target = registry.documentFor('target')
+        ..attachFile(workspacePath: workspace, relativePath: 'target.txt')
+        ..acceptLoaded(_editorFile('target', token: 'target-original'));
+      final dirty = registry.documentFor('dirty')
+        ..attachFile(workspacePath: workspace, relativePath: 'dirty.txt')
+        ..acceptLoaded(_editorFile('dirty', token: 'dirty-original'))
+        ..updateCurrentText('unsaved');
+      final other = registry.documentFor('other')
+        ..attachFile(workspacePath: '/repo/other', relativePath: 'other.txt')
+        ..acceptLoaded(_editorFile('other', token: 'other-original'));
+      var targetReloads = 0;
+      registry.register(
+        'target',
+        EditorSessionHandle(
+          isDirty: () => target.isDirty,
+          save: () async {},
+          discard: () async {},
+          reload: () async {
+            targetReloads++;
+            target.acceptLoaded(
+              _editorFile('external target', token: 'target-external'),
+            );
+          },
+        ),
+      );
+      final viewer = registry.documentChangesForPath(
+        workspacePath: workspace,
+        relativePath: 'viewer.md',
+      );
+      final otherViewer = registry.documentChangesForPath(
+        workspacePath: '/repo/other',
+        relativePath: 'viewer.md',
+      );
+      var viewerNotifications = 0;
+      var otherNotifications = 0;
+      void viewerChanged() => viewerNotifications++;
+      void otherChanged() => otherNotifications++;
+      viewer.addListener(viewerChanged);
+      otherViewer.addListener(otherChanged);
+      addTearDown(() {
+        viewer.removeListener(viewerChanged);
+        otherViewer.removeListener(otherChanged);
+      });
+      final watcher = WorkspaceEditorFileWatcher(
+        workspaceFiles: service,
+        editorSessions: registry,
+      );
+      addTearDown(watcher.dispose);
+      await watcher.update(
+        workspacePath: workspace,
+        openRelativePaths: ['busy.txt', 'target.txt', 'dirty.txt', 'viewer.md'],
+      );
+
+      Future<Completer<void>> holdReload() async {
+        final started = Completer<void>();
+        final release = Completer<void>();
+        addTearDown(() {
+          if (!release.isCompleted) release.complete();
+        });
+        service.beforeContentTokenRead = (_, relativePath) async {
+          if (relativePath == 'busy.txt' && !started.isCompleted) {
+            started.complete();
+            await release.future;
+          }
+        };
+        service.emitChanged('busy.txt');
+        await started.future;
+        return release;
+      }
+
+      // The exact budget keeps detail, even when the same paths repeat.
+      final first = await holdReload();
+      final exact = List.generate(512, (i) => 'generated/file-$i.txt');
+      service.emitBatch(exact);
+      service.emitBatch(exact.reversed.toList());
+      await _flush();
+      first.complete();
+      await _flush();
+      expect(registry.reloadBatches.map((batch) => batch.paths).toList(), [
+        ['busy.txt'],
+        exact,
+      ]);
+      expect(viewerNotifications, 0);
+
+      // Multiple individually small native batches can accumulate during IO.
+      // 10,000 distinct paths must collapse to one root sentinel, not remain
+      // queued as 10,000 paths or cause 10,000 follow-up metadata lookups.
+      registry.reloadBatches.clear();
+      service.contentTokenReads.clear();
+      final second = await holdReload();
+      service.contentTokens['target.txt'] = 'target-external';
+      for (var batch = 0; batch < 100; batch++) {
+        service.emitBatch(
+          List.generate(100, (i) => 'generated/storm-${batch * 100 + i}.txt'),
+        );
+      }
+      service.emitChanged('target.txt');
+      await _flush();
+      second.complete();
+      await _flush();
+
+      expect(registry.reloadBatches.map((batch) => batch.paths).toList(), [
+        ['busy.txt'],
+        [''],
+      ]);
+      expect(service.contentTokenReads, ['busy.txt', 'busy.txt', 'target.txt']);
+      expect(targetReloads, 1);
+      expect(target.currentText, 'external target');
+      expect(dirty.currentText, 'unsaved');
+      expect(other.currentText, 'other');
+      expect(viewerNotifications, 1);
+      expect(otherNotifications, 0);
+
+      // After draining the rescan, normal precise notifications resume.
+      registry.reloadBatches.clear();
+      service.emitChanged('viewer.md');
+      await _flush();
+      expect(registry.reloadBatches.single.paths, ['viewer.md']);
+      expect(viewerNotifications, 2);
+      expect(targetReloads, 1);
+    },
+  );
+
+  test('native root sentinel dominates pending detail and workspace switch clears it', () async {
+    final service = _WatcherFileService()
+      ..contentTokens['busy.txt'] = 'unchanged';
+    final registry = _RecordingEditorRegistry();
+    addTearDown(registry.dispose);
+    registry.documentFor('busy')
+      ..attachFile(workspacePath: '/repo/one', relativePath: 'busy.txt')
+      ..acceptLoaded(_editorFile('busy', token: 'unchanged'));
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    await watcher.update(
+      workspacePath: '/repo/one',
+      openRelativePaths: ['busy.txt'],
+    );
+    final started = Completer<void>();
+    final release = Completer<void>();
+    addTearDown(() {
+      if (!release.isCompleted) release.complete();
+    });
+    service.beforeContentTokenRead = (_, relativePath) async {
+      if (relativePath == 'busy.txt' && !started.isCompleted) {
+        started.complete();
+        await release.future;
+      }
+    };
+    service.emitChanged('busy.txt');
+    await started.future;
+    service.emitBatch(['first.txt', '', 'later.txt']);
+    service.emitChanged('another.txt');
+    await _flush();
+    release.complete();
+    await _flush();
+    expect(registry.reloadBatches.map((batch) => batch.paths).toList(), [
+      ['busy.txt'],
+      [''],
+    ]);
+
+    // Overflow queued for the old watcher must never be passed to the new
+    // workspace, including while the old metadata query is still in flight.
+    registry.reloadBatches.clear();
+    final secondStarted = Completer<void>();
+    final secondRelease = Completer<void>();
+    addTearDown(() {
+      if (!secondRelease.isCompleted) secondRelease.complete();
+    });
+    service.beforeContentTokenRead = (_, relativePath) async {
+      if (relativePath == 'busy.txt' && !secondStarted.isCompleted) {
+        secondStarted.complete();
+        await secondRelease.future;
+      }
+    };
+    service.emitChanged('busy.txt');
+    await secondStarted.future;
+    service.emitBatch(List.generate(600, (i) => 'old-$i.txt'));
+    await _flush();
+    await watcher.update(
+      workspacePath: '/repo/two',
+      openRelativePaths: ['new.txt'],
+    );
+    service.emitChanged('new.txt');
+    await _flush();
+    secondRelease.complete();
+    await _flush();
+    expect(registry.reloadBatches.map((batch) => batch.workspace).toList(), [
+      '/repo/one',
+      '/repo/two',
+    ]);
+    expect(registry.reloadBatches.map((batch) => batch.paths).toList(), [
+      ['busy.txt'],
+      ['new.txt'],
+    ]);
+  });
+
+  test(
+    'registry tolerates closing or replacing tabs during async metadata lookup',
+    () async {
+      const workspace = '/repo/alera';
+      final service = _WatcherFileService()
+        ..contentTokens['closing.txt'] = 'closing-disk'
+        ..contentTokens['surviving.txt'] = 'surviving-disk'
+        ..contentTokens['dirty.txt'] = 'dirty-disk';
+      final registry = EditorSessionRegistry();
+      addTearDown(registry.dispose);
+      final closing = registry.documentFor('closing')
+        ..attachFile(workspacePath: workspace, relativePath: 'closing.txt')
+        ..acceptLoaded(_editorFile('closing', token: 'closing-old'));
+      final surviving = registry.documentFor('surviving')
+        ..attachFile(workspacePath: workspace, relativePath: 'surviving.txt')
+        ..acceptLoaded(_editorFile('surviving', token: 'surviving-old'));
+      final dirty = registry.documentFor('dirty')
+        ..attachFile(workspacePath: workspace, relativePath: 'dirty.txt')
+        ..acceptLoaded(_editorFile('dirty', token: 'dirty-old'));
+      var replacementReloads = 0;
+      var survivingReloads = 0;
+      registry.register(
+        'surviving',
+        EditorSessionHandle(
+          isDirty: () => surviving.isDirty,
+          save: () async {},
+          discard: () async {},
+          reload: () async {
+            survivingReloads++;
+            surviving.acceptLoaded(
+              _editorFile('external surviving', token: 'surviving-disk'),
+            );
+          },
+        ),
+      );
+      final started = Completer<void>();
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      service.beforeContentTokenRead = (_, relativePath) async {
+        if (relativePath == 'closing.txt') {
+          started.complete();
+          await release.future;
+        } else if (relativePath == 'dirty.txt') {
+          // Simulate an edit during this document's metadata lookup.
+          dirty.updateCurrentText('unsaved during lookup');
+        }
+      };
+      final refresh = registry.reloadExternallyChangedCleanFiles(
+        workspaceFiles: service,
+        workspacePath: workspace,
+        relativePaths: [''],
+      );
+      await started.future;
+      registry.forget('closing');
+      final replacement = registry.documentFor('closing')
+        ..attachFile(workspacePath: workspace, relativePath: 'closing.txt')
+        ..acceptLoaded(
+          _editorFile('new session', token: 'replacement-original'),
+        );
+      registry.register(
+        'closing',
+        EditorSessionHandle(
+          isDirty: () => replacement.isDirty,
+          save: () async {},
+          discard: () async {},
+          reload: () async {
+            replacementReloads++;
+          },
+        ),
+      );
+      registry.documentFor('new-tab')
+        ..attachFile(workspacePath: workspace, relativePath: 'new.txt')
+        ..acceptLoaded(_editorFile('new tab', token: 'new-original'));
+      release.complete();
+      await refresh;
+      expect(closing.currentText, 'closing');
+      expect(replacement.currentText, 'new session');
+      expect(replacementReloads, 0);
+      expect(survivingReloads, 1);
+      expect(surviving.currentText, 'external surviving');
+      expect(dirty.currentText, 'unsaved during lookup');
+      expect(service.contentTokenReads, [
+        'closing.txt',
+        'surviving.txt',
+        'dirty.txt',
+      ]);
+    },
+  );
+
   test('changed events notify path listeners without an editor tab', () async {
     final service = _WatcherFileService();
     final registry = EditorSessionRegistry();
@@ -260,6 +564,25 @@ native.WorkspaceEditorTextFile _editorFile(
   );
 }
 
+class _RecordingEditorRegistry extends EditorSessionRegistry {
+  final reloadBatches = <({String workspace, List<String> paths})>[];
+
+  @override
+  Future<void> reloadExternallyChangedCleanFiles({
+    required WorkspaceFileService workspaceFiles,
+    required String workspacePath,
+    required Iterable<String> relativePaths,
+  }) {
+    final paths = relativePaths.toList(growable: false);
+    reloadBatches.add((workspace: workspacePath, paths: paths));
+    return super.reloadExternallyChangedCleanFiles(
+      workspaceFiles: workspaceFiles,
+      workspacePath: workspacePath,
+      relativePaths: paths,
+    );
+  }
+}
+
 class _WatcherFileService extends WorkspaceFileService {
   final StreamController<native.WorkspaceExplorerWatchBatch> _events =
       StreamController<native.WorkspaceExplorerWatchBatch>.broadcast();
@@ -268,6 +591,8 @@ class _WatcherFileService extends WorkspaceFileService {
   final List<List<String>> watchedDirectories = <List<String>>[];
   final Map<String, String?> contentTokens = <String, String?>{};
   final List<String> contentTokenReads = <String>[];
+  Future<void> Function(String workspacePath, String relativePath)?
+  beforeContentTokenRead;
   var _nextWatcher = 0;
 
   @override
@@ -305,7 +630,18 @@ class _WatcherFileService extends WorkspaceFileService {
     required String relativePath,
   }) async {
     contentTokenReads.add(relativePath);
+    await beforeContentTokenRead?.call(workspacePath, relativePath);
     return contentTokens[relativePath];
+  }
+
+  void emitBatch(List<String> paths) {
+    _events.add(
+      native.WorkspaceExplorerWatchBatch(
+        directoryRelativePaths: const [''],
+        changedRelativePaths: paths,
+        coalescedEventCount: paths.length,
+      ),
+    );
   }
 
   void emitChanged(String relativePath) {
