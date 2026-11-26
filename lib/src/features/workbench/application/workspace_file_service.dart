@@ -20,6 +20,10 @@ class const WorkspaceFileClipboardPayload({
 });
 
 class WorkspaceFileService {
+  static const _quickOpenQueryLimit = 24;
+  static const _quickOpenResultLimit = 500;
+  static const _quickOpenResultAge = Duration(seconds: 2);
+  bool _disposed = false;
   final Map<String, _WorkspaceQuickOpenCacheEntry> _quickOpenCache =
       <String, _WorkspaceQuickOpenCacheEntry>{};
   final Map<String, Timer> _quickOpenRefreshTimers = <String, Timer>{};
@@ -95,12 +99,14 @@ class WorkspaceFileService {
   }) {
     final entry =
         _quickOpenCache[_quickOpenCacheKey(workspacePath, excludedDirectories)];
-    return entry?.matches[_quickOpenSearchKey(
-      query,
-      includeGitignored,
-      limit,
-      includeDirectories,
-    )];
+    return entry
+        ?.matches[_quickOpenSearchKey(
+          query,
+          includeGitignored,
+          limit,
+          includeDirectories,
+        )]
+        ?.matches;
   }
 
   Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenCached({
@@ -110,7 +116,10 @@ class WorkspaceFileService {
     required bool includeGitignored,
     int limit = 50,
     bool includeDirectories = false,
-  }) async {
+  }) {
+    if (_disposed) {
+      return Future.error(StateError('WorkspaceFileService is disposed'));
+    }
     final entry = _quickOpenEntry(workspacePath, excludedDirectories);
     final searchKey = _quickOpenSearchKey(
       query,
@@ -118,48 +127,98 @@ class WorkspaceFileService {
       limit,
       includeDirectories,
     );
-    entry.searchRequests[searchKey] = _WorkspaceQuickOpenSearchRequest(
+    final request = _WorkspaceQuickOpenSearchRequest(
       key: searchKey,
       query: query,
       includeGitignored: includeGitignored,
       limit: limit,
       includeDirectories: includeDirectories,
     );
-    var session = await _ensureQuickOpenSession(entry);
-    List<native.WorkspaceQuickOpenMatch> matches;
-    try {
-      matches = await searchQuickOpenSession(
-        session: session,
-        query: query,
-        includeGitignored: includeGitignored,
-        limit: limit,
-        includeDirectories: includeDirectories,
-      );
-    } on native.WorkspaceFileError catch (error) {
-      // Rust evicts idle sessions and caps the session registry. A Dart cache
-      // entry may still reference an evicted session (or one replaced by a
-      // concurrent refresh). Rebuild once rather than breaking Ctrl+P.
-      if (error.kind != native.WorkspaceFileErrorKind.notFound ||
-          error.context != 'quick open session not found') {
-        rethrow;
+    // Oversized result sets are not retained or replayed on every rebuild.
+    final retain = limit > 0 && limit <= _quickOpenResultLimit;
+    if (retain) {
+      entry.searchRequests.remove(searchKey);
+      entry.searchRequests[searchKey] = request;
+      while (entry.searchRequests.length > _quickOpenQueryLimit) {
+        final oldest = entry.searchRequests.keys.first;
+        entry.searchRequests.remove(oldest);
+        entry.matches.remove(oldest);
       }
-      if (entry.session?.id == session.id) {
-        entry.session = null;
+      final cached = entry.matches[searchKey];
+      if (entry.session != null &&
+          cached != null &&
+          cached.age.elapsed < _quickOpenResultAge) {
+        return Future.value(cached.matches);
       }
-      session = await _ensureQuickOpenSession(entry);
-      matches = await searchQuickOpenSession(
-        session: session,
-        query: query,
-        includeGitignored: includeGitignored,
-        limit: limit,
-        includeDirectories: includeDirectories,
-      );
     }
-    if (entry.session?.id == session.id) {
-      entry.matches[searchKey] =
-          List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
+    final pending = entry.inFlight[searchKey];
+    if (pending != null) {
+      return pending;
     }
-    return matches;
+    late final Future<List<native.WorkspaceQuickOpenMatch>> next;
+    next = _searchQuickOpenRequest(entry, request).whenComplete(() {
+      if (identical(entry.inFlight[searchKey], next)) {
+        entry.inFlight.remove(searchKey);
+      }
+    });
+    entry.inFlight[searchKey] = next;
+    return next;
+  }
+
+  Future<List<native.WorkspaceQuickOpenMatch>> _searchQuickOpenRequest(
+    _WorkspaceQuickOpenCacheEntry entry,
+    _WorkspaceQuickOpenSearchRequest request,
+  ) async {
+    final searchKey = request.key;
+    final query = request.query;
+    final includeGitignored = request.includeGitignored;
+    final limit = request.limit;
+    final includeDirectories = request.includeDirectories;
+    var recoveredEviction = false;
+    // Revalidate after each await: a background refresh may replace the
+    // native snapshot while this search is still in flight.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final session = await _ensureQuickOpenSession(entry);
+      if (_disposed) throw StateError('WorkspaceFileService is disposed');
+      final cached = entry.matches[searchKey];
+      if (entry.session?.id == session.id &&
+          cached != null &&
+          cached.age.elapsed < _quickOpenResultAge) {
+        return cached.matches;
+      }
+      List<native.WorkspaceQuickOpenMatch> matches;
+      try {
+        matches = await searchQuickOpenSession(
+          session: session,
+          query: query,
+          includeGitignored: includeGitignored,
+          limit: limit,
+          includeDirectories: includeDirectories,
+        );
+      } on native.WorkspaceFileError catch (error) {
+        // Rust evicts idle sessions and caps the session registry. Rebuild
+        // once for a missing session, but never suppress unrelated errors.
+        if (recoveredEviction ||
+            error.kind != native.WorkspaceFileErrorKind.notFound ||
+            error.context != 'quick open session not found') {
+          rethrow;
+        }
+        recoveredEviction = true;
+        if (entry.session?.id == session.id) {
+          entry.session = null;
+          entry.matches.clear();
+        }
+        continue;
+      }
+      if (_disposed) throw StateError('WorkspaceFileService is disposed');
+      if (entry.session?.id != session.id) continue;
+      final frozen = List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
+      if (entry.searchRequests.containsKey(searchKey)) {
+        entry.matches[searchKey] = _WorkspaceQuickOpenCachedResult(frozen);
+      }
+      return frozen;
+    }
+    throw StateError('Quick open index changed repeatedly during search');
   }
 
   Future<void> warmQuickOpenSession({
@@ -178,6 +237,7 @@ class WorkspaceFileService {
     required String workspacePath,
     Duration debounce = const Duration(milliseconds: 120),
   }) {
+    if (_disposed) return;
     _quickOpenRefreshTimers.remove(workspacePath)?.cancel();
     _quickOpenRefreshTimers[workspacePath] = Timer(debounce, () {
       _quickOpenRefreshTimers.remove(workspacePath);
@@ -189,6 +249,7 @@ class WorkspaceFileService {
   /// Refresh its index in the background on demand, but do not reindex the
   /// entire workspace for every keystroke.
   void scheduleQuickOpenFilterRefresh({required String workspacePath}) {
+    if (_disposed) return;
     final now = DateTime.now();
     final last = _lastOnDemandQuickOpenRefresh[workspacePath];
     if (last != null && now.difference(last) < const Duration(seconds: 3)) {
@@ -202,6 +263,8 @@ class WorkspaceFileService {
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     for (final timer in _quickOpenRefreshTimers.values) {
       timer.cancel();
     }
@@ -241,6 +304,9 @@ class WorkspaceFileService {
   Future<native.WorkspaceQuickOpenSession> _ensureQuickOpenSession(
     _WorkspaceQuickOpenCacheEntry entry,
   ) {
+    if (_disposed) {
+      return Future.error(StateError('WorkspaceFileService is disposed'));
+    }
     final current = entry.session;
     if (current != null) {
       return Future<native.WorkspaceQuickOpenSession>.value(current);
@@ -249,29 +315,36 @@ class WorkspaceFileService {
     if (pending != null) {
       return pending;
     }
-    final next = startQuickOpenSession(
-      workspacePath: entry.workspacePath,
-      excludedDirectories: entry.excludedDirectories,
-    );
+    late final Future<native.WorkspaceQuickOpenSession> next;
+    next =
+        Future<native.WorkspaceQuickOpenSession>.sync(
+          () => startQuickOpenSession(
+            workspacePath: entry.workspacePath,
+            excludedDirectories: entry.excludedDirectories,
+          ),
+        ).then(
+          (session) {
+            if (_disposed || !identical(entry.pendingSession, next)) {
+              unawaited(_stopQuickOpenSessionBestEffort(session));
+              if (!_disposed && entry.session != null) return entry.session!;
+              throw StateError('Quick open session was retired');
+            }
+            entry
+              ..session = session
+              ..pendingSession = null;
+            _schedulePendingQuickOpenRefresh(entry);
+            return session;
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (identical(entry.pendingSession, next)) {
+              entry.pendingSession = null;
+              _schedulePendingQuickOpenRefresh(entry);
+            }
+            Error.throwWithStackTrace(error, stackTrace);
+          },
+        );
     entry.pendingSession = next;
-    return next.then(
-      (session) {
-        if (identical(entry.pendingSession, next)) {
-          entry
-            ..session = session
-            ..pendingSession = null;
-          _schedulePendingQuickOpenRefresh(entry);
-        }
-        return session;
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        if (identical(entry.pendingSession, next)) {
-          entry.pendingSession = null;
-          _schedulePendingQuickOpenRefresh(entry);
-        }
-        Error.throwWithStackTrace(error, stackTrace);
-      },
-    );
+    return next;
   }
 
   void _schedulePendingQuickOpenRefresh(_WorkspaceQuickOpenCacheEntry entry) {
@@ -286,6 +359,7 @@ class WorkspaceFileService {
   }
 
   Future<void> _refreshQuickOpenEntries(String workspacePath) async {
+    if (_disposed) return;
     final entries = _quickOpenCache.values
         .where((entry) => entry.workspacePath == workspacePath)
         .toList(growable: false);
@@ -295,16 +369,33 @@ class WorkspaceFileService {
         entry.refreshPending = true;
         continue;
       }
+      if (_disposed) break;
       entry.refreshing = true;
+      native.WorkspaceQuickOpenSession? replacementSession;
       try {
         final session = await startQuickOpenSession(
           workspacePath: entry.workspacePath,
           excludedDirectories: entry.excludedDirectories,
         );
-        final refreshedMatches =
-            <String, List<native.WorkspaceQuickOpenMatch>>{};
-        // Search requests can arrive while this asynchronous rebuild runs.
-        for (final request in entry.searchRequests.values.toList()) {
+        replacementSession = session;
+        if (_disposed) continue;
+        final refreshedMatches = <String, _WorkspaceQuickOpenCachedResult>{};
+        // At most the latest request for each file/directory and ignored
+        // mode. Other recent queries are invalidated, not replayed. Active
+        // consumers requery on the refresh event, including requests that
+        // arrived while this asynchronous rebuild was running.
+        final seenModes = <(bool, bool)>{};
+        final recent = entry.searchRequests.values
+            .toList()
+            .reversed
+            .where(
+              (request) => seenModes.add((
+                request.includeDirectories,
+                request.includeGitignored,
+              )),
+            )
+            .toList(growable: false);
+        for (final request in recent) {
           final matches = await searchQuickOpenSession(
             session: session,
             query: request.query,
@@ -312,13 +403,22 @@ class WorkspaceFileService {
             limit: request.limit,
             includeDirectories: request.includeDirectories,
           );
-          refreshedMatches[request.key] =
-              List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches);
+          refreshedMatches[request.key] = _WorkspaceQuickOpenCachedResult(
+            List<native.WorkspaceQuickOpenMatch>.unmodifiable(matches),
+          );
+          if (_disposed) break;
         }
+        if (_disposed) continue;
         final previousSession = entry.session;
         entry
           ..session = session
           ..pendingSession = null;
+        replacementSession = null;
+        // Never let an old in-flight query satisfy a new-generation request.
+        entry.inFlight.clear();
+        refreshedMatches.removeWhere(
+          (key, _) => !entry.searchRequests.containsKey(key),
+        );
         entry.matches
           ..clear()
           ..addAll(refreshedMatches);
@@ -330,6 +430,9 @@ class WorkspaceFileService {
         // Keep serving the previous index if a background refresh fails.
       } finally {
         entry.refreshing = false;
+        if (replacementSession != null) {
+          unawaited(_stopQuickOpenSessionBestEffort(replacementSession));
+        }
         _schedulePendingQuickOpenRefresh(entry);
       }
     }
@@ -806,10 +909,18 @@ class _WorkspaceQuickOpenCacheEntry {
   Future<native.WorkspaceQuickOpenSession>? pendingSession;
   bool refreshing = false;
   bool refreshPending = false;
-  final Map<String, List<native.WorkspaceQuickOpenMatch>> matches =
-      <String, List<native.WorkspaceQuickOpenMatch>>{};
+  final Map<String, _WorkspaceQuickOpenCachedResult> matches =
+      <String, _WorkspaceQuickOpenCachedResult>{};
+  final Map<String, Future<List<native.WorkspaceQuickOpenMatch>>> inFlight =
+      <String, Future<List<native.WorkspaceQuickOpenMatch>>>{};
   final Map<String, _WorkspaceQuickOpenSearchRequest> searchRequests =
       <String, _WorkspaceQuickOpenSearchRequest>{};
+}
+
+class _WorkspaceQuickOpenCachedResult {
+  _WorkspaceQuickOpenCachedResult(this.matches);
+  final List<native.WorkspaceQuickOpenMatch> matches;
+  final Stopwatch age = Stopwatch()..start();
 }
 
 class const _WorkspaceQuickOpenSearchRequest({
