@@ -34,6 +34,28 @@ void main() {
     expect(fakes.last.startCalls, 1);
   });
 
+  test(
+    'retired watcher callbacks cannot refresh a replacement project',
+    () async {
+      final fakes = <_FakeWatcher>[];
+      final registry = _registry(fakes);
+      final refreshed = <String>[];
+      registry.sync(
+        _project(id: 'project', repoPath: 'C:/old'),
+        onRefresh: (_) async => refreshed.add('old'),
+      );
+      registry.sync(
+        _project(id: 'project', repoPath: 'C:/new'),
+        onRefresh: (_) async => refreshed.add('new'),
+      );
+      await fakes.first.onRefresh();
+      await fakes.last.onRefresh();
+      registry.disposeAll();
+      await fakes.last.onRefresh();
+      expect(refreshed, ['new']);
+    },
+  );
+
   test('folder projects remove metadata watchers', () {
     final fakes = <_FakeWatcher>[];
     final registry = _registry(fakes);

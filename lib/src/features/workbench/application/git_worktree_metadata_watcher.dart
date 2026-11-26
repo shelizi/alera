@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:alera/src/features/workbench/application/workbench_background_task_pool.dart';
 import 'package:path/path.dart' as p;
 
 typedef GitMetadataWatchFactory = Stream<String> Function(
@@ -17,12 +18,20 @@ final class GitWorktreeMetadataWatcher {
     required this.repoPath,
     required Future<void> Function() onRefresh,
     Duration debounce = const Duration(milliseconds: 300),
+    Duration maxRefreshDelay = const Duration(seconds: 1),
+    WorkbenchBackgroundTaskPool? refreshPool,
+    WorkbenchBackgroundTaskPool? metadataProbePool,
     Duration pollInterval = const Duration(seconds: 60),
     GitMetadataWatchFactory? watchDirectory,
     Future<String?> Function(String)? resolveCommonDir,
     Future<bool> Function(String)? directoryExists,
   }) : _onRefresh = onRefresh,
        _debounce = debounce,
+       _maxRefreshDelay = maxRefreshDelay,
+       _refreshPool =
+           refreshPool ?? WorkbenchBackgroundTaskPool(maxConcurrent: 1),
+       _metadataProbePool =
+           metadataProbePool ?? WorkbenchBackgroundTaskPool(maxConcurrent: 1),
        _pollInterval = pollInterval,
        _watchDirectory = watchDirectory ?? _defaultGitMetadataWatch,
        _resolveCommonDir = resolveCommonDir ?? resolveGitCommonDir,
@@ -31,6 +40,11 @@ final class GitWorktreeMetadataWatcher {
   final String repoPath;
   final Future<void> Function() _onRefresh;
   final Duration _debounce;
+  final Duration _maxRefreshDelay;
+  final WorkbenchBackgroundTaskPool _refreshPool;
+  final WorkbenchBackgroundTaskPool _metadataProbePool;
+  final Object _refreshOwner = Object();
+  final Object _metadataProbeOwner = Object();
   final Duration _pollInterval;
   final GitMetadataWatchFactory _watchDirectory;
   final Future<String?> Function(String) _resolveCommonDir;
@@ -39,6 +53,7 @@ final class GitWorktreeMetadataWatcher {
   StreamSubscription<String>? _commonGitDirSub;
   StreamSubscription<String>? _worktreesSub;
   Timer? _debounceTimer;
+  Timer? _maxRefreshTimer;
   Timer? _pollTimer;
   Future<void>? _refreshFuture;
   Future<void>? _metadataProbeFuture;
@@ -78,6 +93,15 @@ final class GitWorktreeMetadataWatcher {
       return;
     }
     _refreshSuspendCount += 1;
+    if (_debounceTimer != null || _maxRefreshTimer != null) {
+      _cancelRefreshTimers();
+      _refreshQueuedWhileSuspended = true;
+    }
+    // A local mutation must not wait behind unrelated projects. Cancel a
+    // queued pass, retain its dirty flag, and only wait for active local work.
+    if (_refreshPool.cancelPending(_refreshOwner)) {
+      _refreshQueuedWhileSuspended = true;
+    }
     final refreshFuture = _refreshRunning ? _refreshFuture : null;
     if (refreshFuture != null) {
       await refreshFuture;
@@ -100,8 +124,9 @@ final class GitWorktreeMetadataWatcher {
       return;
     }
     _disposed = true;
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
+    _cancelRefreshTimers();
+    _refreshPool.cancelPending(_refreshOwner);
+    _metadataProbePool.cancelPending(_metadataProbeOwner);
     _pollTimer?.cancel();
     _pollTimer = null;
 
@@ -137,7 +162,7 @@ final class GitWorktreeMetadataWatcher {
       _metadataProbeAgain = true;
       return running;
     }
-    final future = _runMetadataProbeLoop();
+    final future = Future<void>.microtask(_runMetadataProbeLoop);
     _metadataProbeFuture = future;
     return future;
   }
@@ -145,11 +170,17 @@ final class GitWorktreeMetadataWatcher {
   Future<void> _runMetadataProbeLoop() async {
     try {
       do {
-        _metadataProbeAgain = false;
-        final resetWorktrees = _resetWorktreesOnProbe;
-        _resetWorktreesOnProbe = false;
+        if (_disposed) break;
         try {
-          await _ensureMetadataWatches(resetWorktrees: resetWorktrees);
+          await _metadataProbePool.run(_metadataProbeOwner, () async {
+            if (_disposed) return;
+            // Requests arriving before this queued pass begins are covered
+            // by it; only events during the actual I/O require a trailing pass.
+            _metadataProbeAgain = false;
+            final resetWorktrees = _resetWorktreesOnProbe;
+            _resetWorktreesOnProbe = false;
+            await _ensureMetadataWatches(resetWorktrees: resetWorktrees);
+          });
         } catch (_) {
           // Metadata watching is best-effort. The next poll retries.
         }
@@ -263,15 +294,26 @@ final class GitWorktreeMetadataWatcher {
       return;
     }
     _debounceTimer?.cancel();
-    if (_debounce.inMicroseconds <= 0) {
-      _debounceTimer = null;
-      _queueRefresh();
+    if (_debounce.inMicroseconds <= 0 || _maxRefreshDelay.inMicroseconds <= 0) {
+      _flushScheduledRefresh();
       return;
     }
-    _debounceTimer = Timer(_debounce, () {
-      _debounceTimer = null;
-      _queueRefresh();
-    });
+    _debounceTimer = Timer(_debounce, _flushScheduledRefresh);
+    // Continuous metadata notifications cannot postpone reconciliation
+    // forever. This deadline is anchored at the first event in the burst.
+    _maxRefreshTimer ??= Timer(_maxRefreshDelay, _flushScheduledRefresh);
+  }
+
+  void _cancelRefreshTimers() {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _maxRefreshTimer?.cancel();
+    _maxRefreshTimer = null;
+  }
+
+  void _flushScheduledRefresh() {
+    _cancelRefreshTimers();
+    _queueRefresh();
   }
 
   void _queueRefresh() {
@@ -287,15 +329,32 @@ final class GitWorktreeMetadataWatcher {
       return;
     }
     _refreshRunning = true;
-    _refreshFuture = _runRefreshLoop();
+    _refreshFuture = Future<void>.microtask(_runRefreshLoop);
   }
 
   Future<void> _runRefreshLoop() async {
     try {
       do {
         _refreshAgain = false;
+        if (_disposed) break;
+        if (_refreshSuspendCount > 0) {
+          _refreshQueuedWhileSuspended = true;
+          break;
+        }
         try {
-          await _onRefresh();
+          // Release the pool slot after each pass, including a trailing
+          // pass. Other projects keep their FIFO position during bursts.
+          await _refreshPool.run(_refreshOwner, () async {
+            if (_disposed) return;
+            if (_refreshSuspendCount > 0) {
+              _refreshQueuedWhileSuspended = true;
+              return;
+            }
+            // An authoritative pass also covers all requests accumulated
+            // while it was waiting for a slot.
+            _refreshAgain = false;
+            await _onRefresh();
+          });
         } catch (_) {
           // Automatic refresh is best-effort. Manual refresh still surfaces
           // errors through WorkbenchController.reconcileProjectWorkspaces.
@@ -303,6 +362,7 @@ final class GitWorktreeMetadataWatcher {
       } while (_refreshAgain && !_disposed && _refreshSuspendCount == 0);
     } finally {
       _refreshRunning = false;
+      _refreshFuture = null;
       if (_refreshAgain && !_disposed) {
         _refreshAgain = false;
         _queueRefresh();

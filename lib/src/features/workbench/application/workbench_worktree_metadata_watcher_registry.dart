@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/git_worktree_metadata_watcher.dart';
+import 'package:alera/src/features/workbench/application/workbench_background_task_pool.dart';
 import 'package:path/path.dart' as p;
 
 abstract interface class WorkbenchWorktreeMetadataWatcherHandle {
@@ -25,9 +26,19 @@ typedef WorkbenchWorktreeMetadataWatcherFactory =
 final class WorkbenchWorktreeMetadataWatcherRegistry {
   WorkbenchWorktreeMetadataWatcherRegistry({
     WorkbenchWorktreeMetadataWatcherFactory? factory,
-  }) : _factory = factory ?? _createGitWatcher;
+    int maxConcurrentRefreshes = 4,
+    int maxConcurrentMetadataProbes = 4,
+  }) : _factory = factory,
+       _refreshPool = WorkbenchBackgroundTaskPool(
+         maxConcurrent: maxConcurrentRefreshes,
+       ),
+       _metadataProbePool = WorkbenchBackgroundTaskPool(
+         maxConcurrent: maxConcurrentMetadataProbes,
+       );
 
-  final WorkbenchWorktreeMetadataWatcherFactory _factory;
+  final WorkbenchWorktreeMetadataWatcherFactory? _factory;
+  final WorkbenchBackgroundTaskPool _refreshPool;
+  final WorkbenchBackgroundTaskPool _metadataProbePool;
   final Map<String, WorkbenchWorktreeMetadataWatcherHandle> _watchers =
       <String, WorkbenchWorktreeMetadataWatcherHandle>{};
 
@@ -45,12 +56,25 @@ final class WorkbenchWorktreeMetadataWatcherRegistry {
     }
 
     _remove(project.id);
-    final watcher = _factory(
-      repoPath: project.repoPath,
-      onRefresh: () => onRefresh(project.id),
-    );
-    _watchers[project.id] = watcher;
-    watcher.start();
+    WorkbenchWorktreeMetadataWatcherHandle? watcher;
+    Future<void> refreshIfCurrent() async {
+      if (watcher != null && identical(_watchers[project.id], watcher)) {
+        await onRefresh(project.id);
+      }
+    }
+
+    final factory = _factory;
+    final created = factory != null
+        ? factory(repoPath: project.repoPath, onRefresh: refreshIfCurrent)
+        : _createGitWatcher(
+            repoPath: project.repoPath,
+            onRefresh: refreshIfCurrent,
+            refreshPool: _refreshPool,
+            metadataProbePool: _metadataProbePool,
+          );
+    watcher = created;
+    _watchers[project.id] = created;
+    created.start();
   }
 
   Future<T> withRefreshSuspended<T>(
@@ -94,9 +118,16 @@ final class WorkbenchWorktreeMetadataWatcherRegistry {
 WorkbenchWorktreeMetadataWatcherHandle _createGitWatcher({
   required String repoPath,
   required Future<void> Function() onRefresh,
+  required WorkbenchBackgroundTaskPool refreshPool,
+  required WorkbenchBackgroundTaskPool metadataProbePool,
 }) {
   return _GitWorktreeMetadataWatcherHandle(
-    GitWorktreeMetadataWatcher(repoPath: repoPath, onRefresh: onRefresh),
+    GitWorktreeMetadataWatcher(
+      repoPath: repoPath,
+      onRefresh: onRefresh,
+      refreshPool: refreshPool,
+      metadataProbePool: metadataProbePool,
+    ),
   );
 }
 
