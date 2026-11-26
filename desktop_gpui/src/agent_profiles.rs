@@ -671,7 +671,8 @@ mod tests {
                 interrupted: false,
                 agent_state_started_at: None,
                 agent_updated_at: None,
-            agent_context: None,
+                agent_context: None,
+                builtin_mcp_status: None,
             },
             TerminalSession {
                 handle: "plain_terminal".into(),
@@ -683,7 +684,8 @@ mod tests {
                 interrupted: false,
                 agent_state_started_at: None,
                 agent_updated_at: None,
-            agent_context: None,
+                agent_context: None,
+                builtin_mcp_status: None,
             },
             TerminalSession {
                 handle: "correct_agent".into(),
@@ -695,7 +697,8 @@ mod tests {
                 interrupted: false,
                 agent_state_started_at: None,
                 agent_updated_at: None,
-            agent_context: None,
+                agent_context: None,
+                builtin_mcp_status: None,
             },
         ];
         assert_eq!(
@@ -726,6 +729,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         assert_eq!(
             matching_agent_handle(&pending, &[session.clone()], "codex"),

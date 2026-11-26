@@ -556,6 +556,45 @@ void main() {
     expect(host.payloads['runtimeSettings.update'], isNull);
   });
 
+  test(
+    'built-in MCP is Host-owned, locally scoped and refuses stale fallback',
+    () async {
+      final legacy = _MemorySettingsRepository();
+      final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+      legacy.settings = AleraSettings.defaults.copyWith(
+        agents: AleraSettings.defaults.agents.copyWith(builtinMcpEnabled: true),
+      );
+      host.responses['desktopSettings.seedLocal'] = {
+        'values': {'agents.builtinMcpEnabled': false},
+      };
+      host.responses['runtimeSettings.get'] = {'workspaceDirectory': null};
+      final repo = RuntimeSettingsRepository(
+        client: host,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      expect(loaded.agents.builtinMcpEnabled, isFalse);
+      final changed = loaded.copyWith(
+        agents: loaded.agents.copyWith(builtinMcpEnabled: true),
+      );
+      await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+      expect(host.payloads['desktopSettings.compareAndSetBatch']!.single, {
+        'changes': [
+          {
+            'path': 'agents.builtinMcpEnabled',
+            'expectedValue': false,
+            'value': true,
+          },
+        ],
+      });
+      await repo.save(changed);
+      expect(host.payloads['configuration.settings.update'], isNull);
+      expect(host.payloads['runtimeSettings.update'], isNull);
+      host.responses.remove('desktopSettings.seedLocal');
+      expect((await repo.load()).agents.builtinMcpEnabled, isNull);
+    },
+  );
+
   test('Classic imports Drift only once and uses Rust CAS without rewriting GPUI portable values', () async {
     final legacy = _MemorySettingsRepository();
     legacy.settings = AleraSettings.defaults.copyWith(

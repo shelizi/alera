@@ -659,6 +659,7 @@ fn terminal_list_and_read_do_not_write_files_or_accept_stale_replies() {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         }],
     );
     assert!(dock.open("term-1"));
@@ -680,6 +681,7 @@ fn terminal_list_and_read_do_not_write_files_or_accept_stale_replies() {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         }],
     );
     assert!(!stale_list);

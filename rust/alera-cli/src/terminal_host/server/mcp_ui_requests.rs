@@ -31,6 +31,10 @@ pub(super) struct McpUiControlState {
     windows: HashMap<u64, String>,
     /// Ephemeral capabilities are bound to live PTYs, never database rows.
     tokens: HashMap<String, String>,
+    // Diagnostics only: no capability or private provider arguments escape this state.
+    launch_status: HashMap<String, &'static str>,
+    discovery_clients: HashMap<u64, String>,
+    discovered: std::collections::HashSet<String>,
     requests: HashMap<String, McpUiReceipt>,
 }
 
@@ -83,12 +87,48 @@ impl McpUiControlState {
         // Two independent UUIDv4 values form a 64-character per-PTY proof.
         // Replacing the session invalidates the previous proof.
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        self.launch_status.remove(handle);
+        self.discovered.remove(handle);
+        self.discovery_clients
+            .retain(|_, source| source.as_str() != handle);
         self.tokens.insert(handle.to_owned(), token.clone());
         token
     }
 
+    pub(super) fn record_launch(&mut self, handle: &str, status: &'static str) {
+        self.launch_status.insert(handle.to_owned(), status);
+    }
+
+    pub(super) fn record_discovery(&mut self, client_id: u64, handle: &str) -> bool {
+        let previous = self.connection_status(handle, true);
+        self.discovered.insert(handle.to_owned());
+        let old = self.discovery_clients.insert(client_id, handle.to_owned());
+        previous != "connected" || old.is_some_and(|source| source != handle)
+    }
+
+    pub(super) fn connection_status(&self, handle: &str, running: bool) -> &'static str {
+        if !running {
+            return "stopped";
+        }
+        if self
+            .discovery_clients
+            .values()
+            .any(|source| source.as_str() == handle)
+        {
+            return "connected";
+        }
+        if self.discovered.contains(handle) {
+            return "disconnected";
+        }
+        self.launch_status.get(handle).copied().unwrap_or("unknown")
+    }
+
     pub(super) fn revoke(&mut self, handle: &str) {
         self.tokens.remove(handle);
+        self.launch_status.remove(handle);
+        self.discovered.remove(handle);
+        self.discovery_clients
+            .retain(|_, source| source.as_str() != handle);
         for request in self.requests.values_mut() {
             if request.session_handle == handle && request.status == "accepted" {
                 request.status = "failed";
@@ -97,8 +137,13 @@ impl McpUiControlState {
         }
     }
 
+    pub(super) fn discovery_handle(&self, client_id: u64) -> Option<&str> {
+        self.discovery_clients.get(&client_id).map(String::as_str)
+    }
+
     pub(super) fn disconnect(&mut self, client_id: u64) {
         self.windows.remove(&client_id);
+        self.discovery_clients.remove(&client_id);
         for receipt in self.requests.values_mut() {
             if receipt.target_client_id == client_id && receipt.status == "accepted" {
                 receipt.status = "failed";

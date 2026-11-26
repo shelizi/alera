@@ -67,6 +67,28 @@ impl WorkbenchTab {
             .filter(|kind| !kind.trim().is_empty())
     }
 
+    /// Only a current, matching live Host Terminal may supply an MCP indicator.
+    pub fn verified_builtin_mcp_status<'a>(
+        &self,
+        sessions: &'a [TerminalSession],
+    ) -> Option<&'a str> {
+        if !self.running {
+            return None;
+        }
+        let WorkbenchTabIdentity::Host(target) = &self.identity else {
+            return None;
+        };
+        sessions
+            .iter()
+            .find(|session| {
+                session.running
+                    && session.handle == target.handle
+                    && session.workspace_id == target.workspace_id()
+                    && session.tab_id == target.tab_id()
+            })
+            .and_then(|session| session.builtin_mcp_status.as_deref())
+    }
+
     /// Human-readable status anchored to the verified Host identity. The
     /// tooltip never reports a Hook for a stopped PTY, generic terminal or
     /// Editor; labels contain no Agent prompt, tool input or credentials.
@@ -308,6 +330,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         }]);
         dock.open(handle);
         (
@@ -396,6 +419,25 @@ mod tests {
         let (terminal, _) = host("pty-agent", false);
         assert_eq!(terminal.verified_agent_brand(&dock.sessions), None);
         assert_eq!(editor(7, 1).verified_agent_brand(&dock.sessions), None);
+    }
+
+    #[test]
+    fn builtin_mcp_indicator_requires_live_exact_session_identity() {
+        let (tab, dock) = host("pty-agent", true);
+        let mut live = dock.sessions[0].clone();
+        live.builtin_mcp_status = Some("connected".into());
+        assert_eq!(tab.verified_builtin_mcp_status(&[live.clone()]), Some("connected"));
+        let mut stale = live.clone();
+        stale.workspace_id = "other".into();
+        assert_eq!(tab.verified_builtin_mcp_status(&[stale]), None);
+        let mut stale = live.clone();
+        stale.tab_id = "reused".into();
+        assert_eq!(tab.verified_builtin_mcp_status(&[stale]), None);
+        let mut stale = live.clone();
+        stale.running = false;
+        assert_eq!(tab.verified_builtin_mcp_status(&[stale]), None);
+        assert_eq!(editor(7, 1).verified_builtin_mcp_status(&[live]), None);
+        assert_eq!(tab.verified_builtin_mcp_status(&dock.sessions), None);
     }
 
     #[test]

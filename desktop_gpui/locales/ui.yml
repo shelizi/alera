@@ -1060,6 +1060,96 @@ _version: 2
   zh-TW: "在側邊欄顯示審查與 CI 狀態。"
   zh-CN: "在侧边栏显示审核与 CI 状态。"
   ja: "サイドバーにレビューと CI の状態を表示します。"
+"MCP connected":
+  en: "MCP connected"
+  zh-TW: "MCP 已連線"
+  zh-CN: "MCP 已连接"
+  ja: "MCP 接続済み"
+"MCP awaiting discovery":
+  en: "MCP awaiting discovery"
+  zh-TW: "MCP 等待工具探索"
+  zh-CN: "MCP 等待工具发现"
+  ja: "MCP ツール検出待ち"
+"MCP disconnected":
+  en: "MCP disconnected"
+  zh-TW: "MCP 已斷線"
+  zh-CN: "MCP 已断开"
+  ja: "MCP 切断済み"
+"MCP disabled":
+  en: "MCP disabled"
+  zh-TW: "MCP 未啟用"
+  zh-CN: "MCP 未启用"
+  ja: "MCP 無効"
+"MCP unsupported":
+  en: "MCP unsupported"
+  zh-TW: "MCP 不支援"
+  zh-CN: "MCP 不支持"
+  ja: "MCP 未対応"
+"MCP not registered":
+  en: "MCP not registered"
+  zh-TW: "MCP 未註冊"
+  zh-CN: "MCP 未注册"
+  ja: "MCP 未登録"
+"MCP unavailable":
+  en: "MCP unavailable"
+  zh-TW: "MCP 無法使用"
+  zh-CN: "MCP 不可用"
+  ja: "MCP 利用不可"
+"Built-in Alera MCP":
+  en: "Built-in Alera MCP"
+  zh-TW: "內建 Alera MCP"
+  zh-CN: "内置 Alera MCP"
+  ja: "内蔵 Alera MCP"
+"Register alera-workbench for new Managed Codex and Claude sessions. Existing sessions must be restarted; other providers are not supported.":
+  en: "Register alera-workbench for new Managed Codex and Claude sessions. Existing sessions must be restarted; other providers are not supported."
+  zh-TW: "為新啟動的 Managed Codex 與 Claude 註冊 alera-workbench。既有工作階段需重新啟動；其他 Agent 尚不支援。"
+  zh-CN: "为新启动的 Managed Codex 和 Claude 注册 alera-workbench。已有会话需要重启；其他 Agent 暂不支持。"
+  ja: "新規 Managed Codex と Claude セッションに alera-workbench を登録します。既存セッションは再起動が必要です。他の Agent は未対応です。"
+"Unavailable: connect to an updated Runtime Host.":
+  en: "Unavailable: connect to an updated Runtime Host."
+  zh-TW: "無法使用：請連線至新版 Runtime Host。"
+  zh-CN: "无法使用：请连接新版 Runtime Host。"
+  ja: "利用不可：新しい Runtime Host に接続してください。"
+"MCP connection diagnostics":
+  en: "MCP connection diagnostics"
+  zh-TW: "MCP 連線診斷"
+  zh-CN: "MCP 连接诊断"
+  ja: "MCP 接続診断"
+"Inspect the last checked Host connection and available MCP tools.":
+  en: "Inspect the last checked Host connection and available MCP tools."
+  zh-TW: "檢查最近一次 Host 連線狀態及可用 MCP 工具。"
+  zh-CN: "检查最近一次 Host 连接状态及可用 MCP 工具。"
+  ja: "直近の Host 接続状態と利用可能な MCP ツールを確認します。"
+"Refresh MCP diagnostics":
+  en: "Refresh MCP diagnostics"
+  zh-TW: "重新整理 MCP 診斷"
+  zh-CN: "刷新 MCP 诊断"
+  ja: "MCP 診断を更新"
+"MCP diagnostics unavailable":
+  en: "MCP diagnostics unavailable"
+  zh-TW: "MCP 診斷無法使用"
+  zh-CN: "MCP 诊断不可用"
+  ja: "MCP 診断は利用できません"
+"Last Host snapshot":
+  en: "Last Host snapshot"
+  zh-TW: "最近一次 Host 快照"
+  zh-CN: "最近一次 Host 快照"
+  ja: "直近の Host スナップショット"
+"No running Agent sessions":
+  en: "No running Agent sessions"
+  zh-TW: "沒有執行中的 Agent 工作階段"
+  zh-CN: "没有运行中的 Agent 会话"
+  ja: "実行中の Agent セッションはありません"
+"Available MCP tools":
+  en: "Available MCP tools"
+  zh-TW: "可用 MCP 工具"
+  zh-CN: "可用 MCP 工具"
+  ja: "利用可能な MCP ツール"
+"Agent sessions":
+  en: "Agent sessions"
+  zh-TW: "Agent 工作階段"
+  zh-CN: "Agent 会话"
+  ja: "Agent セッション"
 "Show Tab Titles in Sidebar":
   en: "Show Tab Titles in Sidebar"
   zh-TW: "在側邊欄顯示分頁標題"

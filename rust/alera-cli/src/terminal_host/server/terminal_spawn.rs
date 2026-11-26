@@ -11,9 +11,7 @@ use crate::terminal_host::orchestration::agent_startup_command::{
 use crate::terminal_host::orchestration::codex_terminal_launch::{
     isolate_codex_command, isolate_managed_codex_launch,
 };
-use crate::terminal_host::orchestration::managed_agent_mcp_injection::{
-    enabled_by_opt_in, inject_managed_agent_mcp,
-};
+use crate::terminal_host::orchestration::managed_agent_mcp_injection::inject_managed_agent_mcp;
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::Session;
 
@@ -364,15 +362,42 @@ impl ServerActor {
         let mut prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
             isolate_managed_codex_launch(descriptor.map(|item| item.id), &mut launch);
-            // Opt-in alpha: only declared Managed Agent Profiles receive a
+            // Only declared Managed Agent Profiles receive a
             // per-launch MCP config. The Host has already minted this PTY's
             // ephemeral environment capability; never write it into argv or
             // the user's global Codex/Claude configuration.
-            if agent_profile_id(tab).is_some() && enabled_by_opt_in() {
-                if let (Some(descriptor), Ok(exe)) = (descriptor, std::env::current_exe()) {
-                    inject_managed_agent_mcp(descriptor.id, &mut launch, &exe, &self.runtime_dir);
+            let mcp_status = if agent_profile_id(tab).is_none() {
+                "not_managed"
+            } else if !descriptor.is_some_and(|item| matches!(item.id, "codex" | "claude")) {
+                "unsupported"
+            } else {
+                match self
+                    .runtime_store
+                    .desktop_shared_setting("agents.builtinMcpEnabled")
+                    .await
+                {
+                    Ok(value) if value.as_bool() == Some(false) => "disabled",
+                    Ok(value) if value.as_bool() == Some(true) => {
+                        if let (Some(descriptor), Ok(exe)) = (descriptor, std::env::current_exe()) {
+                            if inject_managed_agent_mcp(
+                                descriptor.id,
+                                &mut launch,
+                                &exe,
+                                &self.runtime_dir,
+                            ) {
+                                "awaiting_discovery"
+                            } else {
+                                "not_injected"
+                            }
+                        } else {
+                            "not_injected"
+                        }
+                    }
+                    _ => "setting_unavailable",
                 }
-            }
+            };
+            self.mcp_ui.record_launch(&session_id, mcp_status);
+            self.broadcast_builtin_mcp_changed();
             // Use the provider conversation UUID stored per Host tab by
             // its Hook. Never guess another tab's conversation or replay
             // an initial prompt when resuming.
@@ -404,6 +429,10 @@ impl ServerActor {
                 command
             })
         } else {
+            if descriptor.is_some() {
+                self.mcp_ui.record_launch(&session_id, "not_managed");
+                self.broadcast_builtin_mcp_changed();
+            }
             initial_command(tab)?.map(|command| {
                 // Command-mode profiles using a bare provider CLI can also
                 // resume; never parse or rewrite a custom shell command.

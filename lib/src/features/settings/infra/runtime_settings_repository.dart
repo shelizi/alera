@@ -20,6 +20,7 @@ class RuntimeSettingsRepository({
   bool _sharedDesktopAvailable = false;
   bool _sharedQuotaPinsAvailable = false;
   bool _sharedExternalEditorAvailable = false;
+  bool _sharedBuiltinMcpAvailable = false;
 
   @override
   Future<AleraSettings> load() async {
@@ -27,6 +28,11 @@ class RuntimeSettingsRepository({
     _sharedDesktopAvailable = false;
     _sharedQuotaPinsAvailable = false;
     _sharedExternalEditorAvailable = false;
+    _sharedBuiltinMcpAvailable = false;
+    // Never show a cached MCP state when the Host cannot confirm it.
+    legacy = legacy.copyWith(
+      agents: legacy.agents.copyWith(builtinMcpEnabled: null),
+    );
     try {
       await beforeAccess?.call();
       if (await _supportsConfiguration()) {
@@ -112,6 +118,8 @@ class RuntimeSettingsRepository({
         // A running older Host cannot synchronize shared preferences yet.
         // Keep Classic's Drift values rather than breaking Settings startup.
       }
+      _sharedBuiltinMcpAvailable =
+          sharedDesktop['agents.builtinMcpEnabled'] is bool;
       final payload = await client.runtimeRequest('runtimeSettings.get');
       final runtime = _asMap(payload);
       if (!runtime.containsKey('workspaceDirectory')) {
@@ -192,6 +200,15 @@ class RuntimeSettingsRepository({
     final changes = <Map<String, Object?>>[];
     for (final path in _sharedDesktopPaths) {
       if (path == 'editor.externalEditor' && !_sharedExternalEditorAvailable) {
+        continue;
+      }
+      if (path == 'agents.builtinMcpEnabled' && !_sharedBuiltinMcpAvailable) {
+        if (previous.agents.builtinMcpEnabled !=
+            next.agents.builtinMcpEnabled) {
+          throw StateError(
+            'Built-in MCP settings require an updated Runtime Host',
+          );
+        }
         continue;
       }
       if (path == 'agents.quotaUnpinnedKeys' && !_sharedQuotaPinsAvailable) {
@@ -347,6 +364,7 @@ const _sharedDesktopPaths = <String>[
   'general.confirmWorkspaceRemoval',
   'general.autoArchiveWorkspacesAfterDays',
   'agents.defaultAgentProfileId',
+  'agents.builtinMcpEnabled',
   'general.showTrayIcon',
   'general.showDockBadge',
   'general.showTrayBadge',
@@ -386,6 +404,7 @@ Object? _sharedDesktopValue(
   'general.autoArchiveWorkspacesAfterDays' =>
     settings.general.autoArchiveWorkspacesAfterDays,
   'agents.defaultAgentProfileId' => settings.agents.defaultAgentProfileId,
+  'agents.builtinMcpEnabled' => settings.agents.builtinMcpEnabled,
   'general.showTrayIcon' => settings.general.showTrayIcon,
   'general.showDockBadge' => settings.general.showDockBadge,
   'general.showTrayBadge' => settings.general.showTrayBadge,
@@ -626,6 +645,9 @@ AleraSettings _applySharedDesktopValues(
               values['agents.showTabTitlesInSidebar'] is bool
               ? values['agents.showTabTitlesInSidebar'] as bool
               : current.agents.showTabTitlesInSidebar,
+          builtinMcpEnabled: values['agents.builtinMcpEnabled'] is bool
+              ? values['agents.builtinMcpEnabled'] as bool
+              : null,
           showTaskSummariesInSidebar:
               values['agents.showTaskSummariesInSidebar'] is bool
               ? values['agents.showTaskSummariesInSidebar'] as bool

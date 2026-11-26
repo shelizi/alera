@@ -1,4 +1,4 @@
-//! Opt-in, per-spawn Alera MCP adapter configuration for managed Agent Profiles.
+//! Per-spawn Alera MCP adapter configuration for managed Agent Profiles.
 //!
 //! Never mutate ~/.codex/config.toml, ~/.claude.json or other global client
 //! configuration. The Host-issued per-PTY capability remains an environment
@@ -10,13 +10,6 @@ use std::path::Path;
 use super::managed_agent_launch::ManagedAgentLaunch;
 
 const SERVER_NAME: &str = "alera-workbench";
-const OPT_IN_ENV: &str = "ALERA_MCP_PROFILE_INJECTION";
-
-/// The alpha is disabled by default until supported platform acceptance.
-pub fn enabled_by_opt_in() -> bool {
-    std::env::var(OPT_IN_ENV).as_deref() == Ok("1")
-}
-
 /// Extend already resolved *managed* argv, before the initial prompt. Never
 /// parse or rewrite opaque Command-mode launch lines.
 pub fn inject_managed_agent_mcp(

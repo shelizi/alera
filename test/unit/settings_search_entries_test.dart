@@ -32,7 +32,7 @@ void main() {
       _catalogFingerprint(catalogs),
       // Audited Settings search metadata/order including merge-conflict
       // resolution and other entries from the integrated main branch.
-      'd607972cd19daf151a7cbed61dfb30e1b0f56024c9bbd83f20664754261bda54',
+      'd30fa345c80ea8e6b9400b18d997173a767c82fb920857125d8cf99abccaedba',
     );
   });
 
@@ -149,6 +149,15 @@ void main() {
     expect(entry.matches('quota'), isTrue);
     expect(entry.matches('managed'), isTrue);
     expect(entry.groupId, 'extraSkills');
+  });
+
+  test('built-in MCP is searchable in the agents behavior group', () {
+    final entry = agentsSearchEntries.singleWhere(
+      (candidate) => candidate.title == 'Built-in Alera MCP',
+    );
+    expect(entry.matches('mcp'), isTrue);
+    expect(entry.matches('codex'), isTrue);
+    expect(entry.groupId, 'behavior');
   });
 
   test('sidebar tab titles are searchable in the agents behavior group', () {

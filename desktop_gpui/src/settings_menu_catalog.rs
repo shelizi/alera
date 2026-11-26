@@ -240,6 +240,7 @@ pub const SECTIONS: &[SettingsSection] = &[
             group!("Extra Skills" => [row!("Agent Profiles Skill", "Catalog and managed-profile instructions.", Action)]),
             group!("Status Hooks" => [row!("Codex Hooks", "Managed status hooks.", Toggle), row!("Claude Code Hooks", "Managed status hooks.", Toggle)]),
             group!("Behavior" => [
+                row!("Built-in Alera MCP", "Register alera-workbench for new Managed Codex and Claude sessions. Existing sessions must be restarted; other providers are not supported.", Toggle),
                 row!("Show Tab Titles in Sidebar", "Display agent tab titles in the project tree.", Toggle),
                 row!("Show Agent Task Summaries in Sidebar", "Show the overall task and recent report in multiline Agent rows (off by default).", Toggle),
                 row!("Agent Status Notifications", "Notify when an agent needs attention.", Toggle),
@@ -393,6 +394,7 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
         ("editor", "Autosave") => "editor.autosaveEnabled",
         ("editor", "Autosave Delay") => "editor.autosaveDelaySeconds",
         ("editor", "Excluded Directories") => "editor.quickOpenExcludedDirectories",
+        ("agents", "Built-in Alera MCP") => "agents.builtinMcpEnabled",
         ("agents", "Show Tab Titles in Sidebar") => "agents.showTabTitlesInSidebar",
         ("agents", "Show Agent Task Summaries in Sidebar") => "agents.showTaskSummariesInSidebar",
         ("agents", "Agent Status Notifications") => "agents.agentStatusNotificationsEnabled",

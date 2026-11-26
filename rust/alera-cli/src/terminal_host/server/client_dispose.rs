@@ -107,7 +107,14 @@ impl ServerActor {
             self.immediate_checkpoint(&session_id).await;
         }
         self.clients.remove(&client_id);
+        let was_mcp = self.mcp_ui.discovery_handle(client_id).map(str::to_owned);
         self.mcp_ui.disconnect(client_id);
+        if was_mcp
+            .as_ref()
+            .is_some_and(|handle| self.mcp_ui.connection_status(handle, true) != "connected")
+        {
+            self.broadcast_builtin_mcp_changed();
+        }
         self.configuration_transfers.disconnect(client_id);
         if mobile_disconnected {
             self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));

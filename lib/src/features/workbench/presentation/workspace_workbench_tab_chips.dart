@@ -276,6 +276,12 @@ class const _WorkspaceTabChip({
                 ),
                 const SizedBox(width: AleraTokens.space4),
                 TerminalExecutionOriginBadge(tab: tab),
+                if (liveStatus &&
+                    tab.kind == WorkspaceTabKind.terminal &&
+                    (tab.payload['agentType'] is String ||
+                        tab.payload['agentProfileId'] is String ||
+                        tab.payload['agentProfileLaunchV1'] is Map))
+                  _BuiltinMcpTabIndicator(tab: tab),
                 if (detachedTabWindows.isLaunching(tab.id)) ...<Widget>[
                   const Tooltip(
                     message: 'Opening separate window...',
@@ -324,6 +330,131 @@ class const _WorkspaceTabChip({
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+typedef _BuiltinMcpTabIdentity = (String, String, String);
+
+/// Shared by every local Agent tab in both panes. Changes invalidate a single
+/// Host snapshot, not one request/timer per tab. A disconnected transport
+/// immediately clears the previous positive observations.
+final _builtinMcpTabStatusesProvider =
+    StreamProvider.autoDispose<Map<_BuiltinMcpTabIdentity, String>>((ref) {
+      final client = ref.watch(runtimeHostClientProvider);
+      final output = StreamController<Map<_BuiltinMcpTabIdentity, String>>();
+      var disposed = false;
+      var refreshing = false;
+      var queued = false;
+      var generation = 0;
+      Future<void> refresh() async {
+        if (disposed) return;
+        if (refreshing) {
+          queued = true;
+          generation++;
+          return;
+        }
+        refreshing = true;
+        try {
+          do {
+            queued = false;
+            final requested = ++generation;
+            try {
+              final snapshot = await client.runtimeRequest(
+                'desktopSettings.get',
+              );
+              if (disposed || requested != generation) continue;
+              final diagnostics = snapshot is Map
+                  ? snapshot['builtinMcpDiagnostics']
+                  : null;
+              final sessions = diagnostics is Map
+                  ? diagnostics['sessions']
+                  : null;
+              final statuses = <_BuiltinMcpTabIdentity, String>{};
+              if (sessions is List) {
+                for (final item in sessions.whereType<Map>()) {
+                  final handle = item['handle'];
+                  final workspaceId = item['workspaceId'];
+                  final tabId = item['tabId'];
+                  final status = item['status'];
+                  if (handle is String &&
+                      workspaceId is String &&
+                      tabId is String &&
+                      status is String &&
+                      _builtinMcpStatusLabel(status) != null) {
+                    statuses[(workspaceId, tabId, handle)] = status;
+                  }
+                }
+              }
+              output.add(Map.unmodifiable(statuses));
+            } catch (_) {
+              if (!disposed && requested == generation) output.add(const {});
+            }
+          } while (queued && !disposed);
+        } finally {
+          refreshing = false;
+        }
+      }
+
+      final subscription = client.runtimeEvents.listen((event) {
+        if (event.name == aleraRuntimeHostDisconnectedEvent) {
+          generation++;
+          queued = false;
+          if (!disposed) output.add(const {});
+        } else if (event.name == 'builtinMcpChanged' ||
+            event.name == aleraRuntimeHostConnectedEvent) {
+          unawaited(refresh());
+        }
+      });
+      ref.onDispose(() {
+        disposed = true;
+        unawaited(subscription.cancel());
+        unawaited(output.close());
+      });
+      unawaited(refresh());
+      return output.stream;
+    });
+
+String? _builtinMcpStatusLabel(String? status) => switch (status) {
+  'connected' => 'MCP connected',
+  'awaiting_discovery' => 'MCP awaiting discovery',
+  'disconnected' => 'MCP disconnected',
+  'disabled' => 'MCP disabled',
+  'unsupported' => 'MCP unsupported',
+  'not_injected' => 'MCP not registered',
+  'setting_unavailable' => 'MCP unavailable',
+  _ => null,
+};
+
+class const _BuiltinMcpTabIndicator({required final WorkspaceTabRecord tab})
+    extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final identity = (tab.workspaceId, tab.id, tab.terminalSessionId);
+    final status = ref.watch(
+      _builtinMcpTabStatusesProvider.select(
+        (snapshot) => snapshot.asData?.value[identity],
+      ),
+    );
+    final label = _builtinMcpStatusLabel(status);
+    if (label == null) return const SizedBox.shrink();
+    final color = switch (status) {
+      'connected' => const Color(0xff47b879),
+      'awaiting_discovery' => const Color(0xffd6a74c),
+      'disconnected' ||
+      'not_injected' ||
+      'setting_unavailable' => const Color(0xffe07a73),
+      _ => AleraTokens.foregroundMuted,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(right: AleraTokens.space4),
+      child: Tooltip(
+        message: context.tr(label),
+        child: Text(
+          'MCP',
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
         ),
       ),
     );

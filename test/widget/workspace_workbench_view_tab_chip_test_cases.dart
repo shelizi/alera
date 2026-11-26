@@ -1,6 +1,95 @@
 part of 'workspace_workbench_view_test.dart';
 
+class _McpStatusTestHost implements RuntimeHostClient {
+  final events = StreamController<RuntimeHostEvent>.broadcast();
+  List<Map<String, Object?>> sessions = [];
+  int requests = 0;
+  @override
+  Stream<RuntimeHostEvent> get runtimeEvents => events.stream;
+
+  @override
+  Future<Object?> runtimeRequest(
+    String type, [
+    Map<String, Object?> payload = const {},
+    Duration? timeout,
+  ]) async {
+    if (type != 'desktopSettings.get') return null;
+    requests++;
+    return {
+      'builtinMcpDiagnostics': {'sessions': sessions},
+    };
+  }
+}
+
 void _registerWorkspaceWorkbenchViewTabChipTests() {
+  testWidgets(
+    'local MCP badge follows exact Host identity and clears on disconnect',
+    (tester) async {
+      final tab = _tab(
+        'mcp-agent',
+        title: 'Codex',
+      ).copyWith(payload: {'agentType': 'codex'});
+      final other = _tab(
+        'other-agent',
+        title: 'Claude',
+      ).copyWith(payload: {'agentType': 'claude'});
+      final host = _McpStatusTestHost();
+      addTearDown(host.events.close);
+      Map<String, Object?> row(
+        WorkspaceTabRecord t,
+        String status, {
+        String? workspaceId,
+      }) => {
+        'workspaceId': workspaceId ?? t.workspaceId,
+        'tabId': t.id,
+        'handle': t.terminalSessionId,
+        'status': status,
+      };
+      host.sessions = [
+        row(tab, 'connected'),
+        row(other, 'connected', workspaceId: 'wrong'),
+      ];
+      await _pumpWorkbenchView(
+        tester,
+        tabs: [tab, other],
+        terminalRuntime: terminalRuntime,
+        layout: .single(workspaceId: _workspaceId, tabIds: [tab.id, other.id]),
+        createdTabs: createdTabs,
+        selectedTabs: selectedTabs,
+        closedTabs: closedTabs,
+        closedTabGroups: closedTabGroups,
+        renamedTabs: renamedTabs,
+        movedTabs: movedTabs,
+        splitGroups: splitGroups,
+        mergedGroups: mergedGroups,
+        updatedRatios: updatedRatios,
+        agentStatuses: null,
+        mcpHost: host,
+        size: const Size(900, 280),
+      );
+      await tester.pump();
+      expect(find.byTooltip('MCP connected'), findsOneWidget);
+      expect(host.requests, 1, reason: 'all tabs share one status request');
+      host.sessions = [
+        row(tab, 'disconnected'),
+        row(other, 'awaiting_discovery'),
+      ];
+      host.events.add(const RuntimeHostEvent('builtinMcpChanged', {}));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byTooltip('MCP connected'), findsNothing);
+      expect(find.byTooltip('MCP disconnected'), findsOneWidget);
+      expect(find.byTooltip('MCP awaiting discovery'), findsOneWidget);
+      host.events.add(
+        const RuntimeHostEvent(aleraRuntimeHostDisconnectedEvent, {}),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byTooltip('MCP disconnected'), findsNothing);
+      expect(find.byTooltip('MCP awaiting discovery'), findsNothing);
+    },
+  );
+
   testWidgets('terminal tab chips show agent status dots', (tester) async {
     final tab = _tab('tab-1', title: 'Terminal');
 

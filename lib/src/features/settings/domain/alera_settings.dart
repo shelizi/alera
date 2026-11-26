@@ -112,6 +112,7 @@ class const AgentSettings({
   this.keepComputerAwakeWhileAgentsWork = false,
   this.showTabTitlesInSidebar = false,
   this.showTaskSummariesInSidebar = false,
+  this.builtinMcpEnabled,
   this.defaultAgentProfileId,
   this.agentExecutablePaths = const <String, String>{},
   this.gitBashExecutablePath,
@@ -139,6 +140,9 @@ class const AgentSettings({
   /// Opt-in: show overall goals and latest reports in multiline Agent rows.
   /// The right Agent Context panel remains available when this is disabled.
   final bool showTaskSummariesInSidebar;
+
+  /// Host-owned local preference. Null means the Host has not confirmed it.
+  final bool? builtinMcpEnabled;
 
   /// Runtime profile selected for flows that need an initial agent choice.
   final String? defaultAgentProfileId;

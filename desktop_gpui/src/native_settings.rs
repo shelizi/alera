@@ -185,7 +185,12 @@ impl NativeSettings {
         let mut required = Vec::new();
         for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
             let Some(value) = values.get(path) else {
-                if matches!(path, "agents.quotaUnpinnedKeys" | "editor.externalEditor") {
+                if matches!(
+                    path,
+                    "agents.quotaUnpinnedKeys"
+                        | "editor.externalEditor"
+                        | "agents.builtinMcpEnabled"
+                ) {
                     // Existing Host binaries without the new optional quota
                     // preference must not break all other shared settings.
                     continue;
@@ -216,6 +221,13 @@ impl NativeSettings {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Invalid shared Host default Agent Profile ID",
+                    ));
+                }
+            } else if path == "agents.builtinMcpEnabled" {
+                if !value.is_boolean() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid built-in MCP setting",
                     ));
                 }
             } else if path == "agents.quotaUnpinnedKeys" {
@@ -885,6 +897,7 @@ mod tests {
             "general.confirmWorkspaceRemoval":true,
             "general.autoArchiveWorkspacesAfterDays":60,
             "agents.defaultAgentProfileId":"host_codex",
+            "agents.builtinMcpEnabled":true,
             "explorer.showHiddenFiles":true,
             "explorer.showIgnoredFiles":false,
             "general.showTrayIcon":true,

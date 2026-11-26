@@ -83,6 +83,14 @@ extension _SocketTerminalHostMessageDispatch on SocketTerminalHostClient {
       _runtimeSettingsRevision = null;
       unawaited(_runtimeLineSub?.cancel());
       _runtimeLineSub = null;
+      if (!_runtimeEvents.isClosed && !_disposed) {
+        _runtimeEvents.add(
+          const RuntimeHostEvent(
+            aleraRuntimeHostDisconnectedEvent,
+            <String, Object?>{},
+          ),
+        );
+      }
     }
     connection.dispose();
     final pendingIds = <int>[
