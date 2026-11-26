@@ -1,14 +1,16 @@
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use grep_matcher::Matcher;
 use ignore::WalkBuilder;
 
 use super::compile::CompiledSearch;
+use super::content_cache::{self, FileStamp, Lookup, RootCache};
 use super::globs::matches_globs;
 use super::paths::{
-    content_token, is_protected_relative_path, relative_string, safe_regular_file_metadata,
-    should_walk_entry,
+    content_token, is_protected_relative_path, open_search_file, relative_string, should_walk_entry,
 };
 use super::{
     WorkspaceSearchError, WorkspaceSearchErrorKind, WorkspaceSearchFileResult,
@@ -21,9 +23,29 @@ pub(super) fn run_search(
     full_lines: bool,
     cancellation: Option<&AtomicBool>,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
-    let mut files = Vec::<WorkspaceSearchFileResult>::new();
-    let mut total_matches = 0_u32;
-    let mut truncated = false;
+    // Replacement previews and execution must always use fresh disk bytes
+    // and the original sequential order.
+    run_search_impl(compiled, full_lines, cancellation, None, 1)
+}
+
+pub(super) fn run_readonly_search(
+    compiled: &CompiledSearch,
+    cancellation: Option<&AtomicBool>,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    ensure_not_cancelled(cancellation)?;
+    let cache = content_cache::for_root(&compiled.root);
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
+    run_search_impl(compiled, false, cancellation, cache.as_deref(), workers)
+}
+
+fn run_search_impl(
+    compiled: &CompiledSearch,
+    full_lines: bool,
+    cancellation: Option<&AtomicBool>,
+    cache: Option<&RootCache>,
+    workers: usize,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    ensure_not_cancelled(cancellation)?;
     let mut walker = WalkBuilder::new(&compiled.root);
     let root = compiled.root.clone();
     // Do not walk other linked worktrees, even when ignored files are included.
@@ -43,81 +65,339 @@ pub(super) fn run_search(
             .git_ignore(false)
             .git_exclude(false);
     }
+    let walker = walker.build();
+    if workers > 1 {
+        if let Some(permit) = ReadAheadPermit::acquire(workers) {
+            return scan_parallel(walker, compiled, full_lines, cancellation, cache, permit.0);
+        }
+    }
+    scan_sequential(walker, compiled, full_lines, cancellation, cache)
+}
 
-    for entry in walker.build() {
-        ensure_not_cancelled(cancellation)?;
-        if total_matches >= compiled.max_results {
-            truncated = true;
-            break;
+struct CandidateFile {
+    path: std::path::PathBuf,
+    relative_path: String,
+}
+
+fn candidate_file(
+    entry: Result<ignore::DirEntry, ignore::Error>,
+    compiled: &CompiledSearch,
+) -> Option<CandidateFile> {
+    let entry = entry.ok()?;
+    let path = entry.path();
+    if path == compiled.root {
+        return None;
+    }
+    let file_type = entry.file_type()?;
+    if !file_type.is_file() || file_type.is_symlink() {
+        return None;
+    }
+    let relative_path = relative_string(&compiled.root, path)?;
+    if is_protected_relative_path(&relative_path)
+        || !matches_globs(&relative_path, &compiled.include, true)
+        || matches_globs(&relative_path, &compiled.exclude, false)
+    {
+        return None;
+    }
+    Some(CandidateFile {
+        path: path.to_path_buf(),
+        relative_path,
+    })
+}
+
+struct LoadedFile {
+    relative_path: String,
+    content_token: String,
+    text: Arc<String>,
+}
+
+fn load_file(
+    root: &std::path::Path,
+    candidate: CandidateFile,
+    cache: Option<&RootCache>,
+) -> Option<LoadedFile> {
+    let CandidateFile {
+        path,
+        relative_path,
+    } = candidate;
+    // All hits still undergo the same path containment, symlink, size and
+    // regular-file validation. Open the actual file even on hits so cached
+    // content is never used to bypass the current read permissions.
+    let opened = open_search_file(root, &path, &relative_path)?;
+    let metadata = opened.metadata;
+    let mut file = opened.file;
+    let key = path.strip_prefix(root).ok()?;
+    let stamp = cache
+        .filter(|_| metadata.len() <= content_cache::MAX_CACHED_FILE_BYTES)
+        .and_then(|_| {
+            if !opened.handle_verified {
+                let before = FileStamp::from_metadata(&metadata)?;
+                let opened_metadata = file.metadata().ok()?;
+                if FileStamp::from_metadata(&opened_metadata)? != before {
+                    return None;
+                }
+            }
+            FileStamp::from_file(&file, &metadata)
+        });
+    let mut cache_generation = None;
+    if let (Some(cache), Some(stamp)) = (cache, stamp.as_ref()) {
+        match cache.lookup(key, stamp) {
+            Lookup::Hit(text) => {
+                return text.map(|text| LoadedFile {
+                    relative_path,
+                    content_token: content_token(&metadata),
+                    text,
+                });
+            }
+            Lookup::Miss(generation) => cache_generation = Some(generation),
+            Lookup::Disabled => {}
         }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if path == compiled.root {
-            continue;
-        }
-        let file_type = match entry.file_type() {
-            Some(file_type) => file_type,
-            None => continue,
-        };
-        if !file_type.is_file() || file_type.is_symlink() {
-            continue;
-        }
-        let relative_path = match relative_string(&compiled.root, path) {
-            Some(path) => path,
-            None => continue,
-        };
-        if is_protected_relative_path(&relative_path) {
-            continue;
-        }
-        if !matches_globs(&relative_path, &compiled.include, true)
-            || matches_globs(&relative_path, &compiled.exclude, false)
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    (&mut file)
+        .take(MAX_TEXT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_TEXT_FILE_BYTES {
+        return None;
+    }
+    let length = bytes.len() as u64;
+    let text = if bytes.contains(&0) {
+        None
+    } else {
+        String::from_utf8(bytes).ok().map(Arc::new)
+    };
+    if let (Some(cache), Some(stamp), Some(generation)) = (cache, stamp, cache_generation) {
+        // Never publish a read that raced an observed watch event, changed
+        // handle metadata or a file growing/shrinking during the read.
+        if length == metadata.len()
+            && file
+                .metadata()
+                .ok()
+                .and_then(|m| FileStamp::from_file(&file, &m))
+                .as_ref()
+                == Some(&stamp)
         {
-            continue;
+            cache.insert(key.to_path_buf(), stamp, text.clone(), generation);
         }
-        let metadata = match safe_regular_file_metadata(&compiled.root, path, &relative_path) {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        if metadata.len() > MAX_TEXT_FILE_BYTES {
-            continue;
-        }
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
+    }
+    text.map(|text| LoadedFile {
+        relative_path,
+        content_token: content_token(&metadata),
+        text,
+    })
+}
+
+#[derive(Default)]
+struct SearchAccumulator {
+    files: Vec<WorkspaceSearchFileResult>,
+    total_matches: u32,
+    truncated: bool,
+}
+
+impl SearchAccumulator {
+    fn consume(
+        &mut self,
+        loaded: Option<LoadedFile>,
+        compiled: &CompiledSearch,
+        full_lines: bool,
+        cancellation: Option<&AtomicBool>,
+    ) -> Result<(), WorkspaceSearchError> {
         ensure_not_cancelled(cancellation)?;
-        if bytes.contains(&0) {
-            continue;
-        }
-        let text = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => continue,
+        let Some(loaded) = loaded else {
+            return Ok(());
         };
         let matches = matches_in_file(
-            &relative_path,
-            &text,
+            &loaded.relative_path,
+            &loaded.text,
             compiled,
             full_lines,
-            &mut total_matches,
-            &mut truncated,
+            &mut self.total_matches,
+            &mut self.truncated,
             cancellation,
         )?;
         if !matches.is_empty() {
-            files.push(WorkspaceSearchFileResult {
-                relative_path,
-                content_token: content_token(&metadata),
+            self.files.push(WorkspaceSearchFileResult {
+                relative_path: loaded.relative_path,
+                content_token: loaded.content_token,
                 matches,
             });
         }
+        Ok(())
     }
 
-    Ok(WorkspaceSearchResult {
-        files,
-        total_matches,
-        truncated,
+    fn finish(self) -> WorkspaceSearchResult {
+        WorkspaceSearchResult {
+            files: self.files,
+            total_matches: self.total_matches,
+            truncated: self.truncated,
+        }
+    }
+}
+
+fn scan_sequential(
+    walker: ignore::Walk,
+    compiled: &CompiledSearch,
+    full_lines: bool,
+    cancellation: Option<&AtomicBool>,
+    cache: Option<&RootCache>,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    let mut out = SearchAccumulator::default();
+    for entry in walker {
+        ensure_not_cancelled(cancellation)?;
+        if out.total_matches >= compiled.max_results {
+            out.truncated = true;
+            break;
+        }
+        let loaded = candidate_file(entry, compiled)
+            .and_then(|candidate| load_file(&compiled.root, candidate, cache));
+        out.consume(loaded, compiled, full_lines, cancellation)?;
+    }
+    Ok(out.finish())
+}
+
+// Limit both the number of active read-ahead workers in the process and the
+// number of slots in a single search. At most 8 * 5 MiB read-ahead text bytes
+// per search (plus temporary decoding/allocations) before ordered matching.
+const READ_AHEAD_SLOTS: usize = 8;
+const MAX_READ_AHEAD_WORKERS: usize = 8;
+static ACTIVE_READ_AHEAD_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+struct ReadAheadPermit(usize);
+impl ReadAheadPermit {
+    fn acquire(wanted: usize) -> Option<Self> {
+        let mut active = ACTIVE_READ_AHEAD_WORKERS.load(Ordering::Relaxed);
+        loop {
+            let count = wanted.min(MAX_READ_AHEAD_WORKERS.saturating_sub(active));
+            if count < 2 {
+                return None;
+            }
+            match ACTIVE_READ_AHEAD_WORKERS.compare_exchange_weak(
+                active,
+                active + count,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(Self(count)),
+                Err(current) => active = current,
+            }
+        }
+    }
+}
+impl Drop for ReadAheadPermit {
+    fn drop(&mut self) {
+        ACTIVE_READ_AHEAD_WORKERS.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+struct ReadJob {
+    slot: usize,
+    candidate: CandidateFile,
+}
+
+fn scan_parallel(
+    mut walker: ignore::Walk,
+    compiled: &CompiledSearch,
+    full_lines: bool,
+    cancellation: Option<&AtomicBool>,
+    cache: Option<&RootCache>,
+    workers: usize,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    use std::sync::mpsc;
+    let (job_tx, job_rx) = mpsc::channel::<ReadJob>();
+    let jobs = Mutex::new(job_rx);
+    let (result_tx, result_rx) = mpsc::channel::<(usize, Option<LoadedFile>)>();
+    let root = &compiled.root;
+    std::thread::scope(|scope| {
+        let mut spawned = 0;
+        for _ in 0..workers {
+            let jobs = &jobs;
+            let results = result_tx.clone();
+            if std::thread::Builder::new()
+                .name("alera-search-read".into())
+                .spawn_scoped(scope, move || loop {
+                    let job = jobs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .recv();
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    let loaded = if ensure_not_cancelled(cancellation).is_ok() {
+                        load_file(root, job.candidate, cache)
+                    } else {
+                        None
+                    };
+                    if results.send((job.slot, loaded)).is_err() {
+                        break;
+                    }
+                })
+                .is_ok()
+            {
+                spawned += 1;
+            }
+        }
+        drop(result_tx);
+        if spawned == 0 {
+            drop(job_tx);
+            return scan_sequential(walker, compiled, full_lines, cancellation, cache);
+        }
+        let result = (|| {
+            let mut out = SearchAccumulator::default();
+            'walk: loop {
+                ensure_not_cancelled(cancellation)?;
+                if out.total_matches >= compiled.max_results {
+                    // The old loop marked truncation only when another
+                    // physical walker entry existed, even a non-file.
+                    out.truncated |= walker.next().is_some();
+                    break;
+                }
+                let mut slots = Vec::with_capacity(READ_AHEAD_SLOTS);
+                let mut sent = 0;
+                for slot in 0..READ_AHEAD_SLOTS {
+                    ensure_not_cancelled(cancellation)?;
+                    let Some(entry) = walker.next() else {
+                        break;
+                    };
+                    slots.push(None);
+                    if let Some(candidate) = candidate_file(entry, compiled) {
+                        job_tx.send(ReadJob { slot, candidate }).map_err(|_| {
+                            WorkspaceSearchError::new(
+                                WorkspaceSearchErrorKind::Io,
+                                "search read workers stopped",
+                            )
+                        })?;
+                        sent += 1;
+                    }
+                }
+                if slots.is_empty() {
+                    break;
+                }
+                for _ in 0..sent {
+                    let (slot, loaded) = result_rx.recv().map_err(|_| {
+                        WorkspaceSearchError::new(
+                            WorkspaceSearchErrorKind::Io,
+                            "search read result missing",
+                        )
+                    })?;
+                    slots[slot] = loaded;
+                }
+                // Disk reads finish out of order, but matching and the
+                // global/per-file result caps retain original walk order.
+                for loaded in slots {
+                    ensure_not_cancelled(cancellation)?;
+                    if out.total_matches >= compiled.max_results {
+                        out.truncated = true;
+                        break 'walk;
+                    }
+                    out.consume(loaded, compiled, full_lines, cancellation)?;
+                }
+            }
+            Ok(out.finish())
+        })();
+        // Always disconnect before scope joins the waiting workers.
+        drop(job_tx);
+        result
     })
 }
 
@@ -346,3 +626,7 @@ fn clamp_line_context(
 #[cfg(test)]
 #[path = "engine_perf_tests.rs"]
 mod perf_tests;
+
+#[cfg(test)]
+#[path = "engine_cache_tests.rs"]
+mod cache_tests;
