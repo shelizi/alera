@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
-use notify::{RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::frb_generated::StreamSink;
 
@@ -65,6 +66,9 @@ fn watch_linked_git_metadata(
     for dir in [
         metadata.private_dir.join("refs"),
         metadata.common_dir.join("refs"),
+        // info/exclude, sparse-checkout and attributes can change status.
+        metadata.private_dir.join("info"),
+        metadata.common_dir.join("info"),
     ] {
         if dir.is_dir() && watched.insert(dir.clone()) {
             watcher.watch(&dir, RecursiveMode::Recursive)?;
@@ -73,15 +77,29 @@ fn watch_linked_git_metadata(
     Ok(())
 }
 
-fn metadata_path_is_relevant(metadata_root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(metadata_root) else {
+fn metadata_relative_path_is_relevant(relative: &Path, shared: bool) -> bool {
+    let mut components = relative.components();
+    let first = components.next().and_then(|part| part.as_os_str().to_str());
+    if matches!(first, Some("objects" | "logs" | "hooks" | "lfs")) {
         return false;
-    };
-    let first = relative
-        .components()
-        .next()
-        .and_then(|part| part.as_os_str().to_str());
-    !matches!(first, Some("objects" | "logs" | "hooks" | "info" | "lfs"))
+    }
+    // The main checkout watches its .git directory recursively. Git's
+    // administrative directories also contain other worktrees' private
+    // HEAD/index/reflog files. Those do not change this checkout's status.
+    // Keep structural worktree events, shared refs/config, and unknown
+    // metadata; don't suppress a whole worktree administration subtree.
+    if shared && first == Some("worktrees") && components.next().is_some() {
+        let name = components.next().and_then(|part| part.as_os_str().to_str());
+        if name == Some("logs") {
+            return false;
+        }
+        if matches!(name, Some("HEAD" | "HEAD.lock" | "index" | "index.lock"))
+            && components.next().is_none()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
@@ -161,43 +179,56 @@ fn event_is_relevant(
     metadata: Option<&LinkedGitMetadata>,
     event: &notify::Event,
 ) -> bool {
-    // Unknown/overflow events must always trigger a status reconciliation.
-    event.paths.is_empty()
-        || event.paths.iter().any(|path| {
-            path_is_relevant(root, path)
-                || metadata.is_some_and(|git| {
-                    metadata_path_is_relevant(&git.private_dir, path)
-                        || metadata_path_is_relevant(&git.common_dir, path)
-                })
-        })
+    // Overflow/rescan can carry paths and even an access event kind. Never
+    // let the filtering policy hide a request for full reconciliation.
+    if event.need_rescan() || event.paths.is_empty() {
+        return true;
+    }
+    if matches!(
+        event.kind,
+        EventKind::Access(
+            AccessKind::Read
+                | AccessKind::Open(AccessMode::Read | AccessMode::Execute)
+                | AccessKind::Close(AccessMode::Read | AccessMode::Execute)
+        )
+    ) {
+        return false;
+    }
+    event.paths.iter().any(|path| {
+        if let Some(git) = metadata {
+            // A linked checkout's own private metadata wins over the common
+            // directory rule, because it is physically inside worktrees/.
+            if let Ok(relative) = path.strip_prefix(&git.private_dir) {
+                return metadata_relative_path_is_relevant(
+                    relative,
+                    git.private_dir == git.common_dir,
+                );
+            }
+            if let Ok(relative) = path.strip_prefix(&git.common_dir) {
+                return metadata_relative_path_is_relevant(relative, true);
+            }
+        }
+        path_is_relevant(root, path)
+    })
 }
 
-fn path_is_relevant(root: &std::path::Path, path: &std::path::Path) -> bool {
+fn path_is_relevant(root: &Path, path: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-    let components = relative
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
-    let Some(first) = components.first().copied() else {
-        return true;
-    };
-    if matches!(first, ".dart_tool" | "build" | "node_modules" | "target") {
+    let mut components = relative.components();
+    let first = components.next().and_then(|part| part.as_os_str().to_str());
+    if first == Some(".git") {
+        return metadata_relative_path_is_relevant(components.as_path(), true);
+    }
+    if matches!(
+        first,
+        Some(".dart_tool" | "build" | "node_modules" | "target")
+    ) {
         return false;
     }
-    if components.contains(&"node_modules") {
-        return false;
-    }
-    if first != ".git" {
-        return true;
-    }
-    // Merge/rebase markers, index locks and refs affect repository state too.
-    // Ignore only noisy object/log storage rather than a fragile allowlist.
-    !matches!(
-        components.get(1).copied(),
-        Some("objects" | "logs" | "hooks" | "info" | "lfs")
-    )
+    // Avoid a Vec allocation on every filesystem notification.
+    !components.any(|component| component.as_os_str() == "node_modules")
 }
 
 pub(super) fn watch_source_control_events(
@@ -292,6 +323,192 @@ mod tests {
     }
 
     #[test]
+    fn read_only_access_never_requests_a_status_scan() {
+        let root = PathBuf::from("repo");
+        let event = |kind| Event::new(EventKind::Access(kind)).add_path(root.join("src/main.rs"));
+        for kind in [
+            AccessKind::Read,
+            AccessKind::Open(AccessMode::Read),
+            AccessKind::Close(AccessMode::Read),
+            AccessKind::Open(AccessMode::Execute),
+            AccessKind::Close(AccessMode::Execute),
+        ] {
+            assert!(!event_is_relevant(&root, None, &event(kind)), "{kind:?}");
+        }
+        for kind in [
+            AccessKind::Any,
+            AccessKind::Other,
+            AccessKind::Open(AccessMode::Any),
+            AccessKind::Open(AccessMode::Write),
+            AccessKind::Close(AccessMode::Write),
+        ] {
+            assert!(event_is_relevant(&root, None, &event(kind)), "{kind:?}");
+        }
+        assert!(event_is_relevant(
+            &root,
+            None,
+            &Event::new(EventKind::Access(AccessKind::Read)),
+        ));
+        assert!(event_is_relevant(
+            &root,
+            None,
+            &Event::new(EventKind::Access(AccessKind::Read))
+                .add_path(root.join("node_modules/pkg"))
+                .set_flag(notify::event::Flag::Rescan),
+        ));
+        assert!(event_is_relevant(
+            &root,
+            None,
+            &Event::new(EventKind::Other)
+                .add_path(root.join(".git/objects/aa/bb"))
+                .set_flag(notify::event::Flag::Rescan),
+        ));
+    }
+
+    #[test]
+    fn private_worktree_metadata_only_invalidates_its_owner() {
+        let main = PathBuf::from("repo");
+        let common = main.join(".git");
+        let own = common.join("worktrees/own");
+        let sibling = common.join("worktrees/sibling");
+        let linked_root = PathBuf::from("linked");
+        let metadata = LinkedGitMetadata {
+            private_dir: own.clone(),
+            common_dir: common.clone(),
+        };
+        let event = |path: PathBuf| Event::new(EventKind::Any).add_path(path);
+        for name in ["HEAD", "HEAD.lock", "index", "index.lock"] {
+            assert!(!event_is_relevant(&main, None, &event(own.join(name))));
+            assert!(event_is_relevant(
+                &linked_root,
+                Some(&metadata),
+                &event(own.join(name))
+            ));
+            assert!(!event_is_relevant(
+                &linked_root,
+                Some(&metadata),
+                &event(sibling.join(name))
+            ));
+            assert!(event_is_relevant(&main, None, &event(common.join(name))));
+            // A linked checkout must still observe shared metadata and
+            // conservatively retain direct common-directory notifications.
+            assert!(event_is_relevant(
+                &linked_root,
+                Some(&metadata),
+                &event(common.join(name))
+            ));
+        }
+        assert!(!event_is_relevant(
+            &main,
+            None,
+            &event(sibling.join("logs/HEAD"))
+        ));
+        assert!(!event_is_relevant(
+            &linked_root,
+            Some(&metadata),
+            &event(own.join("logs/HEAD"))
+        ));
+        for path in [
+            common.join("refs/heads/feature"),
+            common.join("refs/stash"),
+            common.join("packed-refs"),
+            common.join("config"),
+            common.join("info/exclude"),
+            common.join("info/attributes"),
+            own.join("info/sparse-checkout"),
+            sibling.clone(),
+            sibling.join("gitdir"),
+            sibling.join("commondir"),
+            sibling.join("refs/worktree/private"),
+            sibling.join("index/nested"),
+        ] {
+            assert!(
+                event_is_relevant(&main, None, &event(path.clone())),
+                "{path:?}"
+            );
+            assert!(
+                event_is_relevant(&linked_root, Some(&metadata), &event(path.clone())),
+                "{path:?}"
+            );
+        }
+        // A rename with a relevant destination must be retained, even if
+        // the other path alone would have been filtered.
+        let rename = Event::new(EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Both,
+        )))
+        .add_path(sibling.join("index.lock"))
+        .add_path(common.join("index"));
+        assert!(event_is_relevant(&main, None, &rename));
+
+        // An external Git directory without commondir owns its HEAD/index.
+        let external = LinkedGitMetadata {
+            private_dir: common.clone(),
+            common_dir: common.clone(),
+        };
+        assert!(event_is_relevant(
+            &linked_root,
+            Some(&external),
+            &event(common.join("index"))
+        ));
+    }
+
+    #[test]
+    fn event_storm_filters_private_index_traffic_and_reads_not_real_changes() {
+        let root = PathBuf::from("repo");
+        let mut accepted = 0;
+        let mut submitted = 0;
+        let mut route = |event| {
+            submitted += 1;
+            if event_is_relevant(&root, None, &event) {
+                accepted += 1;
+                true
+            } else {
+                false
+            }
+        };
+        // Each event previously passed the path-only filter, including
+        // reads caused by Git/status or editor activity.
+        for i in 0..100 {
+            for _ in 0..10 {
+                for name in ["index", "index.lock", "HEAD", "HEAD.lock"] {
+                    assert!(!route(
+                        Event::new(EventKind::Any)
+                            .add_path(root.join(format!(".git/worktrees/wt-{i}/{name}")))
+                    ));
+                }
+                assert!(!route(
+                    Event::new(EventKind::Access(AccessKind::Read))
+                        .add_path(root.join(format!("src/file-{i}.rs")))
+                ));
+            }
+        }
+        // Preserve all 100 real edits plus a shared ref update, ignore-rule
+        // update, and a rescan of an otherwise excluded directory.
+        for i in 0..100 {
+            assert!(route(
+                Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(root.join(format!("src/file-{i}.rs")))
+            ));
+        }
+        assert!(route(
+            Event::new(EventKind::Any).add_path(root.join(".git/refs/heads/main"))
+        ));
+        assert!(route(
+            Event::new(EventKind::Any).add_path(root.join(".git/info/exclude"))
+        ));
+        assert!(route(
+            Event::new(EventKind::Other)
+                .add_path(root.join("build"))
+                .set_flag(notify::event::Flag::Rescan)
+        ));
+        assert_eq!(submitted, 5103);
+        assert_eq!(accepted, 103);
+        // Old policy accepted 5101 events (the final info/rescan were
+        // incorrectly suppressed). Count admitted events, not full scans.
+        println!("Source Control routing fixture: old accepted 5101, new accepted {accepted}, submitted {submitted}");
+    }
+
+    #[test]
     fn linked_worktree_metadata_resolves_private_and_shared_git_dirs() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("checkout");
@@ -337,6 +554,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&private).unwrap();
         std::fs::create_dir_all(common.join("refs")).unwrap();
+        std::fs::create_dir_all(common.join("info")).unwrap();
         std::fs::write(
             root.join(".git"),
             "gitdir: ../repo/.git/worktrees/checkout\n",
@@ -360,29 +578,47 @@ mod tests {
             watch_linked_git_metadata(&mut watcher, &metadata).unwrap();
             watcher
         };
-        std::fs::write(private.join("index"), b"new index").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(4);
-        let mut observed = false;
-        while Instant::now() < deadline {
+        let main_root = common.parent().unwrap();
+        // Real OS notification delivery, including info/exclude outside
+        // the checkout root. The index is relevant only to its owner.
+        let index_path = metadata.private_dir.join("index");
+        let info_path = metadata.common_dir.join("info/exclude");
+        let ref_path = metadata.common_dir.join("refs/test-ref");
+        let main_root = dunce::canonicalize(main_root).unwrap();
+        std::fs::write(&index_path, b"new index").unwrap();
+        std::fs::write(&info_path, b"ignored.txt\n").unwrap();
+        std::fs::write(&ref_path, b"ref update").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut observed_index = false;
+        let mut observed_info = false;
+        let mut observed_ref = false;
+        while Instant::now() < deadline && !(observed_index && observed_info && observed_ref) {
             let timeout = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(timeout) {
-                Ok(event)
-                    if event
-                        .paths
-                        .iter()
-                        .any(|path| path == &private.join("index")) =>
-                {
-                    observed = true;
-                    break;
+                Ok(event) => {
+                    for path in &event.paths {
+                        if path == &index_path {
+                            observed_index = true;
+                            assert!(!event_is_relevant(
+                                &main_root,
+                                None,
+                                &Event::new(event.kind).add_path(path.clone()),
+                            ));
+                        }
+                        if path == &info_path {
+                            observed_info = true;
+                        }
+                        if path == &ref_path {
+                            observed_ref = true;
+                        }
+                    }
                 }
-                Ok(_) => {}
                 Err(_) => break,
             }
         }
-        assert!(
-            observed,
-            "linked worktree index did not emit a filesystem event"
-        );
+        assert!(observed_index, "linked worktree index notification missing");
+        assert!(observed_info, "shared info/exclude notification missing");
+        assert!(observed_ref, "shared refs notification missing");
     }
     #[test]
     fn coalesces_a_burst_into_one_signal() {
