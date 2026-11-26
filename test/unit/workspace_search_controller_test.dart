@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 part 'workspace_search_controller_cancellation_cases.dart';
+part 'workspace_search_controller_progress_cases.dart';
 
 void main() {
   test('whitespace-only query counts as searchable', () async {
@@ -50,6 +51,62 @@ void main() {
   });
 
   _registerWorkspaceSearchCancellationTests();
+  _registerWorkspaceSearchProgressTests();
+
+  testWidgets('selective literal debounce is 120 ms and replaces old timer', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceSearchService();
+    final container = ProviderContainer(
+      overrides: [workspaceSearchServiceProvider.overrideWithValue(service)],
+    );
+    addTearDown(container.dispose);
+    final provider = workspaceSearchControllerProvider('workspace-1');
+    final controller = container.read(provider.notifier);
+
+    controller.setQuery('/workspace', 'nee');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(service.searchedQueries, isEmpty);
+    controller.setQuery('/workspace', 'needle');
+    await tester.pump(const Duration(milliseconds: 119));
+    expect(service.searchedQueries, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(service.searchedQueries, ['needle']);
+    expect(container.read(provider).result, isNotNull);
+  });
+
+  testWidgets('short, regex and replacement queries keep 250 ms debounce', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceSearchService();
+    final container = ProviderContainer(
+      overrides: [workspaceSearchServiceProvider.overrideWithValue(service)],
+    );
+    addTearDown(container.dispose);
+    final controller = container.read(
+      workspaceSearchControllerProvider('workspace-1').notifier,
+    );
+
+    controller.setQuery('/workspace', 'n');
+    await tester.pump(const Duration(milliseconds: 249));
+    expect(service.searchedQueries, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(service.searchedQueries, ['n']);
+
+    controller.setQuery('/workspace', 'needle');
+    controller.toggleUseRegex('/workspace');
+    await tester.pump(const Duration(milliseconds: 249));
+    expect(service.searchedQueries, ['n']);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(service.searchedQueries, ['n', 'needle']);
+
+    controller.toggleUseRegex('/workspace');
+    controller.setReplacement('/workspace', 'replacement');
+    await tester.pump(const Duration(milliseconds: 249));
+    expect(service.previewCalls, 0);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(service.previewCalls, 1);
+  });
 
   test('toggle all files collapsed collapses every result file', () async {
     final service = _FakeWorkspaceSearchService(result: _multiFileSearchResult);
@@ -325,12 +382,15 @@ class _FakeWorkspaceSearchService._(final native.WorkspaceSearchResult _result)
   new({native.WorkspaceSearchResult result = _searchResult}) : this._(result);
 
   int replaceCalls = 0;
+  final List<String> searchedQueries = <String>[];
+  int previewCalls = 0;
 
   @override
   Future<native.WorkspaceSearchResult> search({
     required native.WorkspaceSearchOptions options,
     required String requestId,
   }) async {
+    searchedQueries.add(options.query);
     return _result;
   }
 
@@ -339,6 +399,7 @@ class _FakeWorkspaceSearchService._(final native.WorkspaceSearchResult _result)
     required native.WorkspaceReplaceOptions options,
     required String requestId,
   }) async {
+    previewCalls += 1;
     return native.WorkspaceReplacePreview(
       result: _result,
       replacement: options.replacement,

@@ -275,6 +275,101 @@ void _registerWorkspaceExplorerWatchTests() {
     expect(service.listChildrenCalls.length, directoryReadsBefore);
   });
 
+  testWidgets(
+    'verified modifications defer index rebuild but keep directory refresh',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _file('main.dart'),
+        ];
+      await _pumpExplorer(tester, service);
+      final baselineStart = service.quickOpenRefreshRequests.length;
+      // Matched legacy producer: identical event cadence with no hints.
+      for (var index = 0; index < 120; index++) {
+        service.emitWatchBatch([''], changedRelativePaths: ['main.dart']);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pump();
+      final baselineBuilds =
+          service.quickOpenRefreshRequests.length - baselineStart;
+      expect(baselineBuilds, greaterThan(1));
+      final before = service.quickOpenRefreshRequests.length;
+      final readsBefore = service.listChildrenCalls.length;
+      for (var index = 0; index < 120; index++) {
+        service.emitWatchBatch(
+          [''],
+          changedRelativePaths: ['main.dart'],
+          deferredQuickOpenPaths: ['main.dart'],
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      expect(service.listChildrenCalls.length, greaterThan(readsBefore));
+      expect(
+        service.quickOpenRefreshRequests.length,
+        before,
+        reason: '4.8 seconds of verified edits should not repeatedly rebuild',
+      );
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pump();
+      expect(
+        service.quickOpenRefreshRequests.length,
+        before + 1,
+        reason: 'five second maximum wait prevents indefinite stale index',
+      );
+      await tester.pump(const Duration(seconds: 3));
+      expect(service.quickOpenRefreshRequests.length, before + 1);
+      debugPrint(
+        'QUICK_OPEN_WATCH_BURST events=120 prompt=$baselineBuilds deferred=1',
+      );
+    },
+  );
+
+  testWidgets('structural event supersedes a deferred modification', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('main.dart'),
+      ];
+    await _pumpExplorer(tester, service);
+    final before = service.quickOpenRefreshRequests.length;
+    service.emitWatchBatch(
+      [],
+      changedRelativePaths: ['main.dart'],
+      deferredQuickOpenPaths: ['main.dart'],
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(service.quickOpenRefreshRequests.length, before);
+    service.emitWatchBatch(
+      [],
+      changedRelativePaths: ['main.dart', 'new.dart'],
+      deferredQuickOpenPaths: ['main.dart'],
+    );
+    await _pumpWatchedRefresh(tester);
+    expect(service.quickOpenRefreshRequests.length, before + 1);
+    await tester.pump(const Duration(seconds: 6));
+    expect(
+      service.quickOpenRefreshRequests.length,
+      before + 1,
+      reason: 'prompt scan consumes pending deferred scan',
+    );
+    service.emitWatchBatch(
+      [''],
+      changedRelativePaths: [''],
+      deferredQuickOpenPaths: [],
+    );
+    await _pumpWatchedRefresh(tester);
+    expect(
+      service.quickOpenRefreshRequests.length,
+      before + 2,
+      reason: 'rescan always prompt',
+    );
+  });
+
   testWidgets('Quick Open refreshes during continuous watch notifications', (
     tester,
   ) async {

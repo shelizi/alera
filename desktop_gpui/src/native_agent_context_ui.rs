@@ -3,8 +3,16 @@
 //! untrusted status-only sidecar text is parsed inside this UI component.
 use super::*;
 use alera_gpui_desktop::terminal::AgentContextOverview;
+use alera_gpui_desktop::visual_tokens::ACCENT;
 
-pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement {
+pub(super) fn panel(
+    context: Option<&AgentContextOverview>,
+    expanded: &HashSet<String>,
+    selection: Option<&(String, String, String, String)>,
+    pending: &HashSet<String>,
+    feedback: Option<&str>,
+    cx: &mut Context<Workbench>,
+) -> gpui::AnyElement {
     let body =
         div()
             .id("agent-context-overview-scroll")
@@ -24,7 +32,7 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
                     .child("Agent Context"),
             )
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Overall goal follows task changes. Reports are Agent excerpts or AI summaries, not independently verified results.",
+                "AI summaries take precedence. Original replies are shown when no summary is available. Reports are not independently verified.",
             ));
 
     let Some(context) = context else {
@@ -44,13 +52,37 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
         context.goal.clone()
     };
     let progress = if context.progress.is_empty() {
-        "Waiting for an Agent progress report".to_owned()
+        "Waiting for an Agent work report".to_owned()
     } else {
         context.progress.clone()
     };
+    let latest = context.timeline.iter().find(|event| event.kind == "report");
+    let overall = if context.overall_summary.is_empty() {
+        div().text_xs().text_color(rgb(MUTED)).child("No cumulative summary yet. Generate from retained reports.").into_any_element()
+    } else {
+        summary_text("overall".to_owned(), context.overall_summary.clone(), true, expanded, cx)
+    };
+    let mut overall_body = div().flex().flex_col().gap_1().child(overall);
+    if latest.is_some() {
+        overall_body = overall_body.child(summary_action("overall", selection, None, !context.overall_summary.is_empty(), pending, cx));
+    }
+    let latest_body = if context.progress.is_empty() {
+        div().text_sm().child(progress).into_any_element()
+    } else {
+        summary_text("latest".to_owned(), progress, context.is_summary, expanded, cx)
+    };
+    let mut latest_body = div().flex().flex_col().gap_1().child(latest_body);
+    if let Some(event) = latest {
+        latest_body = latest_body.child(summary_action("latest", selection, Some(&event.at), context.is_summary, pending, cx));
+    }
     let mut body = body
-        .child(section("OVERALL OBJECTIVE", goal))
-        .child(section("LATEST AGENT REPORT", progress))
+        .child(section("OVERALL OBJECTIVE", div().text_sm().child(goal).into_any_element()))
+        .when(latest.is_some() || !context.overall_summary.is_empty(), |body| body.child(section("CUMULATIVE PROGRESS SUMMARY", overall_body.into_any_element())))
+        .child(section(if context.is_summary { "LATEST AGENT REPORT · AI SUMMARY" } else if context.has_report { "LATEST AGENT REPORT · ORIGINAL REPLY" } else { "LATEST AGENT REPORT" }, latest_body.into_any_element()))
+        .when_some(feedback.map(str::to_owned), |body, message| body.child(div().text_xs().text_color(rgb(MUTED)).child(message)))
+        .when(!context.is_summary || context.timeline.iter().any(|event| event.kind == "report" && !event.is_summary), |body| body.child(
+            div().text_xs().text_color(rgb(MUTED)).child("Enable automatic summaries in Settings → AI Assist → Agent Work Report → Auto-Summarize Agent Work Reports. Generated summaries appear automatically."),
+        ))
         .child(
             div()
                 .text_xs()
@@ -69,7 +101,8 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
             let label = match event.kind.as_str() {
                 "goal" => "Goal",
                 "instruction" => "Follow-up instruction",
-                "report" => "Agent report",
+                "report" if event.is_summary => "Agent report · AI summary",
+                "report" => "Agent report · original reply",
                 _ => "Update",
             };
             body = body.child(
@@ -101,14 +134,86 @@ pub(super) fn panel(context: Option<&AgentContextOverview>) -> gpui::AnyElement 
                                     .child(event.at.clone()),
                             ),
                     )
-                    .child(div().min_w_0().text_sm().child(event.text.clone())),
+                    .child(if event.kind == "report" {
+                        if event.text.is_empty() {
+                            div().text_xs().text_color(rgb(MUTED)).child("Report received · no summary").into_any_element()
+                        } else {
+                            summary_text(format!("event-{index}-{}", event.at), event.text.clone(), event.is_summary, expanded, cx)
+                        }
+                    } else {
+                        div().min_w_0().text_sm().child(event.text.clone()).into_any_element()
+                    })
+                    .when(event.kind == "report", |row| row.child(summary_action(&format!("event-{index}"), selection, Some(&event.at), event.is_summary, pending, cx))),
             );
         }
     }
     body.into_any_element()
 }
 
-fn section(title: &'static str, value: String) -> gpui::AnyElement {
+fn summary_action(
+    id: &str,
+    selection: Option<&(String, String, String, String)>,
+    report_at: Option<&str>,
+    exists: bool,
+    pending: &HashSet<String>,
+    cx: &mut Context<Workbench>,
+) -> gpui::AnyElement {
+    let Some(selection) = selection.filter(|identity| !identity.3.is_empty()).cloned() else {
+        return div().into_any_element();
+    };
+    let report_at = report_at.map(str::to_owned);
+    let key = report_at.clone().unwrap_or_else(|| "overall".into());
+    let busy = pending.contains(&key);
+    let button = div()
+        .id(gpui::SharedString::from(format!("agent-context-generate-{id}")))
+        .text_xs().text_color(rgb(if busy { MUTED } else { ACCENT }))
+        .child(if busy { "Submitting…" } else if exists { "Regenerate summary" } else { "Generate summary" });
+    if busy {
+        button.into_any_element()
+    } else {
+        button.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
+            this.generate_context_summary(selection.clone(), report_at.clone(), cx);
+        })).into_any_element()
+    }
+}
+
+impl Workbench {
+    fn generate_context_summary(&mut self, identity: (String, String, String, String), report_at: Option<String>, cx: &mut Context<Self>) {
+        if self.agent_context_selection.as_ref() != Some(&identity) || self.terminals.session_list_is_stale() {
+            self.agent_context_feedback = Some("Agent identity changed; refresh the Host inventory".into());
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_context_feedback = Some("Connect the existing Runtime Host to generate a summary".into());
+            cx.notify();
+            return;
+        };
+        let key = report_at.clone().unwrap_or_else(|| "overall".into());
+        if !self.agent_context_pending.insert(key.clone()) { return; }
+        self.agent_context_feedback = Some("Submitting summary request…".into());
+        cx.notify();
+        let request_identity = identity.clone();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.summarize_agent_context(&request_identity.1, &request_identity.2,
+                    &request_identity.0, &request_identity.3, report_at.as_deref())
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.agent_context_selection.as_ref() != Some(&identity) { return; }
+                view.agent_context_pending.remove(&key);
+                view.agent_context_feedback = Some(match result {
+                    Ok(()) => "Summary queued; the report updates when generation completes".into(),
+                    Err(error) => format!("Could not queue summary: {error}"),
+                });
+                view.refresh_terminals(cx);
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+}
+
+fn section(title: &'static str, value: gpui::AnyElement) -> gpui::AnyElement {
     div()
         .min_w_0()
         .flex()
@@ -124,8 +229,47 @@ fn section(title: &'static str, value: String) -> gpui::AnyElement {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(title),
         )
-        .child(div().min_w_0().text_sm().child(value))
+        .child(value)
         .into_any_element()
+}
+
+/// Collapse long generated summaries and original report excerpts; never label raw text as a summary.
+fn summary_text(
+    id: String,
+    value: String,
+    is_summary: bool,
+    expanded: &HashSet<String>,
+    cx: &mut Context<Workbench>,
+) -> gpui::AnyElement {
+    let long = value.chars().count() > 120;
+    let key = format!("{id}:{is_summary}:{value}");
+    let open = expanded.contains(&key);
+    let text = if long && !open {
+        format!("{}…", value.chars().take(117).collect::<String>())
+    } else {
+        value
+    };
+    let mut body = div().min_w_0().flex().flex_col().gap_1();
+    if long {
+        body = body.child(
+            div()
+                .id(gpui::SharedString::from(format!("agent-context-toggle-{id}")))
+                .text_xs()
+                .text_color(rgb(ACCENT))
+                .cursor_pointer()
+                .child(match (is_summary, open) { (true, true) => "Collapse summary", (true, false) => "Expand summary", (false, true) => "Collapse reply", (false, false) => "Expand reply" })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.agent_context_expanded.remove(&key) {
+                        if this.agent_context_expanded.len() >= 32 {
+                            this.agent_context_expanded.clear();
+                        }
+                        this.agent_context_expanded.insert(key.clone());
+                    }
+                    cx.notify();
+                })),
+        );
+    }
+    body.child(div().min_w_0().text_sm().child(text)).into_any_element()
 }
 
 /// Sidebar summaries are opt-in. Missing, stale, or non-boolean Host values

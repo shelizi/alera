@@ -5,11 +5,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod compile;
+mod content_cache;
 mod engine;
 mod globs;
 mod line_ranges;
+mod literal_index;
 mod paths;
 mod preview;
+mod progress;
 mod replace;
 
 #[cfg(test)]
@@ -69,6 +72,17 @@ pub struct WorkspaceSearchResult {
     pub files: Vec<WorkspaceSearchFileResult>,
     pub total_matches: u32,
     pub truncated: bool,
+}
+
+/// A delta from the current read-only search, not a complete snapshot.
+/// A successful terminal batch may have zero new files.
+#[derive(Debug)]
+pub struct WorkspaceSearchBatch {
+    pub files: Vec<WorkspaceSearchFileResult>,
+    pub total_matches: u32,
+    pub truncated: bool,
+    pub done: bool,
+    pub error: Option<WorkspaceSearchError>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,7 +159,7 @@ pub fn search_workspace(
     options: WorkspaceSearchOptions,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     let compiled = compile::compile_search(&options)?;
-    engine::run_search(&compiled, false, None)
+    engine::run_readonly_search(&compiled, None)
 }
 
 pub fn search_workspace_cancelable(
@@ -154,7 +168,34 @@ pub fn search_workspace_cancelable(
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     let cancellation = SearchCancellation::begin(request_id);
     let compiled = compile::compile_search(&options)?;
-    engine::run_search(&compiled, false, Some(&cancellation.flag))
+    engine::run_readonly_search(&compiled, Some(&cancellation.flag))
+}
+
+/// Streams read-only search results in original scan order. Replacement
+/// operations deliberately retain the existing complete, fresh result API.
+pub fn search_workspace_stream(
+    options: WorkspaceSearchOptions,
+    request_id: String,
+    sink: crate::frb_generated::StreamSink<WorkspaceSearchBatch>,
+) {
+    let cancellation = SearchCancellation::begin(request_id);
+    let result = progress::run(&options, &cancellation.flag, |batch| {
+        sink.add(batch).map_err(|_| {
+            WorkspaceSearchError::new(
+                WorkspaceSearchErrorKind::Cancelled,
+                "search consumer closed",
+            )
+        })
+    });
+    if let Err(error) = result {
+        let _ = sink.add(WorkspaceSearchBatch {
+            files: Vec::new(),
+            total_matches: 0,
+            truncated: false,
+            done: true,
+            error: Some(error),
+        });
+    }
 }
 
 pub fn preview_workspace_replace(

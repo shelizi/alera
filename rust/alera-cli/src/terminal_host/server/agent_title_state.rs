@@ -14,6 +14,8 @@ type ContextOverview = crate::terminal_host::orchestration::agent_context::Agent
 #[serde(rename_all = "camelCase")]
 pub(super) struct RetiredAgentContext {
     pub overview: ContextOverview,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub report_sources: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_transcript_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -45,6 +47,9 @@ pub(super) struct AgentTitleState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_overview:
         Option<crate::terminal_host::orchestration::agent_context::AgentContextOverview>,
+    /// Bounded original reports for exact historical regeneration; private, never projected to UI.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub report_sources: BTreeMap<String, String>,
 }
 
 impl AgentTitleState {
@@ -64,6 +69,7 @@ impl AgentTitleState {
             attempted: false,
             closed: false,
             context_overview: None,
+            report_sources: BTreeMap::new(),
         }
     }
 
@@ -107,12 +113,12 @@ impl AgentTitleState {
             if let (Some(old_agent), Some(old_id)) = (&self.agent, &self.native_id) {
                 let key = format!("{old_agent}:{old_id}");
                 prompts.insert(key.clone(), self.initial_prompt.clone());
-                if let Some(mut overview) = self.context_overview.take() {
-                    overview.report_summary = None;
+                if let Some(overview) = self.context_overview.take() {
                     contexts.insert(
                         key.clone(),
                         RetiredAgentContext {
                             overview,
+                            report_sources: std::mem::take(&mut self.report_sources),
                             codex_transcript_path: self.codex_transcript_path.clone(),
                             agy_transcript_path: self.agy_transcript_path.clone(),
                         },
@@ -175,6 +181,7 @@ impl AgentTitleState {
         self.observe(agent, native_id, "", cursor);
         if let Some(archived) = archived {
             self.context_overview = Some(archived.overview);
+            self.report_sources = archived.report_sources;
             self.codex_transcript_path = archived.codex_transcript_path;
             self.agy_transcript_path = archived.agy_transcript_path;
         }
@@ -277,7 +284,7 @@ mod tests {
         let context = restored.context_overview.unwrap();
         assert_eq!(context.goal, "Task 18");
         assert_eq!(context.progress, "Report 18");
-        assert!(context.report_summary.is_none());
+        assert_eq!(context.report_summary.as_deref(), Some("Transient AI summary"));
         assert_eq!(
             restored.agy_transcript_path.as_deref(),
             Some("account-A/18/transcript.jsonl")

@@ -29,6 +29,11 @@ pub(super) fn encode_workspace_editor_text_for_save(
     if current_display_content == original_display_content {
         return original_raw_content.to_string();
     }
+    // With identical raw/display text there are no hidden tabs to restore.
+    // Avoid building three line-index vectors for the common spaces-only file.
+    if original_raw_content == original_display_content {
+        return current_display_content.to_string();
+    }
 
     let original_raw_segments = split_line_segments(original_raw_content);
     let original_display_segments = split_line_segments(original_display_content);
@@ -73,23 +78,32 @@ pub(super) fn encode_workspace_editor_text_for_save(
 }
 
 fn expand_workspace_editor_tabs(text: &str, tab_size: i32) -> String {
+    // Most files are space-indented. Copy them as a single UTF-8 buffer
+    // rather than decoding and appending every character.
+    if !text.as_bytes().contains(&b'\t') {
+        return text.to_owned();
+    }
     let effective_tab_size = normalize_workspace_editor_tab_size(tab_size);
     let mut expanded = String::with_capacity(text.len());
     let mut column = 0usize;
-    for character in text.chars() {
-        if character == '\t' {
-            let spaces = effective_tab_size - (column % effective_tab_size);
-            expanded.extend(std::iter::repeat_n(' ', spaces));
-            column += spaces;
+    let mut start = 0;
+    for (index, _) in text.match_indices('\t') {
+        let segment = &text[start..index];
+        expanded.push_str(segment);
+        // Only the characters after the last line break affect a tab stop.
+        // Preserve scalar-value columns (including non-BMP and combining
+        // characters), and the original CR, LF and CRLF bytes.
+        if let Some(last_break) = segment.rfind(['\r', '\n']) {
+            column = segment[last_break + 1..].chars().count();
         } else {
-            expanded.push(character);
-            if character == '\n' || character == '\r' {
-                column = 0;
-            } else {
-                column += 1;
-            }
+            column += segment.chars().count();
         }
+        let spaces = effective_tab_size - (column % effective_tab_size);
+        expanded.extend(std::iter::repeat_n(' ', spaces));
+        column += spaces;
+        start = index + 1;
     }
+    expanded.push_str(&text[start..]);
     expanded
 }
 
@@ -124,6 +138,100 @@ fn split_line_segments(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_expand(text: &str, tab_size: i32) -> String {
+        let size = normalize_workspace_editor_tab_size(tab_size);
+        let mut expanded = String::with_capacity(text.len());
+        let mut column = 0;
+        for character in text.chars() {
+            if character == '\t' {
+                let spaces = size - column % size;
+                expanded.extend(std::iter::repeat_n(' ', spaces));
+                column += spaces;
+            } else {
+                expanded.push(character);
+                if character == '\r' || character == '\n' {
+                    column = 0;
+                } else {
+                    column += 1;
+                }
+            }
+        }
+        expanded
+    }
+
+    #[test]
+    fn segment_expansion_matches_original_for_unicode_and_all_line_breaks() {
+        let parts = ["", "a", "中文", "🙂", "e\u{301}", "\t", "\r", "\n", "\r\n"];
+        for a in parts {
+            for b in parts {
+                for c in parts {
+                    let text = format!("{a}{b}{c}\t{a}");
+                    for tab in -1..=9 {
+                        assert_eq!(
+                            expand_workspace_editor_tabs(&text, tab),
+                            reference_expand(&text, tab)
+                        );
+                    }
+                }
+            }
+        }
+        let no_tabs = "中文 🙂\r\n  code\rfinal";
+        assert_eq!(expand_workspace_editor_tabs(no_tabs, 4), no_tabs);
+        assert_eq!(
+            encode_workspace_editor_text_for_save("edited\r\n", Some(no_tabs), Some(no_tabs)),
+            "edited\r\n"
+        );
+    }
+
+    #[test]
+    #[ignore = "repeatable editor expansion microbenchmark"]
+    fn compare_editor_tab_expansion() {
+        use std::{hint::black_box, time::Instant};
+        for (name, text) in [
+            ("spaces", "    let value = 中文🙂;\r\n".repeat(40000)),
+            (
+                "sparse_tabs",
+                format!("{}\tend\n", "    let value = 中文🙂;\r\n".repeat(40000)),
+            ),
+            ("dense_tabs", "\tlet\tvalue = 中文🙂;\r\n".repeat(40000)),
+        ] {
+            assert_eq!(
+                expand_workspace_editor_tabs(&text, 4),
+                reference_expand(&text, 4)
+            );
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            let run = |reference: bool| {
+                let start = Instant::now();
+                for _ in 0..10 {
+                    black_box(if reference {
+                        reference_expand(black_box(&text), 4)
+                    } else {
+                        expand_workspace_editor_tabs(black_box(&text), 4)
+                    });
+                }
+                start.elapsed().as_secs_f64() * 100.0
+            };
+            for i in 0..7 {
+                if i % 2 == 0 {
+                    old.push(run(true));
+                    new.push(run(false));
+                } else {
+                    new.push(run(false));
+                    old.push(run(true));
+                }
+            }
+            old.sort_by(f64::total_cmp);
+            new.sort_by(f64::total_cmp);
+            println!(
+                "EDITOR_TABS mode={name} bytes={} old_ms={:.6} new_ms={:.6}",
+                text.len(),
+                old[3],
+                new[3]
+            );
+        }
+    }
 
     #[test]
     fn expands_workspace_editor_tabs_to_columns() {

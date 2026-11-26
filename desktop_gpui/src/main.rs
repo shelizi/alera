@@ -864,6 +864,10 @@ struct ProjectCopyRowInputs {
 
 struct Workbench {
     model: WorkbenchModel,
+    agent_context_selection: Option<(String, String, String, String)>,
+    agent_context_expanded: HashSet<String>,
+    agent_context_pending: HashSet<String>,
+    agent_context_feedback: Option<String>,
     center_view: CenterView,
     right_sidebar_view: RightSidebarView,
     projects_sidebar_collapsed: bool,
@@ -13056,7 +13060,7 @@ impl Render for Workbench {
         let agent_inventory_current = !self.terminals.session_list_is_stale();
         // Full identity checks prevent one pane or recycled Host handle from
         // showing another Agent's private task context.
-        let agent_context_overview = self
+        let agent_context_selected = self
             .mixed_panes
             .active_in(self.mixed_panes.focused_pane())
             .and_then(|identity| match identity {
@@ -13071,7 +13075,18 @@ impl Render for Workbench {
                 }
                 _ => None,
             })
-            .and_then(|session| session.agent_context.clone());
+            .and_then(|session| session.agent_context.as_ref().map(|context| {
+                ((session.handle.clone(), session.workspace_id.clone(), session.tab_id.clone(),
+                    context.conversation_id.clone()), context.clone())
+            }));
+        let selection = agent_context_selected.as_ref().map(|(identity, _)| identity.clone());
+        if self.agent_context_selection != selection {
+            self.agent_context_selection = selection;
+            self.agent_context_expanded.clear();
+            self.agent_context_pending.clear();
+            self.agent_context_feedback = None;
+        }
+        let agent_context_overview = agent_context_selected.map(|(_, overview)| overview);
         let agent_state_summary =
             AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current);
         let agent_ui_locale = self.settings_menu_locale;
@@ -14044,7 +14059,7 @@ impl Render for Workbench {
                                             // This sidebar is for the selected Agent's
                                             // context only. The global Kanban Dashboard
                                             // is always rendered in the central workspace.
-                                            .child(native_agent_context_ui::panel(agent_context_overview.as_ref())),
+                                            .child(native_agent_context_ui::panel(agent_context_overview.as_ref(), &self.agent_context_expanded, self.agent_context_selection.as_ref(), &self.agent_context_pending, self.agent_context_feedback.as_deref(), cx)),
                                     ),
                             )
                             .child(
@@ -18882,6 +18897,10 @@ fn main() {
                             explorer_delete_confirmed: false,
                             explorer_delete_pending: None,
                             model,
+                            agent_context_selection: None,
+                            agent_context_expanded: HashSet::new(),
+                            agent_context_pending: HashSet::new(),
+                            agent_context_feedback: None,
                             center_view: CenterView::Terminal,
                             right_sidebar_view: if native_settings.sidebar_layout.context_is_agent_context {
                                 RightSidebarView::AgentContext

@@ -68,6 +68,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_StreamSink_workspace_explorer_watch_batch_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<WorkspaceSearchBatch>
+  dco_decode_StreamSink_workspace_search_batch_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -202,6 +206,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceRequest dco_decode_box_autoadd_workspace_replace_request(
+    dynamic raw,
+  );
+
+  @protected
+  WorkspaceSearchError dco_decode_box_autoadd_workspace_search_error(
     dynamic raw,
   );
 
@@ -596,9 +605,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceSearchError? dco_decode_opt_box_autoadd_workspace_search_error(
+    dynamic raw,
+  );
+
+  @protected
   WorkspaceTextEncoding? dco_decode_opt_box_autoadd_workspace_text_encoding(
     dynamic raw,
   );
+
+  @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw);
 
   @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw);
@@ -720,6 +737,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceQuickOpenMatch dco_decode_workspace_quick_open_match(dynamic raw);
 
   @protected
+  WorkspaceQuickOpenRefresh dco_decode_workspace_quick_open_refresh(
+    dynamic raw,
+  );
+
+  @protected
   WorkspaceQuickOpenSession dco_decode_workspace_quick_open_session(
     dynamic raw,
   );
@@ -743,6 +765,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceResult dco_decode_workspace_replace_result(dynamic raw);
+
+  @protected
+  WorkspaceSearchBatch dco_decode_workspace_search_batch(dynamic raw);
 
   @protected
   WorkspaceSearchError dco_decode_workspace_search_error(dynamic raw);
@@ -798,6 +823,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RustStreamSink<WorkspaceExplorerWatchBatch>
   sse_decode_StreamSink_workspace_explorer_watch_batch_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<WorkspaceSearchBatch>
+  sse_decode_StreamSink_workspace_search_batch_Sse(
     SseDeserializer deserializer,
   );
 
@@ -970,6 +1001,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceRequest sse_decode_box_autoadd_workspace_replace_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceSearchError sse_decode_box_autoadd_workspace_search_error(
     SseDeserializer deserializer,
   );
 
@@ -1474,9 +1510,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceSearchError? sse_decode_opt_box_autoadd_workspace_search_error(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   WorkspaceTextEncoding? sse_decode_opt_box_autoadd_workspace_text_encoding(
     SseDeserializer deserializer,
   );
+
+  @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer);
 
   @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -1626,6 +1670,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceQuickOpenRefresh sse_decode_workspace_quick_open_refresh(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   WorkspaceQuickOpenSession sse_decode_workspace_quick_open_session(
     SseDeserializer deserializer,
   );
@@ -1657,6 +1706,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceResult sse_decode_workspace_replace_result(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceSearchBatch sse_decode_workspace_search_batch(
     SseDeserializer deserializer,
   );
 
@@ -1733,6 +1787,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_workspace_explorer_watch_batch_Sse(
     RustStreamSink<WorkspaceExplorerWatchBatch> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_workspace_search_batch_Sse(
+    RustStreamSink<WorkspaceSearchBatch> self,
     SseSerializer serializer,
   );
 
@@ -1940,6 +2000,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_workspace_replace_request(
     WorkspaceReplaceRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_workspace_search_error(
+    WorkspaceSearchError self,
     SseSerializer serializer,
   );
 
@@ -2571,10 +2637,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_workspace_search_error(
+    WorkspaceSearchError? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_workspace_text_encoding(
     WorkspaceTextEncoding? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_list_String(List<String>? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_list_prim_u_8_strict(
@@ -2763,6 +2838,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_workspace_quick_open_refresh(
+    WorkspaceQuickOpenRefresh self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_workspace_quick_open_session(
     WorkspaceQuickOpenSession self,
     SseSerializer serializer,
@@ -2801,6 +2882,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_workspace_replace_result(
     WorkspaceReplaceResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_search_batch(
+    WorkspaceSearchBatch self,
     SseSerializer serializer,
   );
 

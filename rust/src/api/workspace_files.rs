@@ -175,6 +175,10 @@ pub struct WorkspaceExplorerWatcherHandle {
 pub struct WorkspaceExplorerWatchBatch {
     pub directory_relative_paths: Vec<String>,
     pub changed_relative_paths: Vec<String>,
+    /// Verified existing ordinary-file modifications eligible for a bounded
+    /// deferred Quick Open reconciliation. All other changed paths retain
+    /// the prompt refresh policy. None means the producer has no hints.
+    pub deferred_quick_open_paths: Option<Vec<String>>,
     pub coalesced_event_count: u32,
 }
 
@@ -192,6 +196,13 @@ pub struct SourceControlWatchSignal {
 pub struct WorkspaceQuickOpenSession {
     pub id: String,
     pub indexed_file_count: u32,
+}
+
+/// An incremental refresh is provisional until a scheduled full scan.
+#[derive(Debug, Clone)]
+pub struct WorkspaceQuickOpenRefresh {
+    pub session: WorkspaceQuickOpenSession,
+    pub incremental: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +272,29 @@ pub fn start_workspace_quick_open_session(
     .map(|session| WorkspaceQuickOpenSession {
         id: session.id,
         indexed_file_count: session.indexed_file_count,
+    })
+    .map_err(shared_workspace_file_error)
+}
+
+pub fn refresh_workspace_quick_open_session(
+    workspace_path: String,
+    excluded_directories: Vec<String>,
+    previous: WorkspaceQuickOpenSession,
+) -> Result<WorkspaceQuickOpenRefresh, WorkspaceFileError> {
+    alera_core::workspace_files::refresh_workspace_quick_open_session(
+        workspace_path,
+        excluded_directories,
+        alera_core::workspace_files::WorkspaceQuickOpenSession {
+            id: previous.id,
+            indexed_file_count: previous.indexed_file_count,
+        },
+    )
+    .map(|(session, incremental)| WorkspaceQuickOpenRefresh {
+        session: WorkspaceQuickOpenSession {
+            id: session.id,
+            indexed_file_count: session.indexed_file_count,
+        },
+        incremental,
     })
     .map_err(shared_workspace_file_error)
 }

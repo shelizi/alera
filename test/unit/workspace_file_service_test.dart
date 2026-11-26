@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
@@ -102,6 +104,153 @@ void main() {
   });
 
   testWidgets(
+    'on-demand filters reuse queued and recently reconciled snapshots',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()..files.add('main.dart');
+      addTearDown(service.dispose);
+      const path = '/repo';
+      await service.searchQuickOpenCached(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'main',
+        includeGitignored: false,
+      );
+      service.files.add('new-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+      );
+      // A filter request must not postpone a queued immediate reconciliation.
+      for (var n = 0; n < 20; n++) {
+        service.scheduleQuickOpenFilterRefresh(workspacePath: path);
+      }
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.startedSessionIds, ['index-1', 'index-2']);
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: path,
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        ),
+        hasLength(2),
+      );
+      for (var n = 0; n < 20; n++) {
+        service.scheduleQuickOpenFilterRefresh(workspacePath: path);
+      }
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(
+        service.startedSessionIds,
+        hasLength(2),
+        reason: 'successful reconciliation is fresh',
+      );
+      // An explicit/watcher refresh still takes precedence over freshness.
+      service.files.add('another-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.startedSessionIds, hasLength(3));
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: path,
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        ),
+        hasLength(3),
+      );
+    },
+  );
+
+  testWidgets(
+    'provisional incremental index is fully reconciled without further events',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()
+        ..files.add('src/main.dart');
+      addTearDown(service.dispose);
+      const path = '/repo';
+      Future<List<native.WorkspaceQuickOpenMatch>> search() =>
+          service.searchQuickOpenCached(
+            workspacePath: path,
+            excludedDirectories: const [],
+            query: 'main',
+            includeGitignored: false,
+          );
+      await search();
+      service.files.add('src/new-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+        allowIncremental: true,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.incrementalPreviousIds, ['index-1']);
+      expect(await search(), hasLength(2));
+      // Another delta does not postpone the original full deadline.
+      await tester.pump(const Duration(seconds: 3));
+      service.files.add('src/another-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+        allowIncremental: true,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.incrementalPreviousIds, ['index-1', 'index-2']);
+      expect(await search(), hasLength(3));
+      // Simulate a missed watcher notification: the scheduled full scan
+      // must discover it even when no subsequent event arrives.
+      service.files.add('other/missed-main.dart');
+      await tester.pump(const Duration(milliseconds: 2100));
+      await tester.pump();
+      expect(service.startedSessionIds, [
+        'index-1',
+        'index-2',
+        'index-3',
+        'index-4',
+      ]);
+      expect(service.incrementalPreviousIds, hasLength(2));
+      expect(await search(), hasLength(4));
+      await tester.pump(const Duration(seconds: 6));
+      expect(service.startedSessionIds, hasLength(4));
+    },
+  );
+
+  testWidgets('queued full refresh cannot be replaced by watcher delta', (
+    tester,
+  ) async {
+    final service = _RefreshingQuickOpenFileService()
+      ..files.add('src/main.dart');
+    addTearDown(service.dispose);
+    const path = '/repo';
+    await service.searchQuickOpenCached(
+      workspacePath: path,
+      excludedDirectories: const [],
+      query: 'main',
+      includeGitignored: false,
+    );
+    service.scheduleQuickOpenRefresh(
+      workspacePath: path,
+      debounce: Duration.zero,
+    );
+    service.scheduleQuickOpenRefresh(
+      workspacePath: path,
+      debounce: const Duration(seconds: 3),
+      allowIncremental: true,
+    );
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(service.startedSessionIds, ['index-1', 'index-2']);
+    expect(service.incrementalPreviousIds, isEmpty);
+  });
+
+  testWidgets(
     'file-only and directory-enabled searches keep independent caches',
     (tester) async {
       final service = _RefreshingQuickOpenFileService()
@@ -156,6 +305,158 @@ void main() {
       expect(cachedFiles, hasLength(1));
       expect(cachedExplorer, hasLength(3));
       expect(service.startedSessionIds, hasLength(2));
+    },
+  );
+
+  testWidgets(
+    'quick open bounds query history and replays only current modes',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()
+        ..files.add('query-39.txt');
+      addTearDown(service.dispose);
+      Future<List<native.WorkspaceQuickOpenMatch>> search(
+        String query, {
+        bool directories = false,
+        bool ignored = false,
+      }) => service.searchQuickOpenCached(
+        workspacePath: '/repo',
+        excludedDirectories: const [],
+        query: query,
+        includeGitignored: ignored,
+        includeDirectories: directories,
+      );
+      for (var i = 0; i < 40; i++) {
+        await search('query-$i');
+      }
+      // Cache is bounded even for empty result sets.
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: '/repo',
+          excludedDirectories: const [],
+          query: 'query-0',
+          includeGitignored: false,
+        ),
+        isNull,
+      );
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: '/repo',
+          excludedDirectories: const [],
+          query: 'query-16',
+          includeGitignored: false,
+        ),
+        isNotNull,
+      );
+      final calls = service.includeDirectoriesRequests.length;
+      await search('query-39');
+      expect(
+        service.includeDirectoriesRequests.length,
+        calls,
+        reason: 'warm same-generation query',
+      );
+      await search('folder', directories: true);
+      await search('ignored', ignored: true);
+      await search('ignored-folder', directories: true, ignored: true);
+      final before = service.includeDirectoriesRequests.length;
+      service.files.add('query-39-new.txt');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: '/repo',
+        debounce: Duration.zero,
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(service.startedSessionIds, ['index-1', 'index-2']);
+      expect(service.includeDirectoriesRequests.length - before, 4);
+      expect((await search('query-39')).length, 2);
+      expect(
+        service.includeDirectoriesRequests.length - before,
+        4,
+        reason: 'refresh results are reused',
+      );
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: '/repo',
+          excludedDirectories: const [],
+          query: 'query-38',
+          includeGitignored: false,
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test('identical concurrent queries share a single native search', () async {
+    final service = _RefreshingQuickOpenFileService()..files.add('main.dart');
+    addTearDown(service.dispose);
+    Future<List<native.WorkspaceQuickOpenMatch>> search() =>
+        service.searchQuickOpenCached(
+          workspacePath: '/repo',
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        );
+    final first = search();
+    final second = search();
+    expect(identical(first, second), isTrue);
+    final results = await Future.wait([first, second, search()]);
+    expect(service.startedSessionIds, ['index-1']);
+    expect(service.includeDirectoriesRequests, [false]);
+    expect(results.every((r) => identical(r, results.first)), isTrue);
+  });
+
+  testWidgets('late query returns new-generation results after refresh', (
+    tester,
+  ) async {
+    final service = _DelayedSearchQuickOpenFileService()
+      ..files.add('old-main.dart');
+    addTearDown(service.dispose);
+    Future<List<native.WorkspaceQuickOpenMatch>> search() =>
+        service.searchQuickOpenCached(
+          workspacePath: '/repo',
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        );
+    final old = search();
+    await service.firstSearchStarted.future;
+    service.files
+      ..clear()
+      ..add('new-main.dart');
+    service.scheduleQuickOpenRefresh(
+      workspacePath: '/repo',
+      debounce: Duration.zero,
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    expect(service.startedSessionIds, ['index-1', 'index-2']);
+    final current = await search();
+    expect(current.single.relativePath, 'new-main.dart');
+    service.releaseFirst.complete();
+    expect((await old).single.relativePath, 'new-main.dart');
+    expect(
+      service.includeDirectoriesRequests.length,
+      2,
+      reason: 'old completion reuses new generation rather than issuing redundant native search',
+    );
+  });
+
+  test(
+    'disposal retires a native session that finishes starting late',
+    () async {
+      final service = _DelayedQuickOpenFileService();
+      final search = service.searchQuickOpenCached(
+        workspacePath: '/repo',
+        excludedDirectories: const [],
+        query: 'main',
+        includeGitignored: false,
+      );
+      final rejected = expectLater(search, throwsStateError);
+      await service.dispose();
+      service.started.complete(
+        const native.WorkspaceQuickOpenSession(id: 'late', indexedFileCount: 0),
+      );
+      await rejected;
+      expect(service.stopped, ['late']);
     },
   );
 
@@ -833,6 +1134,24 @@ class _ExpiringQuickOpenFileService extends WorkspaceFileService {
 }
 
 class _RefreshingQuickOpenFileService extends WorkspaceFileService {
+  final incrementalPreviousIds = <String>[];
+
+  @override
+  Future<native.WorkspaceQuickOpenRefresh> refreshQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required native.WorkspaceQuickOpenSession previous,
+  }) async {
+    incrementalPreviousIds.add(previous.id);
+    return native.WorkspaceQuickOpenRefresh(
+      session: await startQuickOpenSession(
+        workspacePath: workspacePath,
+        excludedDirectories: excludedDirectories,
+      ),
+      incremental: true,
+    );
+  }
+
   final List<String> files = <String>[];
   final List<String> directories = <String>[];
   final List<String> startedSessionIds = <String>[];
@@ -888,6 +1207,52 @@ class _RefreshingQuickOpenFileService extends WorkspaceFileService {
   Future<void> stopQuickOpenSession({
     required native.WorkspaceQuickOpenSession session,
   }) async {}
+}
+
+class _DelayedSearchQuickOpenFileService
+    extends _RefreshingQuickOpenFileService {
+  final firstSearchStarted = Completer<void>();
+  final releaseFirst = Completer<void>();
+
+  @override
+  Future<List<native.WorkspaceQuickOpenMatch>> searchQuickOpenSession({
+    required native.WorkspaceQuickOpenSession session,
+    required String query,
+    required bool includeGitignored,
+    int limit = 50,
+    bool includeDirectories = false,
+  }) async {
+    final matches = await super.searchQuickOpenSession(
+      session: session,
+      query: query,
+      includeGitignored: includeGitignored,
+      limit: limit,
+      includeDirectories: includeDirectories,
+    );
+    if (session.id == 'index-1' && !firstSearchStarted.isCompleted) {
+      firstSearchStarted.complete();
+      await releaseFirst.future;
+    }
+    return matches;
+  }
+}
+
+class _DelayedQuickOpenFileService extends WorkspaceFileService {
+  final started = Completer<native.WorkspaceQuickOpenSession>();
+  final stopped = <String>[];
+
+  @override
+  Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+  }) => started.future;
+
+  @override
+  Future<void> stopQuickOpenSession({
+    required native.WorkspaceQuickOpenSession session,
+  }) async {
+    stopped.add(session.id);
+  }
 }
 
 native.WorkspaceFileEntry _workspaceEntry(

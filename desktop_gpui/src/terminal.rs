@@ -63,6 +63,10 @@ pub struct AgentContextOverview {
     pub goal: String,
     pub progress: String,
     pub timeline: Vec<AgentContextMilestone>,
+    pub conversation_id: String,
+    pub has_report: bool,
+    pub is_summary: bool,
+    pub overall_summary: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +74,7 @@ pub struct AgentContextMilestone {
     pub kind: String,
     pub text: String,
     pub at: String,
+    pub is_summary: bool,
 }
 
 impl AgentContextOverview {
@@ -87,13 +92,12 @@ impl AgentContextOverview {
 
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        let goal = Self::text(object.get("goal"), 600);
+        let goal = Self::text(object.get("goal"), 120);
         let summary = Self::text(object.get("reportSummary"), 420);
-        let progress = if summary.is_empty() {
-            Self::text(object.get("progress"), 420)
-        } else {
-            summary
-        };
+        let is_summary = !summary.is_empty();
+        let progress = if is_summary { summary.clone() } else { Self::text(object.get("progress"), 420) };
+        let has_report = !progress.is_empty();
+        let mut first_report = true;
         let timeline = object
             .get("timeline")
             .and_then(Value::as_array)
@@ -105,25 +109,48 @@ impl AgentContextOverview {
                 if !matches!(kind, "goal" | "instruction" | "report") {
                     return None;
                 }
-                let text = Self::text(item.get("text"), 260);
                 let at = item.get("at")?.as_str()?;
-                if text.is_empty() || at.len() > 64 || agent_host_utc_time_key(at).is_none() {
+                if at.len() > 64 || agent_host_utc_time_key(at).is_none() {
+                    return None;
+                }
+                let (text, event_is_summary) = if kind == "report" {
+                    let event_summary = Self::text(item.get("summary"), 420);
+                    let event_summary = if first_report && event_summary.is_empty() {
+                        summary.clone()
+                    } else {
+                        event_summary
+                    };
+                    first_report = false;
+                    if event_summary.is_empty() {
+                        (Self::text(item.get("text"), 260), false)
+                    } else {
+                        (event_summary, true)
+                    }
+                } else {
+                    (Self::text(item.get("text"), 120), false)
+                };
+                if kind != "report" && text.is_empty() {
                     return None;
                 }
                 Some(AgentContextMilestone {
                     kind: kind.to_owned(),
                     text,
                     at: at.to_owned(),
+                    is_summary: event_is_summary,
                 })
             })
             .collect::<Vec<_>>();
-        if goal.is_empty() && progress.is_empty() && timeline.is_empty() {
+        if goal.is_empty() && !has_report && timeline.is_empty() {
             return None;
         }
         Some(Self {
             goal,
             progress,
             timeline,
+            conversation_id: Self::text(object.get("conversationId"), 128),
+            has_report,
+            is_summary,
+            overall_summary: Self::text(object.get("overallSummary"), 1000),
         })
     }
 }
@@ -167,10 +194,13 @@ mod agent_context_overview_tests {
         });
         let sessions = parse_terminal_list(&value).unwrap();
         let context = sessions[0].agent_context.as_ref().unwrap();
-        assert_eq!(context.goal.chars().count(), 600);
+        assert_eq!(context.goal.chars().count(), 120);
         assert_eq!(context.progress, "設定功能對齊中");
+        assert!(!context.is_summary);
+        assert!(context.has_report);
         assert_eq!(context.timeline.len(), 1);
         assert_eq!(context.timeline[0].text, "已補設定驗證");
+        assert!(!context.timeline[0].is_summary);
         assert!(sessions[1].agent_context.is_none());
         assert!(sessions[2].agent_context.is_none());
     }
@@ -187,12 +217,14 @@ mod agent_context_overview_tests {
                 "contextOverview":{
                     "goal":"修正 Agent Context｜目前重點：顯示完成回覆與最新匯報",
                     "progress":"已加入回覆摘要與時間線，測試通過",
+                    "reportSummary":"完成摘要與時間線，測試通過",
+                    "overallSummary":"跨輪次整體進度",
                     "initialGoal":"修正 Agent Context",
                     "currentFocus":"顯示完成回覆與最新匯報",
                     "timeline":[
                         {"kind":"report","text":"已加入回覆摘要與時間線，測試通過","at":newer},
                         {"kind":"instruction","text":"顯示完成回覆與最新匯報","at":newer},
-                        {"kind":"report","text":"第一輪已完成","at":at},
+                        {"kind":"report","text":"第一輪原始回覆","summary":"第一輪已完成","at":at},
                         {"kind":"toolInput","text":"PRIVATE TOOL OUTPUT","at":at}
                     ]
                 }
@@ -201,7 +233,10 @@ mod agent_context_overview_tests {
         let sessions = parse_terminal_list(&reply).unwrap();
         let context = sessions[0].agent_context.as_ref().unwrap();
         assert!(context.goal.contains("目前重點"));
-        assert!(context.progress.contains("測試通過"));
+        assert_eq!(context.progress, "完成摘要與時間線，測試通過");
+        assert!(context.is_summary);
+        assert!(context.timeline[0].is_summary);
+        assert_eq!(context.overall_summary, "跨輪次整體進度");
         assert_eq!(context.timeline.len(), 3);
         assert_eq!(context.timeline[0].kind, "report");
         assert_eq!(context.timeline[2].text, "第一輪已完成");

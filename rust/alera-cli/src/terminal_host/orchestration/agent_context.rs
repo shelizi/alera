@@ -15,6 +15,8 @@ pub struct AgentContextMilestone {
     pub kind: String,
     pub text: String,
     pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +27,9 @@ pub struct AgentContextOverview {
     /// Optional AI summary of the current raw report; never replaces the source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_summary: Option<String>,
+    /// Rolling summary of completed reports, separate from the user task anchor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overall_summary: Option<String>,
     /// Task anchor retained across turns, even if the recent focus changes.
     pub initial_goal: String,
     /// Most recent substantive user change; never a mere 'continue' request.
@@ -126,6 +131,38 @@ fn report_excerpt(response: &str, limit: usize) -> String {
 }
 
 impl AgentContextOverview {
+    /// Only the exact latest completed report can receive a generated summary.
+    pub fn apply_report_summary(&mut self, report_at: &str, summary: &str) -> bool {
+        let Some(report) = self.timeline.iter_mut().find(|event| event.kind == "report") else {
+            return false;
+        };
+        if report.at != report_at || summary.trim().is_empty() {
+            return false;
+        }
+        report.summary = Some(summary.to_owned());
+        self.report_summary = Some(summary.to_owned());
+        true
+    }
+
+    /// Match a retained milestone by its exact timestamp and source excerpt.
+    /// Updating an older report must never replace the latest report summary.
+    pub fn apply_retained_report_summary(&mut self, report_at: &str, source: &str, summary: &str) -> bool {
+        if summary.trim().is_empty() {
+            return false;
+        }
+        let Some(index) = self.timeline.iter().position(|event| {
+            event.kind == "report" && event.at == report_at && event.text == source
+        }) else {
+            return false;
+        };
+        let latest = self.timeline.iter().position(|event| event.kind == "report");
+        self.timeline[index].summary = Some(summary.to_owned());
+        if latest == Some(index) {
+            self.report_summary = Some(summary.to_owned());
+        }
+        true
+    }
+
     pub fn observe(
         previous: Option<&Self>,
         previous_prompt: Option<&str>,
@@ -187,12 +224,22 @@ impl AgentContextOverview {
                     .filter_map(|event| DateTime::parse_from_rfc3339(&event.at).ok())
                     .map(|event| event.with_timezone(&Utc))
                     .max();
-                // A delayed Hook must not replace the newest progress report.
-                if newest_report.is_none_or(|previous| at >= previous) {
-                    next.progress = report.clone();
-                    next.report_summary = None;
+                // A duplicate completed Hook can carry the full reply while
+                // the checkpoint stores only its bounded excerpt. Do not
+                // erase a generated summary when no new milestone is added.
+                let event_text = report_excerpt(message, EVENT_LIMIT);
+                let duplicate = next.progress == report
+                    && next.timeline.first().is_some_and(|last| {
+                        last.kind == "report" && last.text == event_text
+                    });
+                if !duplicate {
+                    // A delayed Hook must not replace the newest progress report.
+                    if newest_report.is_none_or(|previous| at >= previous) {
+                        next.progress = report.clone();
+                        next.report_summary = None;
+                    }
+                    next.record_distinct("report", event_text, at);
                 }
-                next.record("report", report_excerpt(message, EVENT_LIMIT), at);
             }
         }
         next
@@ -207,6 +254,13 @@ impl AgentContextOverview {
             .first()
             .is_some_and(|last| last.kind == kind && last.text == text)
         {
+            return;
+        }
+        self.record_distinct(kind, text, at);
+    }
+
+    fn record_distinct(&mut self, kind: &str, text: String, at: DateTime<Utc>) {
+        if text.is_empty() {
             return;
         }
         let index = self
@@ -224,6 +278,7 @@ impl AgentContextOverview {
                 kind: kind.to_owned(),
                 text,
                 at: at.to_rfc3339(),
+                summary: None,
             },
         );
         self.timeline.truncate(TIMELINE_LIMIT);
@@ -233,6 +288,62 @@ impl AgentContextOverview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_is_tied_to_exact_report_and_survives_new_turn() {
+        let now = Utc::now();
+        let mut context = AgentContextOverview::observe(None, None, None, "Task", Some("Raw reply"), now);
+        let at = context.timeline[0].at.clone();
+        assert!(!context.apply_report_summary("wrong timestamp", "Wrong"));
+        assert!(context.apply_report_summary(&at, "First summary"));
+        assert_eq!(context.timeline[0].summary.as_deref(), Some("First summary"));
+        let mut next = AgentContextOverview::observe(
+            Some(&context), None, Some("Raw reply"), "Task", Some("Second raw reply"),
+            now + chrono::Duration::seconds(1),
+        );
+        assert!(next.report_summary.is_none());
+        assert!(!next.apply_report_summary(&at, "Stale summary"));
+        assert_eq!(next.timeline[1].summary.as_deref(), Some("First summary"));
+        let roundtrip: AgentContextOverview = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+        assert_eq!(roundtrip, next);
+    }
+
+    #[test]
+    fn duplicate_long_checkpoint_report_preserves_generated_summary() {
+        let now = Utc::now();
+        let raw = format!("Started {} finished", "detail ".repeat(150));
+        let mut first = AgentContextOverview::observe(None, None, None, "Task", Some(&raw), now);
+        let report_at = first.timeline[0].at.clone();
+        assert!(first.apply_report_summary(&report_at, "Verified summary"));
+        let duplicate = AgentContextOverview::observe(
+            Some(&first), None, Some(&first.progress), "", Some(&raw),
+            now + chrono::Duration::seconds(1),
+        );
+        assert_eq!(duplicate, first);
+    }
+
+    #[test]
+    fn different_reports_with_identical_short_excerpt_keep_separate_summaries() {
+        let now = Utc::now();
+        let raw_a = format!("{}{}{}", "a".repeat(160), "b".repeat(300), "d".repeat(110));
+        let raw_b = format!("{}{}{}", "a".repeat(160), "c".repeat(300), "d".repeat(110));
+        let mut first = AgentContextOverview::observe(None, None, None, "Task", Some(&raw_a), now);
+        let first_at = first.timeline[0].at.clone();
+        assert!(first.apply_report_summary(&first_at, "First summary"));
+        let mut next = AgentContextOverview::observe(
+            Some(&first), None, Some(&raw_a), "", Some(&raw_b),
+            now + chrono::Duration::seconds(1),
+        );
+        assert_ne!(next.progress, first.progress);
+        assert_eq!(next.timeline[0].text, next.timeline[1].text);
+        assert!(next.report_summary.is_none());
+        assert!(next.timeline[0].summary.is_none());
+        assert_eq!(next.timeline[1].summary.as_deref(), Some("First summary"));
+        assert!(!next.apply_report_summary(&first_at, "Stale"));
+        let next_at = next.timeline[0].at.clone();
+        assert!(next.apply_report_summary(&next_at, "Second summary"));
+        assert_eq!(next.timeline[0].summary.as_deref(), Some("Second summary"));
+    }
 
     #[test]
     fn evolving_goal_keeps_original_scope_and_tracks_latest_meaningful_focus() {

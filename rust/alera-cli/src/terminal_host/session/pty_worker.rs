@@ -464,6 +464,15 @@ fn assemble_worker(
     let working_directory = attachment.working_directory;
     let shell_pid = attachment.shell_pid;
     #[cfg(windows)]
+    let shell = match attachment.shell_creation_filetime {
+        Some(creation) => {
+            crate::terminal_host::resources::recover_precise_shell(shell_pid, creation)
+        }
+        None => seal_shell_process(shell_pid),
+    };
+    #[cfg(unix)]
+    let shell = seal_shell_process(shell_pid);
+    #[cfg(windows)]
     let handle = Arc::clone(&attachment.process);
     #[cfg(unix)]
     let worker = seal_shell_process(attachment.worker_pid)
@@ -489,7 +498,7 @@ fn assemble_worker(
         reader,
         writer,
         killer,
-        shell: seal_shell_process(shell_pid),
+        shell,
         #[cfg(windows)]
         process_job: None,
         #[cfg(windows)]
@@ -706,6 +715,7 @@ fn run_inner() -> anyhow::Result<i32> {
         &request.tab_id,
         &request.working_directory,
         shell_pid,
+        shell.and_then(|process| process.creation_filetime()),
         request.initial_output_stream_bytes,
         request.max_backlog_bytes,
         Arc::clone(&writer),

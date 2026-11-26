@@ -5,6 +5,7 @@ import 'package:alera/src/features/agent_status/application/agent_status_control
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/app_window/application/app_window_providers.dart';
 import 'package:alera/src/features/app_window/domain/foreground_parked_refresh.dart';
+import 'package:alera/src/features/resource_manager/application/resource_app_identity.dart';
 import 'package:alera/src/features/resource_manager/application/resource_snapshot_projection.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_snapshot.dart';
 import 'package:alera/src/features/resource_manager/domain/resource_tree.dart';
@@ -97,10 +98,12 @@ Future<ResourceSnapshot> fetchResourceSnapshot({
   required Duration interval,
 }) async {
   try {
+    final creation = resourceAppCreationFiletime(appPid);
     final payload = await client.runtimeRequest(
       'resources.snapshot',
       <String, Object?>{
         'appPid': appPid,
+        if (creation != null) 'appCreationFiletime': creation,
         'intervalMs': interval.inMilliseconds,
       },
       _resourceSnapshotTimeout,

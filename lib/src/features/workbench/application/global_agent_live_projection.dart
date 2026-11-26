@@ -55,11 +55,13 @@ class GlobalAgentDashboardSection {
   final List<GlobalAgentLiveRow> rows;
 }
 
-/// Group live Agent cards by current Hook state, newest first within each
-/// section. Empty sections are omitted, so the viewport stays compact.
+/// Group live Agent cards by current Hook state. The Dashboard may opt in to
+/// persisted Tab pins first; other consumers keep newest-first ordering.
+/// Empty sections are omitted so the viewport stays compact.
 List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
   Iterable<GlobalAgentLiveRow> rows, {
   bool alreadySorted = false,
+  bool pinnedFirst = false,
 }) {
   final grouped = <GlobalAgentDashboardGroup, List<GlobalAgentLiveRow>>{};
   for (final row in rows) {
@@ -75,12 +77,31 @@ List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
       if (grouped[group] case final sectionRows?)
         GlobalAgentDashboardSection(
           group,
-          alreadySorted
-              ? sectionRows
-              : (sectionRows..sort(
-                  (a, b) => b.status.updatedAt.compareTo(a.status.updatedAt),
-                )),
+          _orderDashboardRows(
+            sectionRows,
+            alreadySorted: alreadySorted,
+            pinnedFirst: pinnedFirst,
+          ),
         ),
+  ];
+}
+
+// Preserve the incremental projection's stable recency order; partition pins
+// inside their status instead of sorting all live rows again.
+List<GlobalAgentLiveRow> _orderDashboardRows(
+  List<GlobalAgentLiveRow> rows, {
+  required bool alreadySorted,
+  required bool pinnedFirst,
+}) {
+  if (!alreadySorted) {
+    rows.sort((a, b) => b.status.updatedAt.compareTo(a.status.updatedAt));
+  }
+  if (!pinnedFirst) return rows;
+  return [
+    for (final row in rows)
+      if (row.tab.isPinned) row,
+    for (final row in rows)
+      if (!row.tab.isPinned) row,
   ];
 }
 
@@ -235,9 +256,7 @@ class GlobalAgentLiveProjectionCache {
         tab: registered.tab,
         status: status,
         goal: overview.goal.isNotEmpty ? overview.goal : status.prompt,
-        progress: overview.displayProgress.isNotEmpty
-            ? overview.displayProgress
-            : (status.lastAssistantMessage ?? ''),
+        progress: overview.displayProgress,
         timeline: overview.timeline,
       );
       next[identity] = row;

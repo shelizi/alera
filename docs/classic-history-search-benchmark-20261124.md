@@ -263,3 +263,44 @@ Validation: 40 history regressions passed (two opt-in benchmarks ignored in ordi
 Validated the complete CLI binary unit-test suite on commit `2409b23d2`, using the previously built Rust 1.98.0 executable alera-b2ac5e69cb5b4a7d.exe. All 1,531 enumerated tests were accounted for: 1,517 passed, zero failed, 14 ignored, in 122.44 seconds.
 
 The non-test target also passed `cargo +1.98.0 check --manifest-path rust/Cargo.toml --locked --offline -p alera-cli --bin alera -j 6` with no warnings, in 2m07s. This checks the ordinary production code path, including the earlier test-only warning fixes, without linking or replacing the running application. It is not a Release build or Release performance measurement. No full workspace/integration suite or new Core unit suite was run. Main advanced independently during validation; the tested source remains the isolated commit above.
+
+## Merged-main verification and optimized parser allocation measurement (2026-11-25)
+
+Merged the four history validation commits ending at `adf1800f6` into the independently advanced main `8d588be65`, producing merge commit `d37889ab1`. Both parent histories are ancestors of the result. The original modified history-session documents were verified byte-identical by SHA-256; the set of 22,639 untracked paths was unchanged. The native history search/parser sources are identical to the previously tested history branch. The merged commit was checked out on the separate verification branch `perf/classic-history-release-verification-20261125`.
+
+### Optimized parser-only timing
+
+The direct Cargo test Release target had no populated dependencies. Instead, compiled the exact merged `provider_metadata.rs` through a standalone Rust test harness with `rustc +1.98.0 --edition=2021 --test -C opt-level=3 -C debuginfo=0 -C debug-assertions=no -C overflow-checks=no`. The harness uses the existing optimized sidecar dependency artifacts read-only: serde_json 1.0.151 (libserde_json-84a7165b7e565d39.rlib) and uuid 1.26.0 (libuuid-341066ec15cb73f6.rlib) under D:/c/cli/release/deps, with their versions confirmed by dependency-info files. The actual parser source SHA-256 was 66B980241E17F42186D17F6915B5F830C55E56A58A65C90E078CF6BDEB2A8966. The three differential parser tests passed. Ran the existing parser benchmark five times, each with six interleaved passes per workload (three before and three after), 512 transcripts per pass. These are pooled medians of the 15 pass timings per version per workload, in milliseconds, not end-to-end request latencies.
+
+| Workload | Before range | Before median | After range | After median | Reduction | Speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| Light | 2.311-2.902 | 2.635 | 1.359-1.721 | 1.481 | 43.8% | 1.78x |
+| Tool-heavy | 48.480-55.128 | 50.107 | 6.606-7.405 | 6.961 | 86.1% | 7.20x |
+
+All 60 passes (30,720 transcript parses) completed successfully; every after timing was lower than every before timing within its workload. Synthetic fixtures intentionally have irrelevant events; candidate-heavy/escaped events may benefit less. The optimized standalone harness is not a full Cargo Release CLI or a packaged desktop application.
+
+### Allocation probe
+
+A separate optimized standalone executable used a thread-local counter around the exact existing timed parse loop and a forwarding Rust System global allocator. It counted successful alloc/alloc_zeroed and realloc calls and summed requested layout bytes (new size for realloc, not growth). Fixture setup, benchmark printing, and test harness execution were outside the counter. Production code was unmodified; only the copied test fixture gained start/end counter hooks. Three benchmark repetitions, nine passes per version per workload (36 passes, 18,432 transcripts), produced identical counters within every workload/version pair. Timing from the instrumented binary was not used. Values per 512-transcript pass:
+
+| Workload | Version | Alloc/alloc_zeroed calls | Realloc calls | Cumulative requested bytes |
+|---|---|---:|---:|---:|
+| Light | Before | 30720 | 1792 | 9185792 |
+| Light | After | 15360 | 1792 | 5656064 |
+| Tool-heavy | Before | 404480 | 145152 | 190598144 |
+| Tool-heavy | After | 15360 | 1792 | 6278144 |
+
+Light allocation calls decreased 50.0%, cumulative requested bytes 38.4%; tool-heavy allocation calls decreased 96.2%, realloc calls 98.8%, cumulative requested bytes 96.7%. Cumulative request sizes include repeated allocation of memory that is subsequently freed, and do not establish peak live bytes, working set, RSS, allocator metadata, or process-wide RAM reduction. The standalone test executables and their source wrappers were generated under the prepared local temporary directory, not in Dropbox or the application target. No allocator instrumentation is shipped or added to the application.
+
+### Exact merged CLI regression
+
+Rebuilt the actual integrated `d37889ab1` source on Rust 1.98.0, using unique cfg `alera_history_release_merge_verification_20261125` and executable `D:/c/t/debug/deps/alera-1230d0a1f9314d87.exe`. Build 3m36s, including shared Cargo lock wait. The full CLI binary unit suite accounted for 1,534 tests: 1,520 passed, 0 failed, 14 ignored (141.72s). Ran one opt-in integrated 256-file history benchmark (42 measured requests), all assertions passed. Debug p50 observations:
+
+| Scenario | Total (ms) | Scan (ms) | Other I/O ops | SQL write statements | Reused FTS | Decoded FTS |
+|---|---:|---:|---:|---:|---:|---:|
+| Cold | 137.831 | 79.492 | 3096 | 4 | 0 | 100 |
+| Warm | 79.232 | 51.249 | 2804 | 0 | 100 | 0 |
+| Index reopen | 108.471 | 50.128 | 2824 | 0 | 100 | 0 |
+| One file changed | 101.816 | 69.957 | 2805 | 3 | 100 | 0 |
+
+The integrated deterministic I/O and FTS counters match the previous history benchmark. Single Debug benchmark run on a shared host is not an end-to-end A/B speed comparison. Full workspace, CLI integration suite, full Cargo Release CLI/desktop and process-wide memory peak were not measured in this round. No app switch, deployment, or changes to the merged production source were made.

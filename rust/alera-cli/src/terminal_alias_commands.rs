@@ -100,6 +100,7 @@ pub async fn run(
         | TerminalAction::HistoryResume(_)
         | TerminalAction::HistoryLocate(_)
         | TerminalAction::HistoryMessages(_)
+        | TerminalAction::ContextSummarize(_)
         | TerminalAction::HistoryClear
         | TerminalAction::Attach(_)
         | TerminalAction::Workspaces

@@ -46,6 +46,7 @@ pub(super) struct RenderedDiff {
     pub(super) line_preview_truncated: bool,
 }
 
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct DiffLineStats {
     added: u32,

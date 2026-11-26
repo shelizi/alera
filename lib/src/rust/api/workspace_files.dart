@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `map_quick_open_matches`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `map_quick_open_matches`, `modified_millis`, `move_external_entry`, `new`, `read_checked_text_bytes`, `read_workspace_editor_text_file_in_root`, `read_workspace_text_file_in_root`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
   required String workspacePath,
@@ -29,6 +29,17 @@ Future<WorkspaceQuickOpenSession> startWorkspaceQuickOpenSession({
   workspacePath: workspacePath,
   excludedDirectories: excludedDirectories,
 );
+
+Future<WorkspaceQuickOpenRefresh> refreshWorkspaceQuickOpenSession({
+  required String workspacePath,
+  required List<String> excludedDirectories,
+  required WorkspaceQuickOpenSession previous,
+}) =>
+    RustLib.instance.api.crateApiWorkspaceFilesRefreshWorkspaceQuickOpenSession(
+      workspacePath: workspacePath,
+      excludedDirectories: excludedDirectories,
+      previous: previous,
+    );
 
 Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceQuickOpenSession({
   required WorkspaceQuickOpenSession session,
@@ -617,11 +628,17 @@ class WorkspaceExplorerTreeProjection {
 class WorkspaceExplorerWatchBatch {
   final List<String> directoryRelativePaths;
   final List<String> changedRelativePaths;
+
+  /// Verified existing ordinary-file modifications eligible for a bounded
+  /// deferred Quick Open reconciliation. All other changed paths retain
+  /// the prompt refresh policy. None means the producer has no hints.
+  final List<String>? deferredQuickOpenPaths;
   final int coalescedEventCount;
 
   const WorkspaceExplorerWatchBatch({
     required this.directoryRelativePaths,
     required this.changedRelativePaths,
+    this.deferredQuickOpenPaths,
     required this.coalescedEventCount,
   });
 
@@ -629,6 +646,7 @@ class WorkspaceExplorerWatchBatch {
   int get hashCode =>
       directoryRelativePaths.hashCode ^
       changedRelativePaths.hashCode ^
+      deferredQuickOpenPaths.hashCode ^
       coalescedEventCount.hashCode;
 
   @override
@@ -638,6 +656,7 @@ class WorkspaceExplorerWatchBatch {
           runtimeType == other.runtimeType &&
           directoryRelativePaths == other.directoryRelativePaths &&
           changedRelativePaths == other.changedRelativePaths &&
+          deferredQuickOpenPaths == other.deferredQuickOpenPaths &&
           coalescedEventCount == other.coalescedEventCount;
 }
 
@@ -776,6 +795,28 @@ class WorkspaceQuickOpenMatch {
           relativePath == other.relativePath &&
           score == other.score &&
           isDirectory == other.isDirectory;
+}
+
+/// An incremental refresh is provisional until a scheduled full scan.
+class WorkspaceQuickOpenRefresh {
+  final WorkspaceQuickOpenSession session;
+  final bool incremental;
+
+  const WorkspaceQuickOpenRefresh({
+    required this.session,
+    required this.incremental,
+  });
+
+  @override
+  int get hashCode => session.hashCode ^ incremental.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WorkspaceQuickOpenRefresh &&
+          runtimeType == other.runtimeType &&
+          session == other.session &&
+          incremental == other.incremental;
 }
 
 class WorkspaceQuickOpenSession {

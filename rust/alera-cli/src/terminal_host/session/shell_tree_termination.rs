@@ -88,10 +88,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_root_is_killed_even_when_the_sweep_finds_nothing_to_do() {
-        let recycled = ShellProcess {
-            pid: this_process().pid,
-            start_time: this_process().start_time + 1,
-        };
+        let recycled = ShellProcess::coarse(this_process().pid, this_process().start_time + 1);
         let mut killed = false;
 
         kill_shell_tree(Some(recycled), || killed = true).await;
@@ -109,20 +106,14 @@ mod tests {
         // Same pid, a start time this process never had: whatever lives there
         // is not ours to signal.
         let sealed = this_process();
-        let recycled = ShellProcess {
-            pid: sealed.pid,
-            start_time: sealed.start_time + 1,
-        };
+        let recycled = ShellProcess::coarse(sealed.pid, sealed.start_time + 1);
 
         assert_eq!(live_descendants(recycled).await, None);
     }
 
     #[tokio::test]
     async fn an_absent_pid_reports_no_descendants_to_signal() {
-        let absent = ShellProcess {
-            pid: u32::MAX,
-            start_time: 1,
-        };
+        let absent = ShellProcess::coarse(u32::MAX, 1);
 
         assert_eq!(live_descendants(absent).await, None);
     }
@@ -170,12 +161,10 @@ mod tests {
         let gone = wait_until(|| {
             // A pid missing from a fresh sweep is gone. `sh` is still alive and
             // has not reaped it yet, so this cannot be read off a zombie.
-            !sweep_process_topology().holds(ShellProcess {
-                pid: child_pid,
-                start_time: sealed.start_time,
-            }) && !sweep_process_topology()
-                .descendants(shell_pid)
-                .contains(&child_pid)
+            !sweep_process_topology().holds(ShellProcess::coarse(child_pid, sealed.start_time))
+                && !sweep_process_topology()
+                    .descendants(shell_pid)
+                    .contains(&child_pid)
         })
         .await;
 

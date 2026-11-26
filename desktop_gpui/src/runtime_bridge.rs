@@ -450,6 +450,24 @@ impl RuntimeCliBridge {
         self.terminal_json_io(args, Some(input))
     }
 
+    /// Explicit, bounded summary action on the selected registered conversation.
+    pub fn summarize_agent_context(&self, workspace: &str, tab: &str, session: &str, conversation: &str, report_at: Option<&str>) -> io::Result<()> {
+        let mut args: Vec<OsString> = ["context-summarize", "--workspace-id", workspace,
+            "--tab-id", tab, "--session-id", session, "--conversation-id", conversation,
+            "--confirm-summary"].into_iter().map(OsString::from).collect();
+        if let Some(at) = report_at {
+            args.extend([OsString::from("--report-at"), OsString::from(at)]);
+        } else {
+            args.push(OsString::from("--overall"));
+        }
+        let response = self.terminal_json(&args)?;
+        if response.get("queued").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err(io::Error::other("Host did not accept the summary request"))
+        }
+    }
+
     fn terminal_json_io(&self, args: &[OsString], input: Option<&[u8]>) -> io::Result<Value> {
         let verb = args.first().and_then(|arg| arg.to_str());
         let allowed = match (verb, input.is_some()) {
@@ -529,6 +547,19 @@ impl RuntimeCliBridge {
                     && args[10].to_str().is_some_and(|value| {
                         uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.to_string() == value)
                     })
+            }
+            (Some("context-summarize"), false) => {
+                matches!(args.len(), 11 | 12)
+                    && ["--workspace-id", "--tab-id", "--session-id", "--conversation-id"]
+                        .iter().enumerate().all(|(index, flag)| {
+                            args[1 + index * 2] == OsString::from(flag)
+                                && args[2 + index * 2].to_str().is_some_and(|id| !id.is_empty()
+                                    && id.len() <= 256 && !id.chars().any(char::is_control))
+                        })
+                    && args[9] == OsString::from("--confirm-summary")
+                    && ((args.len() == 11 && args[10] == OsString::from("--overall"))
+                        || (args.len() == 12 && args[10] == OsString::from("--report-at")
+                            && args[11].to_str().is_some_and(|at| !at.is_empty() && at.len() <= 64 && !at.chars().any(char::is_control))))
             }
             (Some("history-clear"), false) => args.len() == 1,
             // Workspace listing and terminal creation are Host requests with

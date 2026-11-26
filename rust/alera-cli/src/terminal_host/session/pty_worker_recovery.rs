@@ -101,6 +101,9 @@ struct WorkerRecord {
     worker_pid: u32,
     worker_start_time: u64,
     shell_pid: u32,
+    // Additive schema-2 field. Old workers omit it; old hosts ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shell_creation_filetime: Option<u64>,
     port: u16,
     token: String,
 }
@@ -220,6 +223,8 @@ pub(super) struct WorkerAttachment {
     #[cfg(windows)]
     pub(super) process: Arc<OwnedHandle>,
     pub(super) shell_pid: u32,
+    #[cfg(windows)]
+    pub(super) shell_creation_filetime: Option<u64>,
     pub(super) replay_start_cursor: u64,
     pub(super) working_directory: String,
 }
@@ -328,6 +333,8 @@ pub(super) fn attach_existing(
         #[cfg(windows)]
         process: Arc::new(handle),
         shell_pid,
+        #[cfg(windows)]
+        shell_creation_filetime: record.shell_creation_filetime,
         replay_start_cursor,
         working_directory: record.working_directory,
     }))
@@ -397,6 +404,7 @@ impl WorkerRecoveryServer {
         tab_id: &str,
         working_directory: &str,
         shell_pid: u32,
+        shell_creation_filetime: Option<u64>,
         initial_cursor: u64,
         max_backlog_bytes: usize,
         writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
@@ -428,6 +436,7 @@ impl WorkerRecoveryServer {
             worker_pid,
             worker_start_time,
             shell_pid,
+            shell_creation_filetime,
             port: listener.local_addr()?.port(),
             token: uuid::Uuid::new_v4().to_string(),
         };

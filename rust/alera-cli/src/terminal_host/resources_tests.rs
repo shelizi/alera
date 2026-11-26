@@ -2,6 +2,22 @@ use std::sync::{mpsc, Arc, Barrier};
 
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn native_windows_is_default_with_explicit_legacy_escape_hatch() {
+    use std::ffi::OsStr;
+
+    assert!(native_windows_enabled(None));
+    assert!(native_windows_enabled(Some(OsStr::new("1"))));
+    for disabled in ["0", "", "false", "unexpected"] {
+        assert!(!native_windows_enabled(Some(OsStr::new(disabled))));
+    }
+    assert!(
+        ResourceSampler::default().native.is_none(),
+        "unit tests opt in explicitly"
+    );
+}
+
 #[test]
 fn a_sample_measures_this_process_and_reports_warming_until_cpu_is_valid() {
     let mut sampler = ResourceSampler::default();
@@ -64,10 +80,7 @@ fn a_session_whose_pid_was_recycled_is_not_measured() {
     let mut sampler = ResourceSampler::default();
     let self_pid = std::process::id();
     let sealed = seal_shell_process(self_pid).expect("this process is live");
-    let recycled = ShellProcess {
-        pid: self_pid,
-        start_time: sealed.start_time + 1,
-    };
+    let recycled = ShellProcess::coarse(self_pid, sealed.start_time + 1);
 
     let snapshot = sampler.sample(&[root(Some(recycled), true)], self_pid, None);
 
@@ -241,10 +254,141 @@ async fn empty_shell_reports_no_running_processes() {
     let none = sweep_session_running_processes(None).await;
     assert!(none.is_empty());
 
-    let absent = ShellProcess {
-        pid: u32::MAX,
-        start_time: 1,
-    };
+    let absent = ShellProcess::coarse(u32::MAX, 1);
     let none = sweep_session_running_processes(Some(absent)).await;
     assert!(none.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn precise_shell_resource_attribution_rejects_same_second_reuse() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    let pid = std::process::id();
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .expect("self process");
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    let sealed = seal_shell_from_handle(pid, handle.as_raw_handle()).expect("exact seal");
+    let creation = sealed.creation_filetime().unwrap();
+    let other = if creation % 10_000_000 == 9_999_999 {
+        creation - 1
+    } else {
+        creation + 1
+    };
+    let wrong = ShellProcess::from_windows_creation_time(pid, other).unwrap();
+    assert_eq!(sealed.start_time, wrong.start_time);
+    let mut sampler = ResourceSampler::default();
+    let snapshot = sampler.sample(&[root(Some(sealed), true)], pid, None);
+    assert_eq!(snapshot["sessions"][0]["measured"], json!(true));
+    assert!(snapshot["sessions"][0]["memoryBytes"].as_u64().unwrap() > 0);
+    let snapshot = sampler.sample(&[root(Some(wrong), true)], pid, None);
+    assert_eq!(snapshot["sessions"][0]["measured"], json!(false));
+    assert_eq!(snapshot["sessions"][0]["memoryBytes"], json!(0));
+    assert_eq!(snapshot["sessions"][0]["processCount"], json!(0));
+}
+
+#[cfg(windows)]
+#[test]
+fn opted_in_sampler_keeps_bare_app_pid_on_legacy_backend() {
+    let mut sampler = ResourceSampler::default();
+    sampler.native = Some(windows_native::NativeSampler::default());
+    let pid = std::process::id();
+    let first = sampler.sample_with_app_identity(&[], pid, Some(pid), None);
+    assert_eq!(first["warming"], json!(true));
+    assert!(!sampler.system.processes().is_empty());
+    assert_eq!(sampler.refreshes, 1);
+    sampler.sample_with_app_identity(&[], pid, Some(pid), None);
+    // Staying on legacy must not reset its CPU baseline every time.
+    assert_eq!(sampler.refreshes, 2);
+    sampler.release_process_cache();
+    assert!(sampler.system.processes().is_empty());
+    assert_eq!(sampler.refreshes, 0);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "opt-in native resource payload and fallback on a responsive single-group host"]
+fn opted_in_sampler_warms_falls_back_and_keeps_history_across_idle() {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    let pid = std::process::id();
+    let raw = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            false,
+            pid,
+        )
+    }
+    .expect("self process");
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    let seal = seal_shell_from_handle(pid, handle.as_raw_handle()).expect("exact seal");
+    let creation = seal.creation_filetime().unwrap();
+    let mut sampler = ResourceSampler::default();
+    sampler.native = Some(windows_native::NativeSampler::default());
+    let roots = [root(Some(seal), true)];
+    for step in 0..3 {
+        let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+        assert_eq!(snapshot["warming"], json!(step < 2));
+        assert_eq!(snapshot["sessions"][0]["measured"], json!(true));
+        assert!(snapshot["sessions"][0]["memoryBytes"].as_u64().unwrap() > 0);
+        assert_eq!(
+            snapshot["totals"]["memoryBytes"],
+            snapshot["sessions"][0]["memoryBytes"]
+        );
+        assert!(
+            sampler.system.processes().is_empty(),
+            "native must not retain full-table rows"
+        );
+        assert_eq!(
+            snapshot["sessions"][0]["history"].as_array().unwrap().len(),
+            step + 1
+        );
+        if step < 2 {
+            std::thread::sleep(
+                sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(std::time::Duration::from_millis(250))
+                    + std::time::Duration::from_millis(30),
+            );
+        }
+    }
+    // The exact same PID and second, but wrong full FILETIME.
+    let wrong = if creation % 10_000_000 == 9_999_999 {
+        creation - 1
+    } else {
+        creation + 1
+    };
+    let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(wrong));
+    assert_eq!(snapshot["warming"], json!(true));
+    assert_eq!(snapshot["processes"]["app"]["memoryBytes"], json!(0));
+    assert!(
+        !sampler.system.processes().is_empty(),
+        "wrong generation must fall back"
+    );
+    assert_eq!(sampler.refreshes, 1);
+    sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+    assert_eq!(
+        sampler.refreshes, 2,
+        "cooldown must retain legacy CPU baseline"
+    );
+    sampler.release_process_cache();
+    assert!(sampler.system.processes().is_empty());
+    let snapshot = sampler.sample_with_app_identity(&roots, pid, Some(pid), Some(creation));
+    assert_eq!(snapshot["warming"], json!(true));
+    assert!(
+        sampler.system.processes().is_empty(),
+        "idle release must clear native cooldown"
+    );
+    assert_eq!(
+        snapshot["sessions"][0]["history"].as_array().unwrap().len(),
+        6
+    );
 }

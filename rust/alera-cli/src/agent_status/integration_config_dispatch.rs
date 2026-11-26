@@ -19,6 +19,14 @@ pub fn prepare_enabled_integrations(
     settings: &RuntimeAgentStatusHookSettings,
     environment: &mut BTreeMap<String, String>,
 ) -> Vec<String> {
+    // The conformance executable runs against a private runtime, but Windows
+    // known-folder APIs can still resolve the real user's profile. Do not
+    // write or clean global agent hooks in that explicitly isolated build.
+    #[cfg(feature = "isolated-host-conformance")]
+    if std::env::var_os("ALERA_TEST_ISOLATED_HOST").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        tracing::debug!(target: "resource_conformance", "isolated host skipped global integration writes");
+        return Vec::new();
+    }
     let mut warnings = Vec::new();
     let script = match write_managed_script() {
         Ok(script) => script,

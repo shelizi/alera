@@ -188,6 +188,7 @@ dependencies = [
  "tokio",
  "trash",
  "whisper-rs",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

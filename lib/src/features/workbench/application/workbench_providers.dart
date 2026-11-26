@@ -244,7 +244,7 @@ WorkspaceFileService workspaceFileService(Ref ref) {
 
 @Riverpod(keepAlive: true)
 WorkspaceSearchService workspaceSearchService(Ref ref) {
-  return const WorkspaceSearchService();
+  return const NativeWorkspaceSearchService();
 }
 
 @Riverpod(keepAlive: true)
