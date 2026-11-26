@@ -525,6 +525,12 @@ pub fn git_status(path: String) -> Result<GitStatusResult, GitError> {
     git_diff_impl::git_status(path)
 }
 
+pub(super) fn git_status_entries_for_explorer(
+    path: String,
+) -> Result<Vec<GitChangeEntry>, GitError> {
+    git_diff_impl::git_status_entries_for_explorer(path)
+}
+
 pub fn git_status_for_path(path: String, file_path: String) -> Result<GitStatusResult, GitError> {
     git_diff_impl::git_status_for_path(path, file_path)
 }

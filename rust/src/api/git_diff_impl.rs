@@ -49,6 +49,17 @@ pub(super) fn git_status(path: String) -> Result<GitStatusResult, GitError> {
     git_status_with_options(&repo, &paths, &mut options)
 }
 
+// Explorer needs only change identities and statuses, not patch line counts
+// or Source Control tree projections. Keep exactly the same authoritative
+// status options, rename handling, submodule checks and workspace scoping.
+pub(super) fn git_status_entries_for_explorer(
+    path: String,
+) -> Result<Vec<GitChangeEntry>, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    git_status_entries_with_options(&repo, &paths, &mut status_options(), false)
+}
+
 pub(super) fn git_status_for_path(
     path: String,
     file_path: String,

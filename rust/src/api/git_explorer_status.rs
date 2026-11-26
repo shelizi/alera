@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::git::{git_status, GitChangeStatus, GitError, GitErrorKind};
+use super::git::{
+    git_status_entries_for_explorer, GitChangeEntry, GitChangeStatus, GitError, GitErrorKind,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitExplorerStatus {
@@ -22,8 +24,8 @@ pub struct GitExplorerStatusSnapshot {
 }
 
 pub fn git_explorer_status_snapshot(path: String) -> Result<GitExplorerStatusSnapshot, GitError> {
-    let result = match git_status(path) {
-        Ok(result) => result,
+    let entries = match git_status_entries_for_explorer(path) {
+        Ok(entries) => entries,
         Err(error) if error.kind == GitErrorKind::NotARepository => {
             return Ok(GitExplorerStatusSnapshot {
                 entries: Vec::new(),
@@ -31,8 +33,23 @@ pub fn git_explorer_status_snapshot(path: String) -> Result<GitExplorerStatusSna
         }
         Err(error) => return Err(error),
     };
+    Ok(project_explorer_status(entries))
+}
+
+// Test oracle and benchmark: retain the exact former full status path and
+// the same projection, without exposing a second production API.
+#[cfg(test)]
+pub(super) fn legacy_explorer_status_snapshot(
+    path: String,
+) -> Result<GitExplorerStatusSnapshot, GitError> {
+    Ok(project_explorer_status(
+        super::git::git_status(path)?.entries,
+    ))
+}
+
+fn project_explorer_status(entries: Vec<GitChangeEntry>) -> GitExplorerStatusSnapshot {
     let mut statuses = HashMap::<String, GitExplorerStatus>::new();
-    for entry in result.entries {
+    for entry in entries {
         let status = match entry.status {
             GitChangeStatus::Untracked => GitExplorerStatus::Untracked,
             GitChangeStatus::Added => GitExplorerStatus::Added,
@@ -60,7 +77,7 @@ pub fn git_explorer_status_snapshot(path: String) -> Result<GitExplorerStatusSna
         .map(|(path, status)| GitExplorerStatusEntry { path, status })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(GitExplorerStatusSnapshot { entries })
+    GitExplorerStatusSnapshot { entries }
 }
 
 fn merge_explorer_status(

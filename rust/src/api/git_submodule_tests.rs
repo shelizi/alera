@@ -38,6 +38,17 @@ fn reports_and_loads_tracked_and_untracked_submodule_changes() {
     assert!(!submodule.commit_changed);
     assert!(submodule.tracked_changes);
     assert!(submodule.untracked_changes);
+    let explorer =
+        crate::api::git_explorer_status::git_explorer_status_snapshot(path_str(parent.path()))
+            .unwrap();
+    let full =
+        crate::api::git_explorer_status::legacy_explorer_status_snapshot(path_str(parent.path()))
+            .unwrap();
+    assert_eq!(explorer, full);
+    assert!(explorer.entries.iter().any(|entry| {
+        entry.path == "modules/sample"
+            && entry.status == crate::api::git_explorer_status::GitExplorerStatus::Modified
+    }));
     assert_eq!(entry.added, None);
     assert_eq!(entry.removed, None);
 
