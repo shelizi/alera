@@ -10,11 +10,7 @@ enum ForkClassicUpdateTarget {
   windowsX64('windows', 'x64', 'wholeDirectoryReplace'),
   macosArm64('macos', 'arm64', 'wholeBundleReplace');
 
-  ForkClassicUpdateTarget(
-    this.platform,
-    this.architecture,
-    this.strategy,
-  );
+  ForkClassicUpdateTarget(this.platform, this.architecture, this.strategy);
 
   final String platform;
   final String architecture;
@@ -38,6 +34,9 @@ enum ForkClassicUpdateTarget {
 
   static bool get networkDisabled =>
       Platform.environment['ALERA_DISABLE_UPDATE_CHECKS'] == '1';
+
+  /// desktop_updater uses the descriptor name as the staged macOS bundle path.
+  String get descriptorAppName => this == macosArm64 ? 'Alera.app' : 'Alera';
 
   String get slug => '$platform-$architecture';
   String get indexName => 'alera-classic-$slug-update-index.json';

@@ -123,6 +123,7 @@ class DesktopUpdaterBackend({
       item: item,
       platform: platform,
       channel: channel,
+      expectedAppName: forkTarget?.descriptorAppName ?? 'Alera',
     );
     if (requireSignature) {
       await _verifyDescriptorSignature(
@@ -262,13 +263,14 @@ void _verifyDescriptorIdentity({
   required ReleaseIndexItem item,
   required String platform,
   required String channel,
+  required String expectedAppName,
 }) {
   if (descriptor.version != item.version ||
       descriptor.buildNumber != item.buildNumber ||
       descriptor.platform != item.platform ||
       descriptor.channel != item.channel ||
       descriptor.packageId != 'dev.leynier.alera' ||
-      descriptor.appName != 'Alera' ||
+      descriptor.appName != expectedAppName ||
       descriptor.platform != platform ||
       descriptor.channel != channel) {
     throw const FormatException(

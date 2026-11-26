@@ -157,6 +157,16 @@ jobs:
           dart tool/release/fork_classic_update_metadata.dart generate windows-x64 $env:VERSION dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Smoke-test signed Windows update staging
+        if: vars.ALERA_FORK_UPDATE_PUBLIC_KEY != ''
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+        run: |
+          dart tool/release/verify_fork_classic_update_staging.dart windows-x64 $env:VERSION dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload release zip
         uses: actions/upload-artifact@v7
         with:
@@ -278,6 +288,16 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "$bundle" "dist/$name"
           shasum -a 256 "dist/$name" | sed 's#  dist/#  #' >"dist/$name.sha256"
           dart tool/release/fork_classic_update_metadata.dart generate macos-arm64 "$VERSION" dist
+
+      - name: Smoke-test signed macOS update staging
+        if: vars.ALERA_FORK_UPDATE_PUBLIC_KEY != ''
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ALERA_FORK_UPDATE_PUBLIC_KEY: ${{ vars.ALERA_FORK_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          dart tool/release/verify_fork_classic_update_staging.dart macos-arm64 "$VERSION" dist
 
       - name: Upload release archive
         uses: actions/upload-artifact@v7

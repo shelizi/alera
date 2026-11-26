@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:alera/src/features/updater/domain/alera_update.dart';
 import 'package:alera/src/features/updater/domain/fork_classic_update_target.dart';
 import 'package:alera/src/features/updater/infra/desktop_updater_backend.dart';
+import 'package:archive/archive.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:desktop_updater/desktop_updater.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,9 +51,29 @@ void main() {
     }
   });
 
-  Future<void> generate(ForkClassicUpdateTarget target) async {
+  Future<void> writeZip(
+    ForkClassicUpdateTarget target, {
+    String? macRoot,
+  }) async {
+    final root = macRoot ?? target.descriptorAppName;
+    final entries = target == ForkClassicUpdateTarget.macosArm64
+        ? ['$root/Contents/Info.plist', '$root/Contents/MacOS/Alera']
+        : [
+            'Alera.exe',
+            'flutter_windows.dll',
+            'desktop_updater_plugin.dll',
+            'resources/alera/alera.exe',
+          ];
+    final archive = Archive();
+    for (final entry in entries) {
+      archive.addFile(ArchiveFile.bytes(entry, [1, 2, 3, 4]));
+    }
     await File(p.join(directory.path, target.artifactName(version)))
-        .writeAsBytes([1, 2, 3, 4]);
+        .writeAsBytes(ZipEncoder().encode(archive));
+  }
+
+  Future<void> generate(ForkClassicUpdateTarget target) async {
+    await writeZip(target);
     await generateForkClassicUpdateMetadata(
       target: target,
       version: version,
@@ -117,7 +138,18 @@ void main() {
         expect(candidate?.buildNumber, build);
         expect(candidate?.platform, target.platform);
         expect(candidate?.artifactUrl, target.artifactUrl(version));
-        expect(candidate?.artifactLength, 4);
+        expect(
+          candidate?.artifactLength,
+          await File(p.join(directory.path, target.artifactName(version)))
+              .length(),
+        );
+        final descriptor = jsonDecode(
+          await descriptorFile(target).readAsString(),
+        ) as Map<String, dynamic>;
+        expect(
+          descriptor['appName'],
+          target == ForkClassicUpdateTarget.macosArm64 ? 'Alera.app' : 'Alera',
+        );
         expect(
           await check(target, currentVersion: version, currentBuild: '42'),
           isNull,
@@ -211,6 +243,46 @@ void main() {
       },
     );
   }
+
+  test(
+    'macOS rejects a signed descriptor with the legacy non-bundle name',
+    () async {
+      const target = ForkClassicUpdateTarget.macosArm64;
+      await generate(target);
+      final file = descriptorFile(target);
+      final json =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      json['appName'] = 'Alera';
+      (json['signature'] as Map<String, dynamic>)['value'] = '';
+      final descriptor = ReleaseDescriptor.fromJson(json);
+      final signed = await Ed25519().sign(
+        descriptor.canonicalSignatureBytes(),
+        keyPair: keyPair,
+      );
+      (json['signature'] as Map<String, dynamic>)['value'] = base64Encode(
+        signed.bytes,
+      );
+      await file.writeAsString(jsonEncode(json));
+      await expectLater(check(target), throwsFormatException);
+    },
+  );
+
+  test('macOS cannot sign a ZIP with a mismatched bundle root', () async {
+    const target = ForkClassicUpdateTarget.macosArm64;
+    await writeZip(target, macRoot: 'Alera');
+    await expectLater(
+      generateForkClassicUpdateMetadata(
+        target: target,
+        version: version,
+        buildNumber: build,
+        directory: directory,
+        privateSeed: privateSeed,
+        publicKey: publicKey,
+      ),
+      throwsFormatException,
+    );
+    expect(await descriptorFile(target).exists(), isFalse);
+  });
 
   test(
     'discovery requires the fork index, stable channel and pinned public key',
