@@ -164,31 +164,49 @@ class WorkspaceService._(
         (mainWorkspace?.isMain ?? false) &&
         existingName != previousDefault &&
         existingName != project.name;
-    final next =
-        (mainWorkspace ??
-                Workspace(
-                  id: _uuid.v4(),
-                  projectId: project.id,
-                  name: defaultName,
-                  branch: branch,
-                  path: project.repoPath,
-                  createdAt: now,
-                  updatedAt: now,
-                  kind: .main,
-                  status: .active,
-                ))
-            .copyWith(
-              name: preserveName ? existingName! : defaultName,
-              branch: branch,
-              path: project.repoPath,
-              updatedAt: now,
-              kind: .main,
-              status: .active,
-              sourceBranch: null,
-              reusesExistingBranch: false,
-            );
-    await _repository.upsertWorkspace(next);
+    final desiredName = preserveName ? existingName! : defaultName;
+    // Passive catalog reconciliation is not user activity. An unchanged
+    // main record must not rewrite its timestamp, publish workspacesChanged,
+    // or trigger another sidebar snapshot through the runtime repository.
+    final unchanged =
+        mainWorkspace != null &&
+        mainWorkspace.name == desiredName &&
+        mainWorkspace.branch == branch &&
+        mainWorkspace.path == project.repoPath &&
+        mainWorkspace.isMain &&
+        mainWorkspace.isActive &&
+        mainWorkspace.sourceBranch == null &&
+        !mainWorkspace.reusesExistingBranch;
+    final next = unchanged
+        ? mainWorkspace
+        : (mainWorkspace ??
+                  Workspace(
+                    id: _uuid.v4(),
+                    projectId: project.id,
+                    name: defaultName,
+                    branch: branch,
+                    path: project.repoPath,
+                    createdAt: now,
+                    updatedAt: now,
+                    kind: .main,
+                    status: .active,
+                  ))
+              .copyWith(
+                name: desiredName,
+                branch: branch,
+                path: project.repoPath,
+                updatedAt: now,
+                kind: .main,
+                status: .active,
+                sourceBranch: null,
+                reusesExistingBranch: false,
+              );
+    if (!unchanged) {
+      await _repository.upsertWorkspace(next);
+    }
 
+    // Even on the no-op path, preserve same-checkout duplicate repair and
+    // legacy main-to-linked demotion. Recheck disk identity before repair.
     for (final workspace in existing) {
       if (workspace.id == next.id) {
         continue;

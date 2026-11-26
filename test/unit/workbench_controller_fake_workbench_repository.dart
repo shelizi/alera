@@ -26,6 +26,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
   Object? upsertWorkspaceError, upsertWorkspaceTabError;
   Object? upsertWorkbenchLayoutError, removeWorkspaceTabError;
   int upsertWorkbenchLayoutCalls = 0;
+  int upsertWorkspaceCalls = 0;
   @override
   Future<List<Workspace>> listWorkspaces(String projectId) async {
     return List<Workspace>.from(
@@ -35,12 +36,26 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Stream<List<Workspace>> watchWorkspaces(String projectId) {
-    return _workspaceControllers
-        .putIfAbsent(
-          projectId,
-          () => StreamController<List<Workspace>>.broadcast(),
-        )
-        .stream;
+    final changes = _workspaceControllers.putIfAbsent(
+      projectId,
+      () => StreamController<List<Workspace>>.broadcast(),
+    );
+    // Both production implementations publish the current snapshot on
+    // subscription, not only after a write. Model that contract explicitly
+    // instead of relying on an unnecessary bootstrap upsert to emit it.
+    return Stream<List<Workspace>>.multi((listener) {
+      final subscription = changes.stream.listen(
+        listener.add,
+        onError: listener.addError,
+        onDone: listener.close,
+      );
+      listener.onCancel = subscription.cancel;
+      listener.add(
+        List<Workspace>.from(
+          _workspacesByProject[projectId] ?? const <Workspace>[],
+        ),
+      );
+    });
   }
 
   @override
@@ -57,6 +72,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Future<Workspace> upsertWorkspace(Workspace workspace) async {
+    upsertWorkspaceCalls += 1;
     if (upsertWorkspaceError case final Object error) {
       throw error;
     }

@@ -239,7 +239,9 @@ final class WorkbenchCatalogOwner {
         );
         if (!_host.isDisposed) {
           _host.emitState(
-            _host.readState().copyWith(bootstrapped: true, error: null),
+            // Preparation now awaits the shared in-flight reconciliation.
+            // Preserve any preparation failure already reported by onError.
+            _host.readState().copyWith(bootstrapped: true),
           );
         }
       } catch (error) {
@@ -293,7 +295,6 @@ final class WorkbenchCatalogOwner {
     final workspaceService = _host.workspaceService;
     return _mainWorkspacePreparation.prepare(
       project: project,
-      ensureMainWorkspace: workspaceService.ensureMainWorkspace,
       reconcile: workspaceService.reconcile,
       onError: (project, error) {
         if (!_host.isDisposed) {

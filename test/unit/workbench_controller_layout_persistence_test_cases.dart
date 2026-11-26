@@ -7,7 +7,7 @@ void _registerWorkbenchControllerLayoutPersistenceTests() {
       final projects = <Project>[_harness.project];
       for (var index = 1; index < 15; index += 1) {
         projects.add(
-          await _harness.addProject('project-$index', 'Project $index'),
+          await _harness.addProject('project-${index + 1}', 'Project $index'),
         );
       }
       for (var index = 0; index < projects.length; index += 1) {
@@ -29,6 +29,8 @@ void _registerWorkbenchControllerLayoutPersistenceTests() {
         );
       }
       _harness.workbenchRepository.upsertWorkbenchLayoutCalls = 0;
+      _harness.workbenchRepository.upsertWorkspaceCalls = 0;
+      _harness.gitBackend.calls.clear();
 
       await _controller.bootstrap();
       await _flushUntil(
@@ -41,6 +43,19 @@ void _registerWorkbenchControllerLayoutPersistenceTests() {
       await Future.pause(const Duration(milliseconds: 10));
 
       expect(_harness.workbenchRepository.upsertWorkbenchLayoutCalls, 0);
+      expect(_harness.workbenchRepository.upsertWorkspaceCalls, 0);
+      expect(
+        _harness.gitBackend.calls.where(
+          (call) => call.method == 'currentBranch',
+        ),
+        hasLength(projects.length),
+      );
+      expect(
+        _harness.gitBackend.calls.where(
+          (call) => call.method == 'listWorktrees',
+        ),
+        hasLength(projects.length),
+      );
     },
   );
 

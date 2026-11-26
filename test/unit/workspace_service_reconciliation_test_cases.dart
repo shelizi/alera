@@ -1,6 +1,110 @@
 part of 'workspace_service_test.dart';
 
 void _reconciliationTests() {
+  test('stable 100-project catalog polling performs no writes or redundant final reads', () async {
+    // Real temporary paths, in-memory repository and Git transport.
+    // Each project owns one main and three linked checkouts.
+    final projects = <Project>[];
+    final original = <String, Workspace>{};
+    for (var i = 0; i < 100; i++) {
+      final root = p.join(tempDir.path, 'project-$i');
+      Directory(root).createSync(recursive: true);
+      final candidate = Project(
+        id: 'p-$i',
+        name: 'project-$i',
+        repoPath: root,
+        createdAt: DateTime.utc(2026, 1),
+        updatedAt: DateTime.utc(2026, 1),
+      );
+      projects.add(candidate);
+      for (var n = 0; n < 4; n++) {
+        final path = n == 0 ? root : p.join(tempDir.path, 'checkout-$i-$n');
+        Directory(path).createSync(recursive: true);
+        final row = Workspace(
+          id: 'w-$i-$n',
+          projectId: candidate.id,
+          name: n == 0 ? 'main' : 'feature-$n',
+          branch: n == 0 ? 'main' : 'feature-$n',
+          path: path,
+          createdAt: DateTime.utc(2026, 1, 1, n),
+          updatedAt: DateTime.utc(2026, 2),
+          kind: n == 0 ? WorkspaceKind.main : WorkspaceKind.linked,
+          status: WorkspaceStatus.active,
+          reusesExistingBranch: n != 0,
+        );
+        await repository.upsertWorkspace(row);
+        original[row.id] = row;
+      }
+    }
+    repository.listWorkspaceCalls = 0;
+    repository.upsertWorkspaceCalls = 0;
+    repository.removeWorkspaceCalls = 0;
+    gitBackend.calls.clear();
+    for (final candidate in projects) {
+      gitBackend.liveBranchByPath = {
+        for (final row in original.values.where(
+          (row) => row.projectId == candidate.id,
+        ))
+          row.path: row.branch!,
+      };
+      final rows = await service.reconcile(candidate);
+      expect(rows, hasLength(4));
+      for (final row in rows) {
+        expect(identical(row, original[row.id]), isTrue);
+        expect(row.updatedAt, DateTime.utc(2026, 2));
+      }
+    }
+    expect(repository.listWorkspaceCalls, 200);
+    expect(repository.upsertWorkspaceCalls, 0);
+    expect(repository.removeWorkspaceCalls, 0);
+    expect(
+      gitBackend.calls.where((call) => call.method == 'listWorktrees'),
+      hasLength(100),
+    );
+    expect(
+      gitBackend.calls.where((call) => call.method == 'currentBranch'),
+      hasLength(100),
+    );
+  });
+
+  test(
+    'changed branch writes once while stable recheck retains timestamp',
+    () async {
+      final initial = await service.ensureMainWorkspace(project);
+      gitBackend.liveBranchByPath = {project.repoPath: 'main'};
+      repository.upsertWorkspaceCalls = 0;
+      repository.listWorkspaceCalls = 0;
+      final stable = await service.reconcile(project);
+      expect(identical(stable.single, initial), isTrue);
+      expect(repository.upsertWorkspaceCalls, 0);
+      expect(repository.listWorkspaceCalls, 2);
+      gitBackend.headBranch = 'feature/new';
+      gitBackend.liveBranchByPath = {project.repoPath: 'feature/new'};
+      final changed = await service.reconcile(project);
+      expect(changed.single.branch, 'feature/new');
+      expect(changed.single.name, 'feature/new');
+      expect(changed.single.id, initial.id);
+      expect(repository.upsertWorkspaceCalls, 1);
+      await service.reconcile(project);
+      expect(repository.upsertWorkspaceCalls, 1);
+    },
+  );
+
+  test(
+    'stable folder reconciliation performs no write or final list read',
+    () async {
+      final folder = project.copyWith(kind: ProjectKind.folder);
+      final initial = await service.ensureMainWorkspace(folder);
+      repository.listWorkspaceCalls = 0;
+      repository.upsertWorkspaceCalls = 0;
+      final rows = await service.reconcile(folder);
+      expect(identical(rows.single, initial), isTrue);
+      expect(repository.listWorkspaceCalls, 2);
+      expect(repository.upsertWorkspaceCalls, 0);
+      expect(gitBackend.calls, isEmpty);
+    },
+  );
+
   test(
     'reconcile keeps the main workspace and removes missing linked ones',
     () async {

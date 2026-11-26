@@ -89,6 +89,10 @@ void _registerWorkbenchControllerWatcherRecoveryTests() {
         ),
       );
 
+      // Let the newly subscribed project's initial reconciliation finish.
+      // The subsequently published row represents a live Git checkout,
+      // rather than a stale database-only row that reconciliation may prune.
+      await _flush();
       final workspace = Workspace(
         id: 'workspace-after-recovery',
         projectId: _harness.project.id,
@@ -100,6 +104,7 @@ void _registerWorkbenchControllerWatcherRecoveryTests() {
         kind: .linked,
         status: .active,
       );
+      _harness.gitBackend.liveBranchByPath[workspace.path] = workspace.branch!;
       await _harness.workbenchRepository.upsertWorkspace(workspace);
       await _flushUntil(
         () => _controller.state

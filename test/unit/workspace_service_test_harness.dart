@@ -2,6 +2,9 @@ part of 'workspace_service_test.dart';
 
 class _FakeWorkbenchRepository implements WorkbenchRepository {
   final List<Workspace> workspaces = <Workspace>[];
+  int listWorkspaceCalls = 0;
+  int upsertWorkspaceCalls = 0;
+  int removeWorkspaceCalls = 0;
   final List<WorkspaceTabRecord> tabs = <WorkspaceTabRecord>[];
   final Map<String, WorkbenchLayout> layouts = <String, WorkbenchLayout>{};
 
@@ -39,6 +42,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Future<List<Workspace>> listWorkspaces(String projectId) async {
+    listWorkspaceCalls += 1;
     final matches = workspaces
         .where((workspace) => workspace.projectId == projectId)
         .toList(growable: false);
@@ -66,6 +70,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
     String workspaceId, {
     bool cascadeTabs = true,
   }) async {
+    removeWorkspaceCalls += 1;
     workspaces.removeWhere((workspace) => workspace.id == workspaceId);
     if (cascadeTabs) {
       await removeWorkspaceTabsForWorkspace(workspaceId);
@@ -111,6 +116,7 @@ class _FakeWorkbenchRepository implements WorkbenchRepository {
 
   @override
   Future<Workspace> upsertWorkspace(Workspace workspace) async {
+    upsertWorkspaceCalls += 1;
     final index = workspaces.indexWhere((entry) => entry.id == workspace.id);
     if (index == -1) {
       workspaces.add(workspace);

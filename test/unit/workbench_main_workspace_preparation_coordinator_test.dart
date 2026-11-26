@@ -5,51 +5,49 @@ import 'package:alera/src/features/workbench/application/workbench_main_workspac
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('ensures the main workspace before reconciling the project', () async {
+  test('performs the authoritative reconciliation once', () async {
     final coordinator = WorkbenchMainWorkspacePreparationCoordinator();
     final events = <String>[];
     final project = _project('project');
 
     await coordinator.prepare(
       project: project,
-      ensureMainWorkspace: (_) async => events.add('ensure'),
       reconcile: (_) async => events.add('reconcile'),
       onError: (_, _) => events.add('error'),
     );
 
-    expect(events, <String>['ensure', 'reconcile']);
+    expect(events, <String>['reconcile']);
   });
 
   test('coalesces concurrent preparation for the same project', () async {
     final coordinator = WorkbenchMainWorkspacePreparationCoordinator();
     final gate = Completer<void>();
-    var ensureCalls = 0;
     var reconcileCalls = 0;
     final project = _project('project');
 
     final first = coordinator.prepare(
       project: project,
-      ensureMainWorkspace: (_) async {
-        ensureCalls += 1;
+      reconcile: (_) async {
+        reconcileCalls += 1;
         await gate.future;
       },
-      reconcile: (_) async => reconcileCalls += 1,
       onError: (_, _) {},
     );
     final second = coordinator.prepare(
       project: project,
-      ensureMainWorkspace: (_) async => ensureCalls += 1,
       reconcile: (_) async => reconcileCalls += 1,
       onError: (_, _) {},
     );
 
-    await second;
-    expect(ensureCalls, 1);
-    expect(reconcileCalls, 0);
-
+    expect(identical(first, second), isTrue);
+    var completed = false;
+    unawaited(second.then((_) => completed = true));
+    await Future<void>.delayed(Duration.zero);
+    expect(reconcileCalls, 1);
+    expect(completed, isFalse);
     gate.complete();
-    await first;
-    expect(ensureCalls, 1);
+    await Future.wait([first, second]);
+    expect(completed, isTrue);
     expect(reconcileCalls, 1);
   });
 
@@ -60,17 +58,15 @@ void main() {
 
     final first = coordinator.prepare(
       project: _project('first'),
-      ensureMainWorkspace: (project) async {
+      reconcile: (project) async {
         started.add(project.id);
         await firstGate.future;
       },
-      reconcile: (_) async {},
       onError: (_, _) {},
     );
     final second = coordinator.prepare(
       project: _project('second'),
-      ensureMainWorkspace: (project) async => started.add(project.id),
-      reconcile: (_) async {},
+      reconcile: (project) async => started.add(project.id),
       onError: (_, _) {},
     );
 
@@ -84,25 +80,24 @@ void main() {
   test('reports failures, releases the project, and allows retry', () async {
     final coordinator = WorkbenchMainWorkspacePreparationCoordinator();
     final errors = <Object>[];
-    var ensureCalls = 0;
+    var reconcileCalls = 0;
     final project = _project('project');
 
     Future<void> prepare() => coordinator.prepare(
       project: project,
-      ensureMainWorkspace: (_) async {
-        ensureCalls += 1;
-        if (ensureCalls == 1) {
+      reconcile: (_) async {
+        reconcileCalls += 1;
+        if (reconcileCalls == 1) {
           throw StateError('prepare failed');
         }
       },
-      reconcile: (_) async {},
       onError: (_, error) => errors.add(error),
     );
 
     await prepare();
     await prepare();
 
-    expect(ensureCalls, 2);
+    expect(reconcileCalls, 2);
     expect(errors, hasLength(1));
     expect(errors.single, isA<StateError>());
   });
