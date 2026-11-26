@@ -95,6 +95,9 @@ class WorkspaceSourceControlController
   Completer<void>? _queuedManualRefresh;
   int _queuedWatcherReloads = 0;
   int _loadGeneration = 0;
+  ({GitSourceControlQueryPort backend, int generation})? _pendingFastMetadata;
+  bool _fastMetadataInFlight = false;
+  bool _fastMetadataNeedsStashes = false;
   int _staleCompletionCount = 0;
   @visibleForTesting
   int get staleCompletionCount => _staleCompletionCount;
@@ -426,13 +429,13 @@ class WorkspaceSourceControlController
       }
       state = AsyncData(next);
       if (statusFirst && previous != null) {
-        unawaited(
-          _refreshRepositoryStateAfterFastAction(
-            backend: backend,
-            loadGeneration: loadGeneration,
-            includeStashes: action == WorkspaceSourceControlAction.refresh,
-          ),
+        _queueRepositoryStateAfterFastAction(
+          backend: backend,
+          loadGeneration: loadGeneration,
+          includeStashes: action == WorkspaceSourceControlAction.refresh,
         );
+      } else {
+        _fastMetadataNeedsStashes = false;
       }
     } catch (error, stackTrace) {
       final recovered = await _recoverAfterFailure(previous);
@@ -461,6 +464,39 @@ class WorkspaceSourceControlController
     );
   }
 
+  // File status stays on the foreground path. Keep at most one background
+  // metadata read and one latest-generation request per controller instead of
+  // launching a new repository/stash query for every rapid stage/refresh.
+  void _queueRepositoryStateAfterFastAction({
+    required GitSourceControlQueryPort backend,
+    required int loadGeneration,
+    required bool includeStashes,
+  }) {
+    _pendingFastMetadata = (backend: backend, generation: loadGeneration);
+    // A manual refresh's stash requirement survives a superseding fast action
+    // until a current metadata read (or a full snapshot) actually satisfies it.
+    _fastMetadataNeedsStashes |= includeStashes;
+    if (!_fastMetadataInFlight) unawaited(_drainFastMetadata());
+  }
+
+  Future<void> _drainFastMetadata() async {
+    _fastMetadataInFlight = true;
+    try {
+      while (ref.mounted && _pendingFastMetadata != null) {
+        final request = _pendingFastMetadata!;
+        _pendingFastMetadata = null;
+        if (request.generation != _loadGeneration) continue;
+        await _refreshRepositoryStateAfterFastAction(
+          backend: request.backend,
+          loadGeneration: request.generation,
+          includeStashes: _fastMetadataNeedsStashes,
+        );
+      }
+    } finally {
+      _fastMetadataInFlight = false;
+    }
+  }
+
   Future<void> _refreshRepositoryStateAfterFastAction({
     required GitSourceControlQueryPort backend,
     required int loadGeneration,
@@ -471,13 +507,14 @@ class WorkspaceSourceControlController
         backend.repositoryState(workspacePath),
         if (includeStashes) backend.listStashes(workspacePath),
       ]);
-      if (loadGeneration != _loadGeneration) return;
+      if (!ref.mounted || loadGeneration != _loadGeneration) return;
       final current = state.asData?.value;
       if (current == null || current.isBusy) return;
       final repositoryState = results[0] as GitRepositoryState;
       final stashes = includeStashes
           ? results[1] as List<GitStashEntry>
           : current.stashes;
+      if (includeStashes) _fastMetadataNeedsStashes = false;
       if (gitRepositoryStateValuesEqual(
             current.repositoryState,
             repositoryState,
@@ -575,6 +612,8 @@ class WorkspaceSourceControlController
 
   void _stopWatching() {
     _disposed = true;
+    _pendingFastMetadata = null;
+    _fastMetadataNeedsStashes = false;
     _watcherReloadQueued = false;
     _watcherReloadNotBefore = null;
     _watcherReloadDebounceTimer?.cancel();
@@ -638,6 +677,7 @@ class WorkspaceSourceControlController
         debugPrint('[stale-completion] watcher generation=$loadGeneration');
         return;
       }
+      _fastMetadataNeedsStashes = false;
       // A native watcher may report several events for an unchanged Git
       // snapshot. Keep manual refresh revisions, but avoid rebuilding the
       // visible Source Control tree for identical background results.

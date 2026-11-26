@@ -147,6 +147,167 @@ void main() {
       await Future.pause(const Duration(milliseconds: 40));
     },
   );
+  test(
+    'rapid fast actions coalesce metadata reads and keep pending stash refresh',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, controller) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final firstGate = Completer<void>();
+      final trailingGate = Completer<void>();
+      final trailingStarted = Completer<void>();
+      var metadataCalls = 0;
+      var active = 0;
+      var peak = 0;
+      final stashCallsBefore = backend.calls
+          .where((call) => call.method == 'listStashes')
+          .length;
+      backend.beforeRepositoryState = (_) async {
+        metadataCalls += 1;
+        active += 1;
+        if (active > peak) peak = active;
+        try {
+          if (metadataCalls == 1) {
+            await firstGate.future;
+          } else {
+            if (!trailingStarted.isCompleted) trailingStarted.complete();
+            await trailingGate.future;
+          }
+        } finally {
+          active -= 1;
+        }
+      };
+      addTearDown(() {
+        if (!firstGate.isCompleted) firstGate.complete();
+        if (!trailingGate.isCompleted) trailingGate.complete();
+      });
+
+      // Manual refresh starts a repository/stash read. While it is blocked,
+      // all twenty local actions must still publish their own file status.
+      await controller.refresh();
+      for (var i = 1; i <= 20; i += 1) {
+        backend.gitStatusResult = _statusWith(i + 1);
+        await controller.stage('file_0.dart');
+        expect(
+          container.read(provider).requireValue.status.entries,
+          hasLength(i + 1),
+        );
+        expect(container.read(provider).requireValue.isBusy, isFalse);
+      }
+      expect(metadataCalls, 1);
+      expect(peak, 1);
+      expect(
+        backend.calls.where((call) => call.method == 'listStashes').length,
+        stashCallsBefore + 1,
+      );
+      backend.gitRepositoryStateResult = const GitRepositoryState(
+        branch: 'updated',
+        ahead: 2,
+      );
+      backend.gitStashEntries = const [
+        GitStashEntry(
+          index: 0,
+          reference: 'stash@{0}',
+          message: 'new',
+          oid: 'abc',
+        ),
+      ];
+      firstGate.complete();
+      await trailingStarted.future.timeout(const Duration(seconds: 2));
+      // The old generation must not publish even if its read completes.
+      expect(
+        container.read(provider).requireValue.repositoryState.branch,
+        'main',
+      );
+      expect(container.read(provider).requireValue.stashes, isEmpty);
+      expect(metadataCalls, 2);
+      expect(peak, 1);
+      trailingGate.complete();
+      await Future.pause(const Duration(milliseconds: 40));
+
+      final next = container.read(provider).requireValue;
+      expect(next.status.entries, hasLength(21));
+      expect(next.repositoryState.branch, 'updated');
+      expect(next.repositoryState.ahead, 2);
+      expect(next.stashes.single.message, 'new');
+      expect(metadataCalls, 2);
+      expect(
+        backend.calls.where((call) => call.method == 'listStashes').length,
+        stashCallsBefore + 2,
+      );
+    },
+  );
+
+  test('a failed metadata read releases the latest queued request', () async {
+    final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+    final watcher = FakeSourceControlWatcher();
+    addTearDown(watcher.dispose);
+    final (container, controller) = await _boot(backend, watcher);
+    final provider = workspaceSourceControlControllerProvider(_workspacePath);
+    final firstGate = Completer<void>();
+    var calls = 0;
+    backend.beforeRepositoryState = (_) async {
+      calls += 1;
+      if (calls == 1) {
+        await firstGate.future;
+        throw StateError('simulated metadata failure');
+      }
+    };
+    addTearDown(() {
+      if (!firstGate.isCompleted) firstGate.complete();
+    });
+    await controller.stage('file_0.dart');
+    await controller.stage('file_0.dart');
+    expect(calls, 1);
+    backend.gitRepositoryStateResult = const GitRepositoryState(
+      branch: 'fresh',
+    );
+    firstGate.complete();
+    await Future.pause(const Duration(milliseconds: 40));
+    expect(calls, 2);
+    expect(
+      container.read(provider).requireValue.repositoryState.branch,
+      'fresh',
+    );
+  });
+
+  test(
+    'disposing cancels queued fast metadata without starting a new read',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final container = ProviderContainer(
+        overrides: [
+          gitBackendProvider.overrideWithValue(backend),
+          sourceControlWatcherProvider.overrideWithValue(watcher),
+        ],
+      );
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final subscription = container.listen(provider, (_, _) {});
+      await container.read(provider.future);
+      final controller = container.read(provider.notifier);
+      final gate = Completer<void>();
+      var calls = 0;
+      backend.beforeRepositoryState = (_) async {
+        calls += 1;
+        await gate.future;
+      };
+      try {
+        await controller.stage('file_0.dart');
+        await controller.stage('file_0.dart');
+        expect(calls, 1);
+      } finally {
+        subscription.close();
+        container.dispose();
+        gate.complete();
+      }
+      await Future.pause(const Duration(milliseconds: 40));
+      expect(calls, 1);
+    },
+  );
   test('a watch signal reloads source control state', () async {
     final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
     final watcher = FakeSourceControlWatcher();
