@@ -26,24 +26,8 @@ final class WorkspaceGitDiffPageReader {
 
   final GitWorkingTreeDiffQueryPort _git;
 
-  Future<List<String>?> changedPaths(String path) async {
-    final status = await _git.status(path);
-    final hasNestedSubmoduleChanges = status.entries.any((entry) {
-      final submodule = entry.submodule;
-      return submodule != null &&
-          (submodule.trackedChanges || submodule.untrackedChanges);
-    });
-    if (hasNestedSubmoduleChanges) {
-      // Rust's combined diff also traverses nested submodule changes. Page
-      // queries do not yet have an equivalent snapshot contract.
-      return null;
-    }
-    final paths = <String>{};
-    for (final entry in status.entries) {
-      paths.add(entry.path);
-    }
-    return paths.toList(growable: false);
-  }
+  Future<List<String>?> changedPaths(String path) =>
+      _git.diffChangedPaths(path);
 
   Future<WorkspaceGitDiffFirstPage> firstPage({
     required String path,

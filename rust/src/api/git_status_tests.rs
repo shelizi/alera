@@ -373,6 +373,55 @@ fn git_status_line_counts_match_rendered_diffs_without_preview_limits() {
     }
 }
 
+fn full_status_changed_paths_for_test(status: GitStatusResult) -> Option<Vec<String>> {
+    if status.entries.iter().any(|entry| {
+        entry
+            .submodule
+            .as_ref()
+            .is_some_and(|submodule| submodule.tracked_changes || submodule.untracked_changes)
+    }) {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    Some(
+        status
+            .entries
+            .into_iter()
+            .filter_map(|entry| seen.insert(entry.path.clone()).then_some(entry.path))
+            .collect(),
+    )
+}
+
+#[test]
+fn lightweight_diff_paths_preserve_order_and_fresh_changes() {
+    let repo = init_repo();
+    let root = repo.path();
+    let path = path_str(root);
+    assert_eq!(git_diff_changed_paths(path.clone()).unwrap(), Some(vec![]));
+    std::fs::write(root.join("README.md"), "stage\n").unwrap();
+    std::fs::write(root.join("a-added.txt"), "added\n").unwrap();
+    run_git(root, &["add", "."]);
+    std::fs::write(root.join("README.md"), "worktree\n").unwrap();
+    std::fs::write(root.join("z-untracked.txt"), "untracked\n").unwrap();
+    let expected = Some(vec![
+        "z-untracked.txt".into(),
+        "README.md".into(),
+        "a-added.txt".into(),
+    ]);
+    assert_eq!(git_diff_changed_paths(path.clone()).unwrap(), expected);
+    assert_eq!(
+        git_diff_changed_paths(path.clone()).unwrap(),
+        full_status_changed_paths_for_test(git_status(path.clone()).unwrap())
+    );
+    std::fs::remove_file(root.join("z-untracked.txt")).unwrap();
+    assert_eq!(
+        git_diff_changed_paths(path.clone()).unwrap(),
+        Some(vec!["README.md".into(), "a-added.txt".into()])
+    );
+    let plain = tempfile::tempdir().unwrap();
+    assert!(git_diff_changed_paths(path_str(plain.path())).is_err());
+}
+
 #[test]
 fn batched_status_matches_legacy_across_chunks_and_workspace_scopes() {
     let repo = init_repo();
@@ -430,8 +479,13 @@ fn batched_status_matches_legacy_across_chunks_and_workspace_scopes() {
     ] {
         let path = path_str(&scope);
         let expected = legacy_git_status_for_test(path.clone()).unwrap();
-        let actual = git_status(path).unwrap();
+        let actual = git_status(path.clone()).unwrap();
         assert_eq!(actual, expected, "scope {scope:?}");
+        assert_eq!(
+            git_diff_changed_paths(path).unwrap(),
+            full_status_changed_paths_for_test(expected),
+            "progressive paths in {scope:?}"
+        );
         let normal_count = actual
             .entries
             .iter()
@@ -520,4 +574,34 @@ fn benchmark_batched_status_line_stats() {
     after.sort_by(f64::total_cmp);
     println!("Source Control status: 512 tracked files, 160 modified (80 also staged), 240 entries; seven alternating runs; old median {:.3} ms, new median {:.3} ms", before[3], after[3]);
     println!("old ms {before:?}; new ms {after:?}");
+
+    // Compare the previous progressive-path preflight (full status, including
+    // phase 5 batching) to the new identities-only API on the same fixture.
+    let full_paths = || full_status_changed_paths_for_test(git_status(path.clone()).unwrap());
+    let lightweight_paths = || git_diff_changed_paths(path.clone()).unwrap();
+    let expected_paths = full_paths();
+    assert_eq!(expected_paths.as_ref().unwrap().len(), 160);
+    assert_eq!(lightweight_paths(), expected_paths);
+    let timed_paths = |f: &dyn Fn() -> Option<Vec<String>>| {
+        let start = Instant::now();
+        let paths = f();
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(paths, expected_paths);
+        ms
+    };
+    let mut full_ms = Vec::new();
+    let mut lightweight_ms = Vec::new();
+    for i in 0..7 {
+        if i % 2 == 0 {
+            full_ms.push(timed_paths(&full_paths));
+            lightweight_ms.push(timed_paths(&lightweight_paths));
+        } else {
+            lightweight_ms.push(timed_paths(&lightweight_paths));
+            full_ms.push(timed_paths(&full_paths));
+        }
+    }
+    full_ms.sort_by(f64::total_cmp);
+    lightweight_ms.sort_by(f64::total_cmp);
+    println!("Progressive diff path discovery: 160 unique paths; old median {:.3} ms, new median {:.3} ms", full_ms[3], lightweight_ms[3]);
+    println!("full status ms {full_ms:?}; identities only ms {lightweight_ms:?}");
 }

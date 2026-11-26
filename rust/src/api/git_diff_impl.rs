@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use git2::{
@@ -60,7 +60,46 @@ pub(super) fn git_status_entries_for_explorer(
 ) -> Result<Vec<GitChangeEntry>, GitError> {
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
-    git_status_entries_with_options(&repo, &paths, &mut status_options(), false)
+    status_entries_without_line_stats(&repo, &paths, None)
+}
+
+fn status_entries_without_line_stats(
+    repo: &Repository,
+    paths: &GitPathContext,
+    file_path: Option<&str>,
+) -> Result<Vec<GitChangeEntry>, GitError> {
+    let mut options = status_options();
+    if let Some(file_path) = file_path {
+        options
+            .disable_pathspec_match(true)
+            .pathspec(paths.to_repo_path(file_path));
+    }
+    git_status_entries_with_options(repo, paths, &mut options, false)
+}
+
+/// The progressive diff reader needs ordered identities, not line counts,
+/// status groups or the tree projection. Nested dirty submodules still use
+/// the combined native renderer, just as the original Dart reader did.
+pub(super) fn git_diff_changed_paths(path: String) -> Result<Option<Vec<String>>, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    let entries = status_entries_without_line_stats(&repo, &paths, None)?;
+    if entries.iter().any(|entry| {
+        entry
+            .submodule
+            .as_ref()
+            .is_some_and(|submodule| submodule.tracked_changes || submodule.untracked_changes)
+    }) {
+        return Ok(None);
+    }
+    let mut seen = HashSet::with_capacity(entries.len());
+    let mut changed = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if seen.insert(entry.path.clone()) {
+            changed.push(entry.path);
+        }
+    }
+    Ok(Some(changed))
 }
 
 #[cfg(test)]

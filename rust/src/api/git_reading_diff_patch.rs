@@ -5,7 +5,7 @@ mod git_reading_diff_submodule;
 
 use super::git_diff_untracked::git_patch_path;
 use super::{
-    build_untracked_patch, git_status, git_status_for_path, open_repo, read_untracked_text_up_to,
+    build_untracked_patch, open_repo, read_untracked_text_up_to, status_entries_without_line_stats,
     GitChangeArea, GitError, GitErrorKind, GitPathContext,
 };
 use git_reading_diff_submodule::submodule_child_workdir;
@@ -127,12 +127,16 @@ fn git_reading_diff_patch_with_prefix(
         ));
     }
 
-    let status = match (&file_path, &old_path) {
-        (Some(file_path), None) => git_status_for_path(path.clone(), file_path.clone())?,
-        _ => git_status(path.clone())?,
+    // Only identities and submodule state are needed before emitting the
+    // actual patch. Avoid computing every patch once just to count lines,
+    // and reuse the already opened repository and workspace scope.
+    let selected_path = match (&file_path, &old_path) {
+        (Some(file_path), None) => Some(file_path.as_str()),
+        _ => None,
     };
+    let entries = status_entries_without_line_stats(&repo, &paths, selected_path)?;
     let mut output = Vec::new();
-    for entry in status.entries {
+    for entry in entries {
         if area.is_some_and(|selected| selected != entry.area) {
             continue;
         }

@@ -560,6 +560,12 @@ pub fn git_diff_all(path: String, file_path: Option<String>) -> Result<GitDiffRe
     git_diff_impl::git_diff_all(path, file_path)
 }
 
+/// Ordered unique workspace-relative changes for progressive diff pagination.
+/// None requests the combined renderer for nested dirty submodules.
+pub fn git_diff_changed_paths(path: String) -> Result<Option<Vec<String>>, GitError> {
+    git_diff_impl::git_diff_changed_paths(path)
+}
+
 pub fn git_diff_all_page(path: String, file_paths: Vec<String>) -> Result<GitDiffPage, GitError> {
     git_diff_impl::git_diff_all_page(path, file_paths)
 }

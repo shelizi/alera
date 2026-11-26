@@ -38,6 +38,10 @@ fn reports_and_loads_tracked_and_untracked_submodule_changes() {
     assert!(!submodule.commit_changed);
     assert!(submodule.tracked_changes);
     assert!(submodule.untracked_changes);
+    assert_eq!(
+        git_diff_changed_paths(path_str(parent.path())).unwrap(),
+        None
+    );
     let explorer =
         crate::api::git_explorer_status::git_explorer_status_snapshot(path_str(parent.path()))
             .unwrap();
@@ -90,6 +94,10 @@ fn exposes_pointer_and_inner_diffs_for_staged_submodule_commit() {
         .find(|entry| entry.path == "modules/sample" && entry.area == GitChangeArea::Unstaged)
         .expect("unstaged pointer");
     assert!(entry.submodule.as_ref().unwrap().commit_changed);
+    assert_eq!(
+        git_diff_changed_paths(path_str(parent.path())).unwrap(),
+        Some(vec!["modules/sample".to_owned()])
+    );
     let pointer = git_diff(
         path_str(parent.path()),
         "modules/sample".to_string(),

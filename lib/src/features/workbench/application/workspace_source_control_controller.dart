@@ -678,16 +678,10 @@ class WorkspaceSourceControlController
         return;
       }
       _fastMetadataNeedsStashes = false;
-      // A native watcher may report several events for an unchanged Git
-      // snapshot. Keep manual refresh revisions, but avoid rebuilding the
-      // visible Source Control tree for identical background results.
-      final current = state.asData?.value;
-      if (current != null &&
-          identical(next.status, current.status) &&
-          identical(next.repositoryState, current.repositoryState) &&
-          identical(next.stashes, current.stashes)) {
-        return;
-      }
+      // Equal status/branch/stash summaries do not prove that the history or
+      // file contents stayed the same. Publish the coalesced load revision so
+      // history and expanded submodules can invalidate; the reconciled
+      // status/group instances still stay hot for the tree's grouping caches.
       state = AsyncData(next);
     } catch (_) {
       // Best-effort background refresh: keep the current state on failure.

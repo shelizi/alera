@@ -50,6 +50,37 @@ Future<(ProviderContainer, WorkspaceSourceControlController)> _boot(
 
 void main() {
   test(
+    'unchanged watcher summary publishes revision with reused payloads',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(4);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, _) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final before = container.read(provider).requireValue;
+      final updated = Completer<WorkspaceSourceControlState>();
+      final subscription = container.listen(provider, (_, next) {
+        final data = next.asData?.value;
+        if (data != null &&
+            data.revision > before.revision &&
+            !updated.isCompleted) {
+          updated.complete(data);
+        }
+      });
+      addTearDown(subscription.close);
+      // A new, value-equal result should reuse the previous projections but
+      // still invalidate commit history even when counts/messages did not move.
+      backend.gitStatusResult = _statusWith(4);
+      watcher.emitChange();
+      final after = await updated.future.timeout(const Duration(seconds: 5));
+      expect(after.revision, before.revision + 1);
+      expect(identical(after.status, before.status), isTrue);
+      expect(identical(after.repositoryState, before.repositoryState), isTrue);
+      expect(identical(after.stashes, before.stashes), isTrue);
+    },
+  );
+
+  test(
     'stage publishes status before repository metadata refresh completes',
     () async {
       final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);

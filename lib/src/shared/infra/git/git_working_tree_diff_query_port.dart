@@ -3,7 +3,9 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 /// Narrow read-only capability for status-scoped worktree diff previews.
 /// Keeps branch mutation/checkout/commit APIs out of progressive readers.
 abstract interface class GitWorkingTreeDiffQueryPort {
-  Future<GitStatusResult> status(String path);
+  /// Ordered unique changed paths. Null means nested submodule changes require
+  /// the combined native renderer rather than progressive pages.
+  Future<List<String>?> diffChangedPaths(String path);
 
   Future<GitDiffResult> diff({
     required String path,

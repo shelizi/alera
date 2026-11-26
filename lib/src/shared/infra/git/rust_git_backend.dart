@@ -159,6 +159,10 @@ class const RustGitBackend()
   });
 
   @override
+  Future<List<String>?> diffChangedPaths(String path) =>
+      _guard(() => rust.gitDiffChangedPaths(path: path));
+
+  @override
   Future<GitExplorerStatusSnapshot> explorerStatusSnapshot(String path) =>
       _guard(
         () async => _toExplorerStatusSnapshot(

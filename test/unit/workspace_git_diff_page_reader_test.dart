@@ -4,16 +4,16 @@ import 'package:alera/src/shared/infra/git/git_working_tree_diff_query_port.dart
 import 'package:flutter_test/flutter_test.dart';
 
 final class _DiffSnapshotFake implements GitWorkingTreeDiffQueryPort {
-  GitStatusResult snapshot = const GitStatusResult(entries: []);
+  List<String>? paths = const [];
   GitDiffResult combined = const GitDiffResult(files: []);
   GitDiffPage page = const GitDiffPage(files: []);
   bool failPage = false;
   final calls = <String>[];
 
   @override
-  Future<GitStatusResult> status(String path) async {
-    calls.add('status:$path');
-    return snapshot;
+  Future<List<String>?> diffChangedPaths(String path) async {
+    calls.add('paths:$path');
+    return paths;
   }
 
   @override
@@ -73,52 +73,29 @@ void main() {
     expect(gitDiffPreviewBytes(const GitDiffResult(files: [])), 0);
   });
 
-  test(
-    'stable status snapshot deduplicates paths before querying the first page',
-    () async {
-      final fake = _DiffSnapshotFake()
-        ..snapshot = const GitStatusResult(
-          entries: [
-            GitChangeEntry(path: 'a.dart', area: .staged, status: .modified),
-            GitChangeEntry(path: 'a.dart', area: .unstaged, status: .modified),
-            GitChangeEntry(path: 'b.dart', area: .unstaged, status: .added),
-          ],
-        )
-        ..page = const GitDiffPage(files: [_file], truncated: true);
-      final reader = WorkspaceGitDiffPageReader(fake);
-      final paths = await reader.changedPaths('/repo');
-      expect(paths, <String>['a.dart', 'b.dart']);
-      final first = await reader.firstPage(
-        path: '/repo',
-        pathsFuture: Future.value(paths),
-        whitespaceMode: GitDiffWhitespaceMode.ignoreAll,
-      );
-      expect(first.result.files, [_file]);
-      expect(first.result.truncated, isTrue);
-      expect(first.nextIndex, 1);
-      expect(fake.calls, ['status:/repo', 'page:/repo:a.dart:ignoreAll']);
-    },
-  );
+  test('ordered lightweight path query supplies the first page', () async {
+    final fake = _DiffSnapshotFake()
+      ..paths = const ['a.dart', 'b.dart']
+      ..page = const GitDiffPage(files: [_file], truncated: true);
+    final reader = WorkspaceGitDiffPageReader(fake);
+    final paths = await reader.changedPaths('/repo');
+    expect(paths, <String>['a.dart', 'b.dart']);
+    final first = await reader.firstPage(
+      path: '/repo',
+      pathsFuture: Future.value(paths),
+      whitespaceMode: GitDiffWhitespaceMode.ignoreAll,
+    );
+    expect(first.result.files, [_file]);
+    expect(first.result.truncated, isTrue);
+    expect(first.nextIndex, 1);
+    expect(fake.calls, ['paths:/repo', 'page:/repo:a.dart:ignoreAll']);
+  });
 
   test(
     'nested submodule worktree changes fall back to native combined diff',
     () async {
       final fake = _DiffSnapshotFake()
-        ..snapshot = const GitStatusResult(
-          entries: [
-            GitChangeEntry(
-              path: 'submodule',
-              area: .unstaged,
-              status: .modified,
-              submodule: GitSubmoduleStatus(
-                commitChanged: false,
-                trackedChanges: true,
-                untrackedChanges: false,
-                inspectable: true,
-              ),
-            ),
-          ],
-        )
+        ..paths = null
         ..combined = const GitDiffResult(files: [_file]);
       final reader = WorkspaceGitDiffPageReader(fake);
       final paths = await reader.changedPaths('/repo');
@@ -130,7 +107,7 @@ void main() {
       );
       expect(first.result.files, [_file]);
       expect(first.nextIndex, isNull);
-      expect(fake.calls, ['status:/repo', 'all:/repo:normal']);
+      expect(fake.calls, ['paths:/repo', 'all:/repo:normal']);
     },
   );
 
