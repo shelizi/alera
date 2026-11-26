@@ -309,6 +309,8 @@ pub struct TerminalSession {
     pub agent_state_started_at: Option<String>,
     pub agent_updated_at: Option<String>,
     pub agent_context: Option<AgentContextOverview>,
+    /// Confirmed by the current Host inventory; missing on older Hosts.
+    pub builtin_mcp_status: Option<String>,
 }
 
 impl TerminalSession {
@@ -1350,6 +1352,22 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             agent_state_started_at,
             agent_updated_at,
             agent_context,
+            builtin_mcp_status: running
+                .then(|| item.get("builtinMcpStatus").and_then(Value::as_str))
+                .flatten()
+                .filter(|status| {
+                    matches!(
+                        *status,
+                        "connected"
+                            | "awaiting_discovery"
+                            | "disconnected"
+                            | "disabled"
+                            | "not_injected"
+                            | "setting_unavailable"
+                            | "unsupported"
+                    )
+                })
+                .map(str::to_owned),
         });
     }
     Ok(sessions)
@@ -2218,9 +2236,10 @@ impl TerminalAutoResizeGate {
     pub fn can_apply_response(&self, request: &TerminalViewportProposal) -> bool {
         !self.manually_suspended.contains(&request.target)
             && self.attempted.iter().any(|attempted| attempted == request)
-            && !self.pending.iter().any(|(pending, _)| {
-                pending.target == request.target && pending != request
-            })
+            && !self
+                .pending
+                .iter()
+                .any(|(pending, _)| pending.target == request.target && pending != request)
     }
 }
 
@@ -3582,6 +3601,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         assert!(expected.matches_running_identity(&expected));
         let mut current = expected.clone();
@@ -3838,8 +3858,13 @@ mod tests {
         assert!(gate.can_apply_response(&first));
         gate.suspend_until_changed(&target);
         assert!(!gate.can_apply_response(&first));
-        gate.observe(vec![first.clone()], now + std::time::Duration::from_millis(320));
-        assert!(gate.take_ready(now + std::time::Duration::from_secs(3)).is_empty());
+        gate.observe(
+            vec![first.clone()],
+            now + std::time::Duration::from_millis(320),
+        );
+        assert!(gate
+            .take_ready(now + std::time::Duration::from_secs(3))
+            .is_empty());
         gate.observe(vec![next.clone()], now + std::time::Duration::from_secs(4));
         assert_eq!(
             gate.take_ready(now + std::time::Duration::from_millis(4310)),
@@ -3894,8 +3919,14 @@ mod tests {
             vec![old.clone()],
         );
         assert!(gate.can_apply_response(&old));
-        gate.observe(vec![latest.clone()], now + std::time::Duration::from_millis(320));
-        assert!(!gate.can_apply_response(&old), "newer pending dimensions win");
+        gate.observe(
+            vec![latest.clone()],
+            now + std::time::Duration::from_millis(320),
+        );
+        assert!(
+            !gate.can_apply_response(&old),
+            "newer pending dimensions win"
+        );
         assert!(!gate.can_apply_response(&latest), "not yet sent to Host");
         assert_eq!(
             gate.take_ready(now + std::time::Duration::from_millis(630)),
@@ -4612,6 +4643,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         }
     }
 

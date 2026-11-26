@@ -771,6 +771,12 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     opt: true,
     def: false,
   );
+  static bool? _$builtinMcpEnabled(AgentSettings v) => v.builtinMcpEnabled;
+  static const Field<AgentSettings, bool> _f$builtinMcpEnabled = Field(
+    'builtinMcpEnabled',
+    _$builtinMcpEnabled,
+    opt: true,
+  );
   static String? _$defaultAgentProfileId(AgentSettings v) =>
       v.defaultAgentProfileId;
   static const Field<AgentSettings, String> _f$defaultAgentProfileId = Field(
@@ -811,6 +817,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
     #keepComputerAwakeWhileAgentsWork: _f$keepComputerAwakeWhileAgentsWork,
     #showTabTitlesInSidebar: _f$showTabTitlesInSidebar,
     #showTaskSummariesInSidebar: _f$showTaskSummariesInSidebar,
+    #builtinMcpEnabled: _f$builtinMcpEnabled,
     #defaultAgentProfileId: _f$defaultAgentProfileId,
     #agentExecutablePaths: _f$agentExecutablePaths,
     #gitBashExecutablePath: _f$gitBashExecutablePath,
@@ -831,6 +838,7 @@ class AgentSettingsMapper extends ClassMapperBase<AgentSettings> {
       ),
       showTabTitlesInSidebar: data.dec(_f$showTabTitlesInSidebar),
       showTaskSummariesInSidebar: data.dec(_f$showTaskSummariesInSidebar),
+      builtinMcpEnabled: data.dec(_f$builtinMcpEnabled),
       defaultAgentProfileId: data.dec(_f$defaultAgentProfileId),
       agentExecutablePaths: data.dec(_f$agentExecutablePaths),
       gitBashExecutablePath: data.dec(_f$gitBashExecutablePath),
@@ -917,6 +925,7 @@ abstract class AgentSettingsCopyWith<$R, $In extends AgentSettings, $Out>
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
     bool? showTaskSummariesInSidebar,
+    bool? builtinMcpEnabled,
     String? defaultAgentProfileId,
     Map<String, String>? agentExecutablePaths,
     String? gitBashExecutablePath,
@@ -959,6 +968,7 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     bool? keepComputerAwakeWhileAgentsWork,
     bool? showTabTitlesInSidebar,
     bool? showTaskSummariesInSidebar,
+    Object? builtinMcpEnabled = $none,
     Object? defaultAgentProfileId = $none,
     Map<String, String>? agentExecutablePaths,
     Object? gitBashExecutablePath = $none,
@@ -977,6 +987,7 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
         #showTabTitlesInSidebar: showTabTitlesInSidebar,
       if (showTaskSummariesInSidebar != null)
         #showTaskSummariesInSidebar: showTaskSummariesInSidebar,
+      if (builtinMcpEnabled != $none) #builtinMcpEnabled: builtinMcpEnabled,
       if (defaultAgentProfileId != $none)
         #defaultAgentProfileId: defaultAgentProfileId,
       if (agentExecutablePaths != null)
@@ -1008,6 +1019,10 @@ class _AgentSettingsCopyWithImpl<$R, $Out>
     showTaskSummariesInSidebar: data.get(
       #showTaskSummariesInSidebar,
       or: $value.showTaskSummariesInSidebar,
+    ),
+    builtinMcpEnabled: data.get(
+      #builtinMcpEnabled,
+      or: $value.builtinMcpEnabled,
     ),
     defaultAgentProfileId: data.get(
       #defaultAgentProfileId,

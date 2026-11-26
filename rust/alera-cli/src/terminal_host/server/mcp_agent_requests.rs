@@ -43,10 +43,17 @@ impl ServerActor {
         let workspace = session.workspace_id.clone();
 
         match request_type {
-            "agentControl.scope" => Ok(json!({
-                "sessionId": from, "workspaceId": workspace, "authorized": true,
-                "crossWorkspace": false, "directInput": false,
-            })),
+            "agentControl.scope" => {
+                if payload.get("mcpDiscovery").and_then(Value::as_bool) == Some(true)
+                    && self.mcp_ui.record_discovery(client_id, &from)
+                {
+                    self.broadcast_builtin_mcp_changed();
+                }
+                Ok(json!({
+                    "sessionId": from, "workspaceId": workspace, "authorized": true,
+                    "crossWorkspace": false, "directInput": false,
+                }))
+            }
             "agentControl.send" => {
                 let to = agent_short(payload, "toHandle", 128)?;
                 if is_group_address(&to) || to == from {
@@ -265,6 +272,19 @@ mod tests {
         assert_eq!(scope["authorized"], true);
         assert_eq!(scope["crossWorkspace"], false);
         assert_eq!(scope["directInput"], false);
+        assert_eq!(actor.mcp_ui.connection_status("sender", true), "unknown");
+        let mut discovered = valid.clone();
+        discovered["mcpDiscovery"] = json!(true);
+        actor
+            .handle_mcp_agent_request(1, "agentControl.scope", &discovered)
+            .await
+            .unwrap();
+        assert_eq!(actor.mcp_ui.connection_status("sender", true), "connected");
+        actor.mcp_ui.disconnect(1);
+        assert_eq!(
+            actor.mcp_ui.connection_status("sender", true),
+            "disconnected"
+        );
         assert!(actor
             .handle_mcp_agent_request(2, "agentControl.scope", &valid)
             .await

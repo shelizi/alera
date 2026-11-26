@@ -369,6 +369,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         let terminal = TerminalSession {
             handle: "plain-terminal".into(),
@@ -381,6 +382,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         let command = NativeMcpUiCommand {
             request_id: "req1".into(),

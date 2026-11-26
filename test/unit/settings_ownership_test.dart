@@ -179,6 +179,7 @@ const _classifiedFieldPaths = <String>{
   'agents.keepComputerAwakeWhileAgentsWork',
   'agents.showTabTitlesInSidebar',
   'agents.showTaskSummariesInSidebar',
+  'agents.builtinMcpEnabled',
   'agents.defaultAgentProfileId',
   'agents.agentExecutablePaths',
   'agents.gitBashExecutablePath',

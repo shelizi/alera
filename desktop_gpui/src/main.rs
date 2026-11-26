@@ -10795,6 +10795,7 @@ impl Workbench {
         pinned: bool,
         drag_generation: u64,
         host_sessions: &[TerminalSession],
+        inventory_current: bool,
         locale: UiLocale,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -10847,6 +10848,26 @@ impl Workbench {
         } else {
             icon(UiIcon::Terminal, 12.0, if selected { TEXT } else { MUTED }).into_any_element()
         };
+        let mcp_indicator = if inventory_current {
+            tab.verified_builtin_mcp_status(host_sessions).map(|status| {
+                let label = match status {
+                    "connected" => "MCP connected",
+                    "awaiting_discovery" => "MCP awaiting discovery",
+                    "disconnected" => "MCP disconnected",
+                    "disabled" => "MCP disabled",
+                    "unsupported" => "MCP unsupported",
+                    "not_injected" => "MCP not registered",
+                    _ => "MCP unavailable",
+                };
+                let color = match status {
+                    "connected" => 0x47b879,
+                    "awaiting_discovery" => 0xd6a74c,
+                    "disconnected" | "not_injected" | "setting_unavailable" => 0xe07a73,
+                    _ => MUTED,
+                };
+                (tr(locale, label).to_string(), color)
+            })
+        } else { None };
         let identity = tab.identity;
         let status_color = if tab.kind == WorkbenchTabKind::Agent && tab.running {
             tab.agent_state
@@ -10922,6 +10943,13 @@ impl Workbench {
                             })
                             .child(title),
                     )
+                    .when(mcp_indicator.is_some(), |entry| {
+                        let (tooltip, color) = mcp_indicator.clone().unwrap_or_default();
+                        entry.child(div().id(("mixed-tab-mcp", index)).text_xs()
+                            .text_color(rgb(color)).tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                            }).child("MCP"))
+                    })
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
                     .when(stopped_label.is_some(), |entry| {
@@ -16390,6 +16418,7 @@ impl Render for Workbench {
                                                     true,
                                                     mixed_drag_generation,
                                                     &self.terminals.sessions,
+                                                    !self.terminals.session_list_is_stale(),
                                                     self.settings_menu_locale,
                                                     cx,
                                                 )
@@ -16446,7 +16475,7 @@ impl Render for Workbench {
                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index, tab, PaneSlot::Primary, selected, pinned,
-                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
+                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
                                                 )
                                             }))
                                             .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
@@ -16648,6 +16677,7 @@ impl Render for Workbench {
                                                                     true,
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
+                                                                    !self.terminals.session_list_is_stale(),
                                                                     self.settings_menu_locale,
                                                                     cx,
                                                                 )
@@ -16679,7 +16709,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .child(
@@ -17238,6 +17268,7 @@ impl Render for Workbench {
                                                                     true,
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
+                                                                    !self.terminals.session_list_is_stale(),
                                                                     self.settings_menu_locale,
                                                                     cx,
                                                                 )
@@ -17270,7 +17301,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .child(

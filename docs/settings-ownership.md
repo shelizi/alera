@@ -45,10 +45,13 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `keepComputerAwakeWhileAgentsWork` | local-only |
 | `showTabTitlesInSidebar` | portable |
 | `showTaskSummariesInSidebar` | portable (Rust Host shared; default off) |
+| `builtinMcpEnabled` | local-device Rust Host shared (`desktopSettings.compareAndSetBatch` / `desktopSettings.compareAndSet`); not portable, unavailable when Host value is unconfirmed |
 | `defaultAgentProfileId` | runtime + portable |
 | `gitBashExecutablePath` | local-only (per-device executable override) |
 | `quotas` (per-host `enabledProviders`, `providerDefaultsVersion`, `claudeDefault*`, `claudeProfiles`, `environment`) | runtime (`agentQuotas` for host `local`) |
 | `quotas.selectedClaudeProfile`, `quotas.unpinnedQuotaKeys` | local-only (merged back from local storage on load) |
+
+The **Built-in Alera MCP** switch is read by the Host for newly spawned Managed Codex and Claude profiles. It defaults off unless the legacy `ALERA_MCP_PROFILE_INJECTION=1` opt-in is present and no preference has been saved. Existing sessions need to restart; global provider configuration is not changed. Explicit per-profile MCP configuration takes precedence. Both desktop settings panes expose the server's advertised tools and bounded session diagnostics. A connected badge is based on an authenticated, capability-validated MCP discovery/tool session, not the preference alone. Disconnect and session closure invalidate this status; the badge is never an additional authorization mechanism.
 
 ### `aiTextGeneration` (`AiAssistSettings`)
 

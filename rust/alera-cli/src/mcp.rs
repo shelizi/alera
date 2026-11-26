@@ -166,7 +166,27 @@ async fn dispatch(
             })
         }
         "ping" => json!({}),
-        "tools/list" => json!({"tools": tool_definitions()}),
+        "tools/list" => {
+            // Only a real stdio tool discovery with a live, Host-issued proof
+            // may mark a session connected. Metadata discovery outside an
+            // Agent remains available and never starts a Host.
+            if std::env::var("ALERA_MCP_UI_TOKEN").is_ok_and(|token| token.len() == 64) {
+                let probe = tokio::time::timeout(Duration::from_secs(2), async {
+                    if client.is_none() {
+                        *client = RuntimeHostRpcClient::connect(&crate::runtime_dir(runtime))
+                            .await
+                            .map_err(host_error)?;
+                    }
+                    let connected = client.as_mut().ok_or("Alera Runtime Host is unavailable")?;
+                    agent_identity(connected).await
+                })
+                .await;
+                if !matches!(probe, Ok(Ok(_))) {
+                    *client = None;
+                }
+            }
+            json!({"tools": tool_definitions()})
+        }
         "tools/call" => {
             let Some(params) = params.as_object() else {
                 return Some(rpc_error(id, -32602, "tools/call params must be an object"));
@@ -210,7 +230,7 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-fn tool_definitions() -> Vec<Value> {
+pub(crate) fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "alera.list_projects",
@@ -958,7 +978,8 @@ async fn agent_identity(
         .request_value(
             "agentControl.scope",
             &json!({
-                "sessionId": session, "workspaceId": workspace, "capability": capability
+                "sessionId": session, "workspaceId": workspace, "capability": capability,
+                "mcpDiscovery": true
             }),
         )
         .await

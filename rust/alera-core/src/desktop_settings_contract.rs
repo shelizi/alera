@@ -2,7 +2,7 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 33] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 34] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -15,6 +15,7 @@ pub const SHARED_DESKTOP_PATHS: [&str; 33] = [
     "general.confirmWorkspaceRemoval",
     "general.autoArchiveWorkspacesAfterDays",
     "agents.defaultAgentProfileId",
+    "agents.builtinMcpEnabled",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
     "general.showTrayIcon",
@@ -40,7 +41,7 @@ pub const SHARED_DESKTOP_PATHS: [&str; 33] = [
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 30] = [
+pub const CLI_WRITABLE_PATHS: [&str; 31] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -50,6 +51,7 @@ pub const CLI_WRITABLE_PATHS: [&str; 30] = [
     "editor.twoRowTabs",
     "editor.externalEditor",
     "agents.defaultAgentProfileId",
+    "agents.builtinMcpEnabled",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
     "general.showTrayIcon",
@@ -226,6 +228,8 @@ pub fn cli_set_value_allowed(path: &str, value: &serde_json::Value) -> bool {
         value
             .as_str()
             .is_some_and(|editor| matches!(editor, "zed" | "vscode"))
+    } else if path == "agents.builtinMcpEnabled" {
+        value.is_boolean()
     } else if path == "agents.quotaUnpinnedKeys" {
         valid_quota_unpinned_keys(value)
     } else {
