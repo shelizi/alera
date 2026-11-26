@@ -1322,16 +1322,25 @@ fn stage_status_entries(
     workspace_path: &str,
     entries: &[GitChangeEntry],
 ) -> Result<(), GitError> {
+    let mut paths = MutationPathResolver::new(repo, workspace_path);
+    stage_status_entries_with_resolver(repo, entries, |path| paths.resolve(path))
+}
+
+fn stage_status_entries_with_resolver(
+    repo: &Repository,
+    entries: &[GitChangeEntry],
+    mut resolve_path: impl FnMut(&str) -> Result<String, GitError>,
+) -> Result<(), GitError> {
     let mut index = repo.index().map_err(GitError::from_git2)?;
     for entry in entries
         .iter()
         .filter(|entry| entry.area != GitChangeArea::Staged && !is_submodule_worktree_only(entry))
     {
         if let Some(old_path) = entry.old_path.as_deref() {
-            let repo_path = repo_relative_path(repo, workspace_path, old_path)?;
+            let repo_path = resolve_path(old_path)?;
             remove_index_path_if_present(&mut index, Path::new(&repo_path))?;
         }
-        let repo_path = repo_relative_path(repo, workspace_path, &entry.path)?;
+        let repo_path = resolve_path(&entry.path)?;
         let path = Path::new(&repo_path);
         if entry.status == GitChangeStatus::Deleted || !repo_workdir_path_exists(repo, path)? {
             remove_index_path_if_present(&mut index, path)?;
@@ -1372,6 +1381,15 @@ fn unstage_status_entries(
     workspace_path: &str,
     entries: &[GitChangeEntry],
 ) -> Result<(), GitError> {
+    let mut paths = MutationPathResolver::new(repo, workspace_path);
+    unstage_status_entries_with_resolver(repo, entries, |path| paths.resolve(path))
+}
+
+fn unstage_status_entries_with_resolver(
+    repo: &Repository,
+    entries: &[GitChangeEntry],
+    mut resolve_path: impl FnMut(&str) -> Result<String, GitError>,
+) -> Result<(), GitError> {
     let mut paths = entries
         .iter()
         .filter(|entry| entry.area == GitChangeArea::Staged)
@@ -1402,7 +1420,7 @@ fn unstage_status_entries(
     };
 
     for path in paths {
-        let repo_path = repo_relative_path(repo, workspace_path, &path)?;
+        let repo_path = resolve_path(&path)?;
         let path = Path::new(&repo_path);
         if let Some(head_index) = head_index.as_ref() {
             if let Some(head_entry) = head_index.get_path(path, 0) {
@@ -1416,6 +1434,35 @@ fn unstage_status_entries(
     }
     index.write().map_err(GitError::from_git2)?;
     Ok(())
+}
+
+/// Pin the canonical roots once for a single index mutation. Never retain
+/// them across operations, and never cache file existence or file contents.
+/// Laziness preserves the old no-op path, including a stage with no entries.
+struct MutationPathResolver<'repo> {
+    repo: &'repo Repository,
+    workspace_path: &'repo str,
+    roots: Option<(PathBuf, PathBuf)>,
+}
+
+impl<'repo> MutationPathResolver<'repo> {
+    fn new(repo: &'repo Repository, workspace_path: &'repo str) -> Self {
+        Self {
+            repo,
+            workspace_path,
+            roots: None,
+        }
+    }
+
+    fn resolve(&mut self, workspace_relative_path: &str) -> Result<String, GitError> {
+        if self.roots.is_none() {
+            let workspace = dunce::canonicalize(self.workspace_path).map_err(GitError::from_io)?;
+            let workdir = canonical_repository_workdir(self.repo, self.workspace_path)?;
+            self.roots = Some((workspace, workdir));
+        }
+        let (workspace, workdir) = self.roots.as_ref().expect("initialized roots");
+        repo_relative_path_from_roots(workspace, workdir, workspace_relative_path)
+    }
 }
 
 fn repo_relative_path(
@@ -1435,19 +1482,37 @@ fn workspace_repo_relative_path(
     repo_relative_path_from_workspace(repo, workspace_path, &workspace, "")
 }
 
+fn canonical_repository_workdir(
+    repo: &Repository,
+    workspace_path: &str,
+) -> Result<PathBuf, GitError> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, workspace_path))?;
+    dunce::canonicalize(workdir).map_err(GitError::from_io)
+}
+
 fn repo_relative_path_from_workspace(
     repo: &Repository,
     workspace_path: &str,
     workspace: &Path,
     workspace_relative_path: &str,
 ) -> Result<String, GitError> {
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, workspace_path))?;
-    let workdir = dunce::canonicalize(workdir).map_err(GitError::from_io)?;
+    let workdir = canonical_repository_workdir(repo, workspace_path)?;
+    repo_relative_path_from_roots(workspace, &workdir, workspace_relative_path)
+}
+
+fn repo_relative_path_from_roots(
+    workspace: &Path,
+    workdir: &Path,
+    workspace_relative_path: &str,
+) -> Result<String, GitError> {
+    // Keep the exact lexical path and repository-boundary validation for
+    // every entry, including deleted and rename-source paths that no longer
+    // exist on disk. Do not canonicalize individual file paths.
     let target = workspace.join(relative_path(workspace_relative_path)?);
     let relative = target
-        .strip_prefix(&workdir)
+        .strip_prefix(workdir)
         .map_err(|_| GitError::new(GitErrorKind::Internal, "path outside repository"))?;
     Ok(pathspec_string(relative))
 }

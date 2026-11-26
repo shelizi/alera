@@ -295,6 +295,72 @@ fn git_unstage_selected_path_uses_repo_relative_index_path_from_subdirectory() {
 }
 
 #[test]
+fn mutation_path_resolver_preserves_scopes_and_lexical_validation() {
+    let dir = init_repo();
+    let repo = Repository::open(dir.path()).unwrap();
+    let workspace = dir.path().join("packages/app[1]");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace_alias = workspace.join("../app[1]");
+    for scope in [dir.path().to_path_buf(), workspace_alias] {
+        let scope = path_str(&scope);
+        let mut resolver = MutationPathResolver::new(&repo, &scope);
+        assert!(resolver.roots.is_none());
+        // Missing/deleted paths, literal brackets and spaces must remain
+        // lexical Git paths, not filesystem-canonicalized file names.
+        for path in [
+            "",
+            ".",
+            "src/./old name.txt",
+            "file[1].txt",
+            "missing/deleted.txt",
+        ] {
+            let expected = repo_relative_path(&repo, &scope, path).unwrap();
+            assert_eq!(resolver.resolve(path).unwrap(), expected);
+        }
+        assert!(resolver.roots.is_some());
+        for path in ["../outside.txt", "src/../../outside.txt", "/absolute.txt"] {
+            let expected = repo_relative_path(&repo, &scope, path).unwrap_err();
+            let actual = resolver.resolve(path).unwrap_err();
+            assert_eq!(
+                (actual.kind, actual.context),
+                (expected.kind, expected.context)
+            );
+        }
+        #[cfg(windows)]
+        for path in [r"C:relative.txt", r"C:\absolute.txt", r"\rooted.txt"] {
+            assert!(resolver.resolve(path).is_err(), "{path}");
+        }
+    }
+
+    let outside = tempfile::tempdir().unwrap();
+    let outside = path_str(outside.path());
+    let mut resolver = MutationPathResolver::new(&repo, &outside);
+    for path in ["file.txt", "other.txt"] {
+        let expected = repo_relative_path(&repo, &outside, path).unwrap_err();
+        let actual = resolver.resolve(path).unwrap_err();
+        assert_eq!(
+            (actual.kind, actual.context),
+            (expected.kind, expected.context)
+        );
+    }
+}
+
+#[test]
+fn mutation_path_resolver_stays_lazy_for_empty_index_actions() {
+    let dir = init_repo();
+    let repo = Repository::open(dir.path()).unwrap();
+    let missing = path_str(&dir.path().join("missing-workspace"));
+    // These helpers previously did not resolve any paths for an empty
+    // selection. Do not introduce a new canonicalization failure on no-ops.
+    stage_status_entries(&repo, &missing, &[]).unwrap();
+    unstage_status_entries(&repo, &missing, &[]).unwrap();
+    let mut resolver = MutationPathResolver::new(&repo, &missing);
+    assert!(resolver.roots.is_none());
+    assert!(resolver.resolve("file.txt").is_err());
+    assert!(resolver.roots.is_none());
+}
+
+#[test]
 #[ignore = "real repository mutation timing benchmark; run explicitly in isolation"]
 fn benchmark_mutation_preflight_and_index_actions() {
     use std::time::Instant;
@@ -362,24 +428,80 @@ fn benchmark_mutation_preflight_and_index_actions() {
     };
     reset_index();
     assert_eq!(git_status(path.clone()).unwrap().entries.len(), 240);
-    let measure = |stage: bool, lightweight: bool| {
+    // Isolate the cost of path resolution with the same changed file list.
+    let repo = open_repo(&path).unwrap();
+    let entries = git_diff_impl::git_status_entries_only(&path, None).unwrap();
+    let paths = entries
+        .iter()
+        .filter(|entry| entry.area == GitChangeArea::Unstaged)
+        .map(|entry| entry.path.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(paths.len(), 160);
+    let expected_paths = paths
+        .iter()
+        .map(|p| repo_relative_path(&repo, &path, p).unwrap())
+        .collect::<Vec<_>>();
+    let measure_paths = |cached: bool| {
+        let start = Instant::now();
+        let mut resolver = MutationPathResolver::new(&repo, &path);
+        let result = paths
+            .iter()
+            .map(|p| {
+                if cached {
+                    resolver.resolve(p).unwrap()
+                } else {
+                    repo_relative_path(&repo, &path, p).unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(result, expected_paths);
+        elapsed
+    };
+    let mut old_paths = Vec::new();
+    let mut new_paths = Vec::new();
+    measure_paths(false);
+    measure_paths(true);
+    for run in 0..7 {
+        if run % 2 == 0 {
+            old_paths.push(measure_paths(false));
+            new_paths.push(measure_paths(true));
+        } else {
+            new_paths.push(measure_paths(true));
+            old_paths.push(measure_paths(false));
+        }
+    }
+    old_paths.sort_by(f64::total_cmp);
+    new_paths.sort_by(f64::total_cmp);
+    println!("Path resolution (160 paths): repeated roots median {:.3} ms, request-local roots median {:.3} ms", old_paths[3], new_paths[3]);
+    println!("Path resolution repeated ms {old_paths:?}; request-local ms {new_paths:?}");
+    drop(repo);
+
+    let measure = |stage: bool, variant: usize| {
         reset_index();
         let start = Instant::now();
-        if lightweight {
+        if variant == 2 {
+            // Phase 11 production entry point.
             if stage {
                 git_stage(path.clone(), None).unwrap();
             } else {
                 git_unstage(path.clone(), None).unwrap();
             }
         } else {
-            // The exact prior production call sequence, including the
-            // independent status repository discovery and full UI stats.
+            // Phase 9 and Phase 10 both canonicalized the two roots for
+            // every resolved path. Preserve this exact baseline using
+            // the same mutation core and the original path helper.
             let repo = open_repo(&path).unwrap();
-            let status = git_status(path.clone()).unwrap();
-            if stage {
-                stage_status_entries(&repo, &path, &status.entries).unwrap();
+            let entries = if variant == 0 {
+                git_status(path.clone()).unwrap().entries
             } else {
-                unstage_status_entries(&repo, &path, &status.entries).unwrap();
+                git_diff_impl::git_status_entries_only(&path, None).unwrap()
+            };
+            let resolve = |p: &str| repo_relative_path(&repo, &path, p);
+            if stage {
+                stage_status_entries_with_resolver(&repo, &entries, resolve).unwrap();
+            } else {
+                unstage_status_entries_with_resolver(&repo, &entries, resolve).unwrap();
             }
         }
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -387,23 +509,30 @@ fn benchmark_mutation_preflight_and_index_actions() {
         elapsed
     };
     for (label, stage) in [("Stage all", true), ("Unstage all", false)] {
-        // Warm both paths; exclude setup and index/content verification.
-        measure(stage, false);
-        measure(stage, true);
-        let mut old = Vec::new();
-        let mut new = Vec::new();
+        // Warm every path; exclude setup and index/content verification.
+        for variant in 0..3 {
+            measure(stage, variant);
+        }
+        let mut samples = [Vec::new(), Vec::new(), Vec::new()];
+        // Collect the older full-status baseline separately. Alternate the
+        // two adjacent implementations directly rather than interposing a
+        // substantially more expensive full-status operation.
+        for _ in 0..7 {
+            samples[0].push(measure(stage, 0));
+        }
         for run in 0..7 {
-            if run % 2 == 0 {
-                old.push(measure(stage, false));
-                new.push(measure(stage, true));
-            } else {
-                new.push(measure(stage, true));
-                old.push(measure(stage, false));
+            let order = if run % 2 == 0 { [1, 2] } else { [2, 1] };
+            for variant in order {
+                samples[variant].push(measure(stage, variant));
             }
         }
-        old.sort_by(f64::total_cmp);
-        new.sort_by(f64::total_cmp);
-        println!("{label}: 512 tracked files, 160 modified (80 also staged), 240 entries, seven alternating runs; old median {:.3} ms, new median {:.3} ms", old[3], new[3]);
-        println!("{label} old ms {old:?}; new ms {new:?}");
+        for sample in &mut samples {
+            sample.sort_by(f64::total_cmp);
+        }
+        println!("{label}: 512 tracked files, 160 modified (80 also staged), 240 entries, seven alternating runs; full status median {:.3} ms, repeated roots median {:.3} ms, request-local roots median {:.3} ms", samples[0][3], samples[1][3], samples[2][3]);
+        println!(
+            "{label} full status ms {:?}; repeated roots ms {:?}; request-local roots ms {:?}",
+            samples[0], samples[1], samples[2]
+        );
     }
 }
