@@ -10,6 +10,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/surfaces/alera_command_line.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
 import 'package:alera/src/features/command_terminal/presentation/command_terminal_launcher.dart';
+import 'package:alera/src/features/updater/application/fork_auto_update_preference.dart';
 import 'package:alera/src/features/updater/domain/alera_update.dart';
 import 'package:alera/src/features/updater/domain/package_install_method.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +24,7 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
     final controller = ref.read(aleraUpdateControllerProvider.notifier);
     final theme = Theme.of(context);
     final packageInstall = ref.watch(packageManagerInstallProvider);
+    final discoveryAllowed = ref.watch(updateDiscoveryAllowedProvider);
     final needsManualPath =
         state.status == AleraUpdateStatus.manualDownloadRequired ||
         state.status == AleraUpdateStatus.restartRequired ||
@@ -77,6 +79,10 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
                   Expanded(child: _UpdateStatusCopy(state: state)),
                 ],
               ),
+              if (discoveryAllowed) ...<Widget>[
+                const SizedBox(height: AleraTokens.space12),
+                const _ForkAutoUpdateControl(),
+              ],
               if (state.status == AleraUpdateStatus.downloading ||
                   state.status == AleraUpdateStatus.applying) ...<Widget>[
                 const SizedBox(height: AleraTokens.space12),
@@ -166,6 +172,32 @@ class const UpdateSettingsSection({super.key}) extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class const _ForkAutoUpdateControl() extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preference = ref.watch(forkAutoUpdatePreferenceProvider);
+    return SwitchListTile.adaptive(
+      contentPadding: EdgeInsets.zero,
+      title: Text(context.tr('Automatically check for updates')),
+      subtitle: Text(
+        context.tr(
+          preference.hasError
+              ? 'Could not save or load the update preference.'
+              : 'Check GitHub for new Classic releases while the app is visible.',
+        ),
+      ),
+      value: preference.asData?.value ?? false,
+      onChanged: preference.isLoading
+          ? null
+          : (value) => unawaited(
+              ref
+                  .read(forkAutoUpdatePreferenceProvider.notifier)
+                  .setEnabled(value),
+            ),
     );
   }
 }

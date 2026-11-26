@@ -84,6 +84,10 @@ const Map<String, String> _traditionalChineseSettingsExtra = <String, String>{
   'Update failed': '更新失敗',
   'Checking': '檢查中',
   'Check for Updates': '檢查更新',
+  'Automatically check for updates': '自動檢查更新',
+  'Check GitHub for new Classic releases while the app is visible.':
+      '在應用程式顯示時，至 GitHub 檢查 Classic 新版本。',
+  'Could not save or load the update preference.': '無法儲存或載入更新偏好設定。',
   'Download Manually': '手動下載',
   'Installation Guide': '安裝指南',
   'Update Alera': '更新 Alera',

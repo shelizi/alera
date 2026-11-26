@@ -80,6 +80,10 @@ const Map<String, String> _japaneseSettingsExtra = <String, String>{
   'Update failed': '更新に失敗しました',
   'Checking': '確認中',
   'Check for Updates': '更新を確認',
+  'Automatically check for updates': '更新を自動的に確認',
+  'Check GitHub for new Classic releases while the app is visible.':
+      'アプリの表示中に GitHub で Classic の新しいリリースを確認します。',
+  'Could not save or load the update preference.': '更新設定を保存または読み込めませんでした。',
   'Download Manually': '手動でダウンロード',
   'Installation Guide': 'インストール手順',
   'Update Alera': 'Alera を更新',
