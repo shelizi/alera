@@ -196,7 +196,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                 if (operation == AiAssistOperation.agentWorkReport)
                   SettingsSwitchRow(
                     title: 'Auto-Summarize Agent Work Reports',
-                    description: 'Send completed model replies to Codex, Claude or Pi. Off by default; original replies remain available.',
+                    description: 'Send completed model replies to Codex, Claude or Pi. Off by default; existing summaries are retained when disabled. Original replies stay in history.',
                     value: settings.autoSummarizeAgentReports,
                     onChanged: (value) => widget.onChanged(
                       (settings) =>

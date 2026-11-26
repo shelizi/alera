@@ -58,7 +58,8 @@ void main() {
     stateStartedAt: now,
     contextOverview: <String, dynamic>{
       'goal': 'Fix Windows IME',
-      'progress': 'Checking IMM API',
+      'progress': 'Private raw reply about IMM internals',
+      'reportSummary': 'Checking IMM API',
       'timeline': timeline ?? <Object>[],
     },
   );
@@ -84,6 +85,7 @@ void main() {
     expect(rows, hasLength(2));
     expect(rows.map((row) => row.project).toSet(), <String>{'alera', 'mcp'});
     expect(rows.where((row) => row.matches('IMM API')), hasLength(2));
+    expect(rows.where((row) => row.matches('Private raw reply')), isEmpty);
     expect(rows.where((row) => row.matches('no-such-context')), isEmpty);
   });
 

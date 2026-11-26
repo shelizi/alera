@@ -3,6 +3,34 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'rolling overall summary and exact report timestamp survive snapshots',
+    () {
+      const at = '2026-11-24T12:34:56.123456789+00:00';
+      final raw = <String, dynamic>{
+        'goal': 'Original task',
+        'progress': 'Original reply',
+        'overallSummary': 'Cumulative work',
+        'timeline': [
+          {'kind': 'report', 'text': 'Original reply', 'at': at},
+        ],
+      };
+      final snapshot = AgentContextOverview.snapshotFromRaw(raw);
+      final view = AgentContextOverview.fromRaw(snapshot);
+      expect(view.overallSummary, 'Cumulative work');
+      expect(view.timeline.single.reportAt, at);
+      expect((snapshot['timeline'] as List).single['at'], at);
+      final updated = AgentContextOverview.observe(
+        previous: view,
+        previousPrompt: null,
+        previousAssistant: null,
+        prompt: 'Continue work',
+        assistant: 'New reply',
+        at: DateTime.utc(2026, 11, 25),
+      );
+      expect(updated.overallSummary, 'Cumulative work');
+    },
+  );
+  test(
     'canonical snapshots share a typed view and isolate mutable raw input',
     () {
       final now = DateTime.utc(2026, 11, 24);
@@ -135,6 +163,7 @@ void main() {
         at: DateTime.utc(2026, 11, 24),
       );
       expect(next.displayProgress, 'New raw report');
+      expect(next.progress, 'New raw report');
       expect(next.reportSummary, isEmpty);
     },
   );

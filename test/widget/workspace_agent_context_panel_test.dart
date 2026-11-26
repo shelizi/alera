@@ -40,38 +40,46 @@ void main() {
   }
 
   testWidgets(
-    'right Agent Context actually renders raw Hook report and timeline',
+    'right Agent Context shows original report and settings reminder without summary',
     (tester) async {
       await pump(
         tester,
         AgentContextReportView(sessionId: 'terminal', live: live),
       );
-      expect(find.text('最新工作回報（Agent 回覆）'), findsOneWidget);
+      expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
       expect(
         find.text('Native raw report without AI summary'),
         findsNWidgets(2),
       );
-      expect(find.text('Agent 工作回報'), findsOneWidget);
+      expect(find.text('Agent 工作回報（原始回覆）'), findsOneWidget);
+      expect(
+        find.textContaining('Auto-Summarize Agent Work Reports'),
+        findsOneWidget,
+      );
     },
   );
-  testWidgets('restored tab with no live presence renders saved raw report', (
-    tester,
-  ) async {
-    final saved = AgentContextRecovery(
-      AgentContextOverview.fromRaw(live.contextOverview),
-    );
-    await pump(
-      tester,
-      AgentContextReportView(
-        sessionId: 'terminal',
-        live: null,
-        recovery: saved,
-      ),
-    );
-    expect(find.text('最新工作回報（已保存的 Agent 回覆）'), findsOneWidget);
-    expect(find.text('Native raw report without AI summary'), findsNWidgets(2));
-    expect(find.text('Fix reports'), findsNWidgets(2));
-  });
+  testWidgets(
+    'restored tab with no live presence shows saved original report',
+    (tester) async {
+      final saved = AgentContextRecovery(
+        AgentContextOverview.fromRaw(live.contextOverview),
+      );
+      await pump(
+        tester,
+        AgentContextReportView(
+          sessionId: 'terminal',
+          live: null,
+          recovery: saved,
+        ),
+      );
+      expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
+      expect(
+        find.text('Native raw report without AI summary'),
+        findsNWidgets(2),
+      );
+      expect(find.text('Fix reports'), findsNWidgets(2));
+    },
+  );
   testWidgets(
     'verified history recovers the visible report, live report wins',
     (tester) async {
@@ -97,7 +105,7 @@ void main() {
           recovery: recovered,
         ),
       );
-      expect(find.text('最新工作回報（原生歷史回覆）'), findsOneWidget);
+      expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
       expect(find.text('Earlier native response'), findsNWidgets(2));
       expect(find.text('DO NOT SHOW TOOL CONTENT'), findsNothing);
       await pump(
@@ -108,7 +116,7 @@ void main() {
           recovery: recovered,
         ),
       );
-      expect(find.text('最新工作回報（Agent 回覆）'), findsOneWidget);
+      expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
       expect(
         find.text('Native raw report without AI summary'),
         findsNWidgets(2),
@@ -122,7 +130,7 @@ void main() {
       tester,
       const AgentContextReportView(sessionId: 'terminal', live: null),
     );
-    expect(find.textContaining('尚未取得原始 Agent 回覆'), findsOneWidget);
+    expect(find.textContaining('尚未取得工作回報'), findsOneWidget);
   });
   testWidgets(
     'selected Agent Tab reads exact saved report and refreshes after SessionEnd',
@@ -178,11 +186,13 @@ void main() {
       final host = _ContextHost({
         'tab': AgentContextOverview.fromRaw({
           'goal': 'Task A',
-          'progress': 'Saved A',
+          'progress': 'Raw checkpoint A',
+          'reportSummary': 'Saved A',
         }),
         'tab-b': AgentContextOverview.fromRaw({
           'goal': 'Task B',
-          'progress': 'Saved B',
+          'progress': 'Raw checkpoint B',
+          'reportSummary': 'Saved B',
         }),
       });
       await tester.pumpWidget(
@@ -249,6 +259,7 @@ void main() {
           contextOverview: AgentContextOverview.fromRaw({
             'goal': 'Fix reports',
             'progress': 'New real report',
+            'reportSummary': 'New summary',
             'timeline': [
               {
                 'kind': 'report',
@@ -261,13 +272,15 @@ void main() {
         ),
       });
       await tester.pumpAndSettle();
-      expect(find.text('New real report'), findsNWidgets(2));
+      expect(find.text('New summary'), findsNWidgets(2));
+      expect(find.text('New real report'), findsNothing);
       expect(tester.widget(reportFinder), isNot(same(originalReport)));
       expect(find.text('Native raw report without AI summary'), findsNothing);
 
       host.saved[a.id] = AgentContextOverview.fromRaw({
         'goal': 'Task A',
-        'progress': 'Latest persisted A',
+        'progress': 'Raw latest persisted A',
+        'reportSummary': 'Latest persisted A',
       });
       status.replace({});
       await tester.pumpAndSettle();
@@ -292,7 +305,8 @@ void main() {
       );
       host.saved[a.id] = AgentContextOverview.fromRaw({
         'goal': 'Task A second conversation',
-        'progress': 'Report for conversation C',
+        'progress': 'Raw report for conversation C',
+        'reportSummary': 'Report for conversation C',
       });
       workbench.switchConversation(a.id, 'conversation-c');
       await tester.pumpAndSettle();
@@ -302,6 +316,148 @@ void main() {
       expect(host.requests.last.$2['conversationId'], 'conversation-c');
       expect(host.requests.last.$2['sessionId'], 'terminal');
       expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'overall and historical summary actions select exact timestamps',
+    (tester) async {
+      const latest = '2026-11-24T12:01:00.987654321+00:00';
+      const earlier = '2026-11-24T12:00:00.123456789+00:00';
+      final requested = <String?>[];
+      final entry = live.copyWith(
+        contextOverview: {
+          'goal': 'Original goal',
+          'progress': 'Latest raw reply',
+          'reportSummary': 'Latest AI summary',
+          'overallSummary': 'Cumulative work',
+          'timeline': [
+            {
+              'kind': 'report',
+              'text': 'Latest raw reply',
+              'summary': 'Latest AI summary',
+              'at': latest,
+            },
+            {'kind': 'report', 'text': 'Earlier raw reply', 'at': earlier},
+          ],
+        },
+      );
+      await pump(
+        tester,
+        AgentContextReportView(
+          sessionId: 'terminal',
+          live: entry,
+          summarize: (at) async {
+            requested.add(at);
+          },
+        ),
+      );
+      expect(find.text('整體進度摘要'), findsOneWidget);
+      expect(find.text('Cumulative work'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('overall-summary-action')));
+      await tester.pumpAndSettle();
+      final latestButton = find.byKey(
+        const ValueKey(('latest-summary-action', latest)),
+      );
+      await tester.ensureVisible(latestButton);
+      await tester.tap(latestButton);
+      await tester.pumpAndSettle();
+      final historyButton = find.byKey(
+        const ValueKey(('history-summary-action', earlier)),
+      );
+      await tester.scrollUntilVisible(historyButton, 120);
+      await tester.tap(historyButton);
+      await tester.pumpAndSettle();
+      expect(requested, [null, latest, earlier]);
+    },
+  );
+  testWidgets('long original reply has its own expand and collapse labels', (
+    tester,
+  ) async {
+    final reply = List.filled(19, 'Original work reply. ').join().trim();
+    final entry = live.copyWith(
+      contextOverview: {'goal': 'Fix reports', 'progress': reply},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 280,
+              child: AgentContextReportView(sessionId: 'terminal', live: entry),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
+    expect(find.text('展開摘要'), findsNothing);
+    expect(find.text('展開回覆'), findsOneWidget);
+    await tester.tap(find.text('展開回覆'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byWidgetPredicate((w) => w is SelectableText && w.data == reply),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('收合回覆'));
+    await tester.pumpAndSettle();
+    expect(find.text('展開回覆'), findsOneWidget);
+  });
+  testWidgets(
+    'long summary expands, collapses and resets on selection change',
+    (tester) async {
+      final summary = List.filled(20, 'Fixed UI and tests. ').join().trim();
+      final entry = live.copyWith(
+        contextOverview: {
+          'goal': 'Fix reports',
+          'progress': 'RAW PRIVATE REPLY',
+          'reportSummary': summary,
+        },
+      );
+      Future<void> show(String session) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 280,
+                  child: AgentContextReportView(
+                    key: ValueKey(session),
+                    sessionId: session,
+                    live: entry,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      final fullSummary = find.byWidgetPredicate(
+        (widget) => widget is SelectableText && widget.data == summary,
+      );
+      await show('terminal');
+      expect(find.text('RAW PRIVATE REPLY'), findsNothing);
+      expect(find.text('最新工作回報（AI 摘要）'), findsOneWidget);
+      expect(
+        find.textContaining('Auto-Summarize Agent Work Reports'),
+        findsNothing,
+      );
+      expect(find.text('展開摘要'), findsOneWidget);
+      expect(fullSummary, findsNothing);
+      await tester.tap(find.text('展開摘要'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('收合摘要'));
+      expect(fullSummary, findsOneWidget);
+      await tester.tap(find.text('收合摘要'));
+      await tester.pumpAndSettle();
+      expect(fullSummary, findsNothing);
+      await tester.tap(find.text('展開摘要'));
+      await tester.pumpAndSettle();
+      await show('other-terminal');
+      expect(find.text('展開摘要'), findsOneWidget);
+      expect(fullSummary, findsNothing);
     },
   );
 }
