@@ -279,6 +279,94 @@ fn compare_quick_open_filesystem_refresh() {
 }
 
 #[test]
+fn parallel_metadata_validation_preserves_order_and_quota_selection() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    fs::write(root.join(".gitignore"), "ignored/\n*.tmp\n!keep.tmp\n").unwrap();
+    for folder in ["src", "ignored", "node_modules", "nested/deep"] {
+        let dir = root.join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        for index in 0..45 {
+            fs::write(dir.join(format!("file-{index:02}.txt")), "text").unwrap();
+        }
+        fs::write(dir.join("keep.tmp"), "keep").unwrap();
+        fs::write(dir.join("skip.tmp"), "skip").unwrap();
+    }
+    let exclusions = QuickOpenExclusions::new(vec!["node_modules".into()]);
+    for symlinks in [false, true] {
+        for (files, bytes) in [(0, 0), (1, 20), (12, 200), (200, 1000), (500, 100000)] {
+            let a = collect_quick_open_files_with_workers(
+                &root,
+                files,
+                bytes,
+                symlinks,
+                &exclusions,
+                1,
+            )
+            .unwrap();
+            let b = collect_quick_open_files_with_workers(
+                &root,
+                files,
+                bytes,
+                symlinks,
+                &exclusions,
+                4,
+            )
+            .unwrap();
+            assert_eq!(format!("{a:?}"), format!("{b:?}"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "compare ordered metadata discovery with bounded workers on real filesystem"]
+fn compare_quick_open_parallel_metadata_discovery() {
+    for (folders, per_folder) in [(2, 20), (40, 75)] {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
+        for n in 0..folders {
+            let dir = root.join(format!("module_{n:03}/src"));
+            fs::create_dir_all(&dir).unwrap();
+            for f in 0..per_folder {
+                fs::write(dir.join(format!("file_{f:03}.rs")), "text").unwrap();
+            }
+        }
+        let exclusions = QuickOpenExclusions::new(Vec::new());
+        let run = |workers| {
+            collect_quick_open_files_with_workers(
+                &root,
+                MAX_QUICK_OPEN_INDEXED_FILES,
+                MAX_QUICK_OPEN_INDEXED_PATH_BYTES,
+                true,
+                &exclusions,
+                workers,
+            )
+            .unwrap()
+        };
+        let reference = format!("{:?}", run(1));
+        let mut times = [Vec::new(), Vec::new()];
+        for round in 0..7 {
+            for offset in 0..2 {
+                let mode = (round + offset) % 2;
+                let start = Instant::now();
+                let result = run(if mode == 0 { 1 } else { 4 });
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                assert_eq!(format!("{result:?}"), reference);
+                times[mode].push(elapsed);
+            }
+        }
+        for (label, values) in ["sequential", "parallel"].into_iter().zip(times.iter_mut()) {
+            values.sort_by(f64::total_cmp);
+            println!(
+                "QUICK_OPEN_DISCOVERY files={} mode={label} median_ms={:.3} samples={values:?}",
+                folders * per_folder,
+                values[3]
+            );
+        }
+    }
+}
+
+#[test]
 fn indexes_and_ranks_workspace_files() {
     let workspace = tempfile::tempdir().unwrap();
     fs::create_dir(workspace.path().join("lib")).unwrap();

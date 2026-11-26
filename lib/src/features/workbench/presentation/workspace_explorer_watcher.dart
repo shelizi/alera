@@ -15,11 +15,29 @@ bool workspaceExplorerWatcherTouchesSearch({
     for (final name in excludedDirectories) name.toLowerCase(),
   };
   return changedRelativePaths.isEmpty ||
-      changedRelativePaths.any(
-        (path) => !path
+      changedRelativePaths.any((path) {
+        if (path.isEmpty) return true;
+        final parts = path
             .split('/')
-            .any((part) => excluded.contains(part.toLowerCase())),
-      );
+            .map((part) => part.toLowerCase())
+            .toList();
+        for (var index = 0; index < parts.length; index++) {
+          final part = parts[index];
+          if (part == '.git') {
+            // Ignore object/ref churn, but preserve changes to ignore
+            // configuration, worktree boundaries and a replaced .git file.
+            if (index + 1 == parts.length) return true;
+            return const {
+              'info',
+              'config',
+              'config.worktree',
+              'worktrees',
+            }.contains(parts[index + 1]);
+          }
+          if (excluded.contains(part)) return false;
+        }
+        return true;
+      });
 }
 
 extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {

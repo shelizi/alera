@@ -209,6 +209,25 @@ fn collect_quick_open_files(
     include_internal_symlinks: bool,
     exclusions: &QuickOpenExclusions,
 ) -> Result<Vec<QuickOpenPath>, WorkspaceFileError> {
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+    collect_quick_open_files_with_workers(
+        root,
+        max_files,
+        max_path_bytes,
+        include_internal_symlinks,
+        exclusions,
+        workers,
+    )
+}
+
+fn collect_quick_open_files_with_workers(
+    root: &Path,
+    max_files: usize,
+    max_path_bytes: usize,
+    include_internal_symlinks: bool,
+    exclusions: &QuickOpenExclusions,
+    workers: usize,
+) -> Result<Vec<QuickOpenPath>, WorkspaceFileError> {
     let filter_root = root.to_path_buf();
     let nested_worktrees = nested_git_worktree_paths(root);
     let git_visible_paths = collect_git_visible_paths(root, exclusions, &nested_worktrees)?;
@@ -230,78 +249,188 @@ fn collect_quick_open_files(
         })
         .build();
     let mut files = Vec::new();
-    let mut indexed_path_bytes = 0_usize;
-    let mut indexed_file_count = 0_usize;
-    let mut ignored_file_count = 0_usize;
-    let mut ignored_path_bytes = 0_usize;
-    let mut directory_count = 0_usize;
-    let mut directory_path_bytes = 0_usize;
-    let mut ignored_directory_count = 0_usize;
-    let mut ignored_directory_path_bytes = 0_usize;
-    for entry in walker {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) if error.depth().is_some_and(|depth| depth > 0) => continue,
-            Err(error) => {
-                return Err(WorkspaceFileError::new(
-                    WorkspaceFileErrorKind::Io,
-                    error.to_string(),
-                ));
-            }
+    let mut budgets = [
+        PathBudget::new(max_files, max_path_bytes),
+        PathBudget::new(
+            MAX_QUICK_OPEN_INDEXED_DIRECTORIES,
+            MAX_QUICK_OPEN_INDEXED_DIRECTORY_PATH_BYTES,
+        ),
+        PathBudget::new(
+            MAX_QUICK_OPEN_IGNORED_INDEXED_FILES,
+            MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES,
+        ),
+        PathBudget::new(
+            MAX_QUICK_OPEN_IGNORED_INDEXED_DIRECTORIES,
+            MAX_QUICK_OPEN_IGNORED_DIRECTORY_PATH_BYTES,
+        ),
+    ];
+    let validate = |path: PathBuf| {
+        let Some((relative_path, is_directory)) =
+            quick_open_relative_path(root, &path, include_internal_symlinks, exclusions)?
+        else {
+            return Ok(None);
         };
-        if let Some((relative_path, is_directory)) =
-            quick_open_relative_path(root, entry.path(), include_internal_symlinks, exclusions)?
-        {
-            let is_gitignored = !git_visible_paths.contains(entry.path());
-            if is_directory && is_gitignored {
-                if ignored_directory_count >= MAX_QUICK_OPEN_IGNORED_INDEXED_DIRECTORIES {
-                    continue;
-                }
-                let next = ignored_directory_path_bytes.saturating_add(relative_path.len());
-                if next > MAX_QUICK_OPEN_IGNORED_DIRECTORY_PATH_BYTES {
-                    continue;
-                }
-                ignored_directory_count += 1;
-                ignored_directory_path_bytes = next;
-            } else if is_directory {
-                if directory_count >= MAX_QUICK_OPEN_INDEXED_DIRECTORIES {
-                    continue;
-                }
-                let next = directory_path_bytes.saturating_add(relative_path.len());
-                if next > MAX_QUICK_OPEN_INDEXED_DIRECTORY_PATH_BYTES {
-                    continue;
-                }
-                directory_count += 1;
-                directory_path_bytes = next;
-            } else if is_gitignored {
-                if ignored_file_count >= MAX_QUICK_OPEN_IGNORED_INDEXED_FILES {
-                    continue;
-                }
-                let next_path_bytes = ignored_path_bytes.saturating_add(relative_path.len());
-                if next_path_bytes > MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES {
-                    continue;
-                }
-                ignored_file_count += 1;
-                ignored_path_bytes = next_path_bytes;
-            } else {
-                if indexed_file_count >= max_files {
-                    continue;
-                }
-                let next_path_bytes = indexed_path_bytes.saturating_add(relative_path.len());
-                if next_path_bytes > max_path_bytes {
-                    continue;
-                }
-                indexed_path_bytes = next_path_bytes;
-                indexed_file_count += 1;
-            }
-            files.push(QuickOpenPath::new(
-                relative_path,
-                is_gitignored,
-                is_directory,
-            ));
+        Ok(Some(QuickOpenPath::new(
+            relative_path,
+            !git_visible_paths.contains(&path),
+            is_directory,
+        )))
+    };
+    let mut admit = |path: QuickOpenPath| {
+        let category = usize::from(path.is_directory) + 2 * usize::from(path.is_gitignored);
+        if budgets[category].admit(path.relative_path.len()) {
+            files.push(path);
+        }
+    };
+    scan_ordered_paths(walker, workers, &validate, &mut admit)?;
+    Ok(files)
+}
+
+struct PathBudget {
+    remaining_files: usize,
+    remaining_bytes: usize,
+}
+
+impl PathBudget {
+    fn new(remaining_files: usize, remaining_bytes: usize) -> Self {
+        Self {
+            remaining_files,
+            remaining_bytes,
         }
     }
-    Ok(files)
+    fn admit(&mut self, bytes: usize) -> bool {
+        if self.remaining_files == 0 || bytes > self.remaining_bytes {
+            return false;
+        }
+        self.remaining_files -= 1;
+        self.remaining_bytes -= bytes;
+        true
+    }
+}
+
+fn walk_paths(walker: ignore::Walk) -> impl Iterator<Item = Result<PathBuf, WorkspaceFileError>> {
+    walker.filter_map(|entry| match entry {
+        Ok(entry) => Some(Ok(entry.into_path())),
+        Err(error) if error.depth().is_some_and(|depth| depth > 0) => None,
+        Err(error) => Some(Err(WorkspaceFileError::new(
+            WorkspaceFileErrorKind::Io,
+            error.to_string(),
+        ))),
+    })
+}
+
+type ValidatedPath = Result<Option<QuickOpenPath>, WorkspaceFileError>;
+const QUICK_OPEN_READ_AHEAD: usize = 32;
+
+fn scan_ordered_paths(
+    walker: ignore::Walk,
+    workers: usize,
+    validate: &(impl Fn(PathBuf) -> ValidatedPath + Sync),
+    admit: &mut impl FnMut(QuickOpenPath),
+) -> Result<(), WorkspaceFileError> {
+    let mut paths = walk_paths(walker);
+    if workers < 2 {
+        for path in paths {
+            if let Some(path) = validate(path?)? {
+                admit(path);
+            }
+        }
+        return Ok(());
+    }
+    // The build gate serializes callers. Bound both worker count and queued
+    // path descriptors; consume in the original sorted traversal order so
+    // independent visible/ignored file/directory quotas remain identical.
+    use std::collections::VecDeque;
+    use std::sync::mpsc;
+    let (job_tx, job_rx) = mpsc::channel::<(usize, PathBuf)>();
+    let jobs = Mutex::new(job_rx);
+    let (result_tx, result_rx) = mpsc::channel::<(usize, ValidatedPath)>();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let mut spawned = 0;
+        for _ in 0..workers.min(4) {
+            let jobs = &jobs;
+            let results = result_tx.clone();
+            let stop = &stop;
+            if std::thread::Builder::new()
+                .name("quick-open-metadata".into())
+                .spawn_scoped(scope, move || loop {
+                    let job = jobs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .recv();
+                    let Ok((slot, path)) = job else {
+                        break;
+                    };
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    if results.send((slot, validate(path))).is_err() {
+                        break;
+                    }
+                })
+                .is_ok()
+            {
+                spawned += 1;
+            }
+        }
+        drop(result_tx);
+        if spawned == 0 {
+            drop(job_tx);
+            for path in paths {
+                if let Some(path) = validate(path?)? {
+                    admit(path);
+                }
+            }
+            return Ok(());
+        }
+        let result = (|| {
+            let mut slots: VecDeque<Option<ValidatedPath>> =
+                VecDeque::with_capacity(QUICK_OPEN_READ_AHEAD);
+            let mut head = 0_usize;
+            let mut exhausted = false;
+            loop {
+                while !exhausted && slots.len() < QUICK_OPEN_READ_AHEAD {
+                    let Some(path) = paths.next() else {
+                        exhausted = true;
+                        break;
+                    };
+                    let slot = head + slots.len();
+                    slots.push_back(None);
+                    job_tx.send((slot, path?)).map_err(|_| {
+                        WorkspaceFileError::new(
+                            WorkspaceFileErrorKind::Io,
+                            "quick open metadata workers stopped",
+                        )
+                    })?;
+                }
+                if slots.is_empty() {
+                    break;
+                }
+                while slots.front().is_some_and(Option::is_none) {
+                    let (slot, result) = result_rx.recv().map_err(|_| {
+                        WorkspaceFileError::new(
+                            WorkspaceFileErrorKind::Io,
+                            "quick open metadata result missing",
+                        )
+                    })?;
+                    *slots.get_mut(slot - head).expect("live quick open slot") = Some(result);
+                }
+                if let Some(path) = slots
+                    .pop_front()
+                    .expect("nonempty window")
+                    .expect("ready slot")?
+                {
+                    admit(path);
+                }
+                head += 1;
+            }
+            Ok(())
+        })();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(job_tx);
+        result
+    })
 }
 
 fn collect_git_visible_paths(

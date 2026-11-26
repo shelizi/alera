@@ -43,6 +43,39 @@ void main() {
     },
   );
 
+  test('ignore and worktree metadata changes reconcile the index', () {
+    for (final path in [
+      '',
+      '.git',
+      '.git/info',
+      '.git/info/exclude',
+      '.git/config',
+      '.git/config.worktree',
+      '.git/worktrees/new-worktree/gitdir',
+      'src/.gitignore',
+      'src/.ignore',
+    ]) {
+      expect(
+        workspaceExplorerWatcherTouchesSearch(
+          changedRelativePaths: [path],
+          excludedDirectories: const {'node_modules'},
+        ),
+        isTrue,
+        reason: path,
+      );
+    }
+    expect(
+      workspaceExplorerWatcherTouchesSearch(
+        changedRelativePaths: const [
+          'node_modules/pkg/.git/config',
+          '.git/objects/pack/a',
+        ],
+        excludedDirectories: const {'node_modules'},
+      ),
+      isFalse,
+    );
+  });
+
   test('similarly named real folders are not excluded by substring', () {
     expect(
       workspaceExplorerWatcherTouchesSearch(

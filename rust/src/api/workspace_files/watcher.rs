@@ -72,12 +72,21 @@ impl PendingWatchBatch {
         self.event_count = self.event_count.saturating_add(1);
         match result {
             Ok(event) if !event.paths.is_empty() => {
-                self.paths.extend(
-                    event
-                        .paths
-                        .into_iter()
-                        .map(|path| normalize_event_path(root, path)),
-                );
+                // Some backends attach paths to a rescan notification.
+                // A nonempty path list must not suppress reconciliation.
+                if event.need_rescan() {
+                    self.paths.insert(root.to_path_buf());
+                }
+                for path in event.paths {
+                    let path = normalize_event_path(root, path);
+                    if path.starts_with(root) {
+                        self.paths.insert(path);
+                    } else {
+                        // An unrecognized alias or out-of-root notification
+                        // cannot be localized safely.
+                        self.paths.insert(root.to_path_buf());
+                    }
+                }
             }
             // Empty-path events and backend errors must still request
             // authoritative root reconciliation, even in a duplicate burst.
@@ -405,6 +414,23 @@ mod tests {
             .expect("root refresh after watcher overflow");
         assert_eq!(batch.directory_relative_paths, vec![String::new()]);
     }
+    #[test]
+    fn rescan_with_concrete_paths_and_unrecognized_paths_reconcile_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let watched = watched_paths_snapshot(HashMap::from([(String::new(), root.to_path_buf())]));
+        let event = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+            .add_path(root.join("src/deep/a.rs"))
+            .set_flag(notify::event::Flag::Rescan);
+        let batch = batch_from_events(root, &watched, vec![event]).unwrap();
+        assert_eq!(batch.directory_relative_paths, vec![String::new()]);
+        assert_eq!(batch.changed_relative_paths, vec!["", "src/deep/a.rs"]);
+        let outside = root.parent().unwrap().join("not-this-workspace");
+        let event = Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(outside);
+        let batch = batch_from_events(root, &watched, vec![event]).unwrap();
+        assert_eq!(batch.changed_relative_paths, vec![""]);
+    }
+
     #[test]
     fn recursive_event_from_unloaded_subfolder_updates_search_only() {
         let workspace = tempfile::tempdir().expect("workspace");

@@ -23,14 +23,15 @@ class WorkspaceFileService {
   static const _quickOpenQueryLimit = 24;
   static const _quickOpenResultLimit = 500;
   static const _quickOpenResultAge = Duration(seconds: 2);
+  static const _quickOpenReconcileAge = Duration(seconds: 3);
   bool _disposed = false;
   final Map<String, _WorkspaceQuickOpenCacheEntry> _quickOpenCache =
       <String, _WorkspaceQuickOpenCacheEntry>{};
   final Map<String, Timer> _quickOpenRefreshTimers = <String, Timer>{};
   final StreamController<String> _quickOpenRefreshEvents =
       StreamController<String>.broadcast();
-  final Map<String, DateTime> _lastOnDemandQuickOpenRefresh =
-      <String, DateTime>{};
+  final Map<String, Stopwatch> _lastOnDemandQuickOpenRefresh =
+      <String, Stopwatch>{};
 
   /// Emits the workspace path after a background index rebuild completes.
   /// Consumers can update already-visible search results without requiring
@@ -250,12 +251,28 @@ class WorkspaceFileService {
   /// entire workspace for every keystroke.
   void scheduleQuickOpenFilterRefresh({required String workspacePath}) {
     if (_disposed) return;
-    final now = DateTime.now();
-    final last = _lastOnDemandQuickOpenRefresh[workspacePath];
-    if (last != null && now.difference(last) < const Duration(seconds: 3)) {
+    // A watcher/manual reconciliation already queued must not be delayed
+    // by an incidental filter keystroke. Only throttle the on-demand path;
+    // explicit and watcher refreshes always retain their existing behavior.
+    if (_quickOpenRefreshTimers.containsKey(workspacePath)) return;
+    final entries = _quickOpenCache.values.where(
+      (entry) => entry.workspacePath == workspacePath,
+    );
+    if (entries.isEmpty) return;
+    if (entries.every(
+      (entry) =>
+          entry.refreshing ||
+          entry.pendingSession != null ||
+          (entry.reconciledAge?.elapsed ?? _quickOpenReconcileAge) <
+              _quickOpenReconcileAge,
+    )) {
       return;
     }
-    _lastOnDemandQuickOpenRefresh[workspacePath] = now;
+    final last = _lastOnDemandQuickOpenRefresh[workspacePath];
+    if (last != null && last.elapsed < _quickOpenReconcileAge) {
+      return;
+    }
+    _lastOnDemandQuickOpenRefresh[workspacePath] = Stopwatch()..start();
     scheduleQuickOpenRefresh(
       workspacePath: workspacePath,
       debounce: const Duration(milliseconds: 200),
@@ -371,6 +388,7 @@ class WorkspaceFileService {
       }
       if (_disposed) break;
       entry.refreshing = true;
+      final reconcileAge = Stopwatch()..start();
       native.WorkspaceQuickOpenSession? replacementSession;
       try {
         final session = await startQuickOpenSession(
@@ -415,6 +433,7 @@ class WorkspaceFileService {
           ..pendingSession = null;
         replacementSession = null;
         // Never let an old in-flight query satisfy a new-generation request.
+        entry.reconciledAge = reconcileAge;
         entry.inFlight.clear();
         refreshedMatches.removeWhere(
           (key, _) => !entry.searchRequests.containsKey(key),
@@ -909,6 +928,7 @@ class _WorkspaceQuickOpenCacheEntry {
   Future<native.WorkspaceQuickOpenSession>? pendingSession;
   bool refreshing = false;
   bool refreshPending = false;
+  Stopwatch? reconciledAge;
   final Map<String, _WorkspaceQuickOpenCachedResult> matches =
       <String, _WorkspaceQuickOpenCachedResult>{};
   final Map<String, Future<List<native.WorkspaceQuickOpenMatch>>> inFlight =

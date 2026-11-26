@@ -104,6 +104,70 @@ void main() {
   });
 
   testWidgets(
+    'on-demand filters reuse queued and recently reconciled snapshots',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()..files.add('main.dart');
+      addTearDown(service.dispose);
+      const path = '/repo';
+      await service.searchQuickOpenCached(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'main',
+        includeGitignored: false,
+      );
+      service.files.add('new-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+      );
+      // A filter request must not postpone a queued immediate reconciliation.
+      for (var n = 0; n < 20; n++) {
+        service.scheduleQuickOpenFilterRefresh(workspacePath: path);
+      }
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.startedSessionIds, ['index-1', 'index-2']);
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: path,
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        ),
+        hasLength(2),
+      );
+      for (var n = 0; n < 20; n++) {
+        service.scheduleQuickOpenFilterRefresh(workspacePath: path);
+      }
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(
+        service.startedSessionIds,
+        hasLength(2),
+        reason: 'successful reconciliation is fresh',
+      );
+      // An explicit/watcher refresh still takes precedence over freshness.
+      service.files.add('another-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.startedSessionIds, hasLength(3));
+      expect(
+        service.peekQuickOpenMatches(
+          workspacePath: path,
+          excludedDirectories: const [],
+          query: 'main',
+          includeGitignored: false,
+        ),
+        hasLength(3),
+      );
+    },
+  );
+
+  testWidgets(
     'file-only and directory-enabled searches keep independent caches',
     (tester) async {
       final service = _RefreshingQuickOpenFileService()
