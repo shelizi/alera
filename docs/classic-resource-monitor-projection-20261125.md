@@ -185,3 +185,31 @@ Two successful real Windows runs (exit 0). Counts below are distinct complete, v
 | Hardened fixture, mixed legacy and precise | 6 | 0 | 6 | 165.726 |
 
 The hardened fixture completed the post-restart soak in 60.2 seconds and verified nine short-lived child commands, in addition to the recovery marker commands. Across the two runs, all 55 observed native-eligible frames used native, and all 12 mixed legacy/precise frames used the expected sysinfo fallback. This does not establish a zero long-term fallback rate: two idle CMD shells and intermittent short commands are not representative sustained Agent workloads, and the earlier real startup churn failure remains valid. No comparative Release benchmark or live cooldown-to-native transition was observed here. No production source or sampling default changed; the branch remains isolated from main and the running Alera. Next perform a longer, representative multi-PTY churn workload and verify native resumption after a real fallback/cooldown before considering default enablement.
+
+### Compact checked selection and linear parent validation (2026-11-26)
+
+The native collector previously constructed the selected descendant closure twice (before querying handles and when validating the sampled frame). It also retained the capacity of a parent map sized for the entire system and created a separate ancestor HashSet for every selected process. On this isolated branch, build one checked Selection per immutable topology (duplicate PID rejection retained), move its compact selected-parent map into the frame, and validate chains iteratively with shared visiting/done state. Every selected parent edge is checked for generation ordering before chain validation; missing metrics, precise root markers, clock/counter and 500 ms acceptance checks, retry classification, legacy fallback and wire format are unchanged. Expected parent-chain work is linear in selected nodes instead of quadratic for a deep chain. The new production-unit regression includes 12,002 synthetic rows with overlapping roots, 2,000 selected chain nodes, unrelated cycles, selected cycle/self-loop, empty map and compact capacity checks.
+
+Independent standard Cargo Release test in `temp/alera-topology-cargo-verification-20261126` (workspace-local scratch outside the Git repository, pinned Rust 1.98.0, offline, no dependencies): copied the exact new Selection/validate_parent_chains and existing select_targets definitions, compared them to the previous repeated-selection/ancestor-walk algorithm (reference uses selected-ID membership and an explicit matching-selection assertion). 31,104 exhaustive five-node graph/root cases plus a duplicate-PID case matched; two test functions passed. Seven alternating old/new rounds per workload, median per invocation, synthetic topology construction outside the timed phase:
+
+| Topology | Selected | Old median | New median | Reduction | Old/new retained parent capacity (entries) |
+|---|---:|---:|---:|---:|---:|
+| 1,000 rows, shallow | 24 | 55.846 us | 27.247 us | 51.2% | 1792 / 28 |
+| 12,002 rows, deep chain | 2,000 | 78,305.233 us | 792.233 us | 99.0% | 10742 / 3584 |
+
+These are algorithm-phase synthetic measurements, not an actual Host snapshot, OS process queries, packaged Release, end-to-end latency, or application CPU/RAM measurement. HashMap capacity counts are entry capacity, not bytes or total allocation counts. Source is still isolated and the live application is unchanged.
+
+Pinned Rust 1.98.0 integrated CLI focused `cargo test --locked --offline -p alera-cli --bin alera terminal_host::resources::windows_native::backend::tests -- --test-threads=1` using D:/c/cli successfully entered alera-cli compilation but reached the 300 s process deadline while other builds were active. No compiler diagnostic or unit-test result was emitted. Rustfmt and git diff --check passed. Keep the source and documentation uncommitted pending a successful integrated run; no merge, default activation, or deployment.
+
+Retry with a 30-minute managed process budget completed successfully on the same alternate D:/c/cli cache. Actual pinned CLI compilation took 8m 09s; test executable alera-6472338b646bb972.exe enumerated 1,565 tests. The focused backend group passed eight tests (three opt-in live tests ignored, 1,554 filtered out), including the new compact-closure/deep-chain regression. This closes the focused integration compile/test blocker; wider regression and live process validation remain separate.
+
+Full actual CLI unit regression reused the same pinned debug test executable: 1,542 passed, zero failed, 23 ignored, 221.17 s. Three opt-in native backend live tests then passed (15.60 s): alternating private 8/24-child benchmark, session claiming/exited-child eviction, and two-worker sustained CPU accuracy. The actual ResourceSampler opt-in warmup/fallback/idle-history lifecycle test also passed separately (1.32 s). Sustained CPU comparison: eight warm samples, reference average 87.995%, native average 88.086%, native MAE 0.696 percentage points versus targeted sysinfo MAE 0.447 pp, native maximum absolute error 1.271 pp. Do not characterize native as more accurate than legacy in this run.
+
+Initial live phase benchmark completed successfully, but retained stdout omitted one of four 24-child legacy timing rows and duplicated another row. The complete 8-child median was 84.9045 ms sysinfo vs 19.2595 ms native (-77.3%); 24-child native median was 25.7745 ms, without a complete paired legacy median. Repeated the benchmark alone on the identical executable: all 16 timing rows and assertions present, one test passed in 3.92 s. Four alternating old/new rounds for each child count, median elapsed time:
+
+| Private idle child count | sysinfo rows | native rows | sysinfo median | native median | Reduction |
+|---|---:|---:|---:|---:|---:|
+| 8 | 602 | 9 | 74.7835 ms | 17.722 ms | 76.3% |
+| 24 | 616-619 | 25 | 95.771 ms | 21.5745 ms | 77.5% |
+
+These compare the existing sysinfo and current native backend on live Windows private test processes (collection, index and attribution), not pre/post topology patch in isolation, nor full Host RPC or application CPU/RAM. Keep native opt-in; no production restart, Release deployment, or merge to main. The longer representative PTY churn and real cooldown-to-native recovery remain unverified.

@@ -5,7 +5,9 @@ use super::{
     cpu_since, direct_sample, global_ticks, native_topology, select_targets, ticks,
     MetricReadFailure, RawSample, Topology,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
 use windows::Win32::System::Threading::{
@@ -111,6 +113,61 @@ pub(super) struct Frame {
     wall_at: u64,
 }
 
+// Build the checked closure once per snapshot, before opening process handles.
+// Keep only selected parent links so the previous CPU frame does not retain
+// a hash table sized for the entire machine's process inventory.
+struct Selection {
+    started: u64,
+    parents: HashMap<u32, u32>,
+}
+
+impl Selection {
+    fn build(topology: &Topology, roots: &[Root]) -> Result<Self, Reject> {
+        let mut all_parents = HashMap::with_capacity(topology.rows.len());
+        for &(pid, parent) in &topology.rows {
+            if all_parents.insert(pid, parent).is_some() {
+                return Err(Reject::Topology);
+            }
+        }
+        let root_ids: Vec<_> = roots.iter().map(|root| root.pid).collect();
+        let selected = select_targets(&topology.rows, &root_ids);
+        let parents = selected
+            .into_iter()
+            .map(|pid| (pid, all_parents[&pid]))
+            .collect();
+        Ok(Self {
+            started: topology.started,
+            parents,
+        })
+    }
+}
+
+// Parent links form a functional graph. Finish each chain only once instead
+// of allocating a fresh set and rewalking its ancestors for every process.
+fn validate_parent_chains(parents: &HashMap<u32, u32>) -> Result<(), Reject> {
+    use std::collections::hash_map::Entry;
+    let mut states = HashMap::with_capacity(parents.len());
+    let mut path = Vec::new();
+    for &pid in parents.keys() {
+        let mut cursor = pid;
+        while let Some(&parent) = parents.get(&cursor) {
+            match states.entry(cursor) {
+                Entry::Occupied(entry) if *entry.get() => break,
+                Entry::Occupied(_) => return Err(Reject::Topology),
+                Entry::Vacant(entry) => {
+                    entry.insert(false);
+                    path.push(cursor);
+                }
+            }
+            cursor = parent;
+        }
+        for finished in path.drain(..) {
+            *states.get_mut(&finished).expect("visited parent") = true;
+        }
+    }
+    Ok(())
+}
+
 impl Frame {
     pub(super) fn contains_pid(&self, pid: u32) -> bool {
         self.samples.contains_key(&pid)
@@ -120,7 +177,7 @@ impl Frame {
     // building rows. Missing roots are allowed; missing *selected* rows are
     // not, because losing an intermediate node can hide an entire subtree.
     fn validate(
-        topology: &Topology,
+        selection: Selection,
         roots: &[Root],
         samples: HashMap<u32, RawSample>,
         cores: usize,
@@ -131,24 +188,16 @@ impl Frame {
         if !(1..=64).contains(&cores) {
             return Err(Reject::UnsupportedCores);
         }
-        if topology.started == 0 || wall_at < topology.started || system_ticks == 0 {
+        if selection.started == 0 || wall_at < selection.started || system_ticks == 0 {
             return Err(Reject::Clock);
         }
-        let mut parents = HashMap::with_capacity(topology.rows.len());
-        for &(pid, parent) in &topology.rows {
-            if parents.insert(pid, parent).is_some() {
-                return Err(Reject::Topology);
-            }
-        }
-        let root_ids: Vec<_> = roots.iter().map(|root| root.pid).collect();
-        let selected = select_targets(&topology.rows, &root_ids);
-        if samples.len() != selected.len() || !selected.iter().all(|pid| samples.contains_key(pid))
-        {
+        let parents = selection.parents;
+        if samples.len() != parents.len() || !parents.keys().all(|pid| samples.contains_key(pid)) {
             return Err(Reject::MissingMetric);
         }
         for sample in samples.values() {
             if sample.creation == 0
-                || sample.creation > topology.started
+                || sample.creation > selection.started
                 || unix_start(sample.creation).is_none()
             {
                 return Err(Reject::Clock);
@@ -175,16 +224,8 @@ impl Frame {
                     return Err(Reject::ParentGeneration);
                 }
             }
-            let mut chain = HashSet::new();
-            let mut cursor = pid;
-            while samples.contains_key(&cursor) {
-                if !chain.insert(cursor) {
-                    return Err(Reject::Topology);
-                }
-                cursor = parents[&cursor];
-            }
         }
-        parents.retain(|pid, _| selected.contains(pid));
+        validate_parent_chains(&parents)?;
         Ok(Self {
             samples,
             parents,
@@ -236,16 +277,15 @@ fn collect_once(
         return Err(Reject::UnsupportedCores);
     }
     let topology = native_topology().map_err(|_| Reject::Topology)?;
-    let root_ids: Vec<_> = roots.iter().map(|root| root.pid).collect();
-    let selected = select_targets(&topology.rows, &root_ids);
+    let selection = Selection::build(&topology, roots)?;
     // All raw metrics are from one topology and query-limited handles. Keep
     // the collection bounded in elapsed time rather than claiming a frozen
     // view of a live, changing process table.
     let at = Instant::now();
     let wall_at = ticks(unsafe { GetSystemTimePreciseAsFileTime() });
     let system_ticks = global_ticks().ok_or(Reject::Counter)?;
-    let mut samples = HashMap::with_capacity(selected.len());
-    for pid in selected {
+    let mut samples = HashMap::with_capacity(selection.parents.len());
+    for &pid in selection.parents.keys() {
         // Stop starting further queries after the budget is spent. An
         // individual OS call is still not interruptible by this check.
         if budget_start.elapsed() > MAX_SPAN {
@@ -254,7 +294,7 @@ fn collect_once(
         let sample =
             direct_sample(pid, topology.started).map_err(|failure| Reject::MetricRead {
                 failure,
-                root: root_ids.contains(&pid),
+                root: roots.iter().any(|root| root.pid == pid),
             })?;
         samples.insert(pid, sample);
     }
@@ -272,7 +312,7 @@ fn collect_once(
     if single_group_cores()? != cores {
         return Err(Reject::UnsupportedCores);
     }
-    let frame = Frame::validate(&topology, roots, samples, cores, system_ticks, at, wall_at)?;
+    let frame = Frame::validate(selection, roots, samples, cores, system_ticks, at, wall_at)?;
     if budget_start.elapsed() > MAX_SPAN {
         return Err(Reject::SlowSweep);
     }
@@ -561,11 +601,13 @@ mod tests {
         roots: &[Root],
     ) -> Result<Frame, Reject> {
         let wall = START + (10 + step) * TICKS_PER_SECOND;
+        let topology = Topology {
+            started: wall,
+            rows: rows.to_vec(),
+        };
+        let selection = Selection::build(&topology, roots)?;
         Frame::validate(
-            &Topology {
-                started: wall,
-                rows: rows.to_vec(),
-            },
+            selection,
             roots,
             samples.iter().copied().collect(),
             4,
@@ -661,6 +703,33 @@ mod tests {
             Err(Reject::Clock)
         ));
         assert!(frame(now, 0, &[(11, 10)], &[], &roots).is_ok()); // absent root
+    }
+
+    #[test]
+    fn selected_closure_is_compact_and_deep_parent_chains_are_checked() {
+        let mut rows: Vec<_> = (10..2010).map(|pid| (pid, pid - 1)).collect();
+        // Unrelated rows, including a cycle, must not be sampled.
+        rows.extend((3000..13000).map(|pid| (pid, 2)));
+        rows.extend([(20000, 20001), (20001, 20000)]);
+        let topology = Topology {
+            started: START,
+            rows,
+        };
+        let selected = Selection::build(&topology, &[Root::plain(10), Root::plain(1000)]).unwrap();
+        assert_eq!(selected.parents.len(), 2000);
+        assert!(selected.parents.capacity() < topology.rows.len());
+        assert_eq!(selected.parents[&10], 9);
+        assert_eq!(selected.parents[&2009], 2008);
+        assert_eq!(validate_parent_chains(&selected.parents), Ok(()));
+
+        let mut parents = selected.parents;
+        parents.insert(10, 2009);
+        assert_eq!(validate_parent_chains(&parents), Err(Reject::Topology));
+        assert_eq!(
+            validate_parent_chains(&HashMap::from([(10, 10)])),
+            Err(Reject::Topology)
+        );
+        assert_eq!(validate_parent_chains(&HashMap::new()), Ok(()));
     }
 
     #[test]
