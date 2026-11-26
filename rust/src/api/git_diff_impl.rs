@@ -33,7 +33,10 @@ use git_diff_combined::{
     git_diff_all_for_file_with_whitespace,
 };
 use git_diff_render::{collect_diff_line_stats, render_diff_for_path};
+#[path = "git_status_line_stats.rs"]
+mod git_status_line_stats;
 use git_diff_untracked::{build_untracked_patch, read_untracked_text_up_to, untracked_diff_file};
+use git_status_line_stats::StatusLineStatsPlan;
 
 #[path = "git_submodule_impl.rs"]
 mod git_submodule_impl;
@@ -58,6 +61,20 @@ pub(super) fn git_status_entries_for_explorer(
     let repo = open_repo(&path)?;
     let paths = GitPathContext::new(&repo, &path)?;
     git_status_entries_with_options(&repo, &paths, &mut status_options(), false)
+}
+
+#[cfg(test)]
+pub(super) fn legacy_git_status_for_test(path: String) -> Result<GitStatusResult, GitError> {
+    let repo = open_repo(&path)?;
+    let paths = GitPathContext::new(&repo, &path)?;
+    Ok(status_result_from_entries(
+        git_status_entries_with_stats_plan(
+            &repo,
+            &paths,
+            &mut status_options(),
+            StatusLineStatsPlan::new(true, false),
+        )?,
+    ))
 }
 
 pub(super) fn git_status_for_path(
@@ -117,6 +134,20 @@ fn git_status_entries_with_options(
     options: &mut StatusOptions,
     include_line_stats: bool,
 ) -> Result<Vec<GitChangeEntry>, GitError> {
+    git_status_entries_with_stats_plan(
+        repo,
+        paths,
+        options,
+        StatusLineStatsPlan::new(include_line_stats, true),
+    )
+}
+
+fn git_status_entries_with_stats_plan(
+    repo: &Repository,
+    paths: &GitPathContext,
+    options: &mut StatusOptions,
+    mut stats_plan: StatusLineStatsPlan,
+) -> Result<Vec<GitChangeEntry>, GitError> {
     let statuses = repo.statuses(Some(options)).map_err(GitError::from_git2)?;
     let mut entries = Vec::new();
     let mut submodule_paths = git_submodule_impl::SubmodulePathCatalog::default();
@@ -127,7 +158,8 @@ fn git_status_entries_with_options(
             paths,
             &entry,
             GitChangeArea::Staged,
-            include_line_stats,
+            &mut stats_plan,
+            entries.len(),
             &mut submodule_paths,
         )? {
             entries.push(change);
@@ -137,7 +169,8 @@ fn git_status_entries_with_options(
             paths,
             &entry,
             GitChangeArea::Untracked,
-            include_line_stats,
+            &mut stats_plan,
+            entries.len(),
             &mut submodule_paths,
         )? {
             entries.push(change);
@@ -148,13 +181,15 @@ fn git_status_entries_with_options(
             paths,
             &entry,
             GitChangeArea::Unstaged,
-            include_line_stats,
+            &mut stats_plan,
+            entries.len(),
             &mut submodule_paths,
         )? {
             entries.push(change);
         }
     }
 
+    stats_plan.finish(repo, &mut entries)?;
     entries.sort_by(|a, b| {
         area_sort_key(a.area)
             .cmp(&area_sort_key(b.area))
@@ -627,7 +662,8 @@ fn status_entry_to_change(
     paths: &GitPathContext,
     entry: &StatusEntry<'_>,
     area: GitChangeArea,
-    include_line_stats: bool,
+    stats_plan: &mut StatusLineStatsPlan,
+    entry_index: usize,
     submodule_paths: &mut git_submodule_impl::SubmodulePathCatalog,
 ) -> Result<Option<GitChangeEntry>, GitError> {
     let status = entry.status();
@@ -665,14 +701,14 @@ fn status_entry_to_change(
                     submodule_paths,
                 )?,
             };
-            if include_line_stats && change.submodule.is_none() {
-                if let Some(stats) =
-                    diff_line_stats_for_paths(repo, &repo_path, old_path.as_deref(), area)?
-                {
-                    change.added = Some(stats.0);
-                    change.removed = Some(stats.1);
-                }
-            }
+            stats_plan.record(
+                repo,
+                &delta,
+                &mut change,
+                entry_index,
+                &repo_path,
+                old_path.as_deref(),
+            )?;
             Ok(Some(change))
         }
         GitChangeArea::Untracked => {
@@ -755,14 +791,14 @@ fn status_entry_to_change(
                     submodule_paths,
                 )?,
             };
-            if include_line_stats && change.submodule.is_none() {
-                if let Some(stats) =
-                    diff_line_stats_for_paths(repo, &repo_path, old_path.as_deref(), area)?
-                {
-                    change.added = Some(stats.0);
-                    change.removed = Some(stats.1);
-                }
-            }
+            stats_plan.record(
+                repo,
+                &delta,
+                &mut change,
+                entry_index,
+                &repo_path,
+                old_path.as_deref(),
+            )?;
             Ok(Some(change))
         }
     }

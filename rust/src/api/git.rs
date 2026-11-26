@@ -525,6 +525,11 @@ pub fn git_status(path: String) -> Result<GitStatusResult, GitError> {
     git_diff_impl::git_status(path)
 }
 
+#[cfg(test)]
+pub(super) fn legacy_git_status_for_test(path: String) -> Result<GitStatusResult, GitError> {
+    git_diff_impl::legacy_git_status_for_test(path)
+}
+
 pub(super) fn git_status_entries_for_explorer(
     path: String,
 ) -> Result<Vec<GitChangeEntry>, GitError> {

@@ -1,8 +1,9 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use git2::{Diff, DiffDelta, DiffFormat, DiffLine, DiffLineType, Oid, Repository};
+use git2::{Delta, Diff, DiffDelta, DiffFormat, DiffLine, DiffLineType, FileMode, Oid, Repository};
 
 use crate::api::workspace_files::{decode_workspace_text_bytes, WorkspaceTextEncoding};
 
@@ -112,6 +113,60 @@ pub(super) fn collect_diff_line_stats(
             .then_some((rendered.added, rendered.removed)));
     }
     Ok(stats.counts())
+}
+
+// Only ordinary, same-path regular-file modifications are candidates for
+// batching. Renames, additions, deletions, type/mode changes, gitlinks and
+// non-UTF-8 paths retain the original literal per-file patch path.
+pub(super) fn ordinary_modified_path<'a>(delta: &DiffDelta<'a>) -> Option<&'a str> {
+    if delta.status() != Delta::Modified {
+        return None;
+    }
+    let old = delta.old_file();
+    let new = delta.new_file();
+    if !matches!(old.mode(), FileMode::Blob | FileMode::BlobExecutable) || old.mode() != new.mode()
+    {
+        return None;
+    }
+    let old_path = old.path()?.to_str()?;
+    let new_path = new.path()?.to_str()?;
+    (old_path == new_path).then_some(new_path)
+}
+
+// Validate the *actual* literal-path batch before accepting any results.
+// A missing, extra, duplicate or nonordinary delta (e.g. a concurrent rename)
+// makes the entire bounded batch fall back to the old per-file implementation.
+pub(super) fn collect_modified_diff_line_stats(
+    diff: &mut Diff<'_>,
+    paths: &[&str],
+) -> Option<Vec<Option<(u32, u32)>>> {
+    let mut by_path = HashMap::with_capacity(paths.len());
+    for (index, &path) in paths.iter().enumerate() {
+        if by_path.insert(path, index).is_some() {
+            return None;
+        }
+    }
+    let mut seen = vec![false; paths.len()];
+    for delta in diff.deltas() {
+        let index = *by_path.get(ordinary_modified_path(&delta)?)?;
+        if std::mem::replace(&mut seen[index], true) {
+            return None;
+        }
+    }
+    if seen.iter().any(|seen| !seen) {
+        return None;
+    }
+
+    let mut stats: Vec<_> = paths.iter().map(|_| DiffLineStats::default()).collect();
+    diff.print(DiffFormat::Patch, |delta, _hunk, line| {
+        let Some(index) = ordinary_modified_path(&delta).and_then(|path| by_path.get(path)) else {
+            return false;
+        };
+        stats[*index].observe(&line);
+        true
+    })
+    .ok()?;
+    Some(stats.iter().map(DiffLineStats::counts).collect())
 }
 
 pub(super) fn render_diff_for_path(

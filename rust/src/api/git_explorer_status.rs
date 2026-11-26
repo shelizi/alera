@@ -43,7 +43,7 @@ pub(super) fn legacy_explorer_status_snapshot(
     path: String,
 ) -> Result<GitExplorerStatusSnapshot, GitError> {
     Ok(project_explorer_status(
-        super::git::git_status(path)?.entries,
+        super::git::legacy_git_status_for_test(path)?.entries,
     ))
 }
 

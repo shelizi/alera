@@ -347,6 +347,7 @@ fn git_status_line_counts_match_rendered_diffs_without_preview_limits() {
     std::fs::remove_file(repo.path().join("deleted.txt")).expect("delete fixture");
     let root = path_str(repo.path());
     let status = git_status(root.clone()).expect("status");
+    assert_eq!(status, legacy_git_status_for_test(root.clone()).unwrap());
     assert_eq!(status.entries.len(), 8);
     for entry in &status.entries {
         let result = git_diff(root.clone(), entry.path.clone(), entry.area).expect("render diff");
@@ -370,4 +371,153 @@ fn git_status_line_counts_match_rendered_diffs_without_preview_limits() {
             assert_eq!((entry.added, entry.removed), (Some(0), Some(0)));
         }
     }
+}
+
+#[test]
+fn batched_status_matches_legacy_across_chunks_and_workspace_scopes() {
+    let repo = init_repo();
+    let root = repo.path();
+    std::fs::create_dir_all(root.join("src/nested")).unwrap();
+    std::fs::create_dir_all(root.join("other")).unwrap();
+    for i in 0..72 {
+        std::fs::write(
+            root.join(format!("src/nested/file_{i:03}.txt")),
+            format!("baseline {i}\nlast"),
+        )
+        .unwrap();
+    }
+    for name in [
+        "src/rename.txt",
+        "src/delete.txt",
+        "src/file[1].txt",
+        "src/file1.txt",
+        "other/outside.txt",
+    ] {
+        std::fs::write(root.join(name), "baseline\n").unwrap();
+    }
+    std::fs::write(root.join(".gitignore"), "*.ignored\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-m", "fixture"]);
+    for i in 0..72 {
+        std::fs::write(
+            root.join(format!("src/nested/file_{i:03}.txt")),
+            format!("baseline {i}\nnew staged line\nlast"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("src/file[1].txt"), "literal staged\n").unwrap();
+    std::fs::write(root.join("src/staged.txt"), "new staged\n").unwrap();
+    run_git(root, &["mv", "src/rename.txt", "src/renamed.txt"]);
+    run_git(root, &["add", "src"]);
+    for i in 0..72 {
+        std::fs::write(
+            root.join(format!("src/nested/file_{i:03}.txt")),
+            format!("baseline {i}\nnew staged line\nnew worktree line\nlast"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("src/file[1].txt"), "literal unstaged\n").unwrap();
+    std::fs::write(root.join("src/file1.txt"), "different literal\n").unwrap();
+    std::fs::write(root.join("other/outside.txt"), "outside edit\n").unwrap();
+    std::fs::remove_file(root.join("src/delete.txt")).unwrap();
+    std::fs::write(root.join("src/untracked.txt"), "untracked").unwrap();
+    std::fs::write(root.join("src/hidden.ignored"), "ignored").unwrap();
+
+    for scope in [
+        root.to_path_buf(),
+        root.join("src"),
+        root.join("src/nested"),
+    ] {
+        let path = path_str(&scope);
+        let expected = legacy_git_status_for_test(path.clone()).unwrap();
+        let actual = git_status(path).unwrap();
+        assert_eq!(actual, expected, "scope {scope:?}");
+        let normal_count = actual
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.path.contains("file_") && entry.status == GitChangeStatus::Modified
+            })
+            .count();
+        assert_eq!(normal_count, 144);
+    }
+
+    // The plan is request-local, so changes after a previous request cannot
+    // return a retained line-count snapshot.
+    std::fs::write(root.join("src/nested/file_000.txt"), "replaced\n").unwrap();
+    let path = path_str(root);
+    assert_eq!(
+        git_status(path.clone()).unwrap(),
+        legacy_git_status_for_test(path).unwrap()
+    );
+}
+
+#[test]
+#[ignore = "real repository timing benchmark; run explicitly in isolation"]
+fn benchmark_batched_status_line_stats() {
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    let name = |i: usize| format!("src/file-{i:04}.txt");
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    for i in 0..512 {
+        let file = name(i);
+        std::fs::write(dir.path().join(&file), format!("original {i}\n").repeat(80)).unwrap();
+        index.add_path(Path::new(&file)).unwrap();
+    }
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Status Benchmark", "benchmark@example.invalid").unwrap();
+    repo.commit(Some("HEAD"), &signature, &signature, "baseline", &tree, &[])
+        .unwrap();
+    drop(tree);
+    for i in 0..160 {
+        let file = name(i);
+        std::fs::write(
+            dir.path().join(&file),
+            format!("original {i}\n").repeat(70) + "staged line\n",
+        )
+        .unwrap();
+        if i < 80 {
+            index.add_path(Path::new(&file)).unwrap();
+        }
+        std::fs::write(
+            dir.path().join(&file),
+            format!("original {i}\n").repeat(70) + "staged line\nworktree line\n",
+        )
+        .unwrap();
+    }
+    index.write().unwrap();
+    drop(index);
+    drop(repo);
+
+    let path = path_str(dir.path());
+    let old = || legacy_git_status_for_test(path.clone()).unwrap();
+    let new = || git_status(path.clone()).unwrap();
+    let expected = old();
+    assert_eq!(expected.entries.len(), 240);
+    assert_eq!(new(), expected);
+    let timed = |f: &dyn Fn() -> GitStatusResult| {
+        let start = Instant::now();
+        let result = f();
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(result, expected);
+        ms
+    };
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for i in 0..7 {
+        if i % 2 == 0 {
+            before.push(timed(&old));
+            after.push(timed(&new));
+        } else {
+            after.push(timed(&new));
+            before.push(timed(&old));
+        }
+    }
+    before.sort_by(f64::total_cmp);
+    after.sort_by(f64::total_cmp);
+    println!("Source Control status: 512 tracked files, 160 modified (80 also staged), 240 entries; seven alternating runs; old median {:.3} ms, new median {:.3} ms", before[3], after[3]);
+    println!("old ms {before:?}; new ms {after:?}");
 }
