@@ -90,7 +90,7 @@ fn observe_checkpoint(
     } else {
         ""
     };
-    let mut next = AgentContextOverview::observe(
+    let next = AgentContextOverview::observe(
         old,
         None,
         old.map(|value| value.progress.as_str()),
@@ -98,11 +98,18 @@ fn observe_checkpoint(
         report,
         at,
     );
-    // AI summaries are transient; keep the original report only.
-    next.report_summary = None;
     if old == Some(&next) {
         return false;
     }
+    // Retain the exact original reply of each newly recorded milestone.
+    // Bound source length and keep only the visible retained timeline.
+    if let Some(raw) = report.filter(|text| !text.trim().is_empty()) {
+        let report_at = at.to_rfc3339();
+        if next.timeline.iter().any(|event| event.kind == "report" && event.at == report_at) {
+            title.report_sources.insert(report_at, raw.chars().take(8000).collect());
+        }
+    }
+    title.report_sources.retain(|at, _| next.timeline.iter().any(|event| event.kind == "report" && &event.at == at));
     title.context_overview = Some(next);
     true
 }
@@ -199,7 +206,8 @@ impl ServerActor {
                 }
             }
         }
-        Ok(json!({"contextOverview":context,"readOnly":true,"fromHistory":from_history}))
+        Ok(json!({"contextOverview":context,"readOnly":true,"fromHistory":from_history,
+            "summaryJobs":self.agent_context_pending_reports(&id, &title.conversation_id)}))
     }
 }
 

@@ -814,7 +814,13 @@ class _GlobalAgentDashboardPageState
                           '${event.kind} · ${event.at.toLocal()}',
                           style: muted,
                         ),
-                        Text(event.text),
+                        Text(
+                          event.kind == 'report'
+                              ? (event.summary.isNotEmpty
+                                    ? event.summary
+                                    : event.text)
+                              : event.text,
+                        ),
                       ],
                     ),
                   ),

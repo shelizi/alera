@@ -202,6 +202,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             | TerminalAction::HistoryResume(_)
             | TerminalAction::HistoryLocate(_)
             | TerminalAction::HistoryMessages(_)
+            | TerminalAction::ContextSummarize(_)
             | TerminalAction::HistoryClear
             | TerminalAction::Stream
     ) && !command.no_start
@@ -596,6 +597,25 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
                     print_value(&value, command.output.json, "Original resumed Agent conversation");
                     0
                 }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::ContextSummarize(args) => {
+            let valid = args.confirm_summary
+                && [args.workspace_id.as_str(), args.tab_id.as_str(), args.session_id.as_str(), args.conversation_id.as_str()]
+                    .iter().all(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+                && (args.overall != args.report_at.is_some())
+                && args.report_at.as_ref().is_none_or(|at| at.len() <= 64 && chrono::DateTime::parse_from_rfc3339(at).is_ok());
+            if !valid {
+                eprintln!("Agent Context summary requires an exact registered tab/conversation, report timestamp or --overall, and --confirm-summary");
+                return USAGE_EXIT_CODE;
+            }
+            match client.request_value("agentContext.summarize", &json!({
+                "workspaceId": args.workspace_id, "tabId": args.tab_id,
+                "sessionId": args.session_id, "conversationId": args.conversation_id,
+                "reportAt": args.report_at, "overall": args.overall,
+            })).await {
+                Ok(value) => { print_value(&value, command.output.json, "Agent Context summary queued"); 0 }
                 Err(error) => print_error(error),
             }
         }

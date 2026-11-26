@@ -5,10 +5,17 @@ class AgentContextMilestone {
     required this.kind,
     required this.text,
     required this.at,
+    this.summary = '',
+    this.sourceAt = '',
   });
   final String kind;
   final String text;
   final DateTime at;
+  final String summary;
+  // Preserve the exact Host timestamp, including sub-microsecond precision.
+  final String sourceAt;
+  String get reportAt =>
+      sourceAt.isNotEmpty ? sourceAt : at.toUtc().toIso8601String();
 
   @override
   bool operator ==(Object other) =>
@@ -16,15 +23,18 @@ class AgentContextMilestone {
       other is AgentContextMilestone &&
           kind == other.kind &&
           text == other.text &&
-          at == other.at;
+          summary == other.summary &&
+          at == other.at &&
+          reportAt == other.reportAt;
 
   @override
-  int get hashCode => Object.hash(kind, text, at);
+  int get hashCode => Object.hash(kind, text, at, summary, reportAt);
 
   Map<String, Object?> toJson() => <String, Object?>{
     'kind': kind,
     'text': text,
-    'at': at.toUtc().toIso8601String(),
+    if (summary.isNotEmpty) 'summary': summary,
+    'at': reportAt,
   };
 }
 
@@ -33,6 +43,7 @@ class AgentContextOverview {
     this.goal = '',
     this.progress = '',
     this.reportSummary = '',
+    this.overallSummary = '',
     this.initialGoal = '',
     this.currentFocus = '',
     this.focusUpdatedAt,
@@ -42,6 +53,9 @@ class AgentContextOverview {
   final String goal;
   final String progress;
   final String reportSummary;
+  final String overallSummary;
+
+  /// Prefer a generated summary, otherwise display the bounded completed reply.
   String get displayProgress =>
       reportSummary.isNotEmpty ? reportSummary : progress;
 
@@ -149,6 +163,7 @@ class AgentContextOverview {
         goal != other.goal ||
         progress != other.progress ||
         reportSummary != other.reportSummary ||
+        overallSummary != other.overallSummary ||
         initialGoal != other.initialGoal ||
         currentFocus != other.currentFocus ||
         focusUpdatedAt != other.focusUpdatedAt ||
@@ -166,6 +181,7 @@ class AgentContextOverview {
     goal,
     progress,
     reportSummary,
+    overallSummary,
     initialGoal,
     currentFocus,
     focusUpdatedAt,
@@ -260,14 +276,39 @@ class AgentContextOverview {
           item['at'] is String ? item['at'] as String : '',
         );
         if (text.isEmpty || at == null) continue;
-        timeline.add(AgentContextMilestone(kind: kind, text: text, at: at));
+        timeline.add(
+          AgentContextMilestone(
+            kind: kind,
+            text: text,
+            at: at,
+            summary: _clean(item['summary'], 420),
+            sourceAt: item['at'] is String ? item['at'] as String : '',
+          ),
+        );
       }
     }
     timeline.sort((a, b) => b.at.compareTo(a.at));
+    // Older hosts carried only the latest top-level summary. Project it
+    // onto that exact newest report, never onto earlier raw messages.
+    final reportSummary = _clean(raw['reportSummary'], 420);
+    final latestReport = timeline.indexWhere((event) => event.kind == 'report');
+    if (reportSummary.isNotEmpty &&
+        latestReport >= 0 &&
+        timeline[latestReport].summary.isEmpty) {
+      final event = timeline[latestReport];
+      timeline[latestReport] = AgentContextMilestone(
+        kind: event.kind,
+        text: event.text,
+        at: event.at,
+        summary: reportSummary,
+        sourceAt: event.sourceAt,
+      );
+    }
     return AgentContextOverview(
       goal: _clean(raw['goal'], 600),
       progress: _clean(raw['progress'], 420),
-      reportSummary: _clean(raw['reportSummary'], 420),
+      reportSummary: reportSummary,
+      overallSummary: _clean(raw['overallSummary'], 1000),
       initialGoal: _clean(raw['initialGoal'], 600),
       currentFocus: _clean(raw['currentFocus'], 600),
       focusUpdatedAt: DateTime.tryParse(
@@ -360,6 +401,7 @@ class AgentContextOverview {
       goal: goal,
       progress: progress,
       reportSummary: reportSummary,
+      overallSummary: previous.overallSummary,
       initialGoal: initialGoal,
       currentFocus: focus,
       focusUpdatedAt: focusUpdatedAt,
@@ -371,6 +413,7 @@ class AgentContextOverview {
     'goal': goal,
     'progress': progress,
     if (reportSummary.isNotEmpty) 'reportSummary': reportSummary,
+    if (overallSummary.isNotEmpty) 'overallSummary': overallSummary,
     'initialGoal': initialGoal,
     'currentFocus': currentFocus,
     'focusUpdatedAt': focusUpdatedAt?.toUtc().toIso8601String(),
@@ -391,6 +434,7 @@ final class _ContextSnapshotInput {
     'goal': 1200,
     'progress': 840,
     'reportSummary': 840,
+    'overallSummary': 2000,
     'initialGoal': 1200,
     'currentFocus': 1200,
     'focusUpdatedAt': 128,
@@ -398,7 +442,7 @@ final class _ContextSnapshotInput {
   };
 
   final List<String?> fields;
-  final List<({String kind, String text, String at})> timeline;
+  final List<({String kind, String text, String at, String? summary})> timeline;
 
   static _ContextSnapshotInput? capture(Object? raw) {
     if (raw is! Map) return null;
@@ -412,21 +456,29 @@ final class _ContextSnapshotInput {
     }
     final rawTimeline = raw['timeline'];
     if (rawTimeline is! List || rawTimeline.length > 16) return null;
-    final timeline = <({String kind, String text, String at})>[];
+    final timeline =
+        <({String kind, String text, String at, String? summary})>[];
     for (final item in rawTimeline) {
       if (item is! Map) return null;
       final kind = item['kind'];
       final text = item['text'];
       final at = item['at'];
+      final summary = item['summary'];
       if (kind is! String ||
           kind.length > 16 ||
           text is! String ||
           text.length > 520 ||
           at is! String ||
-          at.length > 128) {
+          at.length > 128 ||
+          (summary != null && (summary is! String || summary.length > 840))) {
         return null;
       }
-      timeline.add((kind: kind, text: text, at: at));
+      timeline.add((
+        kind: kind,
+        text: text,
+        at: at,
+        summary: summary as String?,
+      ));
     }
     return _ContextSnapshotInput(fields, timeline);
   }
@@ -444,7 +496,8 @@ final class _ContextSnapshotInput {
       if (item is! Map ||
           item['kind'] != old.kind ||
           item['text'] != old.text ||
-          item['at'] != old.at) {
+          item['at'] != old.at ||
+          item['summary'] != old.summary) {
         return false;
       }
     }

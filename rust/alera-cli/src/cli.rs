@@ -182,6 +182,9 @@ pub enum TerminalAction {
     /// Local read-only paged user/assistant messages from a recovered native Tab.
     #[command(name = "history-messages")]
     HistoryMessages(TerminalHistoryMessagesArgs),
+    /// Generate or regenerate a selected Host-owned Agent report summary.
+    #[command(name = "context-summarize")]
+    ContextSummarize(TerminalContextSummarizeArgs),
     /// Clear only the local Agent search cache, never native transcripts.
     #[command(name = "history-clear")]
     HistoryClear,
@@ -335,6 +338,24 @@ pub struct TerminalHistoryLocateArgs {
     pub workspace_id: String,
     #[arg(long = "session-id")]
     pub session_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalContextSummarizeArgs {
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "tab-id")]
+    pub tab_id: String,
+    #[arg(long = "session-id")]
+    pub session_id: String,
+    #[arg(long = "conversation-id")]
+    pub conversation_id: String,
+    #[arg(long = "report-at", conflicts_with = "overall")]
+    pub report_at: Option<String>,
+    #[arg(long)]
+    pub overall: bool,
+    #[arg(long = "confirm-summary")]
+    pub confirm_summary: bool,
 }
 
 #[derive(Debug, Args)]

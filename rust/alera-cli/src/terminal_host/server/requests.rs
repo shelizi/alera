@@ -1206,6 +1206,11 @@ impl ServerActor {
                 self.require_request_allowed(client_id, request_type)?;
                 self.read_agent_context_checkpoint(payload).await
             }
+            "agentContext.summarize" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                self.request_agent_context_summary(payload).await
+            }
             "agentHistory.messages" => {
                 self.require_auth(client_id)?;
                 self.require_request_allowed(client_id, request_type)?;

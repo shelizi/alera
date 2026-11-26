@@ -235,9 +235,7 @@ class GlobalAgentLiveProjectionCache {
         tab: registered.tab,
         status: status,
         goal: overview.goal.isNotEmpty ? overview.goal : status.prompt,
-        progress: overview.displayProgress.isNotEmpty
-            ? overview.displayProgress
-            : (status.lastAssistantMessage ?? ''),
+        progress: overview.displayProgress,
         timeline: overview.timeline,
       );
       next[identity] = row;
