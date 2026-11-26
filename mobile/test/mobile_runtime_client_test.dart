@@ -369,10 +369,13 @@ void main() {
       expect(client.supportsTerminalTitles, isFalse);
 
       await client.authenticate(deviceId: 'device-1', deviceToken: 'token-1');
-      await pumpEventQueue();
-      expect(client.debugPendingRequestCount, 0);
-
       expect(client.supportsTerminalTitles, isTrue);
+
+      // Authentication starts an optional status.get in the background.
+      // A round trip on the same socket drains the earlier reply without
+      // assuming that pumping the event queue completes network I/O.
+      await client.requestMap('test.barrier');
+      expect(client.debugPendingRequestCount, 0);
     },
   );
 
