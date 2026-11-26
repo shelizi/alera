@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:alera/src/features/workbench/application/source_control_refresh_pool.dart';
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
+import 'package:alera/src/features/workbench/application/workbench_background_task_pool.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_snapshot_loader.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_index_mutations.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
@@ -91,7 +93,10 @@ class WorkspaceSourceControlController
   bool _watcherRecovering = false;
   DateTime? _watcherReloadNotBefore;
   bool _watcherReloadInFlight = false;
+  bool _watcherReloadWaitingForSlot = false;
   bool _watcherReloadQueued = false;
+  late WorkbenchBackgroundTaskPool _watcherRefreshPool;
+  final _watcherRefreshOwner = Object();
   Completer<void>? _queuedManualRefresh;
   int _queuedWatcherReloads = 0;
   int _loadGeneration = 0;
@@ -108,6 +113,7 @@ class WorkspaceSourceControlController
     // Capture the watcher now: `onDispose` runs in a lifecycle where reading
     // providers via `ref` is disallowed.
     _watcher = ref.read(sourceControlWatcherProvider);
+    _watcherRefreshPool = ref.read(sourceControlRefreshPoolProvider);
     ref.onDispose(_stopWatching);
     // Best-effort: file watching keeps the panel live without blocking the
     // initial load; manual refresh remains available if it fails to start.
@@ -616,6 +622,7 @@ class WorkspaceSourceControlController
     _fastMetadataNeedsStashes = false;
     _watcherReloadQueued = false;
     _watcherReloadNotBefore = null;
+    _watcherRefreshPool.cancelPending(_watcherRefreshOwner);
     _watcherReloadDebounceTimer?.cancel();
     _watcherReloadDebounceTimer = null;
     _watcherRestartTimer?.cancel();
@@ -637,6 +644,9 @@ class WorkspaceSourceControlController
   }
 
   void _scheduleWatcherReload() {
+    // A request that has not acquired its slot yet will read current Git
+    // state when it starts. Extra signals cannot make that request stale.
+    if (_disposed || _watcherReloadWaitingForSlot) return;
     _watcherReloadDebounceTimer?.cancel();
     var delay = _watcherReloadDebounce;
     final notBefore = _watcherReloadNotBefore;
@@ -667,32 +677,46 @@ class WorkspaceSourceControlController
       return;
     }
     _watcherReloadInFlight = true;
-    final loadGeneration = ++_loadGeneration;
+    _watcherReloadWaitingForSlot = true;
     try {
-      final next = await _load();
-      if (_disposed ||
-          loadGeneration != _loadGeneration ||
-          (state.asData?.value.isBusy ?? false)) {
-        _staleCompletionCount += 1;
-        debugPrint('[stale-completion] watcher generation=$loadGeneration');
-        return;
-      }
-      _fastMetadataNeedsStashes = false;
-      // Equal status/branch/stash summaries do not prove that the history or
-      // file contents stayed the same. Publish the coalesced load revision so
-      // history and expanded submodules can invalidate; the reconciled
-      // status/group instances still stay hot for the tree's grouping caches.
-      state = AsyncData(next);
+      await _watcherRefreshPool.run(_watcherRefreshOwner, () async {
+        _watcherReloadWaitingForSlot = false;
+        if (_disposed) return;
+        // A foreground action can start while this worktree is queued.
+        // Allocate the generation only when the authoritative scan begins.
+        if (state.asData?.value.isBusy ?? false) {
+          _watcherReloadQueued = true;
+          return;
+        }
+        final loadGeneration = ++_loadGeneration;
+        final next = await _load();
+        if (_disposed ||
+            loadGeneration != _loadGeneration ||
+            (state.asData?.value.isBusy ?? false)) {
+          _staleCompletionCount += 1;
+          debugPrint('[stale-completion] watcher generation=$loadGeneration');
+          return;
+        }
+        _fastMetadataNeedsStashes = false;
+        // Equal status/branch/stash summaries do not prove that the history or
+        // file contents stayed the same. Publish the coalesced load revision so
+        // history and expanded submodules can invalidate; the reconciled
+        // status/group instances still stay hot for the tree's grouping caches.
+        state = AsyncData(next);
+      });
     } catch (_) {
       // Best-effort background refresh: keep the current state on failure.
     } finally {
+      _watcherReloadWaitingForSlot = false;
       _watcherReloadInFlight = false;
-      if (!_watcherReloadQueued) {
-        _queuedWatcherReloads = 0;
-        _watcherReloadNotBefore = null;
+      if (!_disposed) {
+        if (!_watcherReloadQueued) {
+          _queuedWatcherReloads = 0;
+          _watcherReloadNotBefore = null;
+        }
+        _drainQueuedManualRefresh();
+        _scheduleQueuedWatcherReload();
       }
-      _drainQueuedManualRefresh();
-      _scheduleQueuedWatcherReload();
     }
   }
 
