@@ -14,7 +14,7 @@ use super::{
     WorkspaceFileErrorKind,
 };
 
-use super::watch_events::{watch_event_channel, WatchEventInbox, WatchStopper};
+use super::watch_events::{watch_signal_channel, WatchEventInbox, WatchStopper};
 
 #[derive(Debug, Clone)]
 struct LinkedGitMetadata {
@@ -128,7 +128,7 @@ pub(super) fn start_source_control_watcher(
 ) -> Result<SourceControlWatcherHandle, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let id = NEXT_WATCHER_ID.fetch_add(1, Ordering::Relaxed).to_string();
-    let (event_tx, stop, inbox) = watch_event_channel();
+    let (event_tx, stop, inbox) = watch_signal_channel();
     let sink = Arc::new(Mutex::new(None));
     let event_root = root.clone();
     let metadata = linked_git_metadata(&root);
@@ -276,8 +276,8 @@ fn event_loop(
 fn collect_signal(inbox: &WatchEventInbox) -> Option<SourceControlWatchSignal> {
     let mut coalesced_event_count = 0u32;
     inbox
-        .collect_batch(|_| {
-            coalesced_event_count = coalesced_event_count.saturating_add(1);
+        .collect_batch(|delivery| {
+            coalesced_event_count = coalesced_event_count.saturating_add(delivery.event_count());
         })
         .then_some(SourceControlWatchSignal {
             coalesced_event_count,
@@ -622,7 +622,7 @@ mod tests {
     }
     #[test]
     fn coalesces_a_burst_into_one_signal() {
-        let (event_tx, _stop, inbox) = watch_event_channel();
+        let (event_tx, _stop, inbox) = watch_signal_channel();
         for _ in 0..4 {
             assert!(event_tx.send(ok_event()));
         }
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn watcher_errors_still_trigger_reconciliation() {
-        let (event_tx, _stop, inbox) = watch_event_channel();
+        let (event_tx, _stop, inbox) = watch_signal_channel();
         assert!(event_tx.send(Err(notify::Error::generic("watch overflow"))));
         let signal = collect_signal(&inbox).expect("watcher errors must refresh status");
         assert_eq!(signal.coalesced_event_count, 1);
@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn idle_worker_stops_without_an_event() {
-        let (_event_tx, stop, inbox) = watch_event_channel();
+        let (_event_tx, stop, inbox) = watch_signal_channel();
         let (done_tx, done_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
             done_tx.send(collect_signal(&inbox).is_none()).unwrap();
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn shuts_down_when_event_channel_disconnects() {
-        let (event_tx, _stop, inbox) = watch_event_channel();
+        let (event_tx, _stop, inbox) = watch_signal_channel();
         drop(event_tx);
 
         assert!(collect_signal(&inbox).is_none());

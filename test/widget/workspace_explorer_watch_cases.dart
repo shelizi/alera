@@ -9,6 +9,35 @@ Future<void> _pumpWatchedRefresh(WidgetTester tester) async {
 }
 
 void _registerWorkspaceExplorerWatchTests() {
+  testWidgets(
+    'root rescan refreshes loaded descendants and rebuilds Quick Open',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [_directory('src', hasChildrenHint: true)]
+        ..childrenByDirectory['src'] = [_file('src/old.dart')];
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      expect(find.text('old.dart'), findsOneWidget);
+
+      service.childrenByDirectory['src'] = [_file('src/new.dart')];
+      final before = service.quickOpenRefreshRequests.length;
+      // Native overflow sends the root sentinel and all loaded directories.
+      service.emitWatchBatch(['', 'src'], changedRelativePaths: ['']);
+      await _pumpWatchedRefresh(tester);
+      expect(find.text('new.dart'), findsOneWidget);
+      expect(find.text('old.dart'), findsNothing);
+      expect(service.quickOpenRefreshRequests.length, before + 1);
+      expect(service.quickOpenRefreshAllowIncremental.last, isFalse);
+
+      final beforeOrdinary = service.quickOpenRefreshRequests.length;
+      service.emitWatchBatch(['src'], changedRelativePaths: ['src/new.dart']);
+      await _pumpWatchedRefresh(tester);
+      expect(service.quickOpenRefreshRequests.length, beforeOrdinary + 1);
+      expect(service.quickOpenRefreshAllowIncremental.last, isTrue);
+    },
+  );
+
   testWidgets('rapid workspace switching keeps only the latest Explorer', (
     tester,
   ) async {

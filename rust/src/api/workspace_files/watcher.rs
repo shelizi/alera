@@ -13,7 +13,7 @@ use super::{
     WorkspaceExplorerWatcherHandle, WorkspaceFileError, WorkspaceFileErrorKind,
 };
 
-use super::watch_events::{watch_event_channel, WatchEventInbox, WatchStopper};
+use super::watch_events::{watch_event_channel, WatchDelivery, WatchEventInbox, WatchStopper};
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
 static WATCHERS: OnceLock<Mutex<HashMap<String, WatcherSession>>> = OnceLock::new();
@@ -61,17 +61,43 @@ fn watched_paths_snapshot(paths: HashMap<String, PathBuf>) -> WatchedPaths {
     Arc::new(Mutex::new(Arc::new(WatchedDirectories::new(paths))))
 }
 
+const MAX_BATCH_PATHS: usize = 2048;
+
 #[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct PendingWatchBatch {
     paths: HashSet<PathBuf>,
     immediate_paths: HashSet<PathBuf>,
     event_count: u32,
+    collapsed: bool,
 }
 
 impl PendingWatchBatch {
+    fn reconcile_all(&mut self, root: &Path) {
+        self.paths.clear();
+        self.immediate_paths.clear();
+        self.paths.insert(root.to_path_buf());
+        self.immediate_paths.insert(root.to_path_buf());
+        self.collapsed = true;
+    }
+
+    fn push_delivery(&mut self, root: &Path, delivery: WatchDelivery) {
+        match delivery {
+            WatchDelivery::Event(event) => self.push(root, event),
+            WatchDelivery::Reconcile(count) => {
+                self.event_count = self.event_count.saturating_add(count);
+                if !self.collapsed {
+                    self.reconcile_all(root);
+                }
+            }
+        }
+    }
+
     fn push(&mut self, root: &Path, result: notify::Result<notify::Event>) {
         self.event_count = self.event_count.saturating_add(1);
+        if self.collapsed {
+            return;
+        }
         match result {
             Ok(event) if !event.paths.is_empty() => {
                 // Some backends attach paths to a rescan notification.
@@ -102,6 +128,12 @@ impl PendingWatchBatch {
                         // cannot be localized safely.
                         self.paths.insert(root.to_path_buf());
                         self.immediate_paths.insert(root.to_path_buf());
+                    }
+                    // Even a fast consumer must not accumulate an unbounded
+                    // number of distinct paths during the 350 ms window.
+                    if self.paths.len() > MAX_BATCH_PATHS {
+                        self.reconcile_all(root);
+                        return;
                     }
                 }
             }
@@ -327,7 +359,7 @@ fn event_loop(
 ) {
     loop {
         let mut pending = PendingWatchBatch::default();
-        if !inbox.collect_batch(|event| pending.push(&root, event)) {
+        if !inbox.collect_batch(|event| pending.push_delivery(&root, event)) {
             return;
         }
         if let Some(batch) = build_batch(&root, &watched_paths, pending) {
@@ -350,6 +382,11 @@ fn build_batch(
     }
     let mut directory_relative_paths = HashSet::<String>::new();
     let mut changed_relative_paths = HashSet::<String>::new();
+    if pending.immediate_paths.contains(root) {
+        // Unknown changes can be inside any loaded directory, not just
+        // the root's immediate children. Include all loaded aliases.
+        directory_relative_paths.extend(watched_paths.by_relative.keys().cloned());
+    }
     let deferred = if pending.immediate_paths.contains(root) || pending.paths.len() > 64 {
         HashSet::new()
     } else {
@@ -740,10 +777,59 @@ mod tests {
             batch.changed_relative_paths,
             vec!["", "dir-0000/old.txt", "dir-1999/new.txt"]
         );
-        assert_eq!(
-            batch.directory_relative_paths,
-            vec!["", "dir-0000", "dir-1999"]
-        );
+        assert_eq!(batch.directory_relative_paths.len(), 2001);
+        assert_eq!(batch.directory_relative_paths.first().unwrap(), "");
+        assert_eq!(batch.directory_relative_paths.last().unwrap(), "dir-1999");
+    }
+
+    #[test]
+    fn mailbox_overflow_reconciles_every_loaded_directory() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let watched = watched_paths_snapshot(HashMap::from([
+            (String::new(), root.to_path_buf()),
+            ("src".into(), root.join("src")),
+            ("nested".into(), root.join("nested")),
+        ]));
+        let (tx, _stop, inbox) = watch_event_channel();
+        for i in 0..10_000 {
+            assert!(tx.send(Ok(
+                Event::new(EventKind::Any).add_path(root.join(format!("src/{i}.rs")))
+            )));
+        }
+        let mut pending = PendingWatchBatch::default();
+        assert!(inbox.collect_batch(|delivery| pending.push_delivery(root, delivery)));
+        assert_eq!(pending.event_count, 10_000);
+        assert_eq!(pending.paths.len(), 1);
+        let batch = build_batch(root, &watched, pending).unwrap();
+        assert_eq!(batch.directory_relative_paths, ["", "nested", "src"]);
+        assert_eq!(batch.changed_relative_paths, [""]);
+        assert_eq!(batch.deferred_quick_open_paths, Some(vec![]));
+        assert_eq!(batch.coalesced_event_count, 10_000);
+    }
+
+    #[test]
+    fn fast_consumer_distinct_path_budget_also_collapses_to_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let watched = watched_paths_snapshot(HashMap::from([
+            (String::new(), root.to_path_buf()),
+            ("src".into(), root.join("src")),
+        ]));
+        let mut pending = PendingWatchBatch::default();
+        for i in 0..10_000 {
+            pending.push(
+                root,
+                Ok(Event::new(EventKind::Any).add_path(root.join(format!("src/{i}.rs")))),
+            );
+            assert!(pending.paths.len() <= MAX_BATCH_PATHS);
+        }
+        assert!(pending.collapsed);
+        assert_eq!(pending.paths.len(), 1);
+        let batch = build_batch(root, &watched, pending).unwrap();
+        assert_eq!(batch.directory_relative_paths, ["", "src"]);
+        assert_eq!(batch.changed_relative_paths, [""]);
+        assert_eq!(batch.coalesced_event_count, 10_000);
     }
 
     #[test]

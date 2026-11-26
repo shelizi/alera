@@ -97,6 +97,94 @@ void main() {
     },
   );
 
+  test(
+    'root rescan checks all clean open files and notifies only this workspace',
+    () async {
+      const workspace = '/repo/alera';
+      final service = _WatcherFileService()
+        ..contentTokens['src/clean.dart'] = 'fixture-new-clean'
+        ..contentTokens['src/dirty.dart'] = 'fixture-new-dirty'
+        ..contentTokens['src/other.dart'] = 'fixture-new-other';
+      final registry = EditorSessionRegistry();
+      addTearDown(registry.dispose);
+      final clean = registry.documentFor('clean')
+        ..attachFile(workspacePath: workspace, relativePath: 'src/clean.dart')
+        ..acceptLoaded(_editorFile('old clean', token: 'fixture-old-clean'));
+      final dirty = registry.documentFor('dirty')
+        ..attachFile(workspacePath: workspace, relativePath: 'src/dirty.dart')
+        ..acceptLoaded(_editorFile('old dirty', token: 'fixture-old-dirty'))
+        ..updateCurrentText('unsaved local edit');
+      final other = registry.documentFor('other')
+        ..attachFile(
+          workspacePath: '/repo/other',
+          relativePath: 'src/other.dart',
+        )
+        ..acceptLoaded(
+          _editorFile('other workspace', token: 'fixture-old-other'),
+        );
+      var reloads = 0;
+      registry.register(
+        'clean',
+        EditorSessionHandle(
+          isDirty: () => clean.isDirty,
+          save: () async {},
+          discard: () async {},
+          reload: () async {
+            reloads++;
+            clean.acceptLoaded(
+              _editorFile('external clean', token: 'fixture-new-clean'),
+            );
+          },
+        ),
+      );
+      final localViewer = registry.documentChangesForPath(
+        workspacePath: workspace,
+        relativePath: 'docs/viewer.md',
+      );
+      final otherViewer = registry.documentChangesForPath(
+        workspacePath: '/repo/other',
+        relativePath: 'docs/viewer.md',
+      );
+      var localNotifications = 0;
+      var otherNotifications = 0;
+      void localChanged() => localNotifications++;
+      void otherChanged() => otherNotifications++;
+      localViewer.addListener(localChanged);
+      otherViewer.addListener(otherChanged);
+      addTearDown(() {
+        localViewer.removeListener(localChanged);
+        otherViewer.removeListener(otherChanged);
+      });
+      final watcher = WorkspaceEditorFileWatcher(
+        workspaceFiles: service,
+        editorSessions: registry,
+      );
+      addTearDown(watcher.dispose);
+      await watcher.update(
+        workspacePath: workspace,
+        openRelativePaths: [
+          'src/clean.dart',
+          'src/dirty.dart',
+          'docs/viewer.md',
+        ],
+      );
+
+      // No concrete file paths survive an overflowing native mailbox.
+      service.emitChanged('');
+      await _flush();
+      expect(reloads, 1);
+      expect(clean.currentText, 'external clean');
+      expect(dirty.currentText, 'unsaved local edit');
+      expect(other.currentText, 'other workspace');
+      expect(service.contentTokenReads, ['src/clean.dart']);
+      expect(localNotifications, 1);
+      expect(otherNotifications, 0);
+      service.emitChanged('');
+      await _flush();
+      expect(reloads, 1, reason: 'unchanged disk token preserves undo state');
+    },
+  );
+
   test('changed events notify path listeners without an editor tab', () async {
     final service = _WatcherFileService();
     final registry = EditorSessionRegistry();

@@ -206,7 +206,14 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
             ));
     if (relevantPrompt) {
       _watchDeferredQuickOpenQueue.clear();
-      _watchQuickOpenRefreshQueue.enqueue(const <String>['index']);
+      // Path detail may have been lost after native queue overflow or an
+      // OS rescan request. Do not rely on an incremental search hint.
+      _watchQuickOpenRefreshQueue.enqueue(
+        batch.changedRelativePaths.isEmpty ||
+                batch.changedRelativePaths.contains('')
+            ? const <String>['full']
+            : const <String>['index'],
+      );
     } else if (batch.changedRelativePaths.any(
       (path) =>
           deferred.contains(path) &&

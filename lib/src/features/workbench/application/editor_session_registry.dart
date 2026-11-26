@@ -36,7 +36,19 @@ class EditorSessionRegistry extends ChangeNotifier
     required String workspacePath,
     required Iterable<String> relativePaths,
   }) {
-    for (final relativePath in relativePaths.toSet()) {
+    final paths = relativePaths.toSet();
+    if (paths.contains('')) {
+      // A root sentinel means path detail was lost (rescan/overflow).
+      // Snapshot keys because listeners may unregister during notification.
+      final workspacePaths = _pathNotifiers.keys
+          .where((path) => path.workspacePath == workspacePath)
+          .toList(growable: false);
+      for (final path in workspacePaths) {
+        _pathNotifiers[path]?.notifyListeners();
+      }
+      return;
+    }
+    for (final relativePath in paths) {
       _pathNotifiers[_EditorDocumentPath(workspacePath, relativePath)]
           ?.notifyListeners();
     }
@@ -295,6 +307,7 @@ class EditorSessionRegistry extends ChangeNotifier
     required Iterable<String> relativePaths,
   }) async {
     final candidates = relativePaths.toSet();
+    final reconcileAll = candidates.contains('');
     final observedTokens = <String, String?>{};
     for (final entry in _documents.entries) {
       final tabId = entry.key;
@@ -302,7 +315,7 @@ class EditorSessionRegistry extends ChangeNotifier
       final relativePath = document.relativePath;
       if (document.workspacePath != workspacePath ||
           relativePath == null ||
-          !candidates.contains(relativePath) ||
+          (!reconcileAll && !candidates.contains(relativePath)) ||
           isDirty(tabId)) {
         continue;
       }

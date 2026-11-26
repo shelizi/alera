@@ -8,6 +8,7 @@ class _FakeWorkspaceFileService({
       StreamController<String>.broadcast(sync: true);
   final List<String> quickOpenFilterRefreshRequests = <String>[];
   final List<String> quickOpenRefreshRequests = <String>[];
+  final List<bool> quickOpenRefreshAllowIncremental = <bool>[];
   Object? quickOpenSearchError;
 
   @override
@@ -31,6 +32,7 @@ class _FakeWorkspaceFileService({
     bool allowIncremental = false,
   }) {
     quickOpenRefreshRequests.add(workspacePath);
+    quickOpenRefreshAllowIncremental.add(allowIncremental);
   }
 
   StreamController<native.WorkspaceExplorerWatchBatch> _watchController =
