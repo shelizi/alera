@@ -9,7 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `active_searches`, `begin`, `from_io`, `new`, `prune_cancel_tombstones`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `SearchCancellation`, `SearchEntry`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `drop`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<WorkspaceSearchResult> searchWorkspace({
   required WorkspaceSearchOptions options,
@@ -21,6 +21,16 @@ Future<WorkspaceSearchResult> searchWorkspaceCancelable({
   required WorkspaceSearchOptions options,
   required String requestId,
 }) => RustLib.instance.api.crateApiWorkspaceSearchSearchWorkspaceCancelable(
+  options: options,
+  requestId: requestId,
+);
+
+/// Streams read-only search results in original scan order. Replacement
+/// operations deliberately retain the existing complete, fresh result API.
+Stream<WorkspaceSearchBatch> searchWorkspaceStream({
+  required WorkspaceSearchOptions options,
+  required String requestId,
+}) => RustLib.instance.api.crateApiWorkspaceSearchSearchWorkspaceStream(
   options: options,
   requestId: requestId,
 );
@@ -191,6 +201,43 @@ class WorkspaceReplaceResult {
           filesChanged == other.filesChanged &&
           matchesReplaced == other.matchesReplaced &&
           conflicts == other.conflicts;
+}
+
+/// A delta from the current read-only search, not a complete snapshot.
+/// A successful terminal batch may have zero new files.
+class WorkspaceSearchBatch {
+  final List<WorkspaceSearchFileResult> files;
+  final int totalMatches;
+  final bool truncated;
+  final bool done;
+  final WorkspaceSearchError? error;
+
+  const WorkspaceSearchBatch({
+    required this.files,
+    required this.totalMatches,
+    required this.truncated,
+    required this.done,
+    this.error,
+  });
+
+  @override
+  int get hashCode =>
+      files.hashCode ^
+      totalMatches.hashCode ^
+      truncated.hashCode ^
+      done.hashCode ^
+      error.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WorkspaceSearchBatch &&
+          runtimeType == other.runtimeType &&
+          files == other.files &&
+          totalMatches == other.totalMatches &&
+          truncated == other.truncated &&
+          done == other.done &&
+          error == other.error;
 }
 
 class WorkspaceSearchError implements FrbException {

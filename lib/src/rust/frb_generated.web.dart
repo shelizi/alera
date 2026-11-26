@@ -70,6 +70,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   dco_decode_StreamSink_workspace_explorer_watch_batch_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<WorkspaceSearchBatch>
+  dco_decode_StreamSink_workspace_search_batch_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -204,6 +208,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceRequest dco_decode_box_autoadd_workspace_replace_request(
+    dynamic raw,
+  );
+
+  @protected
+  WorkspaceSearchError dco_decode_box_autoadd_workspace_search_error(
     dynamic raw,
   );
 
@@ -598,6 +607,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceSearchError? dco_decode_opt_box_autoadd_workspace_search_error(
+    dynamic raw,
+  );
+
+  @protected
   WorkspaceTextEncoding? dco_decode_opt_box_autoadd_workspace_text_encoding(
     dynamic raw,
   );
@@ -747,6 +761,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceReplaceResult dco_decode_workspace_replace_result(dynamic raw);
 
   @protected
+  WorkspaceSearchBatch dco_decode_workspace_search_batch(dynamic raw);
+
+  @protected
   WorkspaceSearchError dco_decode_workspace_search_error(dynamic raw);
 
   @protected
@@ -800,6 +817,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   RustStreamSink<WorkspaceExplorerWatchBatch>
   sse_decode_StreamSink_workspace_explorer_watch_batch_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<WorkspaceSearchBatch>
+  sse_decode_StreamSink_workspace_search_batch_Sse(
     SseDeserializer deserializer,
   );
 
@@ -972,6 +995,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceReplaceRequest sse_decode_box_autoadd_workspace_replace_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceSearchError sse_decode_box_autoadd_workspace_search_error(
     SseDeserializer deserializer,
   );
 
@@ -1476,6 +1504,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceSearchError? sse_decode_opt_box_autoadd_workspace_search_error(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   WorkspaceTextEncoding? sse_decode_opt_box_autoadd_workspace_text_encoding(
     SseDeserializer deserializer,
   );
@@ -1663,6 +1696,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  WorkspaceSearchBatch sse_decode_workspace_search_batch(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   WorkspaceSearchError sse_decode_workspace_search_error(
     SseDeserializer deserializer,
   );
@@ -1735,6 +1773,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_StreamSink_workspace_explorer_watch_batch_Sse(
     RustStreamSink<WorkspaceExplorerWatchBatch> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_workspace_search_batch_Sse(
+    RustStreamSink<WorkspaceSearchBatch> self,
     SseSerializer serializer,
   );
 
@@ -1942,6 +1986,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_workspace_replace_request(
     WorkspaceReplaceRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_workspace_search_error(
+    WorkspaceSearchError self,
     SseSerializer serializer,
   );
 
@@ -2573,6 +2623,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_workspace_search_error(
+    WorkspaceSearchError? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_workspace_text_encoding(
     WorkspaceTextEncoding? self,
     SseSerializer serializer,
@@ -2803,6 +2859,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_workspace_replace_result(
     WorkspaceReplaceResult self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_search_batch(
+    WorkspaceSearchBatch self,
     SseSerializer serializer,
   );
 

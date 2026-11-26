@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::fs;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,14 +31,32 @@ pub(super) fn run_search(
     run_search_impl(compiled, full_lines, cancellation, None, 1)
 }
 
+pub(super) type ProgressObserver<'a> =
+    &'a mut dyn FnMut(&[WorkspaceSearchFileResult], u32, bool) -> Result<(), WorkspaceSearchError>;
+
 pub(super) fn run_readonly_search(
     compiled: &CompiledSearch,
     cancellation: Option<&AtomicBool>,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    run_readonly_search_observed(compiled, cancellation, None)
+}
+
+pub(super) fn run_readonly_search_observed(
+    compiled: &CompiledSearch,
+    cancellation: Option<&AtomicBool>,
+    progress: Option<ProgressObserver<'_>>,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     ensure_not_cancelled(cancellation)?;
     let cache = content_cache::for_root(&compiled.root);
     let workers = std::thread::available_parallelism().map_or(1, |count| count.get().min(4));
-    run_search_impl(compiled, false, cancellation, cache.as_deref(), workers)
+    run_search_impl_observed(
+        compiled,
+        false,
+        cancellation,
+        cache.as_deref(),
+        workers,
+        progress,
+    )
 }
 
 fn run_search_impl(
@@ -46,6 +65,17 @@ fn run_search_impl(
     cancellation: Option<&AtomicBool>,
     cache: Option<&RootCache>,
     workers: usize,
+) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
+    run_search_impl_observed(compiled, full_lines, cancellation, cache, workers, None)
+}
+
+fn run_search_impl_observed(
+    compiled: &CompiledSearch,
+    full_lines: bool,
+    cancellation: Option<&AtomicBool>,
+    cache: Option<&RootCache>,
+    workers: usize,
+    progress: Option<ProgressObserver<'_>>,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     ensure_not_cancelled(cancellation)?;
     let mut walker = WalkBuilder::new(&compiled.root);
@@ -70,10 +100,18 @@ fn run_search_impl(
     let walker = walker.build();
     if workers > 1 {
         if let Some(permit) = ReadAheadPermit::acquire(workers) {
-            return scan_parallel(walker, compiled, full_lines, cancellation, cache, permit.0);
+            return scan_parallel(
+                walker,
+                compiled,
+                full_lines,
+                cancellation,
+                cache,
+                permit.0,
+                progress,
+            );
         }
     }
-    scan_sequential(walker, compiled, full_lines, cancellation, cache)
+    scan_sequential(walker, compiled, full_lines, cancellation, cache, progress)
 }
 
 struct CandidateFile {
@@ -203,6 +241,7 @@ fn load_file(
     })
 }
 
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct SearchAccumulator {
     files: Vec<WorkspaceSearchFileResult>,
@@ -249,6 +288,16 @@ impl SearchAccumulator {
         Ok(())
     }
 
+    fn notify(
+        &self,
+        progress: &mut Option<ProgressObserver<'_>>,
+    ) -> Result<(), WorkspaceSearchError> {
+        if let Some(observer) = progress.as_mut() {
+            observer(&self.files, self.total_matches, self.truncated)?;
+        }
+        Ok(())
+    }
+
     fn finish(self) -> WorkspaceSearchResult {
         WorkspaceSearchResult {
             files: self.files,
@@ -264,6 +313,7 @@ fn scan_sequential(
     full_lines: bool,
     cancellation: Option<&AtomicBool>,
     cache: Option<&RootCache>,
+    mut progress: Option<ProgressObserver<'_>>,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     let mut out = SearchAccumulator::default();
     for entry in walker {
@@ -281,6 +331,7 @@ fn scan_sequential(
             )
         });
         out.consume(loaded, compiled, full_lines, cancellation)?;
+        out.notify(&mut progress)?;
     }
     Ok(out.finish())
 }
@@ -331,6 +382,7 @@ fn scan_parallel(
     cancellation: Option<&AtomicBool>,
     cache: Option<&RootCache>,
     workers: usize,
+    mut progress: Option<ProgressObserver<'_>>,
 ) -> Result<WorkspaceSearchResult, WorkspaceSearchError> {
     use std::sync::mpsc;
     let (job_tx, job_rx) = mpsc::channel::<ReadJob>();
@@ -379,7 +431,7 @@ fn scan_parallel(
         drop(result_tx);
         if spawned == 0 {
             drop(job_tx);
-            return scan_sequential(walker, compiled, full_lines, cancellation, cache);
+            return scan_sequential(walker, compiled, full_lines, cancellation, cache, progress);
         }
         let result = (|| {
             let mut out = SearchAccumulator::default();
@@ -438,6 +490,7 @@ fn scan_parallel(
                     .expect("ready slot");
                 head += 1;
                 out.consume(loaded, compiled, full_lines, cancellation)?;
+                out.notify(&mut progress)?;
             }
             Ok(out.finish())
         })();

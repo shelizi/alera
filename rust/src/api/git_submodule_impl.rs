@@ -33,6 +33,7 @@ struct ResolvedSubmodule<'repo> {
 /// A request-local negative lookup for ordinary files. The original
 /// submodule lookup still runs for matching roots or when enumeration fails.
 /// Never retain this across requests or use it to cache submodule status.
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 pub(super) struct SubmodulePathCatalog {
     roots: Option<HashSet<String>>,

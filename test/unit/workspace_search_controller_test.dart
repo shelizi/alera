@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 part 'workspace_search_controller_cancellation_cases.dart';
+part 'workspace_search_controller_progress_cases.dart';
 
 void main() {
   test('whitespace-only query counts as searchable', () async {
@@ -50,6 +51,7 @@ void main() {
   });
 
   _registerWorkspaceSearchCancellationTests();
+  _registerWorkspaceSearchProgressTests();
 
   testWidgets('selective literal debounce is 120 ms and replaces old timer', (
     tester,

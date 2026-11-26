@@ -61,6 +61,7 @@ fn watched_paths_snapshot(paths: HashMap<String, PathBuf>) -> WatchedPaths {
     Arc::new(Mutex::new(Arc::new(WatchedDirectories::new(paths))))
 }
 
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct PendingWatchBatch {
     paths: HashSet<PathBuf>,

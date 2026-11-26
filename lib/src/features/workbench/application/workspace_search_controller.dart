@@ -99,6 +99,7 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
   Duration? _lastSearchDuration;
   int _requestGeneration = 0;
   String? _activeRequestId;
+  StreamIterator<native.WorkspaceSearchBatch>? _activeSearchIterator;
   WorkspaceSearchService? _searchService;
   native.WorkspaceSearchResult? _projectedResult;
   WorkspaceSearchProjection? _resultProjection;
@@ -246,7 +247,7 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
     }
     final requestId = '$workspacePath:${identityHashCode(this)}:$generation';
     _activeRequestId = requestId;
-    state = state.copyWith(loading: true, error: null);
+    state = state.copyWith(loading: true, error: null, result: null);
     try {
       final stopwatch = Stopwatch()..start();
       final searchOptions = _searchOptions(workspacePath);
@@ -259,8 +260,8 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
               ),
               requestId: requestId,
             )).result
-          : await _service.search(options: searchOptions, requestId: requestId);
-      if (generation != _requestGeneration) {
+          : await _searchBatches(searchOptions, requestId, generation);
+      if (generation != _requestGeneration || result == null) {
         return;
       }
       state = state.copyWith(loading: false, result: result, error: null);
@@ -281,11 +282,96 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
     }
   }
 
+  Future<native.WorkspaceSearchResult?> _searchBatches(
+    native.WorkspaceSearchOptions options,
+    String requestId,
+    int generation,
+  ) async {
+    final iterator = StreamIterator(
+      _service.searchBatches(options: options, requestId: requestId),
+    );
+    _activeSearchIterator = iterator;
+    final files = <native.WorkspaceSearchFileResult>[];
+    final paths = <String>{};
+    var count = 0;
+    var truncated = false;
+    var receivedTerminal = false;
+    try {
+      while (await iterator.moveNext()) {
+        // Check before touching state or accumulating an obsolete batch.
+        if (generation != _requestGeneration) return null;
+        final batch = iterator.current;
+        if (batch.error case final error?) {
+          receivedTerminal = batch.done;
+          throw error;
+        }
+        for (final file in batch.files) {
+          if (!paths.add(file.relativePath)) {
+            throw StateError('Duplicate file in search stream');
+          }
+          count += file.matches.length;
+          files.add(file);
+        }
+        if (batch.totalMatches != count ||
+            count > _workspaceSearchMaxResults ||
+            (truncated && !batch.truncated)) {
+          throw StateError('Invalid search stream result count');
+        }
+        truncated = batch.truncated;
+        final result = native.WorkspaceSearchResult(
+          files: List<native.WorkspaceSearchFileResult>.unmodifiable(files),
+          totalMatches: count,
+          truncated: truncated,
+        );
+        if (batch.done) {
+          receivedTerminal = true;
+          return result;
+        }
+        // Keep loading=true until the authoritative final count/truncation
+        // arrives. Partial results are navigable but never replaceable.
+        if (batch.files.isNotEmpty) {
+          state = state.copyWith(result: result, error: null);
+        }
+      }
+      if (generation != _requestGeneration) return null;
+      throw StateError('Search stream ended before completion');
+    } finally {
+      if (identical(_activeSearchIterator, iterator)) {
+        _activeSearchIterator = null;
+      }
+      // Subscription cleanup must not hold the visible terminal state
+      // hostage to a slow transport. Explicitly cancel native work if this
+      // active stream ended malformed or without a terminal batch.
+      unawaited(_cancelSearchIterator(iterator));
+      if (!receivedTerminal &&
+          generation == _requestGeneration &&
+          _activeRequestId == requestId) {
+        unawaited(_ignoreCancellationFailure(requestId));
+      }
+    }
+  }
+
+  Future<void> _cancelSearchIterator(
+    StreamIterator<native.WorkspaceSearchBatch> iterator,
+  ) async {
+    try {
+      await iterator.cancel();
+    } catch (_) {
+      // Native cancellation and generation guards are independent of the
+      // transport's best-effort subscription cleanup.
+    }
+  }
+
   Future<native.WorkspaceReplaceResult> replaceMatches({
     required String workspacePath,
     required Iterable<String> matchIds,
     required EditorSessionRegistry editorSessions,
   }) async {
+    if (state.loading) {
+      const message = 'Wait until search completes before replacing.';
+      state = state.copyWith(error: message);
+      throw StateError(message);
+    }
     final result = state.result;
     if (result == null) {
       const message = 'Run search before replacing.';
@@ -396,6 +482,11 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
   }
 
   void _cancelActiveSearch() {
+    final iterator = _activeSearchIterator;
+    _activeSearchIterator = null;
+    if (iterator != null) {
+      unawaited(_cancelSearchIterator(iterator));
+    }
     final requestId = _activeRequestId;
     if (requestId == null) {
       return;

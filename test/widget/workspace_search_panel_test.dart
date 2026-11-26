@@ -1,3 +1,8 @@
+import 'dart:async';
+
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_service.dart';
+import 'package:alera/src/rust/api/workspace_search.dart' as native;
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_focus_request.dart';
@@ -8,6 +13,65 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('partial search rows render before the terminal batch', (
+    tester,
+  ) async {
+    final service = _ProgressPanelService();
+    final container = ProviderContainer(
+      overrides: [workspaceSearchServiceProvider.overrideWithValue(service)],
+    );
+    addTearDown(container.dispose);
+    final workspace = _workspace(id: 'progress', path: '/workspace');
+    await _pumpSearchPanel(tester, container: container, workspace: workspace);
+    final controller = container.read(
+      workspaceSearchControllerProvider(workspace.id).notifier,
+    );
+    controller.setQuery(workspace.path, 'needle');
+    unawaited(controller.searchNow(workspace.path));
+    await tester.pump();
+    expect(find.text('Searching...'), findsOneWidget);
+    service.batches.add(
+      const native.WorkspaceSearchBatch(
+        files: [
+          native.WorkspaceSearchFileResult(
+            relativePath: 'src/main.rs',
+            contentToken: 'token',
+            matches: [
+              native.WorkspaceSearchMatch(
+                id: 'm1',
+                line: 1,
+                column: 1,
+                matchLength: 6,
+                lineContent: 'needle',
+              ),
+            ],
+          ),
+        ],
+        totalMatches: 1,
+        truncated: false,
+        done: false,
+      ),
+    );
+    await tester.pump();
+    expect(find.text('1 match in 1 file · Searching...'), findsOneWidget);
+    expect(find.textContaining('main.rs', findRichText: true), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    service.batches.add(
+      const native.WorkspaceSearchBatch(
+        files: [],
+        totalMatches: 1,
+        truncated: false,
+        done: true,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('1 match in 1 file'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    unawaited(service.batches.close());
+    await tester.pump();
+  });
+
   testWidgets(
     'file search refocus requests restore query focus and selection',
     (tester) async {
@@ -153,6 +217,19 @@ void main() {
     expect(_textFieldWithValue('lib/**'), findsOneWidget);
     expect(_textFieldWithValue('build/**'), findsOneWidget);
   });
+}
+
+class _ProgressPanelService extends WorkspaceSearchService {
+  final batches = StreamController<native.WorkspaceSearchBatch>();
+
+  @override
+  Stream<native.WorkspaceSearchBatch> searchBatches({
+    required native.WorkspaceSearchOptions options,
+    required String requestId,
+  }) => batches.stream;
+
+  @override
+  Future<void> cancel({required String requestId}) async {}
 }
 
 Future<void> _pumpSearchPanel(

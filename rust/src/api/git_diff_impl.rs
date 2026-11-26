@@ -1584,6 +1584,7 @@ struct DiffSelection {
 /// One batch request, one repository and one whitespace mode. Build each
 /// tracked area's rename/copy index lazily, never cache it across requests.
 /// Rendering still uses a fresh, literal pathspec diff for the chosen file.
+#[flutter_rust_bridge::frb(ignore)]
 #[derive(Default)]
 struct DiffSelectionCache {
     staged: Option<HashMap<String, DiffSelection>>,

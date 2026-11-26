@@ -62,7 +62,9 @@ class const _SearchSummary({required final WorkspaceSearchState state})
     final text = !state.hasQuery
         ? ''
         : state.loading
-        ? 'Searching...'
+        ? (result == null
+              ? 'Searching...'
+              : '${_resultSummary(result)} · Searching...')
         : result == null
         ? 'No results'
         : _resultSummary(result);
@@ -78,7 +80,7 @@ class const _SearchSummary({required final WorkspaceSearchState state})
               overflow: .ellipsis,
             ),
           ),
-          if (state.replacing)
+          if (state.replacing || (state.loading && result != null))
             const SizedBox.square(
               dimension: AleraTokens.space16,
               child: CircularProgressIndicator(strokeWidth: 2),
