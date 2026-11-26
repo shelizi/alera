@@ -86,7 +86,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
       return;
     }
     _watchQuickOpenRefreshQueue.enqueue(const <String>[
-      'index',
+      'full',
     ], immediate: true);
     _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
     final exponent = _watcherFailureCount.clamp(0, 4);
@@ -122,7 +122,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
       if (mounted && _watcherHandle != null) {
         _watchRefreshQueue.enqueue(const <String>[''], immediate: true);
         _watchQuickOpenRefreshQueue.enqueue(const <String>[
-          'index',
+          'full',
         ], immediate: true);
       }
     }
@@ -220,7 +220,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     _watchRefreshQueue.enqueue(batch.directoryRelativePaths);
   }
 
-  Future<void> _scheduleWatchedQuickOpenRefresh(List<String> _) async {
+  Future<void> _scheduleWatchedQuickOpenRefresh(List<String> requests) async {
     if (!mounted) return;
     _watchDeferredQuickOpenQueue.clear();
     // The prompt/deferred queue has already bounded the wait. Do not
@@ -228,6 +228,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     _workspaceFiles.scheduleQuickOpenRefresh(
       workspacePath: widget.workspace.path,
       debounce: Duration.zero,
+      allowIncremental: !requests.contains('full'),
     );
   }
 

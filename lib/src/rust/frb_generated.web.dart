@@ -739,6 +739,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   WorkspaceQuickOpenMatch dco_decode_workspace_quick_open_match(dynamic raw);
 
   @protected
+  WorkspaceQuickOpenRefresh dco_decode_workspace_quick_open_refresh(
+    dynamic raw,
+  );
+
+  @protected
   WorkspaceQuickOpenSession dco_decode_workspace_quick_open_session(
     dynamic raw,
   );
@@ -1663,6 +1668,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   WorkspaceQuickOpenMatch sse_decode_workspace_quick_open_match(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WorkspaceQuickOpenRefresh sse_decode_workspace_quick_open_refresh(
     SseDeserializer deserializer,
   );
 
@@ -2826,6 +2836,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_workspace_quick_open_match(
     WorkspaceQuickOpenMatch self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_workspace_quick_open_refresh(
+    WorkspaceQuickOpenRefresh self,
     SseSerializer serializer,
   );
 

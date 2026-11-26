@@ -28,6 +28,9 @@ class WorkspaceFileService {
   final Map<String, _WorkspaceQuickOpenCacheEntry> _quickOpenCache =
       <String, _WorkspaceQuickOpenCacheEntry>{};
   final Map<String, Timer> _quickOpenRefreshTimers = <String, Timer>{};
+  final Map<String, bool> _quickOpenRefreshIncremental = <String, bool>{};
+  final Map<String, Timer> _quickOpenFullReconcileTimers = <String, Timer>{};
+  static const _quickOpenFullReconcileDelay = Duration(seconds: 5);
   final StreamController<String> _quickOpenRefreshEvents =
       StreamController<String>.broadcast();
   final Map<String, Stopwatch> _lastOnDemandQuickOpenRefresh =
@@ -58,6 +61,18 @@ class WorkspaceFileService {
     return native.startWorkspaceQuickOpenSession(
       workspacePath: workspacePath,
       excludedDirectories: excludedDirectories,
+    );
+  }
+
+  Future<native.WorkspaceQuickOpenRefresh> refreshQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required native.WorkspaceQuickOpenSession previous,
+  }) {
+    return native.refreshWorkspaceQuickOpenSession(
+      workspacePath: workspacePath,
+      excludedDirectories: excludedDirectories,
+      previous: previous,
     );
   }
 
@@ -237,13 +252,48 @@ class WorkspaceFileService {
   void scheduleQuickOpenRefresh({
     required String workspacePath,
     Duration debounce = const Duration(milliseconds: 120),
+    bool allowIncremental = false,
   }) {
     if (_disposed) return;
+    // A queued authoritative scan cannot be postponed or downgraded by
+    // another watcher notification.
+    if (allowIncremental &&
+        _quickOpenRefreshIncremental[workspacePath] == false)
+      return;
+    _quickOpenRefreshIncremental[workspacePath] = allowIncremental;
     _quickOpenRefreshTimers.remove(workspacePath)?.cancel();
     _quickOpenRefreshTimers[workspacePath] = Timer(debounce, () {
       _quickOpenRefreshTimers.remove(workspacePath);
-      unawaited(_refreshQuickOpenEntries(workspacePath));
+      final incremental =
+          _quickOpenRefreshIncremental.remove(workspacePath) ?? false;
+      unawaited(
+        _refreshQuickOpenEntries(workspacePath, allowIncremental: incremental),
+      );
     });
+  }
+
+  void _maintainQuickOpenFullReconcile(String workspacePath) {
+    if (_disposed) return;
+    final provisional = _quickOpenCache.values.any(
+      (entry) =>
+          entry.workspacePath == workspacePath && entry.incrementalSnapshot,
+    );
+    if (!provisional) {
+      _quickOpenFullReconcileTimers.remove(workspacePath)?.cancel();
+      return;
+    }
+    // Do not reset this timer for later deltas: even the last notification
+    // in a burst must receive a complete authoritative reconciliation.
+    _quickOpenFullReconcileTimers.putIfAbsent(
+      workspacePath,
+      () => Timer(_quickOpenFullReconcileDelay, () {
+        _quickOpenFullReconcileTimers.remove(workspacePath);
+        scheduleQuickOpenRefresh(
+          workspacePath: workspacePath,
+          debounce: Duration.zero,
+        );
+      }),
+    );
   }
 
   /// An explorer filter can search files in collapsed, unwatched directories.
@@ -286,6 +336,11 @@ class WorkspaceFileService {
       timer.cancel();
     }
     _quickOpenRefreshTimers.clear();
+    _quickOpenRefreshIncremental.clear();
+    for (final timer in _quickOpenFullReconcileTimers.values) {
+      timer.cancel();
+    }
+    _quickOpenFullReconcileTimers.clear();
     _lastOnDemandQuickOpenRefresh.clear();
     final sessions = <native.WorkspaceQuickOpenSession>[
       for (final entry in _quickOpenCache.values)
@@ -348,7 +403,9 @@ class WorkspaceFileService {
             }
             entry
               ..session = session
-              ..pendingSession = null;
+              ..pendingSession = null
+              ..incrementalSnapshot = false;
+            _maintainQuickOpenFullReconcile(entry.workspacePath);
             _schedulePendingQuickOpenRefresh(entry);
             return session;
           },
@@ -375,7 +432,10 @@ class WorkspaceFileService {
     );
   }
 
-  Future<void> _refreshQuickOpenEntries(String workspacePath) async {
+  Future<void> _refreshQuickOpenEntries(
+    String workspacePath, {
+    required bool allowIncremental,
+  }) async {
     if (_disposed) return;
     final entries = _quickOpenCache.values
         .where((entry) => entry.workspacePath == workspacePath)
@@ -391,10 +451,21 @@ class WorkspaceFileService {
       final reconcileAge = Stopwatch()..start();
       native.WorkspaceQuickOpenSession? replacementSession;
       try {
-        final session = await startQuickOpenSession(
-          workspacePath: entry.workspacePath,
-          excludedDirectories: entry.excludedDirectories,
-        );
+        final previous = entry.session;
+        final refresh = allowIncremental && previous != null
+            ? await refreshQuickOpenSession(
+                workspacePath: entry.workspacePath,
+                excludedDirectories: entry.excludedDirectories,
+                previous: previous,
+              )
+            : native.WorkspaceQuickOpenRefresh(
+                session: await startQuickOpenSession(
+                  workspacePath: entry.workspacePath,
+                  excludedDirectories: entry.excludedDirectories,
+                ),
+                incremental: false,
+              );
+        final session = refresh.session;
         replacementSession = session;
         if (_disposed) continue;
         final refreshedMatches = <String, _WorkspaceQuickOpenCachedResult>{};
@@ -430,7 +501,9 @@ class WorkspaceFileService {
         final previousSession = entry.session;
         entry
           ..session = session
-          ..pendingSession = null;
+          ..pendingSession = null
+          ..incrementalSnapshot = refresh.incremental;
+        _maintainQuickOpenFullReconcile(workspacePath);
         replacementSession = null;
         // Never let an old in-flight query satisfy a new-generation request.
         entry.reconciledAge = reconcileAge;
@@ -455,6 +528,7 @@ class WorkspaceFileService {
         _schedulePendingQuickOpenRefresh(entry);
       }
     }
+    _maintainQuickOpenFullReconcile(workspacePath);
     if (refreshed && !_quickOpenRefreshEvents.isClosed) {
       _quickOpenRefreshEvents.add(workspacePath);
     }
@@ -928,6 +1002,7 @@ class _WorkspaceQuickOpenCacheEntry {
   Future<native.WorkspaceQuickOpenSession>? pendingSession;
   bool refreshing = false;
   bool refreshPending = false;
+  bool incrementalSnapshot = false;
   Stopwatch? reconciledAge;
   final Map<String, _WorkspaceQuickOpenCachedResult> matches =
       <String, _WorkspaceQuickOpenCachedResult>{};

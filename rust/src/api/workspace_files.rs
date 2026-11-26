@@ -198,6 +198,13 @@ pub struct WorkspaceQuickOpenSession {
     pub indexed_file_count: u32,
 }
 
+/// An incremental refresh is provisional until a scheduled full scan.
+#[derive(Debug, Clone)]
+pub struct WorkspaceQuickOpenRefresh {
+    pub session: WorkspaceQuickOpenSession,
+    pub incremental: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceQuickOpenMatch {
     pub relative_path: String,
@@ -265,6 +272,29 @@ pub fn start_workspace_quick_open_session(
     .map(|session| WorkspaceQuickOpenSession {
         id: session.id,
         indexed_file_count: session.indexed_file_count,
+    })
+    .map_err(shared_workspace_file_error)
+}
+
+pub fn refresh_workspace_quick_open_session(
+    workspace_path: String,
+    excluded_directories: Vec<String>,
+    previous: WorkspaceQuickOpenSession,
+) -> Result<WorkspaceQuickOpenRefresh, WorkspaceFileError> {
+    alera_core::workspace_files::refresh_workspace_quick_open_session(
+        workspace_path,
+        excluded_directories,
+        alera_core::workspace_files::WorkspaceQuickOpenSession {
+            id: previous.id,
+            indexed_file_count: previous.indexed_file_count,
+        },
+    )
+    .map(|(session, incremental)| WorkspaceQuickOpenRefresh {
+        session: WorkspaceQuickOpenSession {
+            id: session.id,
+            indexed_file_count: session.indexed_file_count,
+        },
+        incremental,
     })
     .map_err(shared_workspace_file_error)
 }

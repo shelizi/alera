@@ -55,6 +55,259 @@ fn snapshot(session: &WorkspaceQuickOpenSession) -> Arc<QuickOpenIndex> {
     access_session(&mut sessions().lock().unwrap(), &session.id, Instant::now()).unwrap()
 }
 
+fn index_fingerprint(session: &WorkspaceQuickOpenSession) -> Vec<(String, bool, bool)> {
+    snapshot(session)
+        .files
+        .iter()
+        .map(|file| {
+            (
+                file.relative_path.clone(),
+                file.is_gitignored,
+                file.is_directory,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn subtree_delta_matches_full_discovery_and_preserves_independent_sessions() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    for folder in ["src/deep", "lib/nested", "other", "node_modules"] {
+        fs::create_dir_all(root.join(folder)).unwrap();
+    }
+    fs::write(
+        root.join(".gitignore"),
+        "src/deep/*.tmp\n!src/deep/keep.tmp\nlib/nested/hidden/\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/.ignore"), "private.txt\n").unwrap();
+    fs::write(root.join("src/deep/old.rs"), "old").unwrap();
+    fs::write(root.join("src/deep/keep.tmp"), "old").unwrap();
+    fs::write(root.join("lib/nested/untouched.rs"), "old").unwrap();
+    fs::write(root.join("other/untouched.rs"), "old").unwrap();
+    fs::write(root.join("node_modules/skip.rs"), "old").unwrap();
+    let journal = QuickOpenWatchJournal::new(root.clone());
+    journal.activate();
+    let initial = start_with_exclusions(&workspace, vec!["node_modules".into()]);
+    let initial_paths = index_fingerprint(&initial);
+    fs::rename(
+        root.join("src/deep/old.rs"),
+        root.join("lib/nested/moved.rs"),
+    )
+    .unwrap();
+    fs::remove_file(root.join("src/deep/keep.tmp")).unwrap();
+    fs::write(root.join("src/deep/new.tmp"), "ignored").unwrap();
+    fs::write(root.join("src/deep/keep.tmp"), "visible").unwrap();
+    fs::create_dir(root.join("lib/nested/hidden")).unwrap();
+    fs::write(root.join("lib/nested/hidden/x.rs"), "hidden").unwrap();
+    fs::create_dir(root.join("src/deep/new-dir")).unwrap();
+    fs::write(root.join("src/deep/new-dir/child.rs"), "new").unwrap();
+    journal.record(&[
+        root.join("src"),
+        root.join("lib"),
+        root.join("src/deep/old.rs"),
+        root.join("lib/nested/moved.rs"),
+        root.join("src/deep/keep.tmp"),
+        root.join("src/deep/new.tmp"),
+        root.join("lib/nested/hidden"),
+        root.join("src/deep/new-dir"),
+    ]);
+    let refresh = |previous| {
+        refresh_workspace_quick_open_session(
+            root.to_string_lossy().into_owned(),
+            vec!["node_modules".into()],
+            previous,
+        )
+        .unwrap()
+    };
+    let (delta, incremental) = refresh(initial.clone());
+    assert!(
+        incremental,
+        "ordinary localized changes should use subtree discovery"
+    );
+    let full = start_with_exclusions(&workspace, vec!["node_modules".into()]);
+    assert_eq!(index_fingerprint(&delta), index_fingerprint(&full));
+    assert_eq!(index_fingerprint(&initial), initial_paths);
+    let old_index = snapshot(&initial);
+    let next_index = snapshot(&delta);
+    let old_other = old_index
+        .files
+        .iter()
+        .find(|f| f.relative_path == "other/untouched.rs")
+        .unwrap();
+    let next_other = next_index
+        .files
+        .iter()
+        .find(|f| f.relative_path == "other/untouched.rs")
+        .unwrap();
+    assert!(Arc::ptr_eq(old_other, next_other));
+    for query in [
+        "",
+        "new",
+        "moved",
+        "tmp",
+        "hidden",
+        "rs",
+        "nested",
+        "untouched",
+    ] {
+        for limit in [1, 5, 100] {
+            for ignored in [false, true] {
+                for directories in [false, true] {
+                    assert_eq!(
+                        format!(
+                            "{:?}",
+                            ranking::search(&next_index, query, limit, ignored, directories)
+                        ),
+                        format!(
+                            "{:?}",
+                            ranking::search(&snapshot(&full), query, limit, ignored, directories)
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    // A control-file change invalidates all cursors, not only one parent.
+    fs::write(root.join(".gitignore"), "other/\n").unwrap();
+    journal.record(&[root.join(".gitignore")]);
+    let (policy, incremental) = refresh(delta.clone());
+    assert!(!incremental);
+    assert!(!paths(&policy, "other/untouched.rs", 10).contains(&"other/untouched.rs".into()));
+    // Root-level changes, overflow and retired watchers also force full.
+    fs::write(root.join("root.rs"), "root").unwrap();
+    journal.record(&[root.join("root.rs")]);
+    let (root_edit, incremental) = refresh(policy.clone());
+    assert!(!incremental);
+    journal.invalidate();
+    let (overflow, incremental) = refresh(root_edit.clone());
+    assert!(!incremental);
+    journal.deactivate();
+    let (retired, incremental) = refresh(overflow.clone());
+    assert!(!incremental);
+    for session in [initial, delta, full, policy, root_edit, overflow, retired] {
+        stop_workspace_quick_open_session(session);
+    }
+}
+
+#[test]
+fn late_journal_notification_allows_only_one_retry() {
+    let workspace = tempfile::tempdir().unwrap();
+    let journal = QuickOpenWatchJournal::new(workspace.path().to_path_buf());
+    journal.activate();
+    let mut attempts = 0;
+    let result = retry_changed_journal(&journal, || {
+        attempts += 1;
+        if attempts == 1 {
+            journal.record(&[workspace.path().join("src/deep")]);
+            None
+        } else {
+            Some(42)
+        }
+    });
+    assert_eq!(result, Some(42));
+    assert_eq!(attempts, 2);
+    attempts = 0;
+    assert_eq!(
+        retry_changed_journal::<()>(&journal, || {
+            attempts += 1;
+            None
+        }),
+        None
+    );
+    assert_eq!(attempts, 1);
+    attempts = 0;
+    assert_eq!(
+        retry_changed_journal::<()>(&journal, || {
+            attempts += 1;
+            journal.record(&[workspace.path().join("src/deep")]);
+            None
+        }),
+        None
+    );
+    assert_eq!(attempts, 2);
+    journal.deactivate();
+}
+
+#[test]
+fn incomplete_quota_snapshot_cannot_seed_incremental_discovery() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    for n in 0..12 {
+        fs::write(root.join(format!("src/{n}.txt")), "x").unwrap();
+    }
+    let discovery = discover_paths(
+        &root,
+        3,
+        10000,
+        true,
+        &QuickOpenExclusions::new(vec![]),
+        1,
+        &HashSet::new(),
+        None,
+    )
+    .unwrap();
+    assert!(!discovery.complete);
+    assert_eq!(
+        discovery.paths.iter().filter(|p| !p.is_directory).count(),
+        3
+    );
+}
+
+#[test]
+#[ignore = "compare actual complete and incremental subtree index refresh"]
+fn compare_quick_open_subtree_refresh() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    for module in 0..40 {
+        let dir = root.join(format!("module_{module:03}/src"));
+        fs::create_dir_all(&dir).unwrap();
+        for n in 0..75 {
+            fs::write(dir.join(format!("file_{n:03}.rs")), "x").unwrap();
+        }
+    }
+    let journal = QuickOpenWatchJournal::new(root.clone());
+    journal.activate();
+    let mut samples = [Vec::new(), Vec::new()];
+    for round in 0..7 {
+        let initial = start(&workspace);
+        let new_path = root.join(format!("module_005/src/added_{round}.rs"));
+        fs::write(&new_path, "x").unwrap();
+        journal.record(&[new_path.clone()]);
+        let mut results = [None, None];
+        for offset in 0..2 {
+            let mode = (round + offset) % 2;
+            let started = Instant::now();
+            let session = if mode == 0 {
+                start(&workspace)
+            } else {
+                let (session, incremental) = refresh_workspace_quick_open_session(
+                    root.to_string_lossy().into_owned(),
+                    vec![],
+                    initial.clone(),
+                )
+                .unwrap();
+                assert!(incremental);
+                session
+            };
+            samples[mode].push(started.elapsed().as_secs_f64() * 1000.0);
+            results[mode] = Some(index_fingerprint(&session));
+            stop_workspace_quick_open_session(session);
+        }
+        assert_eq!(results[0], results[1]);
+        stop_workspace_quick_open_session(initial);
+        fs::remove_file(&new_path).unwrap();
+        journal.record(&[new_path]);
+    }
+    for (mode, times) in ["full", "subtree"].into_iter().zip(samples.iter_mut()) {
+        times.sort_by(f64::total_cmp);
+        println!("QUICK_OPEN_SUBTREE files=3000 changed_subtree=75 mode={mode} median_ms={:.3} samples={times:?}", times[3]);
+    }
+    journal.deactivate();
+}
+
 #[test]
 fn refreshed_snapshot_reuses_unchanged_records_without_stale_paths_or_flags() {
     let workspace = tempfile::tempdir().unwrap();
@@ -814,6 +1067,7 @@ fn prunes_idle_and_excess_sessions() {
             QuickOpenSessionEntry {
                 index: index(),
                 scope: test_scope(),
+                baseline: None,
                 last_accessed: now - QUICK_OPEN_SESSION_IDLE_TTL - Duration::from_secs(1),
             },
         ),
@@ -822,6 +1076,7 @@ fn prunes_idle_and_excess_sessions() {
             QuickOpenSessionEntry {
                 index: index(),
                 scope: test_scope(),
+                baseline: None,
                 last_accessed: now,
             },
         ),
@@ -835,6 +1090,7 @@ fn prunes_idle_and_excess_sessions() {
             QuickOpenSessionEntry {
                 index: index(),
                 scope: test_scope(),
+                baseline: None,
                 last_accessed: now + Duration::from_secs(offset as u64),
             },
         );
@@ -855,6 +1111,7 @@ fn refreshes_a_requested_session_before_pruning_idle_entries() {
             QuickOpenSessionEntry {
                 index: index(),
                 scope: test_scope(),
+                baseline: None,
                 last_accessed: expired_at,
             },
         ),
@@ -863,6 +1120,7 @@ fn refreshes_a_requested_session_before_pruning_idle_entries() {
             QuickOpenSessionEntry {
                 index: index(),
                 scope: test_scope(),
+                baseline: None,
                 last_accessed: expired_at,
             },
         ),

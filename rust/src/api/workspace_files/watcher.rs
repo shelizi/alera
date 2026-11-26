@@ -119,6 +119,7 @@ struct WatcherSession {
     root: PathBuf,
     watcher: notify::RecommendedWatcher,
     recursive_root: bool,
+    quick_open_journal: Arc<alera_core::workspace_files::QuickOpenWatchJournal>,
     watched_paths: WatchedPaths,
     sink: Arc<Mutex<Option<StreamSink<WorkspaceExplorerWatchBatch>>>>,
     stop: WatchStopper,
@@ -127,11 +128,43 @@ struct WatcherSession {
 
 impl WatcherSession {
     fn stop(mut self) {
+        self.quick_open_journal.deactivate();
         self.stop.request_stop();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
+}
+
+impl Drop for WatcherSession {
+    fn drop(&mut self) {
+        self.quick_open_journal.deactivate();
+    }
+}
+
+fn record_quick_open_event(
+    journal: &alera_core::workspace_files::QuickOpenWatchJournal,
+    result: &notify::Result<notify::Event>,
+) {
+    use notify::event::{AccessKind, AccessMode};
+    let Ok(event) = result else {
+        journal.invalidate();
+        return;
+    };
+    if event.need_rescan()
+        || matches!(
+            event.kind,
+            notify::EventKind::Any | notify::EventKind::Other
+        )
+    {
+        journal.invalidate();
+        return;
+    }
+    if matches!(event.kind, notify::EventKind::Access(kind) if kind != AccessKind::Close(AccessMode::Write))
+    {
+        return;
+    }
+    journal.record(&event.paths);
 }
 
 pub(super) fn start_workspace_explorer_watcher(
@@ -142,8 +175,15 @@ pub(super) fn start_workspace_explorer_watcher(
     let (event_tx, stop, inbox) = watch_event_channel();
     let watched_paths = watched_paths_snapshot(HashMap::from([(String::new(), root.clone())]));
     let sink = Arc::new(Mutex::new(None));
+    let quick_open_journal = alera_core::workspace_files::QuickOpenWatchJournal::new(root.clone());
+    let callback_journal = quick_open_journal.clone();
     let mut watcher = notify::recommended_watcher(move |result| {
-        let _ = event_tx.send(result);
+        // Record before batching/transport so a concurrent index build
+        // cannot consume the notification before its journal revision.
+        record_quick_open_event(&callback_journal, &result);
+        if !event_tx.send(result) {
+            callback_journal.deactivate();
+        }
     })
     .map_err(notify_error)?;
     // A recursive root watch keeps searches current even in collapsed folders.
@@ -164,10 +204,14 @@ pub(super) fn start_workspace_explorer_watcher(
         })
         .map_err(|error| WorkspaceFileError::from_io(error, "workspace explorer watcher"))?;
 
+    if recursive_root {
+        quick_open_journal.activate();
+    }
     let session = WatcherSession {
         root,
         watcher,
         recursive_root,
+        quick_open_journal,
         watched_paths,
         sink,
         stop,

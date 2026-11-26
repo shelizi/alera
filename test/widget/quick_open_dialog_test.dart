@@ -949,6 +949,7 @@ class _QuickOpenFileService({
   void scheduleQuickOpenRefresh({
     required String workspacePath,
     Duration debounce = const Duration(milliseconds: 500),
+    bool allowIncremental = false,
   }) {
     refreshedWorkspacePaths.add(workspacePath);
   }

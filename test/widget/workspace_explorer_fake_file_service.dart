@@ -28,6 +28,7 @@ class _FakeWorkspaceFileService({
   void scheduleQuickOpenRefresh({
     required String workspacePath,
     Duration debounce = const Duration(milliseconds: 500),
+    bool allowIncremental = false,
   }) {
     quickOpenRefreshRequests.add(workspacePath);
   }

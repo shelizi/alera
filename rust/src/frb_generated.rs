@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -819916264;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 696192475;
 
 // Section: executor
 
@@ -4382,6 +4382,50 @@ fn wire__crate__api__git__git_branch__refresh_source_branch_impl(
         },
     )
 }
+fn wire__crate__api__workspace_files__refresh_workspace_quick_open_session_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "refresh_workspace_quick_open_session",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_workspace_path = <String>::sse_decode(&mut deserializer);
+            let api_excluded_directories = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_previous = <crate::api::workspace_files::WorkspaceQuickOpenSession>::sse_decode(
+                &mut deserializer,
+            );
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::workspace_files::WorkspaceFileError>(
+                    (move || {
+                        let output_ok =
+                            crate::api::workspace_files::refresh_workspace_quick_open_session(
+                                api_workspace_path,
+                                api_excluded_directories,
+                                api_previous,
+                            )?;
+                        std::result::Result::Ok(output_ok)
+                    })(),
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__git__remove_worktree_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -8322,6 +8366,19 @@ impl SseDecode for crate::api::workspace_files::WorkspaceQuickOpenMatch {
     }
 }
 
+impl SseDecode for crate::api::workspace_files::WorkspaceQuickOpenRefresh {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_session =
+            <crate::api::workspace_files::WorkspaceQuickOpenSession>::sse_decode(deserializer);
+        let mut var_incremental = <bool>::sse_decode(deserializer);
+        return crate::api::workspace_files::WorkspaceQuickOpenRefresh {
+            session: var_session,
+            incremental: var_incremental,
+        };
+    }
+}
+
 impl SseDecode for crate::api::workspace_files::WorkspaceQuickOpenSession {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -8711,43 +8768,44 @@ fn pde_ffi_dispatcher_primary_impl(
 115 => wire__crate__api__workspace_files__read_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
 116 => wire__crate__api__workspace_files__read_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
 117 => wire__crate__api__git__git_branch__refresh_source_branch_impl(port, ptr, rust_vec_len, data_len),
-118 => wire__crate__api__git__remove_worktree_impl(port, ptr, rust_vec_len, data_len),
-119 => wire__crate__api__git__git_branch__rename_branch_impl(port, ptr, rust_vec_len, data_len),
-120 => wire__crate__api__workspace_files__rename_workspace_entry_impl(port, ptr, rust_vec_len, data_len),
-121 => wire__crate__api__merman_viewer__render_merman_source_impl(port, ptr, rust_vec_len, data_len),
-122 => wire__crate__api__merman_viewer__render_merman_workspace_file_impl(port, ptr, rust_vec_len, data_len),
-123 => wire__crate__api__agent_runtime_resources__replace_claude_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
-124 => wire__crate__api__agent_runtime_resources__replace_codex_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
-125 => wire__crate__api__workspace_search__replace_workspace_matches_impl(port, ptr, rust_vec_len, data_len),
-126 => wire__crate__api__git__git_merge_ops__resolve_merge_conflict_impl(port, ptr, rust_vec_len, data_len),
-127 => wire__crate__api__clipboard__save_clipboard_image_as_temp_file_impl(port, ptr, rust_vec_len, data_len),
-128 => wire__crate__api__workspace_search__search_workspace_impl(port, ptr, rust_vec_len, data_len),
-129 => wire__crate__api__workspace_search__search_workspace_cancelable_impl(port, ptr, rust_vec_len, data_len),
-130 => wire__crate__api__workspace_files__search_workspace_explorer_filter_session_impl(port, ptr, rust_vec_len, data_len),
-131 => wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-132 => wire__crate__api__workspace_search__search_workspace_stream_impl(port, ptr, rust_vec_len, data_len),
-133 => wire__crate__api__agent_hooks__set_agent_hook_enabled_agents_impl(port, ptr, rust_vec_len, data_len),
-134 => wire__crate__api__clipboard__set_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
-135 => wire__crate__api__keep_alive__set_keep_alive_impl(port, ptr, rust_vec_len, data_len),
-136 => wire__crate__api__agent_hooks__start_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
-137 => wire__crate__api__workspace_files__start_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
-138 => wire__crate__api__workspace_files__start_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
-139 => wire__crate__api__workspace_files__start_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-140 => wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-141 => wire__crate__api__agent_hooks__stop_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
-142 => wire__crate__api__workspace_files__stop_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
-143 => wire__crate__api__workspace_files__stop_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
-144 => wire__crate__api__workspace_files__stop_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-145 => wire__crate__api__workspace_files__stop_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
-146 => wire__crate__api__ai_dictation__transcribe_whisper_impl(port, ptr, rust_vec_len, data_len),
-147 => wire__crate__api__workspace_files__update_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
-148 => wire__crate__api__workspace_files__update_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
-149 => wire__crate__api__agent_hooks__watch_agent_hook_event_batches_impl(port, ptr, rust_vec_len, data_len),
-150 => wire__crate__api__workspace_files__watch_source_control_events_impl(port, ptr, rust_vec_len, data_len),
-151 => wire__crate__api__workspace_files__watch_workspace_explorer_events_impl(port, ptr, rust_vec_len, data_len),
-152 => wire__crate__api__diagnostics__write_diagnostics_bundle_impl(port, ptr, rust_vec_len, data_len),
-153 => wire__crate__api__workspace_files__write_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
-154 => wire__crate__api__workspace_files__write_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
+118 => wire__crate__api__workspace_files__refresh_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+119 => wire__crate__api__git__remove_worktree_impl(port, ptr, rust_vec_len, data_len),
+120 => wire__crate__api__git__git_branch__rename_branch_impl(port, ptr, rust_vec_len, data_len),
+121 => wire__crate__api__workspace_files__rename_workspace_entry_impl(port, ptr, rust_vec_len, data_len),
+122 => wire__crate__api__merman_viewer__render_merman_source_impl(port, ptr, rust_vec_len, data_len),
+123 => wire__crate__api__merman_viewer__render_merman_workspace_file_impl(port, ptr, rust_vec_len, data_len),
+124 => wire__crate__api__agent_runtime_resources__replace_claude_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
+125 => wire__crate__api__agent_runtime_resources__replace_codex_runtime_resource_copy_impl(port, ptr, rust_vec_len, data_len),
+126 => wire__crate__api__workspace_search__replace_workspace_matches_impl(port, ptr, rust_vec_len, data_len),
+127 => wire__crate__api__git__git_merge_ops__resolve_merge_conflict_impl(port, ptr, rust_vec_len, data_len),
+128 => wire__crate__api__clipboard__save_clipboard_image_as_temp_file_impl(port, ptr, rust_vec_len, data_len),
+129 => wire__crate__api__workspace_search__search_workspace_impl(port, ptr, rust_vec_len, data_len),
+130 => wire__crate__api__workspace_search__search_workspace_cancelable_impl(port, ptr, rust_vec_len, data_len),
+131 => wire__crate__api__workspace_files__search_workspace_explorer_filter_session_impl(port, ptr, rust_vec_len, data_len),
+132 => wire__crate__api__workspace_files__search_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+133 => wire__crate__api__workspace_search__search_workspace_stream_impl(port, ptr, rust_vec_len, data_len),
+134 => wire__crate__api__agent_hooks__set_agent_hook_enabled_agents_impl(port, ptr, rust_vec_len, data_len),
+135 => wire__crate__api__clipboard__set_file_clipboard_impl(port, ptr, rust_vec_len, data_len),
+136 => wire__crate__api__keep_alive__set_keep_alive_impl(port, ptr, rust_vec_len, data_len),
+137 => wire__crate__api__agent_hooks__start_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
+138 => wire__crate__api__workspace_files__start_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
+139 => wire__crate__api__workspace_files__start_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
+140 => wire__crate__api__workspace_files__start_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+141 => wire__crate__api__workspace_files__start_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+142 => wire__crate__api__agent_hooks__stop_agent_hook_receiver_impl(port, ptr, rust_vec_len, data_len),
+143 => wire__crate__api__workspace_files__stop_source_control_watcher_impl(port, ptr, rust_vec_len, data_len),
+144 => wire__crate__api__workspace_files__stop_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
+145 => wire__crate__api__workspace_files__stop_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+146 => wire__crate__api__workspace_files__stop_workspace_quick_open_session_impl(port, ptr, rust_vec_len, data_len),
+147 => wire__crate__api__ai_dictation__transcribe_whisper_impl(port, ptr, rust_vec_len, data_len),
+148 => wire__crate__api__workspace_files__update_workspace_explorer_projection_session_impl(port, ptr, rust_vec_len, data_len),
+149 => wire__crate__api__workspace_files__update_workspace_explorer_watcher_impl(port, ptr, rust_vec_len, data_len),
+150 => wire__crate__api__agent_hooks__watch_agent_hook_event_batches_impl(port, ptr, rust_vec_len, data_len),
+151 => wire__crate__api__workspace_files__watch_source_control_events_impl(port, ptr, rust_vec_len, data_len),
+152 => wire__crate__api__workspace_files__watch_workspace_explorer_events_impl(port, ptr, rust_vec_len, data_len),
+153 => wire__crate__api__diagnostics__write_diagnostics_bundle_impl(port, ptr, rust_vec_len, data_len),
+154 => wire__crate__api__workspace_files__write_workspace_editor_text_file_impl(port, ptr, rust_vec_len, data_len),
+155 => wire__crate__api__workspace_files__write_workspace_text_file_impl(port, ptr, rust_vec_len, data_len),
                         _ => unreachable!(),
                     }
 }
@@ -11032,6 +11090,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace_files::WorkspaceQui
     for crate::api::workspace_files::WorkspaceQuickOpenMatch
 {
     fn into_into_dart(self) -> crate::api::workspace_files::WorkspaceQuickOpenMatch {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::workspace_files::WorkspaceQuickOpenRefresh {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.session.into_into_dart().into_dart(),
+            self.incremental.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::workspace_files::WorkspaceQuickOpenRefresh
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::workspace_files::WorkspaceQuickOpenRefresh>
+    for crate::api::workspace_files::WorkspaceQuickOpenRefresh
+{
+    fn into_into_dart(self) -> crate::api::workspace_files::WorkspaceQuickOpenRefresh {
         self
     }
 }
@@ -13370,6 +13449,17 @@ impl SseEncode for crate::api::workspace_files::WorkspaceQuickOpenMatch {
         <String>::sse_encode(self.relative_path, serializer);
         <i32>::sse_encode(self.score, serializer);
         <bool>::sse_encode(self.is_directory, serializer);
+    }
+}
+
+impl SseEncode for crate::api::workspace_files::WorkspaceQuickOpenRefresh {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <crate::api::workspace_files::WorkspaceQuickOpenSession>::sse_encode(
+            self.session,
+            serializer,
+        );
+        <bool>::sse_encode(self.incremental, serializer);
     }
 }
 

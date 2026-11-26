@@ -168,6 +168,89 @@ void main() {
   );
 
   testWidgets(
+    'provisional incremental index is fully reconciled without further events',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()
+        ..files.add('src/main.dart');
+      addTearDown(service.dispose);
+      const path = '/repo';
+      Future<List<native.WorkspaceQuickOpenMatch>> search() =>
+          service.searchQuickOpenCached(
+            workspacePath: path,
+            excludedDirectories: const [],
+            query: 'main',
+            includeGitignored: false,
+          );
+      await search();
+      service.files.add('src/new-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+        allowIncremental: true,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.incrementalPreviousIds, ['index-1']);
+      expect(await search(), hasLength(2));
+      // Another delta does not postpone the original full deadline.
+      await tester.pump(const Duration(seconds: 3));
+      service.files.add('src/another-main.dart');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+        allowIncremental: true,
+      );
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump();
+      expect(service.incrementalPreviousIds, ['index-1', 'index-2']);
+      expect(await search(), hasLength(3));
+      // Simulate a missed watcher notification: the scheduled full scan
+      // must discover it even when no subsequent event arrives.
+      service.files.add('other/missed-main.dart');
+      await tester.pump(const Duration(milliseconds: 2100));
+      await tester.pump();
+      expect(service.startedSessionIds, [
+        'index-1',
+        'index-2',
+        'index-3',
+        'index-4',
+      ]);
+      expect(service.incrementalPreviousIds, hasLength(2));
+      expect(await search(), hasLength(4));
+      await tester.pump(const Duration(seconds: 6));
+      expect(service.startedSessionIds, hasLength(4));
+    },
+  );
+
+  testWidgets('queued full refresh cannot be replaced by watcher delta', (
+    tester,
+  ) async {
+    final service = _RefreshingQuickOpenFileService()
+      ..files.add('src/main.dart');
+    addTearDown(service.dispose);
+    const path = '/repo';
+    await service.searchQuickOpenCached(
+      workspacePath: path,
+      excludedDirectories: const [],
+      query: 'main',
+      includeGitignored: false,
+    );
+    service.scheduleQuickOpenRefresh(
+      workspacePath: path,
+      debounce: Duration.zero,
+    );
+    service.scheduleQuickOpenRefresh(
+      workspacePath: path,
+      debounce: const Duration(seconds: 3),
+      allowIncremental: true,
+    );
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(service.startedSessionIds, ['index-1', 'index-2']);
+    expect(service.incrementalPreviousIds, isEmpty);
+  });
+
+  testWidgets(
     'file-only and directory-enabled searches keep independent caches',
     (tester) async {
       final service = _RefreshingQuickOpenFileService()
@@ -1051,6 +1134,24 @@ class _ExpiringQuickOpenFileService extends WorkspaceFileService {
 }
 
 class _RefreshingQuickOpenFileService extends WorkspaceFileService {
+  final incrementalPreviousIds = <String>[];
+
+  @override
+  Future<native.WorkspaceQuickOpenRefresh> refreshQuickOpenSession({
+    required String workspacePath,
+    required List<String> excludedDirectories,
+    required native.WorkspaceQuickOpenSession previous,
+  }) async {
+    incrementalPreviousIds.add(previous.id);
+    return native.WorkspaceQuickOpenRefresh(
+      session: await startQuickOpenSession(
+        workspacePath: workspacePath,
+        excludedDirectories: excludedDirectories,
+      ),
+      incremental: true,
+    );
+  }
+
   final List<String> files = <String>[];
   final List<String> directories = <String>[];
   final List<String> startedSessionIds = <String>[];
