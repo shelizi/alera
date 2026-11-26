@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::sync::Arc;
 
 use super::super::WorkspaceQuickOpenMatch;
 use super::index::{character_counts, QuickOpenFile, QuickOpenIndex, SegmentMatch};
@@ -126,7 +127,7 @@ pub(super) fn search(
 }
 
 fn append_indexed_match<'a>(
-    files: &'a [QuickOpenFile],
+    files: &'a [Arc<QuickOpenFile>],
     indexed_files: &mut [bool],
     ranked: &mut Vec<RankedFile<'a>>,
     file_index: usize,
@@ -148,7 +149,7 @@ fn append_indexed_match<'a>(
 }
 
 fn append_segment_matches<'a>(
-    files: &'a [QuickOpenFile],
+    files: &'a [Arc<QuickOpenFile>],
     indexed_files: &mut [bool],
     ranked: &mut Vec<RankedFile<'a>>,
     matches: &[SegmentMatch],
@@ -171,7 +172,7 @@ fn append_segment_matches<'a>(
     }
 }
 
-fn first_path_at_least(files: &[QuickOpenFile], query: &str) -> usize {
+fn first_path_at_least(files: &[Arc<QuickOpenFile>], query: &str) -> usize {
     files.partition_point(|file| file.normalized_path.as_str() < query)
 }
 

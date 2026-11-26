@@ -15,7 +15,9 @@ use super::{
 mod index;
 mod ranking;
 
-use self::index::{QuickOpenFile, QuickOpenIndex};
+#[cfg(test)]
+use self::index::QuickOpenFile;
+use self::index::{QuickOpenIndex, QuickOpenPath};
 
 #[cfg(test)]
 use self::index::character_counts;
@@ -36,7 +38,15 @@ pub struct WorkspaceQuickOpenMatch {
 #[derive(Debug)]
 struct QuickOpenSessionEntry {
     index: Arc<QuickOpenIndex>,
+    scope: QuickOpenScope,
     last_accessed: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuickOpenScope {
+    root: PathBuf,
+    include_internal_symlinks: bool,
+    exclusions: QuickOpenExclusions,
 }
 
 const QUICK_OPEN_SESSION_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -105,40 +115,70 @@ fn start_workspace_quick_open_session_with_symlinks(
 ) -> Result<WorkspaceQuickOpenSession, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let exclusions = QuickOpenExclusions::new(excluded_directories);
-    let mut files = with_quick_open_build_gate(|| {
-        collect_quick_open_files(
-            &root,
+    let scope = QuickOpenScope {
+        root,
+        include_internal_symlinks,
+        exclusions,
+    };
+    with_quick_open_build_gate(|| {
+        let mut paths = collect_quick_open_files(
+            &scope.root,
             MAX_QUICK_OPEN_INDEXED_FILES,
             MAX_QUICK_OPEN_INDEXED_PATH_BYTES,
-            include_internal_symlinks,
-            &exclusions,
-        )
-    })?;
-    sort_quick_open_files(&mut files);
-    let indexed_file_count =
-        u32::try_from(files.iter().filter(|file| !file.is_directory).count()).unwrap_or(u32::MAX);
-    let id = Uuid::new_v4().to_string();
-    let mut sessions = sessions().lock().map_err(|_| {
-        WorkspaceFileError::new(
-            WorkspaceFileErrorKind::Io,
-            "quick open registry lock poisoned",
-        )
-    })?;
-    prune_sessions(&mut sessions, Instant::now());
-    sessions.insert(
-        id.clone(),
-        QuickOpenSessionEntry {
-            index: Arc::new(QuickOpenIndex::new(files)),
-            last_accessed: Instant::now(),
-        },
-    );
-    enforce_session_limit(&mut sessions);
-    Ok(WorkspaceQuickOpenSession {
-        id,
-        indexed_file_count,
+            scope.include_internal_symlinks,
+            &scope.exclusions,
+        )?;
+        paths.sort_by(|left, right| {
+            left.normalized_path
+                .cmp(&right.normalized_path)
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+        });
+        let indexed_file_count =
+            u32::try_from(paths.iter().filter(|file| !file.is_directory).count())
+                .unwrap_or(u32::MAX);
+        // Obtain only a shared snapshot under the registry lock. Directory
+        // walking and ranking index construction never hold that lock, so
+        // searches against other live sessions need not wait for rebuilds.
+        let previous = {
+            let mut registry = sessions().lock().map_err(|_| {
+                WorkspaceFileError::new(
+                    WorkspaceFileErrorKind::Io,
+                    "quick open registry lock poisoned",
+                )
+            })?;
+            prune_sessions(&mut registry, Instant::now());
+            registry
+                .values()
+                .filter(|entry| entry.scope == scope)
+                .max_by_key(|entry| entry.last_accessed)
+                .map(|entry| Arc::clone(&entry.index))
+        };
+        let index = QuickOpenIndex::from_paths(paths, previous.as_ref());
+        let id = Uuid::new_v4().to_string();
+        let mut registry = sessions().lock().map_err(|_| {
+            WorkspaceFileError::new(
+                WorkspaceFileErrorKind::Io,
+                "quick open registry lock poisoned",
+            )
+        })?;
+        prune_sessions(&mut registry, Instant::now());
+        registry.insert(
+            id.clone(),
+            QuickOpenSessionEntry {
+                index,
+                scope,
+                last_accessed: Instant::now(),
+            },
+        );
+        enforce_session_limit(&mut registry);
+        Ok(WorkspaceQuickOpenSession {
+            id,
+            indexed_file_count,
+        })
     })
 }
 
+#[cfg(test)]
 fn sort_quick_open_files(files: &mut [QuickOpenFile]) {
     files.sort_by(|left, right| {
         left.normalized_path
@@ -168,7 +208,7 @@ fn collect_quick_open_files(
     max_path_bytes: usize,
     include_internal_symlinks: bool,
     exclusions: &QuickOpenExclusions,
-) -> Result<Vec<QuickOpenFile>, WorkspaceFileError> {
+) -> Result<Vec<QuickOpenPath>, WorkspaceFileError> {
     let filter_root = root.to_path_buf();
     let nested_worktrees = nested_git_worktree_paths(root);
     let git_visible_paths = collect_git_visible_paths(root, exclusions, &nested_worktrees)?;
@@ -254,7 +294,7 @@ fn collect_quick_open_files(
                 indexed_path_bytes = next_path_bytes;
                 indexed_file_count += 1;
             }
-            files.push(QuickOpenFile::with_kind(
+            files.push(QuickOpenPath::new(
                 relative_path,
                 is_gitignored,
                 is_directory,
@@ -419,7 +459,7 @@ fn quick_open_relative_path(
     Ok((metadata.is_file() || metadata.is_dir()).then_some((relative_path, metadata.is_dir())))
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct QuickOpenExclusions {
     configured: HashSet<String>,
 }

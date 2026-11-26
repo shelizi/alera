@@ -8,6 +8,14 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+fn test_scope() -> QuickOpenScope {
+    QuickOpenScope {
+        root: PathBuf::new(),
+        include_internal_symlinks: true,
+        exclusions: QuickOpenExclusions::new(Vec::new()),
+    }
+}
+
 fn start(workspace: &tempfile::TempDir) -> WorkspaceQuickOpenSession {
     start_with_exclusions(workspace, Vec::new())
 }
@@ -41,6 +49,233 @@ fn paths_including_gitignored(
         .into_iter()
         .map(|item| item.relative_path)
         .collect()
+}
+
+fn snapshot(session: &WorkspaceQuickOpenSession) -> Arc<QuickOpenIndex> {
+    access_session(&mut sessions().lock().unwrap(), &session.id, Instant::now()).unwrap()
+}
+
+#[test]
+fn refreshed_snapshot_reuses_unchanged_records_without_stale_paths_or_flags() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+    fs::write(root.join("keep.txt"), "old").unwrap();
+    fs::write(root.join("remove.txt"), "old").unwrap();
+    fs::write(root.join("ignored.txt"), "old").unwrap();
+    fs::create_dir(root.join("folder")).unwrap();
+    let first = start(&workspace);
+    let original = snapshot(&first);
+    // Content-only changes must still perform discovery, but reuse the
+    // entire verified ranking index when the path snapshot is identical.
+    fs::write(root.join("keep.txt"), "new content").unwrap();
+    let second = start(&workspace);
+    let same = snapshot(&second);
+    assert_ne!(first.id, second.id);
+    assert!(Arc::ptr_eq(&original, &same));
+
+    fs::rename(root.join("remove.txt"), root.join("added.txt")).unwrap();
+    fs::write(root.join(".gitignore"), "keep.txt\n").unwrap();
+    fs::remove_dir(root.join("folder")).unwrap();
+    fs::write(root.join("folder"), "replaced directory").unwrap();
+    let third = start(&workspace);
+    let changed = snapshot(&third);
+    assert!(!Arc::ptr_eq(&same, &changed));
+    let find = |index: &QuickOpenIndex, path: &str| {
+        index
+            .files
+            .iter()
+            .find(|file| file.relative_path == path)
+            .unwrap()
+            .clone()
+    };
+    assert!(Arc::ptr_eq(
+        &find(&same, ".gitignore"),
+        &find(&changed, ".gitignore")
+    ));
+    assert!(!Arc::ptr_eq(
+        &find(&same, "keep.txt"),
+        &find(&changed, "keep.txt")
+    ));
+    assert!(!Arc::ptr_eq(
+        &find(&same, "ignored.txt"),
+        &find(&changed, "ignored.txt")
+    ));
+    assert!(!Arc::ptr_eq(
+        &find(&same, "folder"),
+        &find(&changed, "folder")
+    ));
+    assert_eq!(paths(&third, "added.txt", 10), ["added.txt"]);
+    assert!(paths(&third, "remove.txt", 10).is_empty());
+    assert!(paths(&third, "keep.txt", 10).is_empty());
+    assert_eq!(paths(&third, "ignored.txt", 10), ["ignored.txt"]);
+    assert_eq!(paths(&third, "folder", 10), ["folder"]);
+    // Existing session snapshots remain immutable.
+    assert_eq!(paths(&first, "remove.txt", 10), ["remove.txt"]);
+    let excluded = start_with_exclusions(&workspace, vec!["unused".into()]);
+    assert!(!Arc::ptr_eq(&changed, &snapshot(&excluded)));
+    let strict = start_workspace_quick_open_session_without_symlinks(
+        root.to_string_lossy().into_owned(),
+        Vec::new(),
+    )
+    .unwrap();
+    assert!(!Arc::ptr_eq(&changed, &snapshot(&strict)));
+    for session in [first, second, third, excluded, strict] {
+        stop_workspace_quick_open_session(session);
+    }
+}
+
+#[test]
+fn reused_ranking_index_matches_fresh_index_for_all_modes() {
+    let descriptors = |changed: bool| {
+        let mut paths = vec![
+            QuickOpenPath::new("src/src/src/main.rs".into(), false, false),
+            QuickOpenPath::new("src/src/README.md".into(), false, false),
+            QuickOpenPath::new("src/中文/中文🙂.rs".into(), false, false),
+            QuickOpenPath::new("src/中文".into(), changed, true),
+            QuickOpenPath::new("lib/ReadMe.md".into(), true, false),
+            QuickOpenPath::new("lib/readme.md".into(), false, false),
+        ];
+        if changed {
+            paths.push(QuickOpenPath::new("src/src/new.rs".into(), false, false));
+        }
+        paths.sort_by(|a, b| {
+            a.normalized_path
+                .cmp(&b.normalized_path)
+                .then_with(|| a.relative_path.cmp(&b.relative_path))
+        });
+        paths
+    };
+    let original = QuickOpenIndex::from_paths(descriptors(false), None);
+    let reused = QuickOpenIndex::from_paths(descriptors(true), Some(&original));
+    let fresh = QuickOpenIndex::from_paths(descriptors(true), None);
+    for query in [
+        "", "src", "s", "src/src", "readme", "rm", "中文", "🙂", "new", "absent",
+    ] {
+        for limit in [1, 2, 5, 100] {
+            for ignored in [false, true] {
+                for directories in [false, true] {
+                    let a = ranking::search(&reused, query, limit, ignored, directories);
+                    let b = ranking::search(&fresh, query, limit, ignored, directories);
+                    assert_eq!(format!("{a:?}"), format!("{b:?}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "compare fresh and reused CPU index construction on a large path snapshot"]
+fn compare_quick_open_snapshot_reuse() {
+    use std::hint::black_box;
+    let descriptors = |changed: bool| {
+        let mut paths = (0..20000)
+            .map(|n| {
+                QuickOpenPath::new(
+                    format!("packages/module_{:03}/src/src/component_{n:05}.rs", n % 200),
+                    n % 13 == 0,
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+        if changed {
+            paths[123] = QuickOpenPath::new("packages/new/src/changed.rs".into(), false, false);
+        }
+        paths.sort_by(|a, b| {
+            a.normalized_path
+                .cmp(&b.normalized_path)
+                .then_with(|| a.relative_path.cmp(&b.relative_path))
+        });
+        paths
+    };
+    let baseline = QuickOpenIndex::from_paths(descriptors(false), None);
+    let mut samples = [Vec::new(), Vec::new(), Vec::new()];
+    for round in 0..7 {
+        for offset in 0..3 {
+            let mode = (round + offset) % 3;
+            // Exclude descriptor construction/sort and disk discovery.
+            let input = descriptors(mode == 2);
+            let start = Instant::now();
+            let index = QuickOpenIndex::from_paths(input, (mode != 0).then_some(&baseline));
+            let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+            if mode == 1 {
+                assert!(Arc::ptr_eq(&baseline, &index));
+            }
+            if mode == 2 {
+                assert_eq!(
+                    index
+                        .files
+                        .iter()
+                        .filter(|file| {
+                            baseline
+                                .files
+                                .binary_search_by(|old| {
+                                    old.normalized_path
+                                        .cmp(&file.normalized_path)
+                                        .then_with(|| old.relative_path.cmp(&file.relative_path))
+                                })
+                                .ok()
+                                .is_some_and(|n| Arc::ptr_eq(&baseline.files[n], file))
+                        })
+                        .count(),
+                    19999
+                );
+            }
+            samples[mode].push(elapsed);
+            black_box(index);
+        }
+    }
+    for (name, values) in ["fresh", "unchanged", "one_changed"]
+        .into_iter()
+        .zip(samples.iter_mut())
+    {
+        values.sort_by(f64::total_cmp);
+        println!(
+            "QUICK_OPEN_INDEX mode={name} paths=20000 median_ms={:.6}",
+            values[3]
+        );
+    }
+}
+
+#[test]
+#[ignore = "measure actual Windows filesystem snapshot refresh with and without index reuse"]
+fn compare_quick_open_filesystem_refresh() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    for module in 0..40 {
+        let dir = root.join(format!("module_{module:03}/src/src"));
+        fs::create_dir_all(&dir).unwrap();
+        for file in 0..75 {
+            fs::write(dir.join(format!("component_{file:04}.rs")), "source").unwrap();
+        }
+    }
+    let mut times = [Vec::new(), Vec::new()];
+    for round in 0..7 {
+        for offset in 0..2 {
+            let mode = (round + offset) % 2;
+            let previous = (mode == 1).then(|| start(&workspace));
+            let old_snapshot = previous.as_ref().map(snapshot);
+            let start_time = Instant::now();
+            let next = start(&workspace);
+            let ms = start_time.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(next.indexed_file_count, 3000);
+            if let Some(old) = &old_snapshot {
+                assert!(Arc::ptr_eq(old, &snapshot(&next)));
+            }
+            times[mode].push(ms);
+            stop_workspace_quick_open_session(next);
+            if let Some(previous) = previous {
+                stop_workspace_quick_open_session(previous);
+            }
+        }
+    }
+    for (mode, values) in ["fresh", "unchanged"].into_iter().zip(times.iter_mut()) {
+        values.sort_by(f64::total_cmp);
+        println!(
+            "QUICK_OPEN_TREE mode={mode} files=3000 median_ms={:.3} samples={values:?}",
+            values[3]
+        );
+    }
 }
 
 #[test]
@@ -490,6 +725,7 @@ fn prunes_idle_and_excess_sessions() {
             "expired".to_string(),
             QuickOpenSessionEntry {
                 index: index(),
+                scope: test_scope(),
                 last_accessed: now - QUICK_OPEN_SESSION_IDLE_TTL - Duration::from_secs(1),
             },
         ),
@@ -497,6 +733,7 @@ fn prunes_idle_and_excess_sessions() {
             "live".to_string(),
             QuickOpenSessionEntry {
                 index: index(),
+                scope: test_scope(),
                 last_accessed: now,
             },
         ),
@@ -509,6 +746,7 @@ fn prunes_idle_and_excess_sessions() {
             format!("session-{offset}"),
             QuickOpenSessionEntry {
                 index: index(),
+                scope: test_scope(),
                 last_accessed: now + Duration::from_secs(offset as u64),
             },
         );
@@ -528,6 +766,7 @@ fn refreshes_a_requested_session_before_pruning_idle_entries() {
             "requested".to_string(),
             QuickOpenSessionEntry {
                 index: index(),
+                scope: test_scope(),
                 last_accessed: expired_at,
             },
         ),
@@ -535,6 +774,7 @@ fn refreshes_a_requested_session_before_pruning_idle_entries() {
             "abandoned".to_string(),
             QuickOpenSessionEntry {
                 index: index(),
+                scope: test_scope(),
                 last_accessed: expired_at,
             },
         ),
