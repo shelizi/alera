@@ -422,6 +422,67 @@ fn lightweight_diff_paths_preserve_order_and_fresh_changes() {
     assert!(git_diff_changed_paths(path_str(plain.path())).is_err());
 }
 
+fn assert_operation_status_matches_full(path: &str, selected: Option<&str>) {
+    let full = match selected {
+        Some(file_path) => git_status_for_path(path.to_owned(), file_path.to_owned()),
+        None => git_status(path.to_owned()),
+    }
+    .unwrap();
+    let mut expected = full.entries;
+    for entry in &mut expected {
+        entry.added = None;
+        // Untracked entries retain the authoritative zero removed lines;
+        // only patch-derived statistics are absent in the identities API.
+        entry.removed = if entry.area == GitChangeArea::Untracked {
+            Some(0)
+        } else {
+            None
+        };
+    }
+    let actual = git_diff_impl::git_status_entries_only(path, selected).unwrap();
+    assert_eq!(actual, expected, "operation status {path:?}, {selected:?}");
+}
+
+#[test]
+fn operation_status_preserves_linked_worktree_identity_and_fresh_index() {
+    let repo = init_repo();
+    let checkout_parent = tempfile::tempdir().unwrap();
+    let linked = checkout_parent.path().join("linked");
+    run_git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "operation-test",
+            &path_str(&linked),
+        ],
+    );
+    std::fs::write(repo.path().join("README.md"), "main checkout edit").unwrap();
+    std::fs::write(linked.join("README.md"), "linked checkout edit").unwrap();
+    let path = path_str(&linked);
+    assert_operation_status_matches_full(&path, None);
+    assert_operation_status_matches_full(&path, Some("README.md"));
+    git_stage(path.clone(), Some("README.md".into())).unwrap();
+    let staged = git_diff_impl::git_status_entries_only(&path, None).unwrap();
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].area, GitChangeArea::Staged);
+    assert_operation_status_matches_full(&path, None);
+    assert_operation_status_matches_full(&path_str(repo.path()), None);
+    assert_eq!(
+        git_diff_impl::git_status_entries_only(&path_str(repo.path()), None).unwrap()[0].area,
+        GitChangeArea::Unstaged
+    );
+    git_unstage(path.clone(), None).unwrap();
+    assert_eq!(
+        git_diff_impl::git_status_entries_only(&path, None).unwrap()[0].area,
+        GitChangeArea::Unstaged
+    );
+    assert_operation_status_matches_full(&path, None);
+    let plain = tempfile::tempdir().unwrap();
+    assert!(git_diff_impl::git_status_entries_only(&path_str(plain.path()), None).is_err());
+}
+
 #[test]
 fn batched_status_matches_legacy_across_chunks_and_workspace_scopes() {
     let repo = init_repo();
@@ -481,6 +542,24 @@ fn batched_status_matches_legacy_across_chunks_and_workspace_scopes() {
         let expected = legacy_git_status_for_test(path.clone()).unwrap();
         let actual = git_status(path.clone()).unwrap();
         assert_eq!(actual, expected, "scope {scope:?}");
+        assert_operation_status_matches_full(&path, None);
+        if scope == root {
+            for file in [
+                "src/file[1].txt",
+                "src/renamed.txt",
+                "src/delete.txt",
+                "src/untracked.txt",
+                "src/hidden.ignored",
+                "src/nested",
+                "missing.txt",
+            ] {
+                assert_operation_status_matches_full(&path, Some(file));
+            }
+        } else if scope == root.join("src") {
+            for file in ["file[1].txt", "renamed.txt", "nested", "untracked.txt"] {
+                assert_operation_status_matches_full(&path, Some(file));
+            }
+        }
         assert_eq!(
             git_diff_changed_paths(path).unwrap(),
             full_status_changed_paths_for_test(expected),

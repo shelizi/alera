@@ -8,9 +8,10 @@ use git2::{
 
 use super::{
     commit_change_entries, commit_diff_file_for_path, diff_file_for_area, diff_for_commit_range,
-    git_diff_render::diff_lines_from_patch, git_status, has_status_entry_for_path,
-    status_result_from_entries, GitChangeArea, GitChangeEntry, GitChangeStatus, GitDiffFile,
-    GitError, GitErrorKind, GitPathContext, GitStatusResult, GitSubmoduleStatus,
+    git_diff_render::diff_lines_from_patch, git_status, git_status_entries_only,
+    has_status_entry_for_path, status_result_from_entries, GitChangeArea, GitChangeEntry,
+    GitChangeStatus, GitDiffFile, GitError, GitErrorKind, GitPathContext, GitStatusResult,
+    GitSubmoduleStatus,
 };
 
 // git2 0.21 exposes every SubmoduleStatus predicate except WD_INDEX_MODIFIED.
@@ -317,7 +318,9 @@ pub(super) fn discard_gitlink_change(
         })?;
     let child = open_submodule(parent, &resolved)?;
     let child_path = child_workdir_string(&child, &resolved.workspace_path)?;
-    if !git_status(child_path)?.entries.is_empty() {
+    // The dirty-child safety check needs every change identity, including
+    // nested submodules and untracked files, but not patch line counts.
+    if !git_status_entries_only(&child_path, None)?.is_empty() {
         if skip_dirty {
             return Ok(false);
         }

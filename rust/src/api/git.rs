@@ -759,8 +759,8 @@ pub fn git_stage(path: String, file_path: Option<String>) -> Result<(), GitError
     if let Some(file_path) = file_path {
         return stage_selected_path(&repo, &path, &file_path);
     }
-    let status = git_status(path.clone())?;
-    stage_status_entries(&repo, &path, &status.entries)
+    let entries = git_diff_impl::git_status_entries_only(&path, None)?;
+    stage_status_entries(&repo, &path, &entries)
 }
 
 pub fn git_stage_area(
@@ -769,8 +769,10 @@ pub fn git_stage_area(
     file_path: Option<String>,
 ) -> Result<(), GitError> {
     let repo = open_repo(&path)?;
-    let status = git_status(path.clone())?;
-    let entries = entries_for_area_and_scope(status.entries, area, file_path.as_deref());
+    // Keep the complete scoped status before filtering an area/folder:
+    // a narrower status pathspec can lose rename endpoints.
+    let entries = git_diff_impl::git_status_entries_only(&path, None)?;
+    let entries = entries_for_area_and_scope(entries, area, file_path.as_deref());
     stage_status_entries(&repo, &path, &entries)
 }
 
@@ -779,8 +781,8 @@ pub fn git_unstage(path: String, file_path: Option<String>) -> Result<(), GitErr
     if let Some(file_path) = file_path {
         return unstage_selected_path(&repo, &path, &file_path);
     }
-    let status = git_status(path.clone())?;
-    unstage_status_entries(&repo, &path, &status.entries)
+    let entries = git_diff_impl::git_status_entries_only(&path, None)?;
+    unstage_status_entries(&repo, &path, &entries)
 }
 
 pub fn git_unstage_area(
@@ -789,26 +791,19 @@ pub fn git_unstage_area(
     file_path: Option<String>,
 ) -> Result<(), GitError> {
     let repo = open_repo(&path)?;
-    let status = git_status(path.clone())?;
-    let entries = entries_for_area_and_scope(status.entries, area, file_path.as_deref());
+    // Keep the complete scoped status before filtering an area/folder:
+    // a narrower status pathspec can lose rename endpoints.
+    let entries = git_diff_impl::git_status_entries_only(&path, None)?;
+    let entries = entries_for_area_and_scope(entries, area, file_path.as_deref());
     unstage_status_entries(&repo, &path, &entries)
 }
 
 pub fn git_discard(path: String, file_path: Option<String>) -> Result<(), GitError> {
     let repo = open_repo(&path)?;
     let reject_dirty_submodules = file_path.is_some();
-    let status = match file_path.as_deref() {
-        Some(file_path) => git_status_for_path(path.clone(), file_path.to_string())?,
-        None => git_status(path.clone())?,
-    };
+    let entries = git_diff_impl::git_status_entries_only(&path, file_path.as_deref())?;
     let pathspecs = scoped_pathspecs(&repo, &path, file_path.as_deref())?;
-    discard_status_entries(
-        &repo,
-        &path,
-        &status.entries,
-        &pathspecs,
-        reject_dirty_submodules,
-    )
+    discard_status_entries(&repo, &path, &entries, &pathspecs, reject_dirty_submodules)
 }
 
 pub fn git_discard_area(
@@ -817,8 +812,10 @@ pub fn git_discard_area(
     file_path: Option<String>,
 ) -> Result<(), GitError> {
     let repo = open_repo(&path)?;
-    let status = git_status(path.clone())?;
-    let entries = entries_for_area_and_scope(status.entries, area, file_path.as_deref());
+    // Keep the complete scoped status before filtering an area/folder:
+    // a narrower status pathspec can lose rename endpoints.
+    let entries = git_diff_impl::git_status_entries_only(&path, None)?;
+    let entries = entries_for_area_and_scope(entries, area, file_path.as_deref());
     let pathspecs = scoped_pathspecs(&repo, &path, file_path.as_deref())?;
     discard_status_entries(&repo, &path, &entries, &pathspecs, false)
 }
@@ -1199,9 +1196,8 @@ fn reject_out_of_scope_tracked_changes(
     let workdir = repo
         .workdir()
         .ok_or_else(|| GitError::new(GitErrorKind::NotARepository, workspace_path))?;
-    let status = git_status(workdir.to_string_lossy().to_string())?;
-    for entry in status
-        .entries
+    let entries = git_diff_impl::git_status_entries_only(&workdir.to_string_lossy(), None)?;
+    for entry in entries
         .iter()
         .filter(|entry| entry.area != GitChangeArea::Untracked)
     {
@@ -1317,8 +1313,8 @@ fn stage_selected_path(
     workspace_path: &str,
     file_path: &str,
 ) -> Result<(), GitError> {
-    let status = git_status_for_path(workspace_path.to_string(), file_path.to_string())?;
-    stage_status_entries(repo, workspace_path, &status.entries)
+    let entries = git_diff_impl::git_status_entries_only(workspace_path, Some(file_path))?;
+    stage_status_entries(repo, workspace_path, &entries)
 }
 
 fn stage_status_entries(
@@ -1367,8 +1363,8 @@ fn unstage_selected_path(
     workspace_path: &str,
     file_path: &str,
 ) -> Result<(), GitError> {
-    let status = git_status_for_path(workspace_path.to_string(), file_path.to_string())?;
-    unstage_status_entries(repo, workspace_path, &status.entries)
+    let entries = git_diff_impl::git_status_entries_only(workspace_path, Some(file_path))?;
+    unstage_status_entries(repo, workspace_path, &entries)
 }
 
 fn unstage_status_entries(

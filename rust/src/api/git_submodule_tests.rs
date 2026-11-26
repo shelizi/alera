@@ -38,6 +38,19 @@ fn reports_and_loads_tracked_and_untracked_submodule_changes() {
     assert!(!submodule.commit_changed);
     assert!(submodule.tracked_changes);
     assert!(submodule.untracked_changes);
+    // Operations must retain all dirty-submodule safety metadata.
+    let identities =
+        git_diff_impl::git_status_entries_only(&path_str(parent.path()), None).unwrap();
+    assert_eq!(&identities, &status.entries);
+    let selected =
+        git_diff_impl::git_status_entries_only(&path_str(parent.path()), Some("modules/sample"))
+            .unwrap();
+    assert_eq!(
+        &selected,
+        &git_status_for_path(path_str(parent.path()), "modules/sample".into())
+            .unwrap()
+            .entries
+    );
     assert_eq!(
         git_diff_changed_paths(path_str(parent.path())).unwrap(),
         None

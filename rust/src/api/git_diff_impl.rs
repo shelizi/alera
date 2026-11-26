@@ -58,9 +58,21 @@ pub(super) fn git_status(path: String) -> Result<GitStatusResult, GitError> {
 pub(super) fn git_status_entries_for_explorer(
     path: String,
 ) -> Result<Vec<GitChangeEntry>, GitError> {
-    let repo = open_repo(&path)?;
-    let paths = GitPathContext::new(&repo, &path)?;
-    status_entries_without_line_stats(&repo, &paths, None)
+    git_status_entries_only(&path, None)
+}
+
+/// Read fresh authoritative status identities for consumers that do not
+/// use UI line counts or tree groups. Keep the same literal selection and
+/// whole-repository rename detection as the corresponding full status API.
+/// Open a fresh repository handle, as the original preflight did, so callers
+/// holding a separate mutation handle do not reuse a stale index snapshot.
+pub(super) fn git_status_entries_only(
+    path: &str,
+    file_path: Option<&str>,
+) -> Result<Vec<GitChangeEntry>, GitError> {
+    let repo = open_repo(path)?;
+    let paths = GitPathContext::new(&repo, path)?;
+    status_entries_without_line_stats(&repo, &paths, file_path)
 }
 
 fn status_entries_without_line_stats(

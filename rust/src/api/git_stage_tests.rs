@@ -293,3 +293,117 @@ fn git_unstage_selected_path_uses_repo_relative_index_path_from_subdirectory() {
         .iter()
         .any(|entry| entry.path == "lib/foo.dart" && entry.area == GitChangeArea::Staged));
 }
+
+#[test]
+#[ignore = "real repository mutation timing benchmark; run explicitly in isolation"]
+fn benchmark_mutation_preflight_and_index_actions() {
+    use std::time::Instant;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let repo = Repository::init(root).unwrap();
+    let name = |i: usize| format!("src/file-{i:04}.txt");
+    std::fs::create_dir(root.join("src")).unwrap();
+    let mut index = repo.index().unwrap();
+    for i in 0..512 {
+        let file = name(i);
+        std::fs::write(root.join(&file), format!("baseline {i}\n").repeat(80)).unwrap();
+        index.add_path(Path::new(&file)).unwrap();
+    }
+    index.write().unwrap();
+    let baseline_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(baseline_oid).unwrap();
+    let sig = git2::Signature::now("Mutation Benchmark", "test@example.invalid").unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "baseline", &tree, &[])
+        .unwrap();
+    drop(tree);
+
+    for i in 0..80 {
+        let file = name(i);
+        std::fs::write(
+            root.join(&file),
+            format!("baseline {i}\n").repeat(70) + "staged\n",
+        )
+        .unwrap();
+        index.add_path(Path::new(&file)).unwrap();
+    }
+    index.write().unwrap();
+    let partial_oid = index.write_tree().unwrap();
+    for i in 0..160 {
+        let file = name(i);
+        std::fs::write(
+            root.join(&file),
+            format!("baseline {i}\n").repeat(70) + "worktree\n",
+        )
+        .unwrap();
+        index.add_path(Path::new(&file)).unwrap();
+    }
+    index.write().unwrap();
+    let all_staged_oid = index.write_tree().unwrap();
+    drop(index);
+    drop(repo);
+    let path = path_str(root);
+    let reset_index = || {
+        let repo = Repository::open(root).unwrap();
+        let tree = repo.find_tree(partial_oid).unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&tree).unwrap();
+        index.write().unwrap();
+    };
+    let verify_index = |expected_oid| {
+        let repo = Repository::open(root).unwrap();
+        let mut index = repo.index().unwrap();
+        assert_eq!(index.write_tree().unwrap(), expected_oid);
+        for i in 0..160 {
+            assert_eq!(
+                std::fs::read_to_string(root.join(name(i))).unwrap(),
+                format!("baseline {i}\n").repeat(70) + "worktree\n"
+            );
+        }
+    };
+    reset_index();
+    assert_eq!(git_status(path.clone()).unwrap().entries.len(), 240);
+    let measure = |stage: bool, lightweight: bool| {
+        reset_index();
+        let start = Instant::now();
+        if lightweight {
+            if stage {
+                git_stage(path.clone(), None).unwrap();
+            } else {
+                git_unstage(path.clone(), None).unwrap();
+            }
+        } else {
+            // The exact prior production call sequence, including the
+            // independent status repository discovery and full UI stats.
+            let repo = open_repo(&path).unwrap();
+            let status = git_status(path.clone()).unwrap();
+            if stage {
+                stage_status_entries(&repo, &path, &status.entries).unwrap();
+            } else {
+                unstage_status_entries(&repo, &path, &status.entries).unwrap();
+            }
+        }
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        verify_index(if stage { all_staged_oid } else { baseline_oid });
+        elapsed
+    };
+    for (label, stage) in [("Stage all", true), ("Unstage all", false)] {
+        // Warm both paths; exclude setup and index/content verification.
+        measure(stage, false);
+        measure(stage, true);
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for run in 0..7 {
+            if run % 2 == 0 {
+                old.push(measure(stage, false));
+                new.push(measure(stage, true));
+            } else {
+                new.push(measure(stage, true));
+                old.push(measure(stage, false));
+            }
+        }
+        old.sort_by(f64::total_cmp);
+        new.sort_by(f64::total_cmp);
+        println!("{label}: 512 tracked files, 160 modified (80 also staged), 240 entries, seven alternating runs; old median {:.3} ms, new median {:.3} ms", old[3], new[3]);
+        println!("{label} old ms {old:?}; new ms {new:?}");
+    }
+}
