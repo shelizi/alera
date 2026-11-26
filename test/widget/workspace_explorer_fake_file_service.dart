@@ -73,11 +73,13 @@ class _FakeWorkspaceFileService({
   void emitWatchBatch(
     List<String> directoryRelativePaths, {
     List<String> changedRelativePaths = const <String>[],
+    List<String>? deferredQuickOpenPaths,
   }) {
     _watchController.add(
       native.WorkspaceExplorerWatchBatch(
         directoryRelativePaths: directoryRelativePaths,
         changedRelativePaths: changedRelativePaths,
+        deferredQuickOpenPaths: deferredQuickOpenPaths,
         coalescedEventCount: 0,
       ),
     );

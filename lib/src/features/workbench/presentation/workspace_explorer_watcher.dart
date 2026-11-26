@@ -139,6 +139,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     if (discardPending) {
       _watchRefreshQueue.clear();
       _watchQuickOpenRefreshQueue.clear();
+      _watchDeferredQuickOpenQueue.clear();
     }
     _lastSyncedWatchedDirectories = null;
     // Cancellation may stall if a platform event stream never acknowledges
@@ -187,24 +188,43 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
   }
 
   void _scheduleWatchedRefresh(native.WorkspaceExplorerWatchBatch batch) {
-    final searchRelevant = workspaceExplorerWatcherTouchesSearch(
-      changedRelativePaths: batch.changedRelativePaths,
-      excludedDirectories: ref
-          .read(settingsControllerProvider)
-          .editor
-          .quickOpenExcludedDirectories
-          .toSet(),
-    );
-    if (searchRelevant) {
+    final excluded = ref
+        .read(settingsControllerProvider)
+        .editor
+        .quickOpenExcludedDirectories
+        .toSet();
+    final deferred = batch.deferredQuickOpenPaths?.toSet() ?? const <String>{};
+    final prompt = batch.changedRelativePaths
+        .where((path) => path.isEmpty || !deferred.contains(path))
+        .toList(growable: false);
+    final relevantPrompt =
+        batch.changedRelativePaths.isEmpty ||
+        (prompt.isNotEmpty &&
+            workspaceExplorerWatcherTouchesSearch(
+              changedRelativePaths: prompt,
+              excludedDirectories: excluded,
+            ));
+    if (relevantPrompt) {
+      _watchDeferredQuickOpenQueue.clear();
       _watchQuickOpenRefreshQueue.enqueue(const <String>['index']);
+    } else if (batch.changedRelativePaths.any(
+      (path) =>
+          deferred.contains(path) &&
+          workspaceExplorerWatcherTouchesSearch(
+            changedRelativePaths: [path],
+            excludedDirectories: excluded,
+          ),
+    )) {
+      _watchDeferredQuickOpenQueue.enqueue(const <String>['index']);
     }
     _watchRefreshQueue.enqueue(batch.directoryRelativePaths);
   }
 
   Future<void> _scheduleWatchedQuickOpenRefresh(List<String> _) async {
     if (!mounted) return;
-    // The queue already enforces a 120-ms quiet period and a 750-ms maximum
-    // wait. Do not restart the backend's own debounce on every watcher event.
+    _watchDeferredQuickOpenQueue.clear();
+    // The prompt/deferred queue has already bounded the wait. Do not
+    // restart the backend's debounce on every watcher notification.
     _workspaceFiles.scheduleQuickOpenRefresh(
       workspacePath: widget.workspace.path,
       debounce: Duration.zero,

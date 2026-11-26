@@ -617,11 +617,17 @@ class WorkspaceExplorerTreeProjection {
 class WorkspaceExplorerWatchBatch {
   final List<String> directoryRelativePaths;
   final List<String> changedRelativePaths;
+
+  /// Verified existing ordinary-file modifications eligible for a bounded
+  /// deferred Quick Open reconciliation. All other changed paths retain
+  /// the prompt refresh policy. None means the producer has no hints.
+  final List<String>? deferredQuickOpenPaths;
   final int coalescedEventCount;
 
   const WorkspaceExplorerWatchBatch({
     required this.directoryRelativePaths,
     required this.changedRelativePaths,
+    this.deferredQuickOpenPaths,
     required this.coalescedEventCount,
   });
 
@@ -629,6 +635,7 @@ class WorkspaceExplorerWatchBatch {
   int get hashCode =>
       directoryRelativePaths.hashCode ^
       changedRelativePaths.hashCode ^
+      deferredQuickOpenPaths.hashCode ^
       coalescedEventCount.hashCode;
 
   @override
@@ -638,6 +645,7 @@ class WorkspaceExplorerWatchBatch {
           runtimeType == other.runtimeType &&
           directoryRelativePaths == other.directoryRelativePaths &&
           changedRelativePaths == other.changedRelativePaths &&
+          deferredQuickOpenPaths == other.deferredQuickOpenPaths &&
           coalescedEventCount == other.coalescedEventCount;
 }
 

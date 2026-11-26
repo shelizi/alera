@@ -7817,6 +7817,17 @@ impl SseDecode for Option<crate::api::workspace_files::WorkspaceTextEncoding> {
     }
 }
 
+impl SseDecode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<String>>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -8186,10 +8197,12 @@ impl SseDecode for crate::api::workspace_files::WorkspaceExplorerWatchBatch {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_directoryRelativePaths = <Vec<String>>::sse_decode(deserializer);
         let mut var_changedRelativePaths = <Vec<String>>::sse_decode(deserializer);
+        let mut var_deferredQuickOpenPaths = <Option<Vec<String>>>::sse_decode(deserializer);
         let mut var_coalescedEventCount = <u32>::sse_decode(deserializer);
         return crate::api::workspace_files::WorkspaceExplorerWatchBatch {
             directory_relative_paths: var_directoryRelativePaths,
             changed_relative_paths: var_changedRelativePaths,
+            deferred_quick_open_paths: var_deferredQuickOpenPaths,
             coalesced_event_count: var_coalescedEventCount,
         };
     }
@@ -10842,6 +10855,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::workspace_files::WorkspaceExp
         [
             self.directory_relative_paths.into_into_dart().into_dart(),
             self.changed_relative_paths.into_into_dart().into_dart(),
+            self.deferred_quick_open_paths.into_into_dart().into_dart(),
             self.coalesced_event_count.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -12961,6 +12975,16 @@ impl SseEncode for Option<crate::api::workspace_files::WorkspaceTextEncoding> {
     }
 }
 
+impl SseEncode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<String>>::sse_encode(value, serializer);
+        }
+    }
+}
+
 impl SseEncode for Option<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -13242,6 +13266,7 @@ impl SseEncode for crate::api::workspace_files::WorkspaceExplorerWatchBatch {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<String>>::sse_encode(self.directory_relative_paths, serializer);
         <Vec<String>>::sse_encode(self.changed_relative_paths, serializer);
+        <Option<Vec<String>>>::sse_encode(self.deferred_quick_open_paths, serializer);
         <u32>::sse_encode(self.coalesced_event_count, serializer);
     }
 }

@@ -160,6 +160,15 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       WorkspaceExplorerWatchRefreshQueue(
         refresh: _scheduleWatchedQuickOpenRefresh,
       );
+  // A verified existing file modification does not normally change the
+  // filename index. Reconcile ambiguous OS notifications at a slower
+  // bounded cadence instead of rewalking the workspace after every save.
+  late final WorkspaceExplorerWatchRefreshQueue _watchDeferredQuickOpenQueue =
+      WorkspaceExplorerWatchRefreshQueue(
+        refresh: _scheduleWatchedQuickOpenRefresh,
+        debounce: const Duration(seconds: 2),
+        maxWait: const Duration(seconds: 5),
+      );
   Set<String>? _lastSyncedWatchedDirectories;
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
@@ -253,6 +262,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _resetExplorerProjection();
       _watchRefreshQueue.clear();
       _watchQuickOpenRefreshQueue.clear();
+      _watchDeferredQuickOpenQueue.clear();
       _controller.dispose();
       _controller = tree.DirectoryTreeController(
         data: _buildTreeData(),
@@ -275,6 +285,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     unawaited(_stopNativeWatcher());
     _watchRefreshQueue.dispose();
     _watchQuickOpenRefreshQueue.dispose();
+    _watchDeferredQuickOpenQueue.dispose();
     _disposeNativeProjectionSession();
     unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
@@ -336,6 +347,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           showHiddenToggle: defaultTargetPlatform == TargetPlatform.windows,
           loading: _loading,
           onRefresh: () {
+            _watchDeferredQuickOpenQueue.clear();
             _workspaceFiles.scheduleQuickOpenRefresh(
               workspacePath: widget.workspace.path,
               debounce: Duration.zero,

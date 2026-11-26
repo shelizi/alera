@@ -65,6 +65,7 @@ fn watched_paths_snapshot(paths: HashMap<String, PathBuf>) -> WatchedPaths {
 #[derive(Default)]
 struct PendingWatchBatch {
     paths: HashSet<PathBuf>,
+    immediate_paths: HashSet<PathBuf>,
     event_count: u32,
 }
 
@@ -75,17 +76,32 @@ impl PendingWatchBatch {
             Ok(event) if !event.paths.is_empty() => {
                 // Some backends attach paths to a rescan notification.
                 // A nonempty path list must not suppress reconciliation.
-                if event.need_rescan() {
+                let rescan = event.need_rescan();
+                if rescan {
                     self.paths.insert(root.to_path_buf());
+                    self.immediate_paths.insert(root.to_path_buf());
                 }
+                // Windows reports FILE_ACTION_MODIFIED as Modify(Any);
+                // it is only a candidate, never assumed to be content-only.
+                let candidate = !rescan
+                    && matches!(
+                        event.kind,
+                        notify::EventKind::Modify(
+                            notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Any
+                        )
+                    );
                 for path in event.paths {
                     let path = normalize_event_path(root, path);
                     if path.starts_with(root) {
+                        if !candidate {
+                            self.immediate_paths.insert(path.clone());
+                        }
                         self.paths.insert(path);
                     } else {
                         // An unrecognized alias or out-of-root notification
                         // cannot be localized safely.
                         self.paths.insert(root.to_path_buf());
+                        self.immediate_paths.insert(root.to_path_buf());
                     }
                 }
             }
@@ -93,6 +109,7 @@ impl PendingWatchBatch {
             // authoritative root reconciliation, even in a duplicate burst.
             _ => {
                 self.paths.insert(root.to_path_buf());
+                self.immediate_paths.insert(root.to_path_buf());
             }
         }
     }
@@ -289,9 +306,27 @@ fn build_batch(
     }
     let mut directory_relative_paths = HashSet::<String>::new();
     let mut changed_relative_paths = HashSet::<String>::new();
+    let deferred = if pending.immediate_paths.contains(root) || pending.paths.len() > 64 {
+        HashSet::new()
+    } else {
+        let candidates = pending
+            .paths
+            .difference(&pending.immediate_paths)
+            .cloned()
+            .collect::<Vec<_>>();
+        alera_core::workspace_files::quick_open_verified_regular_paths(root, &candidates)
+    };
+    let mut deferred_quick_open_paths = Vec::new();
     for event_path in pending.paths {
         if let Ok(relative_path) = relative_string(root, &event_path) {
+            if deferred.contains(&event_path) {
+                deferred_quick_open_paths.push(relative_path.clone());
+            }
             changed_relative_paths.insert(relative_path);
+        } else {
+            // Malformed relative paths cannot safely be localized.
+            changed_relative_paths.insert(String::new());
+            directory_relative_paths.insert(String::new());
         }
         if let Some(relative_paths) = watched_paths.affected(&event_path) {
             directory_relative_paths.extend(relative_paths.iter().cloned());
@@ -304,9 +339,12 @@ fn build_batch(
     let mut changed_relative_paths = changed_relative_paths.into_iter().collect::<Vec<_>>();
     directory_relative_paths.sort();
     changed_relative_paths.sort();
+    deferred_quick_open_paths.sort();
+    deferred_quick_open_paths.dedup();
     Some(WorkspaceExplorerWatchBatch {
         directory_relative_paths,
         changed_relative_paths,
+        deferred_quick_open_paths: Some(deferred_quick_open_paths),
         coalesced_event_count: pending.event_count,
     })
 }
@@ -365,6 +403,157 @@ mod tests {
             pending.push(root, Ok(event));
         }
         build_batch(root, watched, pending)
+    }
+
+    #[test]
+    fn modification_hints_require_live_index_and_preserve_structural_priority() {
+        use alera_core::workspace_files::{
+            start_workspace_quick_open_session, stop_workspace_quick_open_session,
+        };
+        let workspace = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "original").unwrap();
+        std::fs::write(root.join(".gitignore"), "").unwrap();
+        let watched = watched_paths_snapshot(HashMap::from([
+            (String::new(), root.clone()),
+            ("src".into(), root.join("src")),
+        ]));
+        let modify = |path: &str| {
+            Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(root.join(path))
+        };
+        let no_index = batch_from_events(&root, &watched, vec![modify("src/main.rs")]).unwrap();
+        assert_eq!(no_index.deferred_quick_open_paths, Some(vec![]));
+
+        let session =
+            start_workspace_quick_open_session(root.to_string_lossy().into_owned(), vec![])
+                .unwrap();
+        std::fs::write(root.join("src/main.rs"), "changed content").unwrap();
+        let batch = batch_from_events(
+            &root,
+            &watched,
+            vec![modify("src/main.rs"), modify("src/main.rs")],
+        )
+        .unwrap();
+        assert_eq!(batch.changed_relative_paths, ["src/main.rs"]);
+        assert_eq!(batch.directory_relative_paths, ["src"]);
+        assert_eq!(batch.coalesced_event_count, 2);
+        assert_eq!(
+            batch.deferred_quick_open_paths,
+            Some(vec!["src/main.rs".into()])
+        );
+
+        std::fs::write(root.join("src/new.rs"), "new").unwrap();
+        for path in ["src/new.rs", "src", ".gitignore", "src/missing.rs"] {
+            let batch = batch_from_events(&root, &watched, vec![modify(path)]).unwrap();
+            assert_eq!(batch.deferred_quick_open_paths, Some(vec![]), "{path}");
+        }
+        for kind in [
+            EventKind::Create(notify::event::CreateKind::File),
+            EventKind::Remove(notify::event::RemoveKind::File),
+            EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Any,
+            )),
+            EventKind::Modify(notify::event::ModifyKind::Metadata(
+                notify::event::MetadataKind::Any,
+            )),
+            EventKind::Any,
+        ] {
+            let structural = Event::new(kind).add_path(root.join("src/main.rs"));
+            let batch = batch_from_events(&root, &watched, vec![modify("src/main.rs"), structural])
+                .unwrap();
+            assert_eq!(batch.deferred_quick_open_paths, Some(vec![]));
+        }
+        let batch = batch_from_events(
+            &root,
+            &watched,
+            vec![
+                modify("src/main.rs"),
+                modify("src/new.rs"),
+                modify(".gitignore"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            batch.changed_relative_paths,
+            [".gitignore", "src/main.rs", "src/new.rs"]
+        );
+        assert_eq!(
+            batch.deferred_quick_open_paths,
+            Some(vec!["src/main.rs".into()])
+        );
+        let batch = batch_from_events(
+            &root,
+            &watched,
+            vec![
+                modify("src/main.rs"),
+                modify("src/new.rs").set_flag(notify::event::Flag::Rescan),
+            ],
+        )
+        .unwrap();
+        assert_eq!(batch.deferred_quick_open_paths, Some(vec![]));
+        assert!(batch.changed_relative_paths.contains(&String::new()));
+
+        // Multiple scopes cannot reuse a hint from only one of the live
+        // indexes. One excludes src and therefore cannot prove membership.
+        let excluded = start_workspace_quick_open_session(
+            root.to_string_lossy().into_owned(),
+            vec!["src".into()],
+        )
+        .unwrap();
+        let batch = batch_from_events(&root, &watched, vec![modify("src/main.rs")]).unwrap();
+        assert_eq!(batch.deferred_quick_open_paths, Some(vec![]));
+        stop_workspace_quick_open_session(excluded);
+        stop_workspace_quick_open_session(session);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_existing_file_write_produces_verified_modification_hint() {
+        use alera_core::workspace_files::{
+            start_workspace_quick_open_session, stop_workspace_quick_open_session,
+        };
+        let workspace = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
+        let file = root.join("ordinary.txt");
+        std::fs::write(&file, "old").unwrap();
+        let session =
+            start_workspace_quick_open_session(root.to_string_lossy().into_owned(), vec![])
+                .unwrap();
+        let watched = watched_paths_snapshot(HashMap::from([(String::new(), root.clone())]));
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            let _ = tx.send(event);
+        })
+        .unwrap();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        std::fs::write(&file, "new ordinary contents").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut observed = false;
+        while Instant::now() < deadline {
+            let Ok(result) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            else {
+                break;
+            };
+            let Ok(event) = result else {
+                continue;
+            };
+            let batch = batch_from_events(&root, &watched, vec![event]);
+            if let Some(batch) = batch {
+                if batch.deferred_quick_open_paths.as_deref() == Some(&["ordinary.txt".to_string()])
+                {
+                    observed = true;
+                    assert_eq!(batch.changed_relative_paths, ["ordinary.txt"]);
+                    break;
+                }
+            }
+        }
+        drop(watcher);
+        stop_workspace_quick_open_session(session);
+        assert!(
+            observed,
+            "native watcher did not deliver a verifiable ordinary file modification"
+        );
     }
 
     #[test]

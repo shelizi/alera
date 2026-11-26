@@ -537,6 +537,97 @@ fn access_session(
     Ok(index)
 }
 
+/// A watcher modification is eligible for deferred reconciliation only
+/// when every currently live index for this root already contains the
+/// exact path as a file, and the live path is an ordinary regular file.
+/// This is NOT proof that an ambiguous OS event was content-only: callers
+/// must still perform a bounded full reconciliation. Never use this hint
+/// for create/remove/rename/rescan events or as a path authorization.
+pub fn quick_open_verified_regular_paths(root: &Path, candidates: &[PathBuf]) -> HashSet<PathBuf> {
+    const MAX_CANDIDATES: usize = 64;
+    if candidates.is_empty() || candidates.len() > MAX_CANDIDATES {
+        return HashSet::new();
+    }
+    // Index construction is outside the registry lock. Hold the lock only
+    // to clone the bounded set of existing immutable indexes.
+    let indexes = {
+        let Ok(registry) = sessions().lock() else {
+            return HashSet::new();
+        };
+        let now = Instant::now();
+        registry
+            .values()
+            .filter(|entry| {
+                entry.scope.root == root
+                    && now.saturating_duration_since(entry.last_accessed)
+                        < QUICK_OPEN_SESSION_IDLE_TTL
+            })
+            .map(|entry| Arc::clone(&entry.index))
+            .collect::<Vec<_>>()
+    };
+    if indexes.is_empty() {
+        return HashSet::new();
+    }
+    candidates
+        .iter()
+        .filter(|path| {
+            let Ok(relative) = relative_string(root, path) else {
+                return false;
+            };
+            if relative.is_empty()
+                || relative.split('/').any(|part| {
+                    // Conventional repository and ignore control files always
+                    // request prompt reconciliation, even if they are indexed.
+                    matches!(
+                        part.to_ascii_lowercase().as_str(),
+                        ".git"
+                            | ".hg"
+                            | ".svn"
+                            | ".gitignore"
+                            | ".ignore"
+                            | ".gitconfig"
+                            | ".gitmodules"
+                            | ".gitattributes"
+                    )
+                })
+            {
+                return false;
+            }
+            let Ok(metadata) = fs::symlink_metadata(path) else {
+                return false;
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return false;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                // FILE_ATTRIBUTE_REPARSE_POINT, including non-symlink junctions
+                // and other filesystem redirections.
+                if metadata.file_attributes() & 0x400 != 0 {
+                    return false;
+                }
+            }
+            if dunce::canonicalize(path).ok().as_ref() != Some(*path) {
+                return false;
+            }
+            let normalized = relative.to_lowercase();
+            indexes.iter().all(|index| {
+                index
+                    .files
+                    .binary_search_by(|file| {
+                        file.normalized_path
+                            .cmp(&normalized)
+                            .then_with(|| file.relative_path.cmp(&relative))
+                    })
+                    .ok()
+                    .is_some_and(|position| !index.files[position].is_directory)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn stop_workspace_quick_open_session(session: WorkspaceQuickOpenSession) {
     if let Ok(mut sessions) = sessions().lock() {
         sessions.remove(&session.id);

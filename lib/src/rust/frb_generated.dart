@@ -8063,6 +8063,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_String(raw);
+  }
+
+  @protected
   Uint8List? dco_decode_opt_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_list_prim_u_8_strict(raw);
@@ -8374,12 +8380,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return WorkspaceExplorerWatchBatch(
       directoryRelativePaths: dco_decode_list_String(arr[0]),
       changedRelativePaths: dco_decode_list_String(arr[1]),
-      coalescedEventCount: dco_decode_u_32(arr[2]),
+      deferredQuickOpenPaths: dco_decode_opt_list_String(arr[2]),
+      coalescedEventCount: dco_decode_u_32(arr[3]),
     );
   }
 
@@ -10720,6 +10727,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   Uint8List? sse_decode_opt_list_prim_u_8_strict(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
@@ -11071,10 +11089,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_directoryRelativePaths = sse_decode_list_String(deserializer);
     var var_changedRelativePaths = sse_decode_list_String(deserializer);
+    var var_deferredQuickOpenPaths = sse_decode_opt_list_String(deserializer);
     var var_coalescedEventCount = sse_decode_u_32(deserializer);
     return WorkspaceExplorerWatchBatch(
       directoryRelativePaths: var_directoryRelativePaths,
       changedRelativePaths: var_changedRelativePaths,
+      deferredQuickOpenPaths: var_deferredQuickOpenPaths,
       coalescedEventCount: var_coalescedEventCount,
     );
   }
@@ -13238,6 +13258,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_list_String(
+    List<String>? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_String(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_opt_list_prim_u_8_strict(
     Uint8List? self,
     SseSerializer serializer,
@@ -13525,6 +13558,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_String(self.directoryRelativePaths, serializer);
     sse_encode_list_String(self.changedRelativePaths, serializer);
+    sse_encode_opt_list_String(self.deferredQuickOpenPaths, serializer);
     sse_encode_u_32(self.coalescedEventCount, serializer);
   }
 

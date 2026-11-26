@@ -175,6 +175,10 @@ pub struct WorkspaceExplorerWatcherHandle {
 pub struct WorkspaceExplorerWatchBatch {
     pub directory_relative_paths: Vec<String>,
     pub changed_relative_paths: Vec<String>,
+    /// Verified existing ordinary-file modifications eligible for a bounded
+    /// deferred Quick Open reconciliation. All other changed paths retain
+    /// the prompt refresh policy. None means the producer has no hints.
+    pub deferred_quick_open_paths: Option<Vec<String>>,
     pub coalesced_event_count: u32,
 }
 
