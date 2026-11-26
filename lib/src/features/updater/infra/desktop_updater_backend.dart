@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:alera/src/features/updater/domain/fork_classic_update_target.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:desktop_updater/desktop_updater.dart';
 import 'package:http/http.dart' as http;
@@ -44,16 +45,21 @@ abstract interface class AleraDesktopUpdaterBackend {
   void dispose();
 }
 
-class DesktopUpdaterBackend({DesktopUpdater? updater, http.Client? client})
-    implements AleraDesktopUpdaterBackend {
+class DesktopUpdaterBackend({
+  DesktopUpdater? updater,
+  http.Client? client,
+  ForkClassicUpdateTarget? forkTarget,
+}) implements AleraDesktopUpdaterBackend {
   this
     : _updater = updater ?? DesktopUpdater(),
       _client = client ?? http.Client(),
-      _ownsClient = client == null;
+      _ownsClient = client == null,
+      _forkTarget = forkTarget ?? ForkClassicUpdateTarget.currentBuild;
 
   final DesktopUpdater _updater;
   final http.Client _client;
   final bool _ownsClient;
+  final ForkClassicUpdateTarget? _forkTarget;
   Uri? _archiveUrl;
   DesktopVersionInfo? _currentVersion;
   ReleaseDescriptor? _descriptor;
@@ -70,6 +76,17 @@ class DesktopUpdaterBackend({DesktopUpdater? updater, http.Client? client})
     required String publicKeyId,
     required String publicKeyBase64,
   }) async {
+    _clearSelection();
+    final forkTarget = _forkTarget;
+    if (forkTarget != null &&
+        (archiveUrl != forkTarget.indexUrl ||
+            platform != forkTarget.platform ||
+            channel != 'stable' ||
+            !requireSignature ||
+            publicKeyId != ForkClassicUpdateTarget.keyId ||
+            !ForkClassicUpdateTarget.validPublicKey(publicKeyBase64))) {
+      throw const FormatException('Invalid Classic fork update source.');
+    }
     final version = DesktopVersionInfo.fromParts(
       versionName: currentVersion,
       buildNumber: currentBuildNumber,
@@ -83,12 +100,14 @@ class DesktopUpdaterBackend({DesktopUpdater? updater, http.Client? client})
     final index = ReleaseIndex.fromJson(
       jsonDecode(indexResponse.body) as Map<String, dynamic>,
     );
-    final item = selectReleaseIndexItem(
-      index: index,
-      platform: platform,
-      channel: channel,
-      currentVersion: version,
-    );
+    final item = forkTarget == null
+        ? selectReleaseIndexItem(
+            index: index,
+            platform: platform,
+            channel: channel,
+            currentVersion: version,
+          )
+        : _selectForkRelease(index, forkTarget, currentVersion);
     if (item == null) {
       _clearSelection();
       return null;
@@ -111,6 +130,14 @@ class DesktopUpdaterBackend({DesktopUpdater? updater, http.Client? client})
         publicKeyId: publicKeyId,
         publicKeyBase64: publicKeyBase64,
       );
+    }
+
+    if (forkTarget != null &&
+        (descriptor.artifact.kind != 'zip' ||
+            descriptor.artifact.url != forkTarget.artifactUrl(item.version) ||
+            descriptor.install.strategy != forkTarget.strategy ||
+            descriptor.deltaArtifacts.isNotEmpty)) {
+      throw const FormatException('Incorrect Classic fork update artifact.');
     }
 
     final candidate = DesktopUpdaterReleaseCandidate(
@@ -186,6 +213,39 @@ class DesktopUpdaterBackend({DesktopUpdater? updater, http.Client? client})
     _descriptor = null;
     _candidate = null;
   }
+}
+
+ReleaseIndexItem? _selectForkRelease(
+  ReleaseIndex index,
+  ForkClassicUpdateTarget target,
+  String currentVersion,
+) {
+  // Each index is for exactly one complete Classic distribution. Do not apply
+  // the shared package's build-number-first selection rules to this channel.
+  if (index.appName != 'Alera' ||
+      index.items.length != 1 ||
+      index.supportPolicy != null) {
+    throw const FormatException('Invalid Classic fork release index.');
+  }
+  final item = index.items.single;
+  if (item.platform != target.platform ||
+      item.channel != 'stable' ||
+      item.mandatory ||
+      item.freshInstall != null ||
+      item.rollout != null ||
+      item.buildNumber == null ||
+      item.buildNumber! < 0 ||
+      item.release != target.descriptorUrl(item.version)) {
+    throw const FormatException(
+      'Invalid Classic fork release URL or identity.',
+    );
+  }
+  return ForkClassicUpdateTarget.isNewerStableVersion(
+        item.version,
+        currentVersion,
+      )
+      ? item
+      : null;
 }
 
 void _requireSuccess(http.Response response, Uri uri) {
