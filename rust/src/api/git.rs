@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use alera_core::git as core_git;
 use alera_core::git_cli::git_in_dir;
 use git2::{
-    build::CheckoutBuilder, BranchType, DiffOptions, ErrorCode, Index, ObjectType, Oid, Repository,
-    RepositoryState, Signature, StashApplyOptions, StashSaveOptions,
+    build::CheckoutBuilder, BranchType, DiffOptions, ErrorCode, Index, IndexEntry, IndexTime,
+    ObjectType, Oid, Repository, RepositoryState, Signature, StashApplyOptions, StashSaveOptions,
 };
 
 #[path = "git_ancestry_impl.rs"]
@@ -1388,7 +1388,16 @@ fn unstage_status_entries(
 fn unstage_status_entries_with_resolver(
     repo: &Repository,
     entries: &[GitChangeEntry],
+    resolve_path: impl FnMut(&str) -> Result<String, GitError>,
+) -> Result<(), GitError> {
+    unstage_status_entries_with_lookup(repo, entries, resolve_path, MAX_DIRECT_HEAD_PATHS)
+}
+
+fn unstage_status_entries_with_lookup(
+    repo: &Repository,
+    entries: &[GitChangeEntry],
     mut resolve_path: impl FnMut(&str) -> Result<String, GitError>,
+    direct_path_limit: usize,
 ) -> Result<(), GitError> {
     let mut paths = entries
         .iter()
@@ -1407,14 +1416,15 @@ fn unstage_status_entries_with_resolver(
         .head()
         .ok()
         .and_then(|head| head.peel(ObjectType::Commit).ok());
-    let head_index = if let Some(head) = head.as_ref() {
+    let mut head_entries = if let Some(head) = head.as_ref() {
         let commit = head
             .as_commit()
             .ok_or_else(|| GitError::new(GitErrorKind::Internal, "HEAD is not a commit"))?;
         let tree = commit.tree().map_err(GitError::from_git2)?;
-        let mut head_index = Index::new().map_err(GitError::from_git2)?;
-        head_index.read_tree(&tree).map_err(GitError::from_git2)?;
-        Some(head_index)
+        Some(HeadIndexEntries::new(
+            tree,
+            paths.len() <= direct_path_limit,
+        )?)
     } else {
         None
     };
@@ -1422,18 +1432,97 @@ fn unstage_status_entries_with_resolver(
     for path in paths {
         let repo_path = resolve_path(&path)?;
         let path = Path::new(&repo_path);
-        if let Some(head_index) = head_index.as_ref() {
-            if let Some(head_entry) = head_index.get_path(path, 0) {
-                index.add(&head_entry).map_err(GitError::from_git2)?;
-            } else {
-                remove_index_path_if_present(&mut index, path)?;
-            }
+        let head_entry = match head_entries.as_mut() {
+            Some(entries) => entries.get(&repo_path)?,
+            None => None,
+        };
+        if let Some(head_entry) = head_entry {
+            index.add(&head_entry).map_err(GitError::from_git2)?;
         } else {
             remove_index_path_if_present(&mut index, path)?;
         }
     }
     index.write().map_err(GitError::from_git2)?;
     Ok(())
+}
+
+// Limit direct tree lookups to a small selection (including rename sources).
+// A large selection retains the original one-pass full HEAD index strategy.
+const MAX_DIRECT_HEAD_PATHS: usize = 32;
+
+struct HeadIndexEntries<'repo> {
+    tree: git2::Tree<'repo>,
+    full_index: Option<Index>,
+}
+
+impl<'repo> HeadIndexEntries<'repo> {
+    fn new(tree: git2::Tree<'repo>, direct: bool) -> Result<Self, GitError> {
+        let mut entries = Self {
+            tree,
+            full_index: None,
+        };
+        if !direct {
+            entries.load_full_index()?;
+        }
+        Ok(entries)
+    }
+
+    fn load_full_index(&mut self) -> Result<(), GitError> {
+        let mut index = Index::new().map_err(GitError::from_git2)?;
+        index.read_tree(&self.tree).map_err(GitError::from_git2)?;
+        self.full_index = Some(index);
+        Ok(())
+    }
+
+    fn get(&mut self, path: &str) -> Result<Option<IndexEntry>, GitError> {
+        if let Some(index) = self.full_index.as_ref() {
+            return Ok(index.get_path(Path::new(path), 0));
+        }
+
+        match self.tree.get_path(Path::new(path)) {
+            Ok(entry) => {
+                if entry.kind() == Some(ObjectType::Tree) {
+                    // read_tree flattens trees; directories have no stage-0 entry.
+                    return Ok(None);
+                }
+                let mode = entry.filemode_raw() as u32;
+                if matches!(mode, 0o100644 | 0o100755 | 0o120000 | 0o160000) {
+                    // libgit2 1.9 read_tree_cb on a fresh detached Index
+                    // zero-initializes stat/extended flags, copies the raw
+                    // tree mode and OID, and encodes the path length.
+                    // Index::add also recalculates the name-length mask.
+                    return Ok(Some(IndexEntry {
+                        ctime: IndexTime::new(0, 0),
+                        mtime: IndexTime::new(0, 0),
+                        dev: 0,
+                        ino: 0,
+                        mode,
+                        uid: 0,
+                        gid: 0,
+                        file_size: 0,
+                        id: entry.id(),
+                        flags: path.len().min(0x0fff) as u16,
+                        flags_extended: 0,
+                        path: path.as_bytes().to_vec(),
+                    }));
+                }
+                // Retain the library's original behavior for legacy or
+                // unexpected raw modes rather than inventing an index entry.
+            }
+            Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
+            Err(_) => {
+                // Non-missing lookup failures use the authoritative fallback,
+                // so an unreadable object is not interpreted as a deletion.
+            }
+        }
+
+        self.load_full_index()?;
+        Ok(self
+            .full_index
+            .as_ref()
+            .expect("loaded HEAD index")
+            .get_path(Path::new(path), 0))
+    }
 }
 
 /// Pin the canonical roots once for a single index mutation. Never retain
