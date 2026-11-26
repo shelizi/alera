@@ -54,13 +54,18 @@ def records(runtime):
 
 
 class IsolatedHost(Host):
-    def __init__(self, exe, runtime):
+    def __init__(self, exe, runtime, legacy_only=False):
         self.runtime = runtime
         self.control = runtime / "host-control.json"
         self.token = uuid.uuid4().hex
+        isolation_before = sum(
+            r.get("msg") == "isolated host skipped global integration writes"
+            for r in records(runtime)
+        )
         env = dict(os.environ)
         for name in (
-            "ALERA_TERMINAL_WORKER_PROCESS", "CLAUDE_CONFIG_DIR", "CODEX_HOME",
+            "ALERA_TERMINAL_WORKER_PROCESS", "ALERA_RESOURCE_NATIVE_WINDOWS",
+            "CLAUDE_CONFIG_DIR", "CODEX_HOME",
             "COPILOT_HOME", "GROK_HOME", "OPENCODE_CONFIG_DIR",
             "PI_CODING_AGENT_DIR", "AMP_CONFIG_DIR",
         ):
@@ -75,13 +80,16 @@ class IsolatedHost(Host):
             "APPDATA": str(roaming), "LOCALAPPDATA": str(local),
             "XDG_CONFIG_HOME": str(roaming),
             "ALERA_TEST_ISOLATED_HOST": "1",
-            "ALERA_RESOURCE_NATIVE_WINDOWS": "1",
             "ALERA_CLOUD_URL": "http://127.0.0.1:9",
             "ALERA_HOST_LOG": (
                 "warn,resource_conformance=debug,"
                 "alera::terminal_host::resources::windows_native=debug"
             ),
         })
+        # Exercise the actual production default with no override. The
+        # legacy-only smoke proves that the explicit escape hatch still works.
+        if legacy_only:
+            env["ALERA_RESOURCE_NATIVE_WINDOWS"] = "0"
         self.child = subprocess.Popen(
             [str(exe), "runtime-host", "--runtime-dir", str(runtime),
              "--control-file", str(self.control), "--token", self.token,
@@ -111,10 +119,10 @@ class IsolatedHost(Host):
                 "protocolVersion": record["protocolVersion"],
                 "token": self.token, "clientKind": "app",
             })
-            assert any(
+            assert sum(
                 r.get("msg") == "isolated host skipped global integration writes"
                 for r in records(runtime)
-            ), "missing isolation acknowledgement; refusing to create PTYs"
+            ) > isolation_before, "missing new isolation acknowledgement; refusing to create PTYs"
         except BaseException:
             self.kill()
             raise
@@ -179,62 +187,273 @@ def exercise_session(host, request, marker):
     raise AssertionError("recovered shell did not execute marker command")
 
 
-def sample(host, requests, phase, expected, target=6, soak_seconds=0):
-    request = {"appPid": os.getpid(), "appCreationFiletime": str(own_creation()),
-               "intervalMs": 2000}
-    last = 0
+def app_request(creation=None):
+    return {"appPid": os.getpid(),
+            "appCreationFiletime": str(own_creation() if creation is None else creation),
+            "intervalMs": 2000}
+
+
+def snapshot_if_new(host, requests, payload, last, phase, app_measured=True):
+    snap = host.request("resources.snapshot", payload)
+    if not snap or snap.get("collectedAt", 0) <= last:
+        return None
+    rows = snap.get("sessions", [])
+    if len(rows) != len(requests):
+        return None
+    assert {row["sessionId"] for row in rows} == {r["sessionId"] for r in requests}, phase
+    assert all(row["running"] and row["measured"] and row["memoryBytes"] > 0
+               and row["processCount"] >= 1 for row in rows), phase
+    assert {row["sessionId"]: row["shellPid"] for row in rows} == {
+        r["sessionId"]: identity(host.runtime, r)[1] for r in requests
+    }
+    app = snap["processes"]["app"]
+    if app_measured:
+        assert app["memoryBytes"] > 0 and app["processCount"] >= 1, phase
+    else:
+        assert app["memoryBytes"] == 0 and app["processCount"] == 0, phase
+        assert app["cpuPercent"] == 0, phase
+    total = sum(row["memoryBytes"] for row in rows)
+    total += sum(snap["processes"][k]["memoryBytes"] for k in ("host", "app"))
+    assert snap["totals"]["memoryBytes"] == total
+    for row in rows + [snap["processes"]["host"], app]:
+        history = row["history"]
+        assert 1 <= len(history) <= 60 and history[-1] == row["memoryBytes"], phase
+    record = next(
+        (r for r in reversed(records(host.runtime))
+         if r.get("msg") == "resource snapshot completed"
+         and str(r.get("collected_at")) == str(snap["collectedAt"])), None)
+    assert record is not None, "missing aggregate sample timing"
+    assert record["backend"] in ("native", "sysinfo")
+    return snap, record
+
+
+def events(host, message):
+    return [r for r in records(host.runtime) if r.get("msg") == message]
+
+
+def fallback_events(host):
+    return events(host, "resource sampler falling back to sysinfo")
+
+
+def verify_cooldown(host, requests, last):
+    """Force one real rejection, then keep the original ticker alive."""
+    creation = own_creation()
+    wrong = creation - 1 if creation % 10_000_000 == 9_999_999 else creation + 1
+    assert wrong // 10_000_000 == creation // 10_000_000
+    correct = app_request(creation)
+    invalid = app_request(wrong)
+    previous_fallbacks = len(fallback_events(host))
+    original = [identity(host.runtime, r) for r in requests]
+    original_host = host.child.pid
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        result = snapshot_if_new(host, requests, invalid, last,
+                                 "wrong app creation marker", app_measured=False)
+        if result:
+            rejected, record = result
+            assert record["backend"] == "sysinfo"
+            last = rejected["collectedAt"]
+            break
+        time.sleep(0.25)
+    else:
+        raise AssertionError("wrong marker did not produce a complete fallback frame")
+    new_fallbacks = fallback_events(host)[previous_fallbacks:]
+    assert len(new_fallbacks) == 1, new_fallbacks
+    assert "ShellGeneration" in str(new_fallbacks[0]), new_fallbacks
+    rejected_at = last
+    # The six settled frames before this forced fallback must not disappear.
+    history_lengths = {
+        row["sessionId"]: len(row["history"]) for row in rejected["sessions"]
+    }
+    assert min(history_lengths.values()) >= 6, "fallback discarded session history"
+    print("PASS same-second wrong App marker: actual ShellGeneration rejection, "
+          "zero App attribution; correct identity restored without restarting ticker",
+          flush=True)
+
+    frames = []
+    native_warming = 0
+    native_streak = 0
+    first_native_at = None
+    started = time.monotonic()
+    deadline = started + 75
+    while time.monotonic() < deadline:
+        result = snapshot_if_new(host, requests, correct, last, "cooldown recovery")
+        if not result:
+            time.sleep(0.25)
+            continue
+        snap, record = result
+        last = snap["collectedAt"]
+        for row in snap["sessions"]:
+            size = len(row["history"])
+            assert size >= history_lengths[row["sessionId"]], "recovery reset history"
+            history_lengths[row["sessionId"]] = size
+        backend = record["backend"]
+        frames.append(backend)
+        if backend == "native":
+            if first_native_at is None:
+                first_native_at = last
+                # The rejected frame is timestamped after its legacy sweep.
+                # Allow two seconds of cadence/sweep tolerance; detect an
+                # accidental baseline reset that would resume immediately.
+                assert first_native_at - rejected_at >= 28_000, (
+                    "native resumed before cooldown", first_native_at - rejected_at
+                )
+            if snap.get("warming"):
+                native_warming += 1
+                native_streak = 0
+            else:
+                native_streak += 1
+        else:
+            native_streak = 0
+        if native_streak >= 4:
+            assert frames.count("sysinfo") >= 2, frames
+            assert native_warming >= 1, "native warmup not observed after fallback"
+            assert host.child.pid == original_host and host.child.poll() is None
+            assert [identity(host.runtime, r) for r in requests] == original
+            print(f"PASS cooldown recovery: same Host/Workers, retained history, "
+                  f"sysinfo={frames.count('sysinfo')} native={frames.count('native')} "
+                  f"native_warming={native_warming} "
+                  f"first_native_after_ms={first_native_at - rejected_at} "
+                  f"elapsed_s={time.monotonic() - started:.1f}", flush=True)
+            return last
+        time.sleep(0.25)
+    raise AssertionError(f"native did not recover after cooldown: {frames}")
+
+
+def launch_churn_wave(host, requests, wave, children):
+    """Queue a bounded command chain in each private PTY, not the real app."""
+    pending = []
+    for index, request in enumerate(requests):
+        marker = f"ALERA_CHURN_{wave}_{index}"
+        path = host.runtime / f"{marker}.txt"
+        path.unlink(missing_ok=True)
+        # One bounded holder overlaps the next sample more reliably than
+        # very short cmd processes alone; the remaining children churn.
+        commands = [f'"{sys.executable}" -B -c "import time; time.sleep(0.75)"']
+        commands.extend(["cmd /d /c exit 0"] * (children - 1))
+        commands.append(f'echo {marker} > "{path}"')
+        # A marker proves the entire chain succeeded, not just its last cmd.
+        command = " && ".join(commands) + "\r"
+        host.request("write", {
+            "sessionId": request["sessionId"],
+            "dataBase64": base64.b64encode(command.encode()).decode(),
+        })
+        pending.append((path, marker))
+    return pending
+
+
+def completed_wave(pending):
+    for path, marker in pending:
+        try:
+            if path.read_text(encoding="utf-8").strip() != marker:
+                return False
+        except (FileNotFoundError, PermissionError):
+            return False
+    return True
+
+
+def sample(host, requests, phase, expected, target=6, soak_seconds=0,
+           churn_children=0, last=0, require_legacy=False):
+    request = app_request()
     frames = []
     timings = []
     started = time.monotonic()
-    deadline = started + 75 + soak_seconds
-    next_exercise = started + 5
+    soak_until = started + soak_seconds
+    deadline = soak_until + 75
+    next_exercise = started + 2
     exercise_count = 0
+    waves = 0
+    pending = []
+    wave_deadline = 0
     expected_streak = 0
+    max_post_streak = 0
+    post_frames = []
+    next_report = started + 30
+    peak_session_processes = 0
+    fallback_before = len(fallback_events(host))
+    retries_before = len(events(host, "native topology retry"))
+    schedules_before = len(events(host, "native resource retry scheduled"))
     while time.monotonic() < deadline:
-        snap = host.request("resources.snapshot", request)
-        if not snap or snap.get("collectedAt", 0) <= last:
+        now = time.monotonic()
+        if pending:
+            if completed_wave(pending):
+                exercise_count += len(pending)
+                pending = []
+            else:
+                assert now < wave_deadline, "private PTY command wave timed out"
+        if soak_seconds and now >= next_exercise and now < soak_until and not pending:
+            if churn_children:
+                waves += 1
+                pending = launch_churn_wave(host, requests, waves, churn_children)
+                wave_deadline = time.monotonic() + 20
+                next_exercise = now + 2
+            else:
+                exercise_count += 1
+                exercise_session(host, requests[exercise_count % len(requests)],
+                                 f"ALERA_SOAK_{exercise_count}")
+                next_exercise = now + 5
+        result = snapshot_if_new(host, requests, request, last, phase)
+        if not result:
             time.sleep(0.25)
             continue
-        rows = snap.get("sessions", [])
-        if len(rows) != len(requests):
-            time.sleep(0.25)
-            continue
+        snap, record = result
         last = snap["collectedAt"]
-        assert all(row["running"] and row["measured"] and row["memoryBytes"] > 0
-                   and row["processCount"] >= 1 for row in rows), phase
-        assert sorted(row["shellPid"] for row in rows) == sorted(
-            identity(host.runtime, r)[1] for r in requests)
-        assert snap["processes"]["app"]["memoryBytes"] > 0
-        total = sum(row["memoryBytes"] for row in rows)
-        total += sum(snap["processes"][k]["memoryBytes"] for k in ("host", "app"))
-        assert snap["totals"]["memoryBytes"] == total
-        record = next(
-            (r for r in reversed(records(host.runtime))
-             if r.get("msg") == "resource snapshot completed"
-             and str(r.get("collected_at")) == str(last)), None)
-        assert record is not None, "missing aggregate sample timing"
         backend = record["backend"]
+        if require_legacy:
+            assert backend == "sysinfo", "explicit opt-out used native"
         frames.append(backend)
+        peak_session_processes = max(
+            peak_session_processes, sum(row["processCount"] for row in snap["sessions"])
+        )
+        now = time.monotonic()
+        post_soak = now >= soak_until and not pending
+        if post_soak:
+            post_frames.append((backend, bool(snap.get("warming")),
+                                int(record["elapsed_us"])))
         if backend == expected and not snap.get("warming"):
-            expected_streak += 1
             timings.append(int(record["elapsed_us"]) / 1000)
+            if post_soak:
+                expected_streak += 1
+                max_post_streak = max(max_post_streak, expected_streak)
+            else:
+                expected_streak = 0
         else:
             expected_streak = 0
-        now = time.monotonic()
-        if soak_seconds and now >= next_exercise and now < started + soak_seconds:
-            exercise_count += 1
-            exercise_session(host, requests[exercise_count % len(requests)],
-                             f"ALERA_SOAK_{exercise_count}")
-            next_exercise = now + 5
-        if expected_streak >= target and now >= started + soak_seconds:
+        if soak_seconds and now >= next_report:
+            reasons = [r.get("reason", "?") for r in fallback_events(host)[fallback_before:]]
+            print(f"PROGRESS {phase}: elapsed_s={now - started:.1f} "
+                  f"commands={exercise_count} waves={waves} pending={len(pending)} "
+                  f"native={frames.count('native')} sysinfo={frames.count('sysinfo')} "
+                  f"post_streak={expected_streak} reasons={reasons} "
+                  f"extra_attempts={len(events(host, 'native topology retry')) - retries_before} "
+                  f"scheduled_reasons={[r.get('reason', '?') for r in events(host, 'native resource retry scheduled')[schedules_before:]]}",
+                  flush=True)
+            next_report = now + 30
+        if expected_streak >= target:
+            if churn_children:
+                assert waves >= 1 and exercise_count == waves * len(requests)
+            fallback_count = len(fallback_events(host)) - fallback_before
             print(f"PASS {phase}: frames={len(frames)} native={frames.count('native')} "
                   f"sysinfo={frames.count('sysinfo')} settled_median_ms="
                   f"{statistics.median(timings):.3f} commands={exercise_count} "
+                  f"waves={waves} completed_child_invocations={exercise_count * churn_children} "
+                  f"peak_session_processes={peak_session_processes} "
+                  f"fallback_transitions={fallback_count} "
+                  f"reasons={[r.get('reason', '?') for r in fallback_events(host)[fallback_before:]]} "
+                  f"extra_attempts={len(events(host, 'native topology retry')) - retries_before} "
+                  f"scheduled_reasons={[r.get('reason', '?') for r in events(host, 'native resource retry scheduled')[schedules_before:]]} "
                   f"elapsed_s={now - started:.1f}", flush=True)
-            return
+            return last
         time.sleep(0.25)
-    raise AssertionError(f"{phase}: missing {target} consecutive settled {expected} frames; "
-                         f"native={frames.count('native')} sysinfo={frames.count('sysinfo')}")
+    reasons = [r.get("reason", "?") for r in fallback_events(host)[fallback_before:]]
+    raise AssertionError(
+        f"{phase}: missing {target} consecutive settled {expected} frames; "
+        f"native={frames.count('native')} sysinfo={frames.count('sysinfo')} "
+        f"commands={exercise_count} waves={waves} pending={len(pending)} "
+        f"max_post_streak={max_post_streak} post_frames={post_frames} reasons={reasons} "
+        f"extra_attempts={len(events(host, 'native topology retry')) - retries_before} "
+        f"scheduled_reasons={[r.get('reason', '?') for r in events(host, 'native resource retry scheduled')[schedules_before:]]}"
+    )
 
 
 def stop_private_workers(exe, runtime):
@@ -260,7 +479,8 @@ def stop_private_workers(exe, runtime):
                    capture_output=True, timeout=15, check=False)
 
 
-def main(exe, soak_seconds):
+def main(exe, soak_seconds, session_count, churn_children, check_cooldown,
+         legacy_only=False):
     assert sys.platform == "win32"
     exe = Path(exe).resolve(strict=True)
     # Never launch a normal/Release binary: its integration dispatcher does
@@ -280,13 +500,21 @@ def main(exe, soak_seconds):
         host = None
         requests = []
         try:
-            host = IsolatedHost(exe, runtime)
-            requests = create_sessions(host, runtime)
+            host = IsolatedHost(exe, runtime, legacy_only=legacy_only)
+            requests = create_sessions(host, runtime, session_count)
             original = [identity(runtime, r) for r in requests]
             assert all(i[0] > 0 and i[1] > 0 and i[2] for i in original)
-            print("PASS default Worker mode: two schema-2 records with precise markers",
+            assert len({i[0] for i in original}) == session_count
+            assert len({i[1] for i in original}) == session_count
+            print(f"PASS default Worker mode: {session_count} schema-2 records with precise markers",
                   flush=True)
-            sample(host, requests, "before restart", "native")
+            if legacy_only:
+                sample(host, requests, "explicit legacy override", "sysinfo",
+                       target=4, require_legacy=True)
+                return
+            last = sample(host, requests, "before restart", "native")
+            if check_cooldown:
+                verify_cooldown(host, requests, last)
             host.kill()
             time.sleep(1)
             host = IsolatedHost(exe, runtime)
@@ -296,7 +524,8 @@ def main(exe, soak_seconds):
             exercise_session(host, requests[0], "ALERA_RESTART_RECOVERED")
             print("PASS Host restart: original Worker/Shell/FILETIME preserved", flush=True)
             sample(host, requests, "after restart", "native",
-                   soak_seconds=soak_seconds)
+                   soak_seconds=soak_seconds, churn_children=churn_children)
+            assert [identity(runtime, r) for r in requests] == original
 
             host.kill()
             time.sleep(1)
@@ -311,7 +540,7 @@ def main(exe, soak_seconds):
                 assert host.request("createOrAttach", r)["running"]
             mixed = [identity(runtime, r) for r in requests]
             assert mixed[0][:2] == original[0][:2] and mixed[0][2] is None
-            assert mixed[1] == original[1]
+            assert mixed[1:] == original[1:]
             exercise_session(host, requests[0], "ALERA_LEGACY_RECOVERED")
             sample(host, requests, "mixed legacy and precise records", "sysinfo", target=4)
             print("PASS old record preserved and measured through safe fallback", flush=True)
@@ -334,7 +563,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable")
     parser.add_argument("--soak-seconds", type=int, default=0)
+    parser.add_argument("--session-count", type=int, default=2)
+    parser.add_argument("--churn-children", type=int, default=0)
+    parser.add_argument("--verify-cooldown", action="store_true")
+    parser.add_argument("--legacy-only", action="store_true",
+                        help="smoke test the explicit sysinfo override")
     args = parser.parse_args()
     if not 0 <= args.soak_seconds <= 300:
         parser.error("--soak-seconds must be between 0 and 300")
-    main(args.executable, args.soak_seconds)
+    if not 2 <= args.session_count <= 8:
+        parser.error("--session-count must be between 2 and 8")
+    if not 0 <= args.churn_children <= 12:
+        parser.error("--churn-children must be between 0 and 12")
+    if args.churn_children and args.soak_seconds < 10:
+        parser.error("churn requires at least 10 soak seconds")
+    if args.legacy_only and (args.verify_cooldown or args.soak_seconds or args.churn_children):
+        parser.error("--legacy-only is a short smoke test without cooldown or churn")
+    main(args.executable, args.soak_seconds, args.session_count,
+         args.churn_children, args.verify_cooldown, args.legacy_only)

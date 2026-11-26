@@ -9,6 +9,7 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
+use windows::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
 use windows::Win32::System::Threading::{
     GetActiveProcessorCount, GetActiveProcessorGroupCount, ALL_PROCESSOR_GROUPS,
@@ -17,6 +18,7 @@ use windows::Win32::System::Threading::{
 const EPOCH_SECONDS: u64 = 11_644_473_600;
 const TICKS_PER_SECOND: u64 = 10_000_000;
 const MAX_SPAN: Duration = Duration::from_millis(500);
+const MAX_COLLECTION_ATTEMPTS: usize = 4;
 const MAX_GAP: Duration = Duration::from_secs(150);
 const CLOCK_TOLERANCE_TICKS: u64 = 2_500_000; // 250 ms
 const WARMUP_SWEEPS: u32 = 3;
@@ -237,25 +239,48 @@ impl Frame {
     }
 }
 
-/// A descendant may appear or exit during a Toolhelp snapshot. Re-read
-/// the entire topology at most once; never accept an incomplete closure or
-/// weaken the authoritative creation-marker checks.
+/// A non-root PID from Toolhelp can disappear before OpenProcess or be
+/// created/recycled during the snapshot. Only retry these narrow transient
+/// cases; every attempt must independently validate the entire closure.
+fn retryable_descendant_churn(reason: Reject) -> bool {
+    match reason {
+        Reject::MetricRead {
+            failure,
+            root: false,
+        } => match failure {
+            MetricReadFailure::CreatedAfterSnapshot { .. } | MetricReadFailure::Exited => true,
+            // A nonzero PID from the snapshot may already be gone when
+            // OpenProcess runs. Never classify arbitrary access failures or
+            // an authoritative root identity as transient.
+            MetricReadFailure::Open(code) => code == ERROR_INVALID_PARAMETER.to_hresult().0,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn retry_collection<T>(
     mut attempt: impl FnMut() -> Result<T, Reject>,
-    has_budget: impl FnOnce() -> bool,
+    mut has_budget: impl FnMut() -> bool,
 ) -> Result<T, Reject> {
-    let first = attempt();
-    if matches!(
-        &first,
-        Err(Reject::MetricRead {
-            failure: MetricReadFailure::CreatedAfterSnapshot { .. } | MetricReadFailure::Exited,
-            root: false,
-        })
-    ) && has_budget()
-    {
-        return attempt();
+    let mut result = attempt();
+    for _attempt_number in 2..=MAX_COLLECTION_ATTEMPTS {
+        let Err(reason) = &result else {
+            break;
+        };
+        if !retryable_descendant_churn(*reason) || !has_budget() {
+            break;
+        }
+        #[cfg(feature = "isolated-host-conformance")]
+        tracing::debug!(
+            target: "resource_conformance",
+            attempt = _attempt_number,
+            ?reason,
+            "native topology retry"
+        );
+        result = attempt();
     }
-    first
+    result
 }
 
 pub(super) fn collect(roots: &[Root], expected_cores: usize) -> Result<Frame, Reject> {
@@ -493,6 +518,12 @@ impl BackendController {
         self.native.reset();
         if reason.is_some() && !cooling_down {
             self.retry_at = finished_at().checked_add(RETRY_DELAY);
+            #[cfg(feature = "isolated-host-conformance")]
+            tracing::debug!(
+                target: "resource_conformance",
+                ?reason,
+                "native resource retry scheduled"
+            );
         }
         let reset = !self.legacy_active;
         self.legacy_active = true;
@@ -514,7 +545,7 @@ mod tests {
     const START: u64 = (EPOCH_SECONDS + 1_000) * TICKS_PER_SECOND;
 
     #[test]
-    fn transient_descendant_churn_retries_once_within_the_original_budget() {
+    fn transient_descendant_churn_retries_within_the_original_budget_and_attempt_cap() {
         let transient = Reject::MetricRead {
             failure: MetricReadFailure::CreatedAfterSnapshot { delta_ticks: 1 },
             root: false,
@@ -533,16 +564,69 @@ mod tests {
         );
         assert_eq!(result, Ok(7));
         assert_eq!(attempts, 2);
+
+        let vanished = Reject::MetricRead {
+            failure: MetricReadFailure::Open(ERROR_INVALID_PARAMETER.to_hresult().0),
+            root: false,
+        };
+        let mut outcomes = [Err(transient), Err(vanished), Ok(9)].into_iter();
+        assert_eq!(
+            retry_collection(|| outcomes.next().unwrap(), || true),
+            Ok(9)
+        );
+        let mut budget_checks = 0;
+        let mut attempts = 0;
+        assert_eq!(
+            retry_collection::<()>(
+                || {
+                    attempts += 1;
+                    Err(vanished)
+                },
+                || {
+                    budget_checks += 1;
+                    budget_checks == 1
+                },
+            ),
+            Err(vanished)
+        );
+        assert_eq!(attempts, 2);
+        assert_eq!(budget_checks, 2);
+
+        // A later authoritative failure stops immediately, even with spare
+        // attempts and time; do not retry through it.
+        let mut outcomes = [Err(transient), Err(Reject::ShellGeneration), Ok(9)].into_iter();
+        assert_eq!(
+            retry_collection(|| outcomes.next().unwrap(), || true),
+            Err(Reject::ShellGeneration)
+        );
+        assert_eq!(outcomes.next(), Some(Ok(9)));
+
         for (reason, budget, expected_attempts) in [
-            (transient, true, 2),
+            (transient, true, MAX_COLLECTION_ATTEMPTS),
             (transient, false, 1),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::Open(ERROR_INVALID_PARAMETER.to_hresult().0),
+                    root: false,
+                },
+                true,
+                MAX_COLLECTION_ATTEMPTS,
+            ),
+            (
+                Reject::MetricRead {
+                    failure: MetricReadFailure::Open(ERROR_INVALID_PARAMETER.to_hresult().0),
+                    root: true,
+                },
+                true,
+                1,
+            ),
             (
                 Reject::MetricRead {
                     failure: MetricReadFailure::Exited,
                     root: false,
                 },
                 true,
-                2,
+                MAX_COLLECTION_ATTEMPTS,
             ),
             (
                 Reject::MetricRead {

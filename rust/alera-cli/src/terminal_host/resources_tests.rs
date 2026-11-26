@@ -2,6 +2,22 @@ use std::sync::{mpsc, Arc, Barrier};
 
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn native_windows_is_default_with_explicit_legacy_escape_hatch() {
+    use std::ffi::OsStr;
+
+    assert!(native_windows_enabled(None));
+    assert!(native_windows_enabled(Some(OsStr::new("1"))));
+    for disabled in ["0", "", "false", "unexpected"] {
+        assert!(!native_windows_enabled(Some(OsStr::new(disabled))));
+    }
+    assert!(
+        ResourceSampler::default().native.is_none(),
+        "unit tests opt in explicitly"
+    );
+}
+
 #[test]
 fn a_sample_measures_this_process_and_reports_warming_until_cpu_is_valid() {
     let mut sampler = ResourceSampler::default();

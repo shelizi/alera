@@ -178,6 +178,14 @@ pub struct ResourceSampler {
     native: Option<windows_native::NativeSampler>,
 }
 
+/// Default to native Windows accounting. Keep the existing explicit "1"
+/// and a fail-closed opt-out ("0" or any unrecognized explicit value).
+/// Tests select native explicitly, independent of their process environment.
+#[cfg(windows)]
+fn native_windows_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none_or(|value| value == std::ffi::OsStr::new("1"))
+}
+
 impl Default for ResourceSampler {
     fn default() -> Self {
         ResourceSampler {
@@ -186,9 +194,9 @@ impl Default for ResourceSampler {
             refreshes: 0,
             #[cfg(windows)]
             native: if !cfg!(test)
-                && std::env::var_os("ALERA_RESOURCE_NATIVE_WINDOWS").as_deref()
-                    == Some(std::ffi::OsStr::new("1"))
-            {
+                && native_windows_enabled(
+                    std::env::var_os("ALERA_RESOURCE_NATIVE_WINDOWS").as_deref(),
+                ) {
                 Some(windows_native::NativeSampler::default())
             } else {
                 None

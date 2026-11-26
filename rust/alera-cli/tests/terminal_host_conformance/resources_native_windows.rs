@@ -96,12 +96,14 @@ fn isolated_host(root: &Path, token: &str, native: bool) -> (HostGuard, u16) {
         "--detached-session-shutdown-delay-seconds",
         "60",
     ]);
+    // Verify the real default, not an explicitly enabled test override.
+    if native {
+        command.env_remove("ALERA_RESOURCE_NATIVE_WINDOWS");
+    } else {
+        command.env("ALERA_RESOURCE_NATIVE_WINDOWS", "0");
+    }
     command
         .env("ALERA_TEST_ISOLATED_HOST", "1")
-        .env(
-            "ALERA_RESOURCE_NATIVE_WINDOWS",
-            if native { "1" } else { "0" },
-        )
         .env(
             "ALERA_HOST_LOG",
             "warn,resource_conformance=debug,alera::terminal_host::resources::windows_native=debug",
