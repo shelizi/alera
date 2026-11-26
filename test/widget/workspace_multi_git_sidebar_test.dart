@@ -221,7 +221,7 @@ void main() {
       );
       expect(find.textContaining('main · 1 files'), findsNWidgets(3));
       final queried = git.calls
-          .where((call) => call.method == 'status')
+          .where((call) => call.method == 'diffChangedPaths')
           .map((call) => call.args['path'])
           .toSet();
       expect(queried, <Object?>{
@@ -229,6 +229,7 @@ void main() {
         p.join(workspacePath, 'frontend'),
         p.join(workspacePath, 'backend'),
       });
+      expect(git.calls.where((call) => call.method == 'status'), isEmpty);
       await tester.tap(
         find.byKey(const ValueKey<String>('git-repo-overview:backend')),
       );

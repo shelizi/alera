@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:alera/src/features/workbench/application/workspace_git_repository_change_count.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -103,7 +104,7 @@ final class WorkspaceGitRepositoryScanner {
           directory: child,
           relativePath: current.relativePath.isEmpty
               ? name
-              : current.relativePath + '/' + name,
+              : '${current.relativePath}/$name',
           depth: current.depth + 1,
         ));
       }
@@ -151,7 +152,7 @@ class const GitRepositoryOverviewSummary({
 Stream<Map<String, GitRepositoryOverviewSummary>> loadGitRepositoryOverview({
   required String workspacePath,
   required Future<List<String>> roots,
-  required Future<GitStatusResult> Function(String path) loadStatus,
+  required Future<int> Function(String path) loadChangedFileCount,
   required Future<GitRepositoryState> Function(String path) loadRepositoryState,
   int batchSize = 3,
   bool Function()? isCancelled,
@@ -172,19 +173,16 @@ Stream<Map<String, GitRepositoryOverviewSummary>> loadGitRepositoryOverview({
             : p.joinAll(<String>[workspacePath, ...relativeRoot.split('/')]);
         try {
           final values = await Future.wait<Object>(<Future<Object>>[
-            loadStatus(path),
+            loadChangedFileCount(path),
             loadRepositoryState(path),
           ]);
-          final status = values[0] as GitStatusResult;
+          final changedFiles = values[0] as int;
           final repo = values[1] as GitRepositoryState;
           return MapEntry(
             relativeRoot,
             GitRepositoryOverviewSummary(
               branch: repo.branch,
-              changedFiles: status.entries
-                  .map((entry) => entry.path)
-                  .toSet()
-                  .length,
+              changedFiles: changedFiles,
               ahead: repo.ahead,
               behind: repo.behind,
               conflicts: repo.hasConflicts,
@@ -222,7 +220,11 @@ final workspaceGitRepositoryOverviewProvider = StreamProvider.autoDispose
       return loadGitRepositoryOverview(
         workspacePath: workspacePath,
         roots: roots,
-        loadStatus: backend.status,
+        loadChangedFileCount: (path) => loadWorkspaceGitRepositoryChangeCount(
+          path: path,
+          loadChangedPaths: backend.diffChangedPaths,
+          loadStatus: backend.status,
+        ),
         loadRepositoryState: backend.repositoryState,
         isCancelled: () => disposed,
       );

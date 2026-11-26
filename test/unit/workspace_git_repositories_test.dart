@@ -2,9 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:alera/src/features/workbench/application/workspace_git_repositories.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_repository_change_count.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+
+import 'fake_git_backend.dart';
 
 void main() {
   late Directory root;
@@ -97,20 +102,12 @@ void main() {
         workspacePath: root.path,
         roots: Future.value(<String>['', 'frontend', 'backend', 'tools/cli']),
         batchSize: 2,
-        loadStatus: (path) async {
+        loadChangedFileCount: (path) async {
           requests.add(path);
           final relative = p.relative(path, from: root.path);
           final gate = waiting.putIfAbsent(relative, Completer<void>.new);
           await gate.future;
-          return GitStatusResult(
-            entries: <GitChangeEntry>[
-              GitChangeEntry(
-                path: relative == '.' ? 'README.md' : 'lib/main.dart',
-                area: .unstaged,
-                status: .modified,
-              ),
-            ],
-          );
+          return 1;
         },
         loadRepositoryState: (path) async {
           final relative = p.relative(path, from: root.path);
@@ -153,9 +150,9 @@ void main() {
         workspacePath: root.path,
         roots: Future.value(<String>['ok', 'broken', 'skipped']),
         batchSize: 2,
-        loadStatus: (path) async {
+        loadChangedFileCount: (path) async {
           if (path.endsWith('broken')) throw StateError('bad repository');
-          return const GitStatusResult(entries: <GitChangeEntry>[]);
+          return 0;
         },
         loadRepositoryState: (path) async =>
             const GitRepositoryState(branch: 'main', ahead: 1),
@@ -171,15 +168,149 @@ void main() {
         workspacePath: root.path,
         roots: Future.value(<String>['a', 'b']),
         batchSize: 1,
-        loadStatus: (_) async {
+        loadChangedFileCount: (_) async {
           canceled = true;
-          return const GitStatusResult(entries: <GitChangeEntry>[]);
+          return 0;
         },
         loadRepositoryState: (_) async =>
             const GitRepositoryState(branch: 'main'),
         isCancelled: () => canceled,
       ).toList();
       expect(stopped, isEmpty);
+    },
+  );
+
+  test(
+    'overview count uses lightweight paths and falls back only for null',
+    () async {
+      var lightweightCalls = 0;
+      var fullCalls = 0;
+      List<String>? changed = <String>['tracked.txt', 'new.txt'];
+      Future<int> count() => loadWorkspaceGitRepositoryChangeCount(
+        path: root.path,
+        loadChangedPaths: (path) async {
+          expect(path, root.path);
+          lightweightCalls++;
+          return changed;
+        },
+        loadStatus: (path) async {
+          expect(path, root.path);
+          fullCalls++;
+          return const GitStatusResult(
+            entries: [
+              GitChangeEntry(
+                path: 'modules/sample',
+                area: .staged,
+                status: .modified,
+              ),
+              GitChangeEntry(
+                path: 'modules/sample',
+                area: .unstaged,
+                status: .modified,
+              ),
+              GitChangeEntry(
+                path: 'other.txt',
+                area: .untracked,
+                status: .untracked,
+              ),
+            ],
+          );
+        },
+      );
+
+      expect(await count(), 2);
+      changed = <String>[];
+      expect(await count(), 0);
+      expect(fullCalls, 0);
+      changed = null;
+      expect(await count(), 2);
+      expect(fullCalls, 1);
+      changed = ['latest.txt'];
+      expect(await count(), 1);
+      expect(lightweightCalls, 4);
+      expect(fullCalls, 1);
+    },
+  );
+
+  test(
+    'overview does not repeat a failed authoritative lightweight query',
+    () async {
+      var fullCalls = 0;
+      final error = StateError('status failed');
+      await expectLater(
+        loadWorkspaceGitRepositoryChangeCount(
+          path: root.path,
+          loadChangedPaths: (_) async => throw error,
+          loadStatus: (_) async {
+            fullCalls++;
+            return const GitStatusResult(entries: []);
+          },
+        ),
+        throwsA(same(error)),
+      );
+      expect(fullCalls, 0);
+    },
+  );
+
+  test(
+    'overview provider uses lightweight query for all 100 repository roots',
+    () async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: [
+            GitChangeEntry(
+              path: 'tracked.txt',
+              area: .staged,
+              status: .modified,
+            ),
+            GitChangeEntry(
+              path: 'tracked.txt',
+              area: .unstaged,
+              status: .modified,
+            ),
+            GitChangeEntry(
+              path: 'new.txt',
+              area: .untracked,
+              status: .untracked,
+            ),
+          ],
+        );
+      final roots = List<String>.generate(100, (i) => 'repo-$i');
+      final container = ProviderContainer(
+        overrides: [
+          gitBackendProvider.overrideWithValue(backend),
+          workspaceGitRepositoriesProvider(root.path)
+              .overrideWith((ref) async => roots),
+        ],
+      );
+      addTearDown(container.dispose);
+      final complete = Completer<Map<String, GitRepositoryOverviewSummary>>();
+      final provider = workspaceGitRepositoryOverviewProvider(root.path);
+      final subscription = container.listen(provider, (_, next) {
+        if (next.hasError && !complete.isCompleted) {
+          complete.completeError(next.error!, next.stackTrace);
+        }
+        final data = next.value;
+        if (data != null &&
+            data.length == roots.length &&
+            !complete.isCompleted) {
+          complete.complete(data);
+        }
+      });
+      addTearDown(subscription.close);
+      final summaries = await complete.future;
+      expect(summaries.length, 100);
+      expect(
+        summaries.values.every(
+          (summary) => summary.available && summary.changedFiles == 2,
+        ),
+        isTrue,
+      );
+      expect(
+        backend.calls.where((call) => call.method == 'diffChangedPaths'),
+        hasLength(100),
+      );
+      expect(backend.calls.where((call) => call.method == 'status'), isEmpty);
     },
   );
 
