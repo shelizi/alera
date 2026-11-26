@@ -28,7 +28,11 @@ void main() {
     status: WorkspaceStatus.active,
   );
 
-  WorkspaceTabRecord tab(String id, String workspaceId) => WorkspaceTabRecord(
+  WorkspaceTabRecord tab(
+    String id,
+    String workspaceId, {
+    bool pinned = false,
+  }) => WorkspaceTabRecord(
     id: id,
     workspaceId: workspaceId,
     kind: WorkspaceTabKind.terminal,
@@ -37,6 +41,7 @@ void main() {
     updatedAt: now,
     payload: <String, Object?>{
       workspaceTabTerminalSessionIdPayloadKey: 'session-$id',
+      if (pinned) workspaceTabPinnedPayloadKey: true,
     },
   );
 
@@ -46,6 +51,7 @@ void main() {
     AgentStatusState state = AgentStatusState.working,
     bool? interrupted,
     List<Object?>? timeline,
+    DateTime? updatedAt,
   }) => AgentStatusEntry(
     terminalSessionId: 'session-$id',
     workspaceId: workspaceId,
@@ -54,7 +60,7 @@ void main() {
     state: state,
     interrupted: interrupted,
     prompt: 'Windows IME repair',
-    updatedAt: now,
+    updatedAt: updatedAt ?? now,
     stateStartedAt: now,
     contextOverview: <String, dynamic>{
       'goal': 'Fix Windows IME',
@@ -346,6 +352,48 @@ void main() {
     );
     expect(reused.first.rows.map((row) => row.tab.id), ['d', 'b']);
     expect(reused.last.rows.map((row) => row.tab.id), ['c', 'a']);
+  });
+
+  test('pinned Agent cards come first only inside their own status column', () {
+    final state = WorkbenchState(
+      projects: <Project>[project('alera')],
+      workspacesByProject: <String, List<Workspace>>{
+        'alera': <Workspace>[workspace('wt', 'alera')],
+      },
+      tabsByWorkspace: <String, List<WorkspaceTabRecord>>{
+        'wt': <WorkspaceTabRecord>[
+          tab('new', 'wt'),
+          tab('pinned', 'wt', pinned: true),
+          tab('waiting', 'wt'),
+        ],
+      },
+    );
+    final rows = projectGlobalAgentLiveRows(state, <String, AgentStatusEntry>{
+      'session-new': status(
+        'new',
+        'wt',
+        updatedAt: now.add(const Duration(hours: 3)),
+      ),
+      'session-pinned': status('pinned', 'wt', updatedAt: now),
+      'session-waiting': status(
+        'waiting',
+        'wt',
+        state: AgentStatusState.waiting,
+      ),
+    });
+    final pinned = groupGlobalAgentLiveRows(rows, pinnedFirst: true);
+    expect(pinned.length, 2);
+    expect(pinned.first.group, GlobalAgentDashboardGroup.waiting);
+    expect(pinned.last.group, GlobalAgentDashboardGroup.working);
+    expect(pinned.last.rows.map((row) => row.tab.id), ['pinned', 'new']);
+    final cached = groupGlobalAgentLiveRows(
+      rows,
+      alreadySorted: true,
+      pinnedFirst: true,
+    );
+    expect(cached.last.rows.map((row) => row.tab.id), ['pinned', 'new']);
+    final normal = groupGlobalAgentLiveRows(rows);
+    expect(normal.last.rows.map((row) => row.tab.id), ['new', 'pinned']);
   });
 
   test('rejects stale and foreign workspace-tab Host identity', () {

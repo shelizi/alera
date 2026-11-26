@@ -15,3 +15,18 @@ class GlobalAgentDashboardNavigation extends Notifier<bool> {
 
   void close() => state = false;
 }
+
+/// A live inspector borrows the existing renderer of exactly one PTY.
+final globalAgentInspectionOpenProvider =
+    NotifierProvider<GlobalAgentInspectionOpen, String?>(
+      GlobalAgentInspectionOpen.new,
+    );
+
+class GlobalAgentInspectionOpen extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void open(String sessionId) => state = sessionId;
+
+  void close() => state = null;
+}

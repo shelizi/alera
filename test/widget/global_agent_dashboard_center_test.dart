@@ -40,7 +40,7 @@ void main() {
   testWidgets(
     'live dashboard reorders keyed cards without rebuilding unrelated content',
     (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1600, 1100));
+      await tester.binding.setSurfaceSize(const Size(1600, 1600));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final now = DateTime.utc(2026, 11, 24);
       final project = Project(
@@ -172,6 +172,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Needs You (1)'));
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const PageStorageKey<String>('agent-column-waiting')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const PageStorageKey<String>('agent-column-working')),
+        findsNothing,
+      );
       expect(card('a'), findsOneWidget);
       expect(card('b'), findsNothing);
 
@@ -180,6 +188,14 @@ void main() {
       await tester.tap(find.text('Show hidden cards (1)'));
       await tester.pumpAndSettle();
       expect(action('a', 'Show card'), findsOneWidget);
+      expect(
+        tester.getTopLeft(card('a')).dx,
+        lessThan(tester.getTopLeft(card('b')).dx),
+      );
+      expect(
+        tester.getTopLeft(card('c')).dx,
+        tester.getTopLeft(card('b')).dx,
+      );
 
       // Search changes visibility without changing the cached inventory.
       await tester.enterText(find.byType(TextField).first, 'task b');
