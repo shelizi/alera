@@ -114,7 +114,7 @@ pub(super) async fn preflight_runtime_mutation(
     if let RuntimeMutationRequest::RemoveManagedWorkspace { request } = request {
         validate_managed_workspace_removal(runtime_store, request)
             .await
-            .map_err(runtime_store_error)?;
+            .map_err(managed_workspace_removal_error)?;
     }
     Ok(())
 }
@@ -177,7 +177,7 @@ pub(super) async fn run_runtime_mutation(
                 let workspace_id = request.id.clone();
                 let workspace = remove_managed_workspace(&runtime_store, request)
                     .await
-                    .map_err(runtime_store_error)?;
+                    .map_err(managed_workspace_removal_error)?;
                 let project_id = workspace.project_id.clone();
                 Ok(RuntimeMutationCompletion {
                     response: serde_json::to_value(workspace).map_err(runtime_store_error)?,
@@ -405,6 +405,11 @@ async fn workspace_ids_for_project(
         .into_iter()
         .map(|workspace| workspace.id)
         .collect())
+}
+
+fn managed_workspace_removal_error(error: anyhow::Error) -> HostError {
+    // Anyhow's normal Display hides the underlying Git/filesystem failure.
+    HostError::state(format!("{error:#}"))
 }
 
 fn runtime_store_error(error: impl std::fmt::Display) -> HostError {

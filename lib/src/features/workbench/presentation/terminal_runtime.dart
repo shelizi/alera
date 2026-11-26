@@ -97,10 +97,6 @@ abstract class TerminalSessionHandle extends ChangeNotifier {
   /// Test and synthetic handles may omit it when they do not own a PTY.
   String? get terminalSessionId => null;
 
-  /// Saved provider identity for the optional read-only native conversation.
-  /// Never infer this from Terminal titles or raw PTY text.
-  String? get nativeHistoryProvider => null;
-
   String get displayTitle;
 
   /// Title-only notifications.

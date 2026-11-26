@@ -211,18 +211,6 @@ class _XtermTerminalSessionHandle(
   void cancelDeferredFlush() => _pump.pipeline.cancelDeferredFlush();
 
   @override
-  String? get nativeHistoryProvider {
-    final payload = _tab.payload;
-    final snapshot = payload['agentProfileLaunchV1'];
-    final title = payload['agentTitleStateV1'];
-    final agent =
-        (snapshot is Map ? snapshot['agentType'] : null) ??
-        (title is Map ? title['agent'] : null) ??
-        payload['agentType'];
-    return agent == 'claude' || agent == 'codex' ? agent as String : null;
-  }
-
-  @override
   String get displayTitle {
     if (_tab.hasManualTitle) {
       return _tab.title;

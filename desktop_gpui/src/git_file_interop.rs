@@ -4,6 +4,24 @@ use crate::git_sidebar_layout::{FolderKey, GitSidebarSelectionItem};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Copy and paste must use a current visible selection. A filtered or
+/// deselected anchor must not become an invisible paste destination.
+pub fn preferred_visible_selection<'a>(
+    anchor: Option<&GitSidebarSelectionItem>,
+    selected_files: &HashSet<GitChangeRow>,
+    selected_folders: &HashSet<FolderKey>,
+    visible: &'a [GitSidebarSelectionItem],
+) -> Option<&'a GitSidebarSelectionItem> {
+    let is_selected = |item: &GitSidebarSelectionItem| match item {
+        GitSidebarSelectionItem::File(file) => selected_files.contains(file),
+        GitSidebarSelectionItem::Folder(folder) => selected_folders.contains(folder),
+    };
+    visible
+        .iter()
+        .find(|item| Some(*item) == anchor && is_selected(item))
+        .or_else(|| visible.iter().find(|item| is_selected(item)))
+}
+
 /// Git index entries are not filesystem objects: operations always use the
 /// working tree. A selected file or folder operates on selected visible rows
 /// (including mixed selections), removes duplicate staged/unstaged paths, and
@@ -54,6 +72,35 @@ mod tests {
             label: "M",
             area,
         }
+    }
+
+    #[test]
+    fn keyboard_target_prefers_visible_selected_anchor_and_never_hidden_rows() {
+        let first = row("first.rs", GitChangeArea::Changes);
+        let hidden = row("hidden.rs", GitChangeArea::Changes);
+        let folder = (None, PathBuf::from("folder"));
+        let first_item = GitSidebarSelectionItem::File(first.clone());
+        let hidden_item = GitSidebarSelectionItem::File(hidden.clone());
+        let folder_item = GitSidebarSelectionItem::Folder(folder.clone());
+        let visible = vec![first_item.clone(), folder_item.clone()];
+        let files = HashSet::from([first, hidden]);
+        let folders = HashSet::from([folder]);
+        assert_eq!(
+            preferred_visible_selection(Some(&folder_item), &files, &folders, &visible),
+            Some(&folder_item)
+        );
+        assert_eq!(
+            preferred_visible_selection(Some(&hidden_item), &files, &folders, &visible),
+            Some(&first_item)
+        );
+        assert_eq!(
+            preferred_visible_selection(Some(&first_item), &HashSet::new(), &folders, &visible),
+            Some(&folder_item)
+        );
+        assert_eq!(
+            preferred_visible_selection(Some(&hidden_item), &files, &folders, &[]),
+            None
+        );
     }
 
     #[test]

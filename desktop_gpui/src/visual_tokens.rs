@@ -80,26 +80,6 @@ pub fn usable_workbench_height(
         .max(0.0)
 }
 
-/// Inline provider history is outside the live Terminal grid but inside
-/// the same GPUI pane. Reserve its exact rendered heights before deriving
-/// PTY rows, otherwise expanding history clips the lower Terminal rows.
-pub fn inline_original_terminal_reserved_height(
-    has_messages: bool,
-    has_older_page: bool,
-    collapsed: bool,
-) -> f32 {
-    if !has_messages && !has_older_page {
-        return 0.0;
-    }
-    // 1px border + 30px title + (195px message list) + 28px footer.
-    1.0 + 30.0
-        + if collapsed {
-            0.0
-        } else {
-            (if has_messages { 195.0 } else { 0.0 }) + 28.0
-        }
-}
-
 /// In a side-by-side split both Tab strips sit above the panes. In a
 /// stacked split the secondary pane owns an additional 44px (or 88px)
 /// header inside its half of the content region.
@@ -1048,21 +1028,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_history_reservation_prevents_live_pty_rows_from_hiding() {
-        assert_eq!(inline_original_terminal_reserved_height(false, false, false), 0.0);
-        assert_eq!(inline_original_terminal_reserved_height(false, true, false), 59.0);
-        assert_eq!(inline_original_terminal_reserved_height(true, false, true), 31.0);
-        assert_eq!(inline_original_terminal_reserved_height(true, true, false), 254.0);
-        let full_height = 540.0;
-        let terminal_height =
-            (full_height - inline_original_terminal_reserved_height(true, true, false)).max(0.0);
-        let (_, rows_with_history) =
-            crate::terminal::estimate_terminal_viewport(800.0, terminal_height, 14.0)
-                .expect("expanded history still leaves terminal visible");
-        let (_, rows_without_history) =
-            crate::terminal::estimate_terminal_viewport(800.0, full_height, 14.0)
-                .expect("unexpanded terminal");
-        assert!(rows_with_history < rows_without_history);
+    fn terminal_panes_use_full_viewport_without_original_conversation_panel() {
+        let source = include_str!("main.rs");
+        assert!(!source.contains("native-original-conversation-"));
+        assert!(!source.contains("inline_original"));
+        assert!(source.contains("primary_width,\n            primary_height,"));
+        assert!(source.contains("secondary_terminal_render_height(primary_height, split_height, secondary_two_rows)"));
     }
 
     #[test]

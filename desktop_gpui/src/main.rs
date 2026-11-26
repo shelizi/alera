@@ -80,7 +80,7 @@ use alera_gpui_desktop::git_branch_compare::{
     CompareDirection,
 };
 use alera_gpui_desktop::git_compare_tabs::GitFileCompareTabs;
-use alera_gpui_desktop::git_file_interop::selected_worktree_paths;
+use alera_gpui_desktop::git_file_interop::{preferred_visible_selection, selected_worktree_paths};
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_render::{PreparedGitGraph, PreparedGitGraphRow};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
@@ -1291,13 +1291,6 @@ struct Workbench {
     global_agent_transcript_busy: bool,
     global_agent_transcript_request: u64,
     global_agent_transcript_status: String,
-    /// Source-verified original conversations stay in their own Terminal Tab,
-    /// separate from both the Dashboard panel and interactive PTY emulator.
-    native_inline_original: HashMap<
-        (String, String, String, String),
-        native_global_agents_ui::InlineOriginalConversation,
-    >,
-    native_inline_original_request: u64,
     global_agent_target: Option<native_global_agents_ui::GlobalAgentPromptTarget>,
     /// Separate Host-verified VT inspector; never changes active Workspace.
     global_agent_inspector: Option<native_global_agents_ui::GlobalAgentInspectorState>,
@@ -2710,6 +2703,27 @@ impl Workbench {
         self.git_selection_anchor = Some(row);
     }
 
+    fn focus_git_context_row(
+        &mut self,
+        item: GitSidebarSelectionItem,
+        visible: &[GitSidebarSelectionItem],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !visible.contains(&item) {
+            return;
+        }
+        // Match Classic: right-clicking a selected row preserves the batch.
+        // Right-clicking an unselected row selects that item only.
+        if self.git_sidebar_item_selected(&item) {
+            self.git_selection_anchor = Some(item);
+        } else {
+            self.select_git_sidebar_item(item, visible, false, false);
+        }
+        window.focus(&self.git_keyboard_focus, cx);
+        cx.notify();
+    }
+
     /// Git status rows reference worktree files, not immutable staged blobs.
     /// Recompute visibility and revalidate paths before sharing Explorer's
     /// non-overwriting, workspace-bound Copy/Cut clipboard.
@@ -2731,15 +2745,13 @@ impl Workbench {
         let row = clicked
             .filter(|item| visible.contains(item))
             .or_else(|| {
-                self.git_selection_anchor
-                    .clone()
-                    .filter(|item| visible.contains(item) && self.git_sidebar_item_selected(item))
-            })
-            .or_else(|| {
-                visible
-                    .iter()
-                    .find(|item| self.git_sidebar_item_selected(item))
-                    .cloned()
+                preferred_visible_selection(
+                    self.git_selection_anchor.as_ref(),
+                    &self.git_selected_changes,
+                    &self.git_selected_folders,
+                    &visible,
+                )
+                .cloned()
             });
         let Some(row) = row else {
             self.model
@@ -2822,10 +2834,21 @@ impl Workbench {
     }
 
     fn paste_git_at_selection(&mut self, cx: &mut Context<Self>) {
-        let hovered = self
-            .git_selection_anchor
+        let mut options = self.git_sidebar_options.clone();
+        options.filter = self.git_filter_input.read(cx).query().to_owned();
+        let visible = self
+            .git_snapshot
             .as_ref()
-            .filter(|row| self.git_sidebar_item_selected(row))
+            .map(|snapshot| {
+                layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_items()
+            })
+            .unwrap_or_default();
+        let hovered = preferred_visible_selection(
+            self.git_selection_anchor.as_ref(),
+            &self.git_selected_changes,
+            &self.git_selected_folders,
+            &visible,
+        )
             .map(|row| match row {
                 GitSidebarSelectionItem::Folder((_, path)) => self.model.root().join(path),
                 GitSidebarSelectionItem::File(file) => self
@@ -6292,6 +6315,7 @@ impl Workbench {
     fn open_global_agent_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.global_agent_maximized = true;
         self.global_agent_history_open = true;
+        self.global_agent_history_filters_expanded = false;
         self.explorer_context_menu = None;
         window.focus(
             &self.global_agent_history_input.read(cx).focus_handle(cx),
@@ -7499,8 +7523,6 @@ impl Workbench {
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
-        self.native_inline_original.clear();
-        self.native_inline_original_request = self.native_inline_original_request.wrapping_add(1);
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
         self.terminals
             .set_scrollback_lines(self.native_settings.terminal_scrollback_lines as usize);
@@ -9153,8 +9175,6 @@ impl Workbench {
                             });
                             view.restore_terminal_layout_from_host(cx);
                             view.reconcile_current_workspace_sessions(cx);
-                            view.maybe_restore_inline_original(PaneSlot::Primary, cx);
-                            view.maybe_restore_inline_original(PaneSlot::Secondary, cx);
                             view.refresh_host_tab_pins(cx);
                             // Direct Agent PTYs may start before Hooks report
                             // presence. Their typed Host create reply was
@@ -9368,7 +9388,6 @@ impl Workbench {
         self.mixed_tabs.select(&identity);
         self.save_mixed_pane_layout(cx);
         self.refresh_terminal_split_output(cx);
-        self.maybe_restore_inline_original(pane, cx);
         // Explicit Attach can happen just after the last Host pin read.
         // Query its authoritative state now rather than showing a default
         // unpinned chip until the next periodic session poll.
@@ -10759,8 +10778,6 @@ impl Workbench {
             self.git_graph_center_open = true;
         }
         self.save_mixed_pane_layout(cx);
-        self.maybe_restore_inline_original(PaneSlot::Primary, cx);
-        self.maybe_restore_inline_original(PaneSlot::Secondary, cx);
     }
 
     /// Both Classic workbench panes use this same chip behavior. Only
@@ -11291,7 +11308,6 @@ impl Workbench {
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
                     self.refresh_terminal_output(cx);
-                    self.maybe_restore_inline_original(self.mixed_panes.focused_pane(), cx);
                     if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
                         window.focus(&self.secondary_terminal_input.read(cx).focus_handle(cx), cx);
                     } else {
@@ -13248,21 +13264,17 @@ impl Render for Workbench {
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
         let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
         let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
-        // Reserve the inline Claude/Codex history panel before computing PTY rows.
-        let primary_terminal_area_height =
-            (primary_height - self.inline_original_panel_height_px(PaneSlot::Primary)).max(0.0);
         // The inner Terminal split further reduces the primary VT viewport.
         // Reuse these *visible* dimensions for both PTY rows and the Windows
         // IME cursor anchor; otherwise a candidate popup can cross the seam.
         let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size(
             primary_width,
-            primary_terminal_area_height,
+            primary_height,
             terminal_split_exists,
             terminal_split_horizontal,
         );
         let secondary_workbench_height =
-            (secondary_terminal_render_height(primary_height, split_height, secondary_two_rows)
-                - self.inline_original_panel_height_px(PaneSlot::Secondary)).max(0.0);
+            secondary_terminal_render_height(primary_height, split_height, secondary_two_rows);
         // Keep Windows Zhuyin candidate popups beside the visible VT cursor.
         // The 1px GPUI TextInput still captures composition; only its local
         // visual anchor moves, without altering Host PTY geometry.
@@ -13323,7 +13335,7 @@ impl Render for Workbench {
                         let width =
                             primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
                         let height = inner_secondary_terminal_render_height(
-                            primary_terminal_area_height,
+                            primary_height,
                             terminal_split_horizontal,
                         );
                         if let Some((cols, rows)) = estimate_terminal_viewport_with_cell_metrics(
@@ -15467,6 +15479,8 @@ impl Render for Workbench {
                                                 let folder_for_click = key.clone();
                                                 let folder_for_toggle = key.clone();
                                                 let folder_for_menu = key.clone();
+                                                let folder_for_context = key.clone();
+                                                let folder_context_visible = Arc::clone(&git_visible_items);
                                                 let folder_visible = Arc::clone(&git_visible_items);
                                                 let folder_drag = ExplorerDragBatch::for_row(
                                                     &git_drag_root, git_drag_generation,
@@ -15527,6 +15541,9 @@ impl Render for Workbench {
                                                         cx.stop_propagation();
                                                         this.import_explorer_drop(paths.paths().to_vec(), Some(external_folder_target.clone()), cx);
                                                     }))
+                                                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, window, cx| {
+                                                        this.focus_git_context_row(GitSidebarSelectionItem::Folder(folder_for_context.clone()), folder_context_visible.as_ref(), window, cx);
+                                                    }))
                                                     .context_menu(Self::kit_git_folder_menu(cx.entity().downgrade(), folder_for_menu))
                                                     .into_any_element();
                                             }
@@ -15536,6 +15553,8 @@ impl Render for Workbench {
                                         let clicked_row = change.clone();
                                         let preview_area = change.area;
                                         let menu_row = change.clone();
+                                        let context_row = change.clone();
+                                        let visible_for_context = Arc::clone(&git_visible_items);
                                         let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
                                             self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
                                         let visible_for_click = Arc::clone(&git_visible_items);
@@ -15632,6 +15651,9 @@ impl Render for Workbench {
                                                 .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
                                                     cx.stop_propagation();
                                                     this.import_explorer_drop(paths.paths().to_vec(), Some(external_file_drop_parent.clone()), cx);
+                                                }))
+                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, window, cx| {
+                                                    this.focus_git_context_row(GitSidebarSelectionItem::File(context_row.clone()), visible_for_context.as_ref(), window, cx);
                                                 }))
                                                 .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
                                             .when(can_stage, |row| row.child(sidebar_icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
@@ -16551,25 +16573,6 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(
-                                        icon_button(
-                                            "native-original-conversation-primary",
-                                            UiIcon::History,
-                                            "Original Claude/Codex conversation (read only)",
-                                            false,
-                                        )
-                                        .when(
-                                            !mixed_primary_active.as_ref().is_some_and(|id|
-                                                matches!(id, WorkbenchTabIdentity::Host(_))
-                                            ),
-                                            |button| button.hidden(),
-                                        )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.open_original_conversation_for_pane(
-                                                PaneSlot::Primary, cx,
-                                            );
-                                        })),
-                                    )
-                                    .child(
                                         icon_button("native-terminal-history-up-primary", UiIcon::ChevronUp,
                                             tr(self.settings_menu_locale, "Scroll terminal history up one page (Shift+PageUp)"), false)
                                             .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
@@ -16707,14 +16710,6 @@ impl Render for Workbench {
                                                                 }
                                                             })
                                                     })
-                                                    .child(
-                                                        icon_button("native-original-conversation-secondary", UiIcon::History,
-                                                            "Original Claude/Codex conversation for second pane (read only)", false)
-                                                            .when(mixed_secondary_host.is_none(), |button| button.hidden())
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.open_original_conversation_for_pane(PaneSlot::Secondary, cx);
-                                                            })),
-                                                    )
                                                     .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
                                                             tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
@@ -16911,7 +16906,6 @@ impl Render for Workbench {
                                     .bg(rgb(terminal_theme_bg))
                                     // Provider-native history is visible within this exact
                                     // saved Tab above the current, writable Terminal PTY.
-                                    .child(self.render_inline_original(PaneSlot::Primary, cx))
                                     .child(
                                         div()
                                             .flex_1()
@@ -17308,14 +17302,6 @@ impl Render for Workbench {
                                                             })
                                                     })
                                                     .child(
-                                                        icon_button("native-original-conversation-secondary", UiIcon::History,
-                                                            "Original Claude/Codex conversation for second pane (read only)", false)
-                                                            .when(mixed_secondary_host.is_none(), |button| button.hidden())
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.open_original_conversation_for_pane(PaneSlot::Secondary, cx);
-                                                            })),
-                                                    )
-                                                    .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
                                                             tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
                                                             .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
@@ -17343,7 +17329,6 @@ impl Render for Workbench {
                                             )
                                                     .into_any_element()
                                             })
-                                            .child(self.render_inline_original(PaneSlot::Secondary, cx))
                                             .child(if graph_in_secondary {
                                                 self.render_center_git_graph(window, cx)
                                             } else if let Some(instance) = conflict_in_secondary {
@@ -19344,8 +19329,6 @@ fn main() {
                             global_agent_transcript_busy: false,
                             global_agent_transcript_request: 0,
                             global_agent_transcript_status: String::new(),
-                            native_inline_original: HashMap::new(),
-                            native_inline_original_request: 0,
                             global_agent_target: None,
                             global_agent_inspector: None,
                             global_agent_inspector_epoch: 0,

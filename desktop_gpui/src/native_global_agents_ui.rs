@@ -1106,18 +1106,6 @@ pub(super) struct OriginalConversationMessage {
     timestamp: Option<String>,
 }
 
-/// Automatically displayed above a restored native Terminal's live PTY.
-/// Each triple refers to the exact authenticated original Host Tab, never a
-/// title, global active Agent or guessed provider account.
-#[derive(Clone, Debug, Default)]
-pub(super) struct InlineOriginalConversation {
-    pub(super) messages: Vec<OriginalConversationMessage>,
-    pub(super) before: Option<u64>,
-    pub(super) loading: bool,
-    pub(super) collapsed: bool,
-    pub(super) request: u64,
-}
-
 fn parse_original_conversation_page(
     reply: &serde_json::Value,
     previous_before: Option<u64>,
@@ -1543,384 +1531,6 @@ enum GlobalAgentCreateReply {
 }
 
 impl Workbench {
-    /// Resolve the pane's exact live Host Tab. The terminal history overlay
-    /// never infers source ownership from a title, a handle alone, or the
-    /// globally active TerminalDock tab when two panes are open.
-    fn inline_original_target(&self, pane: PaneSlot) -> Option<GlobalAgentPromptTarget> {
-        if self.terminals.session_list_is_stale() {
-            return None;
-        }
-        let WorkbenchTabIdentity::Host(context) = self.mixed_panes.active_in(pane)? else {
-            return None;
-        };
-        let index = self.terminals.index_for_context(context)?;
-        let tab = self.terminals.tabs.get(index)?;
-        let session = self.terminals.sessions.iter().find(|session| {
-            session.running
-                && session.handle == tab.handle
-                && session.workspace_id == tab.workspace_id
-                && session.tab_id == tab.tab_id
-                && matches!(session.agent_type.as_deref(), Some("claude" | "codex"))
-        })?;
-        Some(GlobalAgentPromptTarget {
-            handle: session.handle.clone(),
-            workspace_id: session.workspace_id.clone(),
-            tab_id: session.tab_id.clone(),
-            agent_type: session.agent_type.clone().unwrap_or_default(),
-        })
-    }
-
-    /// Read the same panel visibility as render_inline_original, so both
-    /// main-pane and mixed secondary PTY geometry exclude expanded history.
-    pub(super) fn inline_original_panel_height_px(&self, pane: PaneSlot) -> f32 {
-        let Some(target) = self.inline_original_target(pane) else {
-            return 0.0;
-        };
-        let key = (
-            target.handle,
-            target.workspace_id,
-            target.tab_id,
-            target.agent_type,
-        );
-        let Some(state) = self.native_inline_original.get(&key) else {
-            return 0.0;
-        };
-        alera_gpui_desktop::visual_tokens::inline_original_terminal_reserved_height(
-            !state.messages.is_empty(),
-            state.before.is_some(),
-            state.collapsed,
-        )
-    }
-
-    /// An ordinary saved Claude Tab contains a native UUID, but the app-level
-    /// Terminal PTY only retains bounded stream output. Read the original
-    /// provider messages on first display *inside* this same Tab. This does
-    /// not start, interrupt, resize, attach or write to the live Agent.
-    pub(super) fn maybe_restore_inline_original(&mut self, pane: PaneSlot, cx: &mut Context<Self>) {
-        self.load_inline_original(pane, false, false, cx);
-    }
-
-    fn load_inline_original(
-        &mut self,
-        pane: PaneSlot,
-        older: bool,
-        refresh: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(target) = self.inline_original_target(pane) else {
-            return;
-        };
-        let key = (
-            target.handle.clone(),
-            target.workspace_id.clone(),
-            target.tab_id.clone(),
-            target.agent_type.clone(),
-        );
-        if let Some(current) = self.native_inline_original.get(&key) {
-            if current.loading || (!older && !refresh) || (older && current.before.is_none()) {
-                return;
-            }
-        } else if older {
-            return;
-        }
-        if self.native_inline_original.len() >= 12
-            && !self.native_inline_original.contains_key(&key)
-        {
-            // Never retain unbounded private dialogue across many tabs.
-            self.native_inline_original.clear();
-        }
-        if self.runtime_bridge.is_none() {
-            self.runtime_bridge = RuntimeCliBridge::discover().ok();
-        }
-        let Some(bridge) = self.runtime_bridge.clone() else {
-            return;
-        };
-        let before = if older {
-            self.native_inline_original
-                .get(&key)
-                .and_then(|state| state.before)
-        } else {
-            None
-        };
-        self.native_inline_original_request = self.native_inline_original_request.wrapping_add(1);
-        let ticket = self.native_inline_original_request;
-        let state = self.native_inline_original.entry(key.clone()).or_default();
-        state.request = ticket;
-        state.loading = true;
-        if !older {
-            state.messages.clear();
-            state.before = None;
-        }
-        let workspace_generation = self.workspace_generation;
-        cx.spawn(async move |view, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    bridge.read_resumed_agent_messages(&target.workspace_id, &target.tab_id, before)
-                })
-                .await;
-            view.update(cx, |view, cx| {
-                if view.workspace_generation != workspace_generation {
-                    return;
-                }
-                let still_live = view.terminals.sessions.iter().any(|session| {
-                    session.running
-                        && session.handle == key.0
-                        && session.workspace_id == key.1
-                        && session.tab_id == key.2
-                        && session.agent_type.as_deref() == Some(key.3.as_str())
-                });
-                let Some(current) = view.native_inline_original.get_mut(&key) else {
-                    return;
-                };
-                if current.request != ticket {
-                    return;
-                }
-                current.loading = false;
-                if !still_live {
-                    current.messages.clear();
-                    current.before = None;
-                    cx.notify();
-                    return;
-                }
-                if let Ok(reply) = result {
-                    if let Ok((messages, next_before)) =
-                        parse_original_conversation_page(&reply, before)
-                    {
-                        if older {
-                            let mut accumulated = messages;
-                            accumulated.extend(current.messages.drain(..));
-                            accumulated.truncate(360);
-                            current.messages = accumulated;
-                        } else {
-                            current.messages = messages;
-                        }
-                        current.before = next_before;
-                    }
-                }
-                // Missing/older Host or a source ambiguity simply does not
-                // show an inline panel. Never guess or read another account.
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// A compact, scrollable read-only slice of the real Claude/Codex native
-    /// conversation above the CURRENT interactive Terminal, not an alternate
-    /// full-screen Dashboard view or synthetic PTY transcript replay.
-    pub(super) fn render_inline_original(
-        &self,
-        pane: PaneSlot,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut panel = div()
-            .id(if pane == PaneSlot::Primary {
-                "native-inline-original-primary"
-            } else {
-                "native-inline-original-secondary"
-            })
-            .flex_shrink_0();
-        let Some(target) = self.inline_original_target(pane) else {
-            return panel;
-        };
-        let key = (
-            target.handle.clone(),
-            target.workspace_id.clone(),
-            target.tab_id.clone(),
-            target.agent_type.clone(),
-        );
-        let Some(state) = self.native_inline_original.get(&key) else {
-            return panel;
-        };
-        if state.messages.is_empty() && state.before.is_none() {
-            return panel;
-        }
-        let collapsed = state.collapsed;
-        let older_enabled = state.before.is_some() && !state.loading;
-        panel = panel
-            .w_full()
-            .border_b_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(PANEL))
-            .child(
-                div()
-                    .h(px(30.0))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(icon(UiIcon::History, 13.0, MUTED))
-                    .child(div().flex_1().min_w_0().truncate().text_xs().child(format!(
-                        "{} · original dialogue · read only (live Terminal below)",
-                        if target.agent_type == "claude" {
-                            "Claude"
-                        } else {
-                            "Codex"
-                        }
-                    )))
-                    .child(
-                        div()
-                            .id(if pane == PaneSlot::Primary {
-                                "native-original-collapse-p"
-                            } else {
-                                "native-original-collapse-s"
-                            })
-                            .text_xs()
-                            .cursor_pointer()
-                            .child(if collapsed { "Expand" } else { "Collapse" })
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if let Some(state) = view.native_inline_original.get_mut(&key) {
-                                    state.collapsed = !state.collapsed;
-                                    cx.notify();
-                                }
-                            })),
-                    ),
-            );
-        if !collapsed {
-            let mut list = div()
-                .id(if pane == PaneSlot::Primary {
-                    "native-inline-original-primary-scroll"
-                } else {
-                    "native-inline-original-secondary-scroll"
-                })
-                .h(px(if state.messages.is_empty() {
-                    0.0
-                } else {
-                    195.0
-                }))
-                .min_h_0()
-                .overflow_y_scroll()
-                .px_3()
-                .py_2()
-                .flex()
-                .flex_col()
-                .gap_2();
-            for (index, message) in state.messages.iter().enumerate() {
-                let role = if message.role == "user" {
-                    "You"
-                } else {
-                    "Agent"
-                };
-                let header = message
-                    .timestamp
-                    .as_deref()
-                    .map_or_else(|| role.to_owned(), |time| format!("{role} · {time}"));
-                list = list.child(
-                    div()
-                        .id((
-                            if pane == PaneSlot::Primary {
-                                "native-inline-original-p-msg"
-                            } else {
-                                "native-inline-original-s-msg"
-                            },
-                            index,
-                        ))
-                        .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .bg(rgb(ELEVATED))
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(div().text_xs().text_color(rgb(MUTED)).child(header))
-                        .child(div().min_w_0().text_sm().child(message.text.clone())),
-                );
-            }
-            panel = panel.child(list).child(
-                div()
-                    .h(px(28.0))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .id(if pane == PaneSlot::Primary {
-                                "native-original-older-p"
-                            } else {
-                                "native-original-older-s"
-                            })
-                            .text_xs()
-                            .cursor_pointer()
-                            .text_color(rgb(if older_enabled { TEXT } else { MUTED }))
-                            .child("Load older dialogue")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.load_inline_original(pane, true, false, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id(if pane == PaneSlot::Primary {
-                                "native-original-latest-p"
-                            } else {
-                                "native-original-latest-s"
-                            })
-                            .text_xs()
-                            .cursor_pointer()
-                            .child("Latest page")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.load_inline_original(pane, false, true, cx);
-                            })),
-                    ),
-            );
-        }
-        panel
-    }
-
-    /// Open the original conversation directly from the selected native Host
-    /// Terminal tab. The pane context includes its generation and exact Tab ID;
-    /// never infer a target from the global active TerminalDock index.
-    pub(super) fn open_original_conversation_for_pane(
-        &mut self,
-        pane: PaneSlot,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(WorkbenchTabIdentity::Host(context)) = self.mixed_panes.active_in(pane).cloned()
-        else {
-            return;
-        };
-        let Some(index) = self.terminals.index_for_context(&context) else {
-            self.terminals.status = "Terminal pane identity changed; no transcript read".into();
-            cx.notify();
-            return;
-        };
-        let Some(tab) = self.terminals.tabs.get(index) else {
-            return;
-        };
-        let target = self
-            .terminals
-            .sessions
-            .iter()
-            .find(|session| {
-                session.running
-                    && session.handle == tab.handle
-                    && session.workspace_id == tab.workspace_id
-                    && session.tab_id == tab.tab_id
-                    && matches!(session.agent_type.as_deref(), Some("claude" | "codex"))
-            })
-            .cloned();
-        let Some(session) = target else {
-            self.terminals.status =
-                "Original history requires a current Claude/Codex Host Tab".into();
-            cx.notify();
-            return;
-        };
-        let identity = GlobalAgentPromptTarget {
-            handle: session.handle,
-            workspace_id: session.workspace_id,
-            tab_id: session.tab_id,
-            agent_type: session.agent_type.unwrap_or_default(),
-        };
-        self.right_sidebar_view = RightSidebarView::AgentContext;
-        self.global_agent_history_open = false;
-        self.global_agent_maximized = true;
-        self.global_agent_collapsed_groups.clear();
-        self.global_agent_needs_review_only = false;
-        self.load_original_conversation(identity, false, cx);
-        cx.notify();
-    }
-
     fn close_original_conversation(&mut self) {
         self.global_agent_transcript_request = self.global_agent_transcript_request.wrapping_add(1);
         self.global_agent_transcript_target = None;
@@ -2449,13 +2059,78 @@ impl Workbench {
     }
 }
 
+fn history_filter_badge(
+    provider: Option<&str>,
+    fields: [&str; 3],
+    expanded: bool,
+) -> (usize, String) {
+    let count = usize::from(provider.is_some())
+        + fields
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .count();
+    let arrow = if expanded { "▴" } else { "▾" };
+    let label = if count == 0 {
+        format!("Filters {arrow}")
+    } else {
+        format!("Filters ({count}) {arrow}")
+    };
+    (count, label)
+}
+
+#[cfg(test)]
+mod compact_history_filter_tests {
+    use super::history_filter_badge;
+
+    #[test]
+    fn empty_and_whitespace_fields_do_not_count_as_filters() {
+        assert_eq!(
+            history_filter_badge(None, ["", " \t", "\u{3000}"], false),
+            (0, "Filters ▾".into())
+        );
+        assert_eq!(
+            history_filter_badge(None, ["", "", ""], true),
+            (0, "Filters ▴".into())
+        );
+    }
+
+    #[test]
+    fn collapsed_badge_retains_provider_and_field_counts() {
+        for (provider, fields, count) in [
+            (Some("claude"), ["", "", ""], 1),
+            (None, ["project", "worktree", ""], 2),
+            (None, ["project", "worktree", "account"], 3),
+            (Some("codex"), ["project", "worktree", "account"], 4),
+        ] {
+            assert_eq!(
+                history_filter_badge(provider, fields, false),
+                (count, format!("Filters ({count}) ▾"))
+            );
+            assert_eq!(
+                history_filter_badge(provider, fields, true),
+                (count, format!("Filters ({count}) ▴"))
+            );
+        }
+    }
+}
+
 fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElement {
     let busy = view.global_agent_history_busy;
     let consented = view.global_agent_history_consent;
+    let (filter_count, filter_label) = history_filter_badge(
+        view.global_agent_history_provider.as_deref(),
+        [
+            view.global_agent_history_project_input.read(cx).query(),
+            view.global_agent_history_workspace_input.read(cx).query(),
+            view.global_agent_history_account_input.read(cx).query(),
+        ],
+        view.global_agent_history_filters_expanded,
+    );
     // Keep search and consent visible while results scroll independently.
     let mut chips = div()
         .id("global-history-provider-chips")
-        .w_full()
+        .flex_1()
+        .min_w_0()
         .flex()
         .items_center()
         .gap_2();
@@ -2487,7 +2162,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 })
                 .child(label)
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    if view.global_agent_history_busy {
+                    if view.global_agent_history_busy || view.global_agent_history_provider == next {
                         return;
                     }
                     view.global_agent_history_provider = next.clone();
@@ -2525,6 +2200,7 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.agent_navigation.cancel();
                             view.global_agent_history_open = false;
+                            view.global_agent_history_filters_expanded = false;
                             view.global_agent_history_clear_armed = false;
                             view.global_agent_history_resume_expanded = None;
                             cx.notify();
@@ -2546,22 +2222,27 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.search_global_agent_history(cx);
                         })),
-                ),
-        )
-        .child(
-            div().w_full().flex().items_center().gap_2()
-                .child(chips)
+                )
                 .child(
                     div().id("global-history-advanced-toggle")
-                        .cursor_pointer().text_xs().text_color(rgb(TEXT))
-                        .child(if view.global_agent_history_filters_expanded {
-                            "▴ Filters"
+                        .cursor_pointer().flex_shrink_0().rounded_md()
+                        .border_1().border_color(rgb(BORDER))
+                        .bg(rgb(if view.global_agent_history_filters_expanded || filter_count > 0 {
+                            ELEVATED
                         } else {
-                            "⚙ Filters"
-                        })
-                        .on_click(cx.listener(|view, _, _, cx| {
+                            PANEL
+                        }))
+                        .px_3().py_2().text_xs().text_color(rgb(TEXT))
+                        .child(filter_label)
+                        .on_click(cx.listener(|view, _, window, cx| {
                             view.global_agent_history_filters_expanded =
                                 !view.global_agent_history_filters_expanded;
+                            if !view.global_agent_history_filters_expanded {
+                                window.focus(
+                                    &view.global_agent_history_input.read(cx).focus_handle(cx),
+                                    cx,
+                                );
+                            }
                             cx.notify();
                         })),
                 ),
@@ -2570,10 +2251,44 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
             list.child(
                 div().id("global-history-advanced-filters")
                     .w_full().p_2().rounded_md().bg(rgb(PANEL))
-                    .flex().items_center().gap_3()
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_project_input.clone()))
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_workspace_input.clone()))
-                    .child(div().flex_1().min_w_0().child(view.global_agent_history_account_input.clone())),
+                    .flex().flex_col().gap_2()
+                    .child(
+                        div().w_full().flex().items_center().gap_2()
+                            .child(chips)
+                            .child(
+                                div().id("global-history-reset-filters")
+                                    .cursor_pointer().flex_shrink_0().text_xs()
+                                    .text_color(rgb(if busy { MUTED } else { TEXT }))
+                                    .child("Reset Filters")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        if view.global_agent_history_busy {
+                                            return;
+                                        }
+                                        view.global_agent_history_provider = None;
+                                        for input in [
+                                            view.global_agent_history_project_input.clone(),
+                                            view.global_agent_history_workspace_input.clone(),
+                                            view.global_agent_history_account_input.clone(),
+                                        ] {
+                                            input.update(cx, |input, cx| input.clear(cx));
+                                        }
+                                        view.global_agent_history_results.clear();
+                                        view.global_agent_history_located.clear();
+                                        view.global_agent_history_resume_expanded = None;
+                                        view.global_agent_history_resume_armed = None;
+                                        view.global_agent_history_clear_armed = false;
+                                        view.global_agent_history_status =
+                                            "Filters reset. Search again to refresh previews.".into();
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div().w_full().flex().items_center().gap_2()
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_project_input.clone()))
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_workspace_input.clone()))
+                            .child(div().flex_1().min_w_0().child(view.global_agent_history_account_input.clone())),
+                    ),
             )
         })
         .child(
@@ -3425,6 +3140,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 .child("History")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.global_agent_history_open = true;
+                                    view.global_agent_history_filters_expanded = false;
                                     cx.notify();
                                 })),
                         )

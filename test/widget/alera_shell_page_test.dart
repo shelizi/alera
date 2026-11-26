@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io' show Directory, Platform;
+import 'dart:convert';
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:path/path.dart' as p;
 
@@ -50,6 +51,7 @@ import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
+import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/gestures.dart';
