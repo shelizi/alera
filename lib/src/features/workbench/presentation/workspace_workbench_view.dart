@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:alera/src/features/workbench/application/global_agent_dashboard_navigation.dart';
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_providers.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_service.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';

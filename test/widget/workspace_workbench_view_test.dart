@@ -1,5 +1,10 @@
 // ignore_for_file: library_private_types_in_public_api
 
+import 'dart:async';
+
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
+
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/ai_assist/application/agent_title_providers.dart';
 import 'package:alera/src/features/agent_profiles/application/local_agent_providers.dart';

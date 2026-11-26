@@ -86,6 +86,15 @@ class SettingsController extends _$SettingsController
     return next;
   }
 
+  Future<void> setBuiltinMcpEnabled(bool value) => _serialize(() async {
+    if (state.agents.builtinMcpEnabled == null ||
+        state.agents.builtinMcpEnabled == value)
+      return;
+    await _save(
+      state.copyWith(agents: state.agents.copyWith(builtinMcpEnabled: value)),
+    );
+  });
+
   Future<void> _save(AleraSettings settings) async {
     try {
       final repository = _repository;

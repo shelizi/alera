@@ -743,10 +743,13 @@ impl ServerActor {
             }
             "desktopSettings.get" => {
                 self.require_auth(client_id)?;
-                self.runtime_store
+                let mut snapshot = self
+                    .runtime_store
                     .desktop_shared_settings_snapshot()
                     .await
-                    .map_err(|error| HostError::state(error.to_string()))
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                snapshot["builtinMcpDiagnostics"] = self.builtin_mcp_diagnostics();
+                Ok(snapshot)
             }
             "desktopSettings.seedLocal" => {
                 self.require_auth(client_id)?;
@@ -801,11 +804,12 @@ impl ServerActor {
                 let changes: Vec<alera_core::runtime::DesktopSettingChange> =
                     serde_json::from_value(payload["changes"].clone())
                         .map_err(|_| HostError::state("Invalid shared settings batch"))?;
-                let result = self
+                let mut result = self
                     .runtime_store
                     .desktop_shared_compare_and_set_batch(&changes)
                     .await
                     .map_err(shared_desktop_settings_error)?;
+                result["builtinMcpDiagnostics"] = self.builtin_mcp_diagnostics();
                 self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
                 Ok(result)
             }
@@ -820,11 +824,12 @@ impl ServerActor {
                 let next = payload
                     .get("value")
                     .ok_or_else(|| HostError::state("Missing desktop setting value"))?;
-                let result = self
+                let mut result = self
                     .runtime_store
                     .desktop_shared_compare_and_set(path, expected, next)
                     .await
                     .map_err(shared_desktop_settings_error)?;
+                result["builtinMcpDiagnostics"] = self.builtin_mcp_diagnostics();
                 self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
                 Ok(result)
             }

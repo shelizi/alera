@@ -205,6 +205,7 @@ mod exact_history_resume_retry_tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         assert!(verified_running_history_session(
             &[live.clone()],
@@ -382,6 +383,7 @@ mod gpui_dashboard_parity_tests {
             agent_state_started_at: None,
             agent_updated_at: Some(updated.into()),
             agent_context: None,
+            builtin_mcp_status: None,
         }
     }
 
@@ -1261,7 +1263,11 @@ impl Workbench {
             agent_type,
         };
         if self.terminals.session_list_is_stale()
-            || alera_gpui_desktop::agent_status_notifications::validated_sidebar_navigation_target(&target, &self.terminals.sessions).is_none()
+            || alera_gpui_desktop::agent_status_notifications::validated_sidebar_navigation_target(
+                &target,
+                &self.terminals.sessions,
+            )
+            .is_none()
         {
             self.agent_navigation.cancel();
             self.terminals.status = "Agent identity changed; refresh before opening Tab".into();

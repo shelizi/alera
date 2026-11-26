@@ -15,11 +15,14 @@ class AleraUpdateCheckScheduler({
   required final Future<void> Function() check,
   required final AppForeground foreground,
   this.interval = aleraUpdateCheckInterval,
+  final bool enabled = true,
 }) {
   this {
-    _foregroundChanges = foreground.changes.listen(_applyForeground);
-    if (foreground.isForeground) {
-      _start();
+    if (enabled) {
+      _foregroundChanges = foreground.changes.listen(_applyForeground);
+      if (foreground.isForeground) {
+        _start();
+      }
     }
   }
 

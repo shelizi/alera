@@ -21,8 +21,9 @@ Future<void> _pumpWorkbenchView(
   List<String>? keptPreviewTabs,
   Size size = const Size(420, 280),
   Locale? locale,
-  Map<String, AgentStatusEntry> agentStatuses =
+  Map<String, AgentStatusEntry>? agentStatuses =
       const <String, AgentStatusEntry>{},
+  RuntimeHostClient? mcpHost,
   bool agentTitlesAvailable = false,
   List<String>? externalTerminalTabs,
   List<AgentType> installedAgents = const <AgentType>[],
@@ -39,6 +40,8 @@ Future<void> _pumpWorkbenchView(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        if (mcpHost != null)
+          runtimeHostClientProvider.overrideWithValue(mcpHost),
         settingsControllerProvider.overrideWithValue(
           AleraSettings.defaults.copyWith(
             editor: EditorSettings.defaults.copyWith(twoRowTabs: twoRowTabs),

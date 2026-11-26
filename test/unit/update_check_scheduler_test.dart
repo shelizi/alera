@@ -27,6 +27,26 @@ class _FakeForeground({this.isForeground = true}) implements AppForeground {
 
 void main() {
   group('AleraUpdateCheckScheduler', () {
+    test('disabled scheduler never checks, even when the window returns', () {
+      fakeAsync((async) {
+        var checks = 0;
+        final foreground = _FakeForeground();
+        final scheduler = AleraUpdateCheckScheduler(
+          enabled: false,
+          check: () async => checks++,
+          foreground: foreground,
+        );
+        async.flushMicrotasks();
+        foreground.emit(false);
+        foreground.emit(true);
+        async.elapse(const Duration(hours: 1));
+        expect(checks, 0);
+        expect(scheduler.isRunning, isFalse);
+        scheduler.dispose();
+        foreground.dispose();
+      });
+    });
+
     test('checks immediately when the window is already visible', () {
       fakeAsync((async) {
         var checks = 0;

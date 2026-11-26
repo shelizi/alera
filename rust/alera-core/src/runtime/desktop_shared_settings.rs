@@ -32,6 +32,7 @@ fn local_path(path: &str) -> bool {
             | "explorer.showHiddenFiles"
             | "explorer.showIgnoredFiles"
             | "agents.quotaUnpinnedKeys"
+            | "agents.builtinMcpEnabled"
     )
 }
 
@@ -61,6 +62,10 @@ fn default_value(path: &str) -> Result<Value> {
         "general.confirmWorkspaceRemoval" => json!(true),
         "general.autoArchiveWorkspacesAfterDays" => json!(30),
         "agents.defaultAgentProfileId" => Value::Null,
+        // Legacy environment opt-in applies only until a user setting is saved.
+        "agents.builtinMcpEnabled" => {
+            json!(std::env::var("ALERA_MCP_PROFILE_INJECTION").as_deref() == Ok("1"))
+        }
         "agents.quotaUnpinnedKeys" => json!([]),
         "explorer.showHiddenFiles" => json!(false),
         "explorer.showIgnoredFiles" => json!(false),
@@ -113,6 +118,7 @@ fn validate(path: &str, value: &Value) -> Result<()> {
         | "editor.twoRowTabs"
         | "explorer.showHiddenFiles"
         | "explorer.showIgnoredFiles"
+        | "agents.builtinMcpEnabled"
         | "general.confirmProjectRemoval"
         | "general.confirmWorkspaceRemoval" => value.is_boolean(),
         "general.autoArchiveWorkspacesAfterDays" => value.as_u64().is_some_and(|n| n <= 36_500),
@@ -552,6 +558,40 @@ mod tests {
                 .get("externalEditor")
                 .is_none(),
             "Local editor choice must never enter portable/cloud settings"
+        );
+    }
+
+    #[tokio::test]
+    async fn builtin_mcp_setting_is_local_boolean_and_shared() {
+        let dir = tempfile::tempdir().unwrap();
+        let classic = RuntimeStore::open(dir.path()).await.unwrap();
+        let native = RuntimeStore::open(dir.path()).await.unwrap();
+        let path = "agents.builtinMcpEnabled";
+        let initial = classic.desktop_shared_setting(path).await.unwrap();
+        assert!(initial.is_boolean());
+        classic
+            .desktop_shared_compare_and_set(path, &initial, &json!(!initial.as_bool().unwrap()))
+            .await
+            .unwrap();
+        let changed = native.desktop_shared_setting(path).await.unwrap();
+        assert_ne!(changed, initial);
+        assert!(native
+            .desktop_shared_compare_and_set(path, &initial, &json!(true))
+            .await
+            .is_err());
+        assert!(native
+            .desktop_shared_compare_and_set(path, &changed, &json!("true"))
+            .await
+            .is_err());
+        assert!(native.configuration_settings().await.unwrap()["agents"]
+            .get("builtinMcpEnabled")
+            .is_none());
+        drop(classic);
+        drop(native);
+        let restarted = RuntimeStore::open(dir.path()).await.unwrap();
+        assert_eq!(
+            restarted.desktop_shared_setting(path).await.unwrap(),
+            changed
         );
     }
 

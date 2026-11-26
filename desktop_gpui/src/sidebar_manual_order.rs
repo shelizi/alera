@@ -498,6 +498,7 @@ mod tests {
             agent_state_started_at: Some("2026-11-24T11:59:00Z".into()),
             agent_updated_at: Some("2026-11-24T11:59:00Z".into()),
             agent_context: None,
+            builtin_mcp_status: None,
         };
         let sessions = [
             session("wa", AgentActivityState::Working),

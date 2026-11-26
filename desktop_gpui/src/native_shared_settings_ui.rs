@@ -183,7 +183,9 @@ impl Workbench {
                 alera_core::desktop_settings_contract::extended_portable(path)
                     || matches!(
                         path.as_str(),
-                        "agents.quotaUnpinnedKeys" | "editor.externalEditor"
+                        "agents.quotaUnpinnedKeys"
+                            | "editor.externalEditor"
+                            | "agents.builtinMcpEnabled"
                     )
             })
             .map(|(path, value)| (path.clone(), value.clone()))
@@ -193,6 +195,13 @@ impl Workbench {
         }
         self.settings_menu_language = language;
         self.settings_extra_values = extended;
+        if let Some(diagnostics) = snapshot
+            .get("builtinMcpDiagnostics")
+            .filter(|value| value.is_object())
+        {
+            self.settings_extra_values
+                .insert("builtinMcpDiagnostics".to_owned(), diagnostics.clone());
+        }
         if let Some(font_family) = values
             .get("terminal.fontFamily")
             .and_then(serde_json::Value::as_str)
@@ -376,8 +385,11 @@ impl Workbench {
             serde_json::json!(self.settings_menu_language)
         } else if alera_core::desktop_settings_contract::extended_portable(path)
             || path == "agents.quotaUnpinnedKeys"
+            || path == "agents.builtinMcpEnabled"
         {
-            let valid = if path == "agents.quotaUnpinnedKeys" {
+            let valid = if path == "agents.builtinMcpEnabled" {
+                value.is_boolean()
+            } else if path == "agents.quotaUnpinnedKeys" {
                 alera_core::desktop_settings_contract::valid_quota_unpinned_keys(&value)
             } else {
                 alera_core::desktop_settings_contract::valid_extended_portable(path, &value)

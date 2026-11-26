@@ -219,6 +219,7 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
             agent_context: None,
+            builtin_mcp_status: None,
         };
         let pin = parse_pin_snapshot(&json!([item]), "ws").unwrap().remove(0);
         assert!(pin.matches_session(&session));

@@ -167,7 +167,11 @@ impl ServerActor {
     ) {
         // Revoke UI command authority as soon as this PTY is no longer live,
         // including a retained transferred Tab whose record must survive.
+        let had_mcp = self.mcp_ui.connection_status(session_id, true) != "unknown";
         self.mcp_ui.revoke(session_id);
+        if had_mcp {
+            self.broadcast_builtin_mcp_changed();
+        }
         if self.agent_presence.remove(session_id) {
             self.broadcast_agent_presence_changes(vec![json!({
                 "terminalSessionId": session_id,

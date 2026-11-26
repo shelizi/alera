@@ -35,6 +35,49 @@ mod verified_history_agent_type_tests {
 }
 
 impl ServerActor {
+    pub(super) fn broadcast_builtin_mcp_changed(&self) {
+        self.broadcast_authenticated_local(crate::terminal_host::protocol::event(
+            "builtinMcpChanged",
+            json!({}),
+        ));
+    }
+
+    /// Bounded, secret-free diagnostics for the two local Settings UIs.
+    pub(super) fn builtin_mcp_diagnostics(&self) -> Value {
+        let mut sessions: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.running())
+            .filter_map(|(handle, session)| {
+                let status = self.mcp_ui.connection_status(handle, true);
+                let provider = reported_agent_type(
+                    self.agent_presence
+                        .get(handle)
+                        .map(|entry| entry.agent_type.as_str()),
+                    session.verified_history_provider.as_deref(),
+                );
+                if status == "unknown" && provider.is_none() {
+                    return None;
+                }
+                Some(json!({
+                    "handle": handle,
+                    "workspaceId": session.workspace_id,
+                    "tabId": session.tab_id,
+                    "provider": provider,
+                    "status": status,
+                }))
+            })
+            .collect();
+        sessions.sort_by(|a, b| a["handle"].as_str().cmp(&b["handle"].as_str()));
+        let total = sessions.len();
+        sessions.truncate(100);
+        let tools: Vec<_> = crate::mcp::tool_definitions()
+            .into_iter()
+            .filter_map(|tool| tool.get("name").cloned())
+            .collect();
+        json!({"server": "alera-workbench", "sessions": sessions, "sessionCount": total, "tools": tools})
+    }
+
     pub(super) fn orchestration_terminals(&self, payload: &Value) -> Value {
         let workspace = optional_string(payload, "workspace");
         let terminals: Vec<Value> = self
@@ -56,6 +99,7 @@ impl ServerActor {
                     "workspaceId": session.workspace_id,
                     "tabId": session.tab_id,
                     "running": session.running(),
+                    "builtinMcpStatus": self.mcp_ui.connection_status(session_id, session.running()),
                     "agentType": agent_type,
                     "agentState": presence.map(|entry| entry.state.as_str()),
                     "stateStartedAt": presence.map(|entry| entry.state_started_at),
@@ -144,6 +188,7 @@ impl ServerActor {
             "workspaceId": session.workspace_id,
             "tabId": session.tab_id,
             "running": session.running(),
+            "builtinMcpStatus": self.mcp_ui.connection_status(&handle, session.running()),
             "agentType": agent_type,
             "agentState": presence.map(|entry| entry.state.as_str()),
             "startupState": startup_state,

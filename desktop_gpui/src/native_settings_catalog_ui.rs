@@ -1720,6 +1720,63 @@ impl Workbench {
                 .as_array()
                 .map(|items| self.render_settings_excluded_directories(items, cx));
         }
+        if path == "agents.builtinMcpEnabled" {
+            let checked = value.as_bool()?;
+            let locale = self.settings_menu_locale;
+            let mut content = div()
+                .flex()
+                .flex_col()
+                .child(self.native_settings_bool_row(row.title, path, checked, cx));
+            if let Some(diagnostics) = self.settings_extra_values.get("builtinMcpDiagnostics") {
+                let sessions = diagnostics["sessions"].as_array();
+                let tools = diagnostics["tools"].as_array();
+                content =
+                    content.child(div().px_3().py_1().text_xs().text_color(rgb(MUTED)).child(
+                        format!(
+                            "{} · {} {}",
+                            tr(locale, "Last Host snapshot"),
+                            diagnostics["sessionCount"].as_u64().unwrap_or(0),
+                            tr(locale, "Agent sessions")
+                        ),
+                    ));
+                if let Some(sessions) = sessions {
+                    for session in sessions {
+                        let provider = session["provider"].as_str().unwrap_or("Agent");
+                        let status = session["status"].as_str().unwrap_or("unknown");
+                        let handle = session["handle"].as_str().unwrap_or("");
+                        let short: String = handle.chars().take(12).collect();
+                        content = content.child(
+                            div()
+                                .px_3()
+                                .text_xs()
+                                .child(format!("{provider} · {short} · {status}")),
+                        );
+                    }
+                }
+                if let Some(tools) = tools {
+                    content =
+                        content.child(div().px_3().py_1().text_xs().text_color(rgb(MUTED)).child(
+                            format!(
+                                "alera-workbench · {} {}",
+                                tools.len(),
+                                tr(locale, "Available MCP tools")
+                            ),
+                        ));
+                    for name in tools.iter().filter_map(|tool| tool.as_str()) {
+                        content = content.child(div().px_3().text_xs().child(name.to_owned()));
+                    }
+                }
+            } else {
+                content = content.child(
+                    div()
+                        .px_3()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(tr(locale, "MCP diagnostics unavailable")),
+                );
+            }
+            return Some(self.render_described_shared_control(row, content.into_any_element()));
+        }
         if let Some(checked) = value.as_bool() {
             return Some(self.render_described_shared_control(
                 row,

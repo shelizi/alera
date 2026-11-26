@@ -403,6 +403,7 @@ const Set<String> runtimeHostEventNames = <String>{
   'mobileRelayChanged',
   'mobileGatewayChanged',
   'agentPresenceChanged',
+  'builtinMcpChanged',
   'codexThreadChanged',
   'codexServerChanged',
   // Host-authorized MCP UI requests must reach the mounted Flutter Shell.

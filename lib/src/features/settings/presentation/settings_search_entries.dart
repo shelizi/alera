@@ -242,6 +242,11 @@ agentsSearchEntries = buildSettingsSearchEntryCatalog(const {
     ),
   },
   'behavior': {
+    'Built-in Alera MCP': SettingsSearchEntryDetails(
+      description:
+          'Register alera-workbench for new Managed Codex and Claude sessions.',
+      keywords: <String>['mcp', 'agent', 'codex', 'claude', 'workbench'],
+    ),
     'Show Tab Titles in Sidebar': SettingsSearchEntryDetails(
       description: 'Use each agent tab title under a workspace instead of the latest activity.',
       keywords: <String>[

@@ -1,4 +1,6 @@
 import 'package:alera/src/app/providers.dart';
+import 'package:alera/src/app/localization/alera_localizations.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_setting_row.dart';
 import 'package:alera/src/design_system/layout/alera_settings_group.dart';
@@ -207,6 +209,24 @@ class const AgentsSettingsPane({
             title: 'Behavior',
             description: 'How Alera reacts while agents are running.',
             children: <Widget>[
+              AleraSettingRow(
+                title: 'Built-in Alera MCP',
+                description: agents.builtinMcpEnabled == null
+                    ? 'Unavailable: connect to an updated Runtime Host.'
+                    : 'Register alera-workbench for new Managed Codex and Claude sessions. Existing sessions must be restarted; other providers are not supported.',
+                child: Switch(
+                  value: agents.builtinMcpEnabled ?? false,
+                  onChanged: agents.builtinMcpEnabled == null
+                      ? null
+                      : controller.setBuiltinMcpEnabled,
+                ),
+              ),
+              const AleraSettingRow(
+                title: 'MCP connection diagnostics',
+                description: 'Inspect the last checked Host connection and available MCP tools.',
+                controlWidth: 360,
+                child: _BuiltinMcpDiagnostics(),
+              ),
               SettingsSwitchRow(
                 title: 'Show Tab Titles in Sidebar',
                 description: 'Use each agent tab title under a workspace instead of the latest activity.',
@@ -248,6 +268,80 @@ class const AgentsSettingsPane({
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Explicit refresh avoids adding another idle Host polling loop.
+class _BuiltinMcpDiagnostics extends ConsumerStatefulWidget {
+  const _BuiltinMcpDiagnostics();
+
+  @override
+  ConsumerState<_BuiltinMcpDiagnostics> createState() =>
+      _BuiltinMcpDiagnosticsState();
+}
+
+class _BuiltinMcpDiagnosticsState
+    extends ConsumerState<_BuiltinMcpDiagnostics> {
+  Future<Map<Object?, Object?>>? _snapshot;
+
+  Future<Map<Object?, Object?>> _load() async {
+    final response = await ref
+        .read(runtimeHostClientProvider)
+        .runtimeRequest('desktopSettings.get');
+    if (response is Map<Object?, Object?>) {
+      final diagnostics = response['builtinMcpDiagnostics'];
+      if (diagnostics is Map<Object?, Object?>) return diagnostics;
+    }
+    throw StateError('MCP diagnostics unavailable');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<Object?, Object?>>(
+      future: _snapshot,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        final waiting = snapshot.connectionState == ConnectionState.waiting;
+        final sessions = data?['sessions'];
+        final tools = data?['tools'];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            OutlinedButton(
+              onPressed: waiting
+                  ? null
+                  : () => setState(() => _snapshot = _load()),
+              child: Text(context.tr('Refresh MCP diagnostics')),
+            ),
+            if (waiting)
+              const LinearProgressIndicator()
+            else if (snapshot.hasError)
+              Text(context.tr('MCP diagnostics unavailable'))
+            else if (data != null) ...[
+              Text(context.tr('Last Host snapshot')),
+              if (sessions is List<Object?>)
+                for (final session
+                    in sessions.whereType<Map<Object?, Object?>>())
+                  Text(
+                    '${session['provider'] ?? 'Agent'} · ${session['handle']} · ${session['status']}',
+                  ),
+              if (sessions is List<Object?> && sessions.isEmpty)
+                Text(context.tr('No running Agent sessions')),
+              if (tools is List<Object?>)
+                ExpansionTile(
+                  title: Text(
+                    '${context.tr('Available MCP tools')} (${tools.length})',
+                  ),
+                  children: [
+                    for (final tool in tools.whereType<String>())
+                      SelectableText(tool),
+                  ],
+                ),
+            ],
+          ],
+        );
+      },
     );
   }
 }
