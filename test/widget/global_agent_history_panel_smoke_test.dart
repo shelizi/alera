@@ -25,6 +25,26 @@ void main() {
     expect(tester.widget<FilledButton>(search).onPressed, isNull);
     expect(find.text('Find existing Tab'), findsNothing);
     expect(find.text('Open verified Tab'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('history-advanced-filters')),
+      findsNothing,
+    );
+
+    await tester.tap(find.text('Advanced filters'));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('history-advanced-filters')),
+      findsOneWidget,
+    );
+    expect(find.text('Project ID'), findsOneWidget);
+    expect(find.text('Worktree ID'), findsOneWidget);
+
+    await tester.tap(find.text('Advanced filters'));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('history-advanced-filters')),
+      findsNothing,
+    );
 
     await tester.tap(
       find.text('Allow local indexing of limited user-message previews'),
@@ -32,5 +52,18 @@ void main() {
     await tester.pump();
     expect(tester.widget<FilledButton>(search).onPressed, isNotNull);
     expect(find.text('Open verified Tab'), findsNothing);
+
+    // Clearing local index is a deliberate confirmed action, not one tap.
+    await tester.tap(find.text('Clear local index'));
+    await tester.pumpAndSettle();
+    expect(find.text('Clear local history index?'), findsOneWidget);
+    expect(
+      find.text('Claude and Codex source conversations will not be changed.'),
+      findsNothing,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Clear local history index?'), findsNothing);
+    expect(tester.widget<FilledButton>(search).onPressed, isNotNull);
   });
 }

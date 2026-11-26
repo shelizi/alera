@@ -41,7 +41,16 @@ class const _WorkspaceTabContent({
   @override
   Widget build(BuildContext context) {
     return switch (tab.kind) {
-      WorkspaceTabKind.terminal => _buildTerminal(),
+      WorkspaceTabKind.terminal => Consumer(
+        builder: (context, ref, _) {
+          final borrowed = ref.watch(
+            globalAgentInspectionOpenProvider.select(
+              (sessionId) => sessionId == tab.terminalSessionId,
+            ),
+          );
+          return borrowed ? const SizedBox.expand() : _buildTerminal();
+        },
+      ),
       WorkspaceTabKind.editor => _WorkspaceFileTabContent(
         workspace: workspace,
         sourceControlScope: sourceControlScope,

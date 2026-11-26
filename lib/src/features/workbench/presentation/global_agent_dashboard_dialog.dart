@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
@@ -7,6 +8,8 @@ import 'package:alera/src/features/workbench/application/global_agent_dashboard_
 import 'package:alera/src/features/workbench/application/global_agent_live_projection.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_launch_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_history_panel.dart';
+import 'package:alera/src/features/workbench/presentation/global_agent_inspector_dialog.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
@@ -20,7 +23,23 @@ typedef _DashboardCardState = ({
   bool controlsDisabled,
   bool armedInterrupt,
   bool armedTerminate,
+  bool pinning,
+  bool openingInspector,
 });
+
+/// Open the live inspector as a true modal: only tapping its outside barrier
+/// or the explicit Close button dismisses it. The inspector itself routes
+/// Escape to the existing Terminal session rather than popping this route.
+@visibleForTesting
+Future<void> showAgentInspectorModal(BuildContext context, Widget inspector) =>
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close Agent inspector',
+      barrierColor: Colors.black54,
+      transitionDuration: Duration.zero,
+      pageBuilder: (_, _, _) => inspector,
+    );
 
 /// Global scope is deliberate: this watches the full Workbench inventory and
 /// current Agent map, not the selected project's subset. This page lives in
@@ -33,8 +52,23 @@ class GlobalAgentDashboardPage extends ConsumerStatefulWidget {
       _GlobalAgentDashboardPageState();
 }
 
+/// Keep card widths readable. Three distinct statuses produce three columns;
+/// narrow windows scroll horizontally instead of crushing the cards.
+@visibleForTesting
+double globalAgentDashboardColumnWidth(double viewportWidth, int columns) {
+  if (columns < 1) return 0;
+  const gap = 12.0;
+  return math.max(
+    280.0,
+    math.min(385.0, (viewportWidth - gap * (columns - 1)) / columns),
+  );
+}
+
 class _GlobalAgentDashboardPageState
     extends ConsumerState<GlobalAgentDashboardPage> {
+  final ScrollController _horizontal = ScrollController();
+  final Set<String> _pinningTabIds = <String>{};
+  bool _openingInspector = false;
   String _query = '';
   bool _historyMode = false;
   bool _needsReviewOnly = false;
@@ -140,12 +174,6 @@ class _GlobalAgentDashboardPageState
   final _cardWidgets =
       <GlobalAgentIdentity, ({_DashboardCardState state, Widget widget})>{};
 
-  static Key _itemKey(Object item) => ValueKey<Object>(
-    item is GlobalAgentDashboardSection
-        ? item.group
-        : (item as GlobalAgentLiveRow).identity,
-  );
-
   Widget _cardWidget(GlobalAgentLiveRow row) {
     final identity = row.identity;
     if (_historicalTarget == identity) {
@@ -168,6 +196,8 @@ class _GlobalAgentDashboardPageState
       controlsDisabled: _controlling || _sending,
       armedInterrupt: armed(false),
       armedTerminate: armed(true),
+      pinning: _pinningTabIds.contains(row.tab.id),
+      openingInspector: _openingInspector,
     );
     final previous = _cardWidgets[identity];
     if (previous != null && previous.state == state) return previous.widget;
@@ -334,6 +364,7 @@ class _GlobalAgentDashboardPageState
 
   @override
   void dispose() {
+    _horizontal.dispose();
     _instruction.dispose();
     super.dispose();
   }
@@ -441,6 +472,213 @@ class _GlobalAgentDashboardPageState
     }
   }
 
+  Future<void> _togglePinned(GlobalAgentLiveRow row) async {
+    final identity = _identity(row);
+    if (_pinningTabIds.contains(identity.tabId)) return;
+    if (!globalAgentTargetIsCurrent(
+      workbench: ref.read(workbenchControllerProvider),
+      statuses: ref.read(agentStatusControllerProvider),
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+    )) {
+      setState(
+        () => _sendFeedback = 'Agent Session changed. Pin was not saved.',
+      );
+      return;
+    }
+    setState(() => _pinningTabIds.add(identity.tabId));
+    try {
+      // Reuse existing persisted Tab pin state so pins survive app restarts,
+      // stay in sync with the Tab strip and never mutate/stop the Agent.
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .setWorkspaceTabPinned(
+            tabId: identity.tabId,
+            pinned: !row.tab.isPinned,
+          );
+    } on Object {
+      if (mounted)
+        setState(() => _sendFeedback = 'Could not save this Agent pin.');
+    } finally {
+      if (mounted) setState(() => _pinningTabIds.remove(identity.tabId));
+    }
+  }
+
+  Future<void> _inspect(GlobalAgentLiveRow row) async {
+    if (_openingInspector) return;
+    final workbench = ref.read(workbenchControllerProvider);
+    final statuses = ref.read(agentStatusControllerProvider);
+    final identity = _identity(row);
+    if (!globalAgentTargetIsCurrent(
+      workbench: workbench,
+      statuses: statuses,
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      tabId: identity.tabId,
+    )) {
+      setState(
+        () => _sendFeedback = 'Agent Session changed. Refresh the board.',
+      );
+      return;
+    }
+    final workspace = workbench.workspacesByProject.values
+        .expand((entries) => entries)
+        .where((entry) => entry.id == identity.workspaceId)
+        .firstOrNull;
+    if (workspace == null) {
+      setState(() => _sendFeedback = 'The original Worktree is not available.');
+      return;
+    }
+    // Reuse the same session identity and rendering handle. No new Agent tab
+    // is created, and the Dashboard stays in place behind the inspector.
+    final runtime = ref.read(terminalRuntimeProvider);
+    final session = runtime.sessionFor(workspace: workspace, tab: row.tab);
+    if (session.terminalSessionId != identity.sessionId) {
+      setState(() => _sendFeedback = 'Terminal Session identity changed.');
+      return;
+    }
+    final overlay = ref.read(globalAgentInspectionOpenProvider.notifier);
+    setState(() {
+      _openingInspector = true;
+      _sendFeedback = null;
+    });
+    try {
+      // Release only the target Terminal renderer before mounting its modal.
+      overlay.open(identity.sessionId);
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      await showAgentInspectorModal(
+        context,
+        GlobalAgentInspectorDialog(row: row, session: session),
+      );
+    } finally {
+      // A zero-duration route and one final frame allow its TerminalView to
+      // unmount before the original workbench's renderer is restored.
+      await WidgetsBinding.instance.endOfFrame;
+      overlay.close();
+      if (mounted) setState(() => _openingInspector = false);
+    }
+  }
+
+  static Color _groupColor(GlobalAgentDashboardGroup group) => switch (group) {
+    GlobalAgentDashboardGroup.blocked => const Color(0xFFE57575),
+    GlobalAgentDashboardGroup.waiting => const Color(0xFFE7B35C),
+    GlobalAgentDashboardGroup.working => const Color(0xFF63C7A4),
+    GlobalAgentDashboardGroup.interrupted => const Color(0xFFA99BE5),
+    GlobalAgentDashboardGroup.done => const Color(0xFF89A2B7),
+  };
+
+  static IconData _groupIcon(GlobalAgentDashboardGroup group) =>
+      switch (group) {
+        GlobalAgentDashboardGroup.blocked => Icons.error_outline,
+        GlobalAgentDashboardGroup.waiting => Icons.hourglass_top,
+        GlobalAgentDashboardGroup.working => Icons.bolt_outlined,
+        GlobalAgentDashboardGroup.interrupted => Icons.pause_circle_outline,
+        GlobalAgentDashboardGroup.done => Icons.check_circle_outline,
+      };
+
+  Widget _statusColumn(GlobalAgentDashboardSection section, double width) {
+    final color = _groupColor(section.group);
+    final collapsed = _collapsedGroups.contains(section.group);
+    final indexByKey = <Key, int>{
+      for (var i = 0; i < section.rows.length; i++)
+        ValueKey<Object>(section.rows[i].identity): i,
+    };
+    return SizedBox(
+      key: ValueKey(section.group),
+      width: collapsed ? 180 : width,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => setState(() {
+              if (!_collapsedGroups.add(section.group)) {
+                _collapsedGroups.remove(section.group);
+              }
+              _target = null;
+              _instruction.clear();
+              _closeHistoricalMessages();
+              _armedControl = null;
+            }),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
+              child: Row(
+                children: [
+                  Icon(_groupIcon(section.group), color: color, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      section.group.label,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  Text(
+                    '${section.rows.length}',
+                    style: TextStyle(color: color, fontWeight: FontWeight.w700),
+                  ),
+                  Icon(collapsed ? Icons.chevron_right : Icons.expand_more),
+                ],
+              ),
+            ),
+          ),
+          if (!collapsed)
+            Expanded(
+              child: ListView.builder(
+                key: PageStorageKey<String>(
+                  'agent-column-${section.group.name}',
+                ),
+                primary: false,
+                itemCount: section.rows.length,
+                findChildIndexCallback: (key) => indexByKey[key],
+                itemBuilder: (_, index) {
+                  final row = section.rows[index];
+                  return Padding(
+                    key: ValueKey<Object>(row.identity),
+                    padding: const EdgeInsets.only(bottom: AleraTokens.space8),
+                    child: _cardWidget(row),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _board(List<GlobalAgentDashboardSection> columns) {
+    if (columns.isEmpty) {
+      return const Center(child: Text('No matching verified Agent Sessions.'));
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columnWidth = globalAgentDashboardColumnWidth(
+          constraints.maxWidth,
+          columns.length,
+        );
+        return Scrollbar(
+          controller: _horizontal,
+          child: SingleChildScrollView(
+            controller: _horizontal,
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              height: constraints.maxHeight,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  for (var i = 0; i < columns.length; i++) ...<Widget>[
+                    if (i > 0) const SizedBox(width: 12),
+                    _statusColumn(columns[i], columnWidth),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // History browsing does not subscribe to the high-frequency live map.
@@ -471,19 +709,17 @@ class _GlobalAgentDashboardPageState
         .where((row) => !_needsReviewOnly || row.needsReview)
         .where((row) => row.matchesTerms(searchTerms))
         .toList();
-    final items = globalAgentDashboardVisibleItems(
+    final columns = groupGlobalAgentLiveRows(
       rows,
-      _collapsedGroups,
       alreadySorted: true,
+      pinnedFirst: true,
     );
-    final indexByKey = <Key, int>{
-      for (var i = 0; i < items.length; i++) _itemKey(items[i]): i,
+    final visible = {
+      for (final section in columns)
+        if (!_collapsedGroups.contains(section.group))
+          for (final row in section.rows) row.identity,
     };
-    // Filtered/collapsed cards can release their render snapshots; the
-    // projection keeps only their current data while they are live.
-    _cardWidgets.removeWhere(
-      (identity, _) => !indexByKey.containsKey(ValueKey<Object>(identity)),
-    );
+    _cardWidgets.removeWhere((identity, _) => !visible.contains(identity));
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     return Material(
@@ -518,8 +754,8 @@ class _GlobalAgentDashboardPageState
               ),
               const SizedBox(height: AleraTokens.space8),
               Text(
-                'All registered projects and worktrees. Live Host Agents or '
-                'opt-in local history previews; semantic search is not yet available.',
+                'All registered projects and worktrees. Each state has its own column. '
+                'Select a card to inspect its existing live Terminal.',
                 style: muted,
               ),
               const SizedBox(height: 8),
@@ -653,82 +889,7 @@ class _GlobalAgentDashboardPageState
                             style: muted,
                           ),
                         )
-                      : ListView.builder(
-                          itemCount: items.length,
-                          findChildIndexCallback: (key) => indexByKey[key],
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            if (item is GlobalAgentDashboardSection) {
-                              final collapsed = _collapsedGroups.contains(
-                                item.group,
-                              );
-                              return Padding(
-                                key: _itemKey(item),
-                                padding: EdgeInsets.only(
-                                  bottom: index == items.length - 1
-                                      ? 0
-                                      : AleraTokens.space8,
-                                ),
-                                child: InkWell(
-                                  onTap: () => setState(() {
-                                    if (!_collapsedGroups.add(item.group)) {
-                                      _collapsedGroups.remove(item.group);
-                                    }
-                                    // Collapsing a group must not leave an
-                                    // invisible target or armed destructive action.
-                                    _target = null;
-                                    _instruction.clear();
-                                    _closeHistoricalMessages();
-                                    _armedControl = null;
-                                  }),
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      4,
-                                      12,
-                                      4,
-                                      4,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          collapsed
-                                              ? Icons.chevron_right
-                                              : Icons.expand_more,
-                                        ),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          item.group.label,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          '${item.rows.length} Agents',
-                                          style: muted,
-                                        ),
-                                        const Spacer(),
-                                        Text(
-                                          collapsed ? 'Expand' : 'Collapse',
-                                          style: muted,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }
-                            return Padding(
-                              key: _itemKey(item),
-                              padding: EdgeInsets.only(
-                                bottom: index == items.length - 1
-                                    ? 0
-                                    : AleraTokens.space8,
-                              ),
-                              child: _cardWidget(item as GlobalAgentLiveRow),
-                            );
-                          },
-                        ),
+                      : _board(columns),
                 ),
               ],
             ],
@@ -743,218 +904,256 @@ class _GlobalAgentDashboardPageState
     final expanded = _expandedTimelines.contains(identity);
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: AleraTokens.surface,
-        border: Border.all(color: AleraTokens.borderSubtle),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _openingInspector ? null : () => _inspect(row),
         borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(AleraTokens.space16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AleraTokens.surface,
+            border: Border.all(color: AleraTokens.borderSubtle),
+            borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(AleraTokens.space16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    '${row.project} / ${row.workspace}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${row.project} / ${row.workspace}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: row.tab.isPinned
+                          ? 'Unpin Agent'
+                          : 'Pin Agent to top',
+                      icon: Icon(
+                        row.tab.isPinned
+                            ? Icons.push_pin
+                            : Icons.push_pin_outlined,
+                      ),
+                      iconSize: 17,
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _pinningTabIds.contains(row.tab.id)
+                          ? null
+                          : () => _togglePinned(row),
+                    ),
+                    IconButton(
+                      tooltip: 'Inspect live Agent',
+                      icon: const Icon(Icons.open_in_full, size: 17),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _openingInspector ? null : () => _inspect(row),
+                    ),
+                  ],
                 ),
                 Text(
-                  '${row.status.agentType.key} - '
-                  '${row.status.state.key}',
+                  '${row.status.agentType.key} - ${row.status.state.key}',
                   style: muted,
                 ),
-              ],
-            ),
-            if (row.needsReview) ...[
-              const SizedBox(height: AleraTokens.space4),
-              Text(
-                'Needs review · ${row.status.state.key} · last reported ${row.status.updatedAt.toLocal()}',
-                style: muted,
-              ),
-            ],
-            const SizedBox(height: AleraTokens.space8),
-            Text(
-              row.goal.isEmpty ? row.tab.title : row.goal,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (row.progress.isNotEmpty) ...[
-              const SizedBox(height: AleraTokens.space4),
-              Text(
-                row.progress,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: muted,
-              ),
-            ],
-            if (row.timeline.isNotEmpty) ...[
-              TextButton.icon(
-                onPressed: () => setState(() {
-                  if (!_expandedTimelines.add(identity)) {
-                    _expandedTimelines.remove(identity);
-                  }
-                }),
-                icon: Icon(expanded ? Icons.expand_less : Icons.expand_more),
-                label: Text('Timeline (${row.timeline.length})'),
-              ),
-              if (expanded)
-                for (final event in row.timeline)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${event.kind} · ${event.at.toLocal()}',
-                          style: muted,
-                        ),
-                        Text(event.text),
-                      ],
-                    ),
-                  ),
-            ],
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 4,
-              runSpacing: 0,
-              children: [
-                TextButton.icon(
-                  onPressed: () => setState(() {
-                    _target = (
-                      sessionId: row.tab.terminalSessionId,
-                      workspaceId: row.status.workspaceId,
-                      tabId: row.tab.id,
-                    );
-                    _sendFeedback = null;
-                  }),
-                  icon: const Icon(Icons.edit_note),
-                  label: const Text('Steer'),
-                ),
-                if (row.status.agentType.key == 'claude' ||
-                    row.status.agentType.key == 'codex')
-                  TextButton.icon(
-                    onPressed: _historicalBusy
-                        ? null
-                        : () => _readHistoricalMessages(row),
-                    icon: const Icon(Icons.menu_book_outlined),
-                    label: const Text('Original conversation'),
-                  ),
-                TextButton.icon(
-                  onPressed: () => _focus(row),
-                  icon: const Icon(Icons.open_in_new),
-                  label: const Text('Open Agent'),
-                ),
-                TextButton.icon(
-                  onPressed: () => _toggleHidden(row),
-                  icon: Icon(
-                    _hiddenCards.contains(identity)
-                        ? Icons.visibility
-                        : Icons.visibility_off,
-                  ),
-                  label: Text(
-                    _hiddenCards.contains(identity)
-                        ? 'Show card'
-                        : 'Hide (keeps running)',
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: _controlling || _sending
-                      ? null
-                      : () => _controlAgent(row, false),
-                  icon: const Icon(Icons.pause_circle_outline),
-                  label: Text(
-                    _armedControl ==
-                            (
-                              sessionId: row.tab.terminalSessionId,
-                              workspaceId: row.status.workspaceId,
-                              tabId: row.tab.id,
-                              terminate: false,
-                            )
-                        ? 'Confirm interrupt'
-                        : 'Interrupt',
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: _controlling || _sending
-                      ? null
-                      : () => _controlAgent(row, true),
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: Text(
-                    _armedControl ==
-                            (
-                              sessionId: row.tab.terminalSessionId,
-                              workspaceId: row.status.workspaceId,
-                              tabId: row.tab.id,
-                              terminate: true,
-                            )
-                        ? 'Confirm terminate'
-                        : 'Terminate',
-                  ),
-                ),
-              ],
-            ),
-            if (_historicalTarget == identity) ...[
-              const Divider(height: 16),
-              Row(
-                children: [
-                  const Icon(Icons.history, size: 16),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      'Original Claude/Codex conversation · read only',
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close original conversation',
-                    onPressed: () => setState(_closeHistoricalMessages),
-                    icon: const Icon(Icons.close, size: 18),
+                if (row.needsReview) ...[
+                  const SizedBox(height: AleraTokens.space4),
+                  Text(
+                    'Needs review · ${row.status.state.key} · last reported ${row.status.updatedAt.toLocal()}',
+                    style: muted,
                   ),
                 ],
-              ),
-              if (_historicalStatus != null)
-                Text(_historicalStatus!, style: muted),
-              if (_historicalBusy) const LinearProgressIndicator(minHeight: 2),
-              if (_historicalMessages.isNotEmpty)
-                SizedBox(
-                  height: 340,
-                  child: ListView.builder(
-                    itemCount: _historicalMessages.length,
-                    itemBuilder: (context, itemIndex) {
-                      final message = _historicalMessages[itemIndex];
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 5),
+                const SizedBox(height: AleraTokens.space8),
+                Text(
+                  row.goal.isEmpty ? row.tab.title : row.goal,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (row.progress.isNotEmpty) ...[
+                  const SizedBox(height: AleraTokens.space4),
+                  Text(
+                    row.progress,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: muted,
+                  ),
+                ],
+                if (row.timeline.isNotEmpty) ...[
+                  TextButton.icon(
+                    onPressed: () => setState(() {
+                      if (!_expandedTimelines.add(identity)) {
+                        _expandedTimelines.remove(identity);
+                      }
+                    }),
+                    icon: Icon(
+                      expanded ? Icons.expand_less : Icons.expand_more,
+                    ),
+                    label: Text('Timeline (${row.timeline.length})'),
+                  ),
+                  if (expanded)
+                    for (final event in row.timeline)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              message.role == 'user' ? 'You' : 'Agent',
-                              style: Theme.of(context).textTheme.labelMedium,
+                              '${event.kind} · ${event.at.toLocal()}',
+                              style: muted,
                             ),
-                            if (message.timestamp != null)
-                              Text(message.timestamp!, style: muted),
-                            SelectableText(message.text),
+                            Text(
+                              event.kind == 'report'
+                                  ? (event.summary.isNotEmpty
+                                        ? event.summary
+                                        : event.text)
+                                  : event.text,
+                            ),
                           ],
                         ),
-                      );
-                    },
+                      ),
+                ],
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => setState(() {
+                        _target = (
+                          sessionId: row.tab.terminalSessionId,
+                          workspaceId: row.status.workspaceId,
+                          tabId: row.tab.id,
+                        );
+                        _sendFeedback = null;
+                      }),
+                      icon: const Icon(Icons.edit_note),
+                      label: const Text('Steer'),
+                    ),
+                    if (row.status.agentType.key == 'claude' ||
+                        row.status.agentType.key == 'codex')
+                      TextButton.icon(
+                        onPressed: _historicalBusy
+                            ? null
+                            : () => _readHistoricalMessages(row),
+                        icon: const Icon(Icons.menu_book_outlined),
+                        label: const Text('Original conversation'),
+                      ),
+                    TextButton.icon(
+                      onPressed: () => _focus(row),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('Open Agent'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _toggleHidden(row),
+                      icon: Icon(
+                        _hiddenCards.contains(identity)
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                      ),
+                      label: Text(
+                        _hiddenCards.contains(identity)
+                            ? 'Show card'
+                            : 'Hide (keeps running)',
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _controlling || _sending
+                          ? null
+                          : () => _controlAgent(row, false),
+                      icon: const Icon(Icons.pause_circle_outline),
+                      label: Text(
+                        _armedControl ==
+                                (
+                                  sessionId: row.tab.terminalSessionId,
+                                  workspaceId: row.status.workspaceId,
+                                  tabId: row.tab.id,
+                                  terminate: false,
+                                )
+                            ? 'Confirm interrupt'
+                            : 'Interrupt',
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: _controlling || _sending
+                          ? null
+                          : () => _controlAgent(row, true),
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: Text(
+                        _armedControl ==
+                                (
+                                  sessionId: row.tab.terminalSessionId,
+                                  workspaceId: row.status.workspaceId,
+                                  tabId: row.tab.id,
+                                  terminate: true,
+                                )
+                            ? 'Confirm terminate'
+                            : 'Terminate',
+                      ),
+                    ),
+                  ],
+                ),
+                if (_historicalTarget == identity) ...[
+                  const Divider(height: 16),
+                  Row(
+                    children: [
+                      const Icon(Icons.history, size: 16),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Original Claude/Codex conversation · read only',
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close original conversation',
+                        onPressed: () => setState(_closeHistoricalMessages),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                    ],
                   ),
-                ),
-              if (_historicalBefore != null)
-                TextButton.icon(
-                  onPressed: _historicalBusy
-                      ? null
-                      : () => _readHistoricalMessages(row, older: true),
-                  icon: const Icon(Icons.expand_less),
-                  label: const Text('Load older conversation messages'),
-                ),
-            ],
-          ],
+                  if (_historicalStatus != null)
+                    Text(_historicalStatus!, style: muted),
+                  if (_historicalBusy)
+                    const LinearProgressIndicator(minHeight: 2),
+                  if (_historicalMessages.isNotEmpty)
+                    SizedBox(
+                      height: 340,
+                      child: ListView.builder(
+                        itemCount: _historicalMessages.length,
+                        itemBuilder: (context, itemIndex) {
+                          final message = _historicalMessages[itemIndex];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 5),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  message.role == 'user' ? 'You' : 'Agent',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelMedium,
+                                ),
+                                if (message.timestamp != null)
+                                  Text(message.timestamp!, style: muted),
+                                SelectableText(message.text),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  if (_historicalBefore != null)
+                    TextButton.icon(
+                      onPressed: _historicalBusy
+                          ? null
+                          : () => _readHistoricalMessages(row, older: true),
+                      icon: const Icon(Icons.expand_less),
+                      label: const Text('Load older conversation messages'),
+                    ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );
