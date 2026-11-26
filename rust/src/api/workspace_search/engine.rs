@@ -131,25 +131,62 @@ fn matches_in_file(
     cancellation: Option<&AtomicBool>,
 ) -> Result<Vec<WorkspaceSearchMatch>, WorkspaceSearchError> {
     let mut out = Vec::new();
-    for (line_index, line) in text.lines().enumerate() {
+    let mut all_lines = text.lines().enumerate();
+    let mut seek_offset = 0;
+    let mut seek_line_index = 0;
+    loop {
         ensure_not_cancelled(cancellation)?;
+        let next = if compiled.seek_literal_lines {
+            if seek_offset >= text.len() {
+                break;
+            }
+            // Preserve the original truncation contract, including a
+            // remaining nonmatching line after the global result limit.
+            if *total_matches >= compiled.max_results {
+                *truncated = true;
+                break;
+            }
+            let next = seek_literal_line(text, compiled, &mut seek_offset, &mut seek_line_index)?;
+            ensure_not_cancelled(cancellation)?;
+            next
+        } else {
+            all_lines.next()
+        };
+        let Some((line_index, line)) = next else {
+            break;
+        };
         if *total_matches >= compiled.max_results {
             *truncated = true;
             break;
         }
         let line_bytes = line.as_bytes();
         let mut file_count = out.len() as u32;
+        // Advance character columns from the previous nonoverlapping match.
+        // Avoid repeatedly counting the entire prefix of long/minified lines.
+        let mut previous_end = 0;
+        let mut previous_end_chars = 0;
+        let mut line_chars = None;
         compiled
             .matcher
             .find_iter(line_bytes, |m| {
+                let start = m.start();
+                let end = m.end();
+                // The byte-oriented iterator can advance through the middle
+                // of UTF-8 after an empty regex match. Such offsets cannot
+                // be represented by editor character columns.
+                if !line.is_char_boundary(start) || !line.is_char_boundary(end) {
+                    return true;
+                }
                 if *total_matches >= compiled.max_results || file_count >= MAX_MATCHES_PER_FILE {
                     *truncated = true;
                     return false;
                 }
-                let start = m.start();
-                let end = m.end();
-                let column = line[..start].chars().count() as u32 + 1;
-                let match_length = line[start..end].chars().count() as u32;
+                let start_chars = previous_end_chars + line[previous_end..start].chars().count();
+                let matched_chars = line[start..end].chars().count();
+                previous_end = end;
+                previous_end_chars = start_chars + matched_chars;
+                let column = start_chars as u32 + 1;
+                let match_length = matched_chars as u32;
                 let line_number = line_index as u32 + 1;
                 let clamped = if full_lines {
                     LinePreview {
@@ -158,7 +195,16 @@ fn matches_in_file(
                         display_match_length: None,
                     }
                 } else {
-                    clamp_line_context(line, start, end)
+                    // Most source lines fit without counting or allocating
+                    // a temporary Vec<char>. Long lines count once per line.
+                    let count = *line_chars.get_or_insert_with(|| {
+                        if line.len() <= MAX_LINE_CONTENT_LENGTH {
+                            line.len()
+                        } else {
+                            line.chars().count()
+                        }
+                    });
+                    clamp_line_context(line, start, start_chars, matched_chars, count)
                 };
                 let id = format!("{relative_path}:{line_number}:{column}:{}", out.len());
                 out.push(WorkspaceSearchMatch {
@@ -181,8 +227,49 @@ fn matches_in_file(
                     error.to_string(),
                 )
             })?;
+        // Once this file is capped and truncation is already known, no
+        // additional line can change the returned matches or truncation bit.
+        if out.len() as u32 >= MAX_MATCHES_PER_FILE && *truncated {
+            break;
+        }
     }
     Ok(out)
+}
+
+/// Find a matching physical line using the same grep matcher over the
+/// remaining file. Only used for nonempty plain literals without CR/LF
+/// or word-boundary mode. Re-run the matcher on that exact str::lines()
+/// slice to retain the existing match, column and replacement semantics.
+fn seek_literal_line<'a>(
+    text: &'a str,
+    compiled: &CompiledSearch,
+    offset: &mut usize,
+    line_index: &mut usize,
+) -> Result<Option<(usize, &'a str)>, WorkspaceSearchError> {
+    let found = compiled
+        .matcher
+        .find_at(text.as_bytes(), *offset)
+        .map_err(|error| {
+            WorkspaceSearchError::new(WorkspaceSearchErrorKind::InvalidPattern, error.to_string())
+        })?;
+    let Some(found) = found else {
+        *offset = text.len();
+        return Ok(None);
+    };
+    let skipped = &text[*offset..found.start()];
+    *line_index += skipped.bytes().filter(|&byte| byte == b'\n').count();
+    let start = skipped
+        .rfind('\n')
+        .map_or(*offset, |index| *offset + index + 1);
+    let remainder = &text[start..];
+    let length = remainder
+        .find('\n')
+        .map_or(remainder.len(), |index| index + 1);
+    let line = remainder[..length].lines().next().expect("matching line");
+    let current = *line_index;
+    *offset = start + length;
+    *line_index += 1;
+    Ok(Some((current, line)))
 }
 
 pub(super) fn ensure_not_cancelled(
@@ -203,12 +290,14 @@ struct LinePreview {
     display_match_length: Option<u32>,
 }
 
-fn clamp_line_context(line: &str, start_byte: usize, end_byte: usize) -> LinePreview {
-    let chars = line.chars().collect::<Vec<_>>();
-    let start = line[..start_byte].chars().count();
-    let end = line[..end_byte].chars().count();
-    let match_len = end.saturating_sub(start);
-    if chars.len() <= MAX_LINE_CONTENT_LENGTH {
+fn clamp_line_context(
+    line: &str,
+    start_byte: usize,
+    start: usize,
+    match_len: usize,
+    line_chars: usize,
+) -> LinePreview {
+    if line_chars <= MAX_LINE_CONTENT_LENGTH {
         return LinePreview {
             line_content: line.to_string(),
             display_column: None,
@@ -219,15 +308,32 @@ fn clamp_line_context(line: &str, start_byte: usize, end_byte: usize) -> LinePre
     let remaining = MAX_LINE_CONTENT_LENGTH.saturating_sub(clamped_match_len);
     let left_budget = remaining / 2;
     let mut window_start = start.saturating_sub(left_budget);
-    let window_end = (window_start + MAX_LINE_CONTENT_LENGTH).min(chars.len());
+    let window_end = (window_start + MAX_LINE_CONTENT_LENGTH).min(line_chars);
     window_start = window_end.saturating_sub(MAX_LINE_CONTENT_LENGTH);
-    let mut snippet = chars[window_start..window_end].iter().collect::<String>();
+    // The context window starts at or before the match. Walk backwards
+    // at most 500 characters, then forwards at most 500, instead of
+    // allocating a vector proportional to the entire source line.
+    let start_byte = if window_start == start {
+        start_byte
+    } else {
+        line[..start_byte]
+            .char_indices()
+            .rev()
+            .nth(start - window_start - 1)
+            .expect("context start")
+            .0
+    };
+    let end_byte = line[start_byte..]
+        .char_indices()
+        .nth(window_end - window_start)
+        .map_or(line.len(), |(index, _)| start_byte + index);
+    let mut snippet = line[start_byte..end_byte].to_string();
     let mut display_column = start.saturating_sub(window_start) as u32 + 1;
     if window_start > 0 {
         snippet.insert(0, '…');
         display_column += 1;
     }
-    if window_end < chars.len() {
+    if window_end < line_chars {
         snippet.push('…');
     }
     LinePreview {
@@ -236,3 +342,7 @@ fn clamp_line_context(line: &str, start_byte: usize, end_byte: usize) -> LinePre
         display_match_length: Some(clamped_match_len as u32),
     }
 }
+
+#[cfg(test)]
+#[path = "engine_perf_tests.rs"]
+mod perf_tests;

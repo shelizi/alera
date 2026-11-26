@@ -14,6 +14,9 @@ use super::{
 pub(super) struct CompiledSearch {
     pub(super) root: PathBuf,
     pub(super) matcher: RegexMatcher,
+    // Plain literals cannot match across a line terminator. Seek candidate
+    // lines in the whole buffer without changing regex/word-boundary semantics.
+    pub(super) seek_literal_lines: bool,
     pub(super) replacement_regex: Regex,
     pub(super) include: Option<GlobSet>,
     pub(super) exclude: Option<GlobSet>,
@@ -64,6 +67,9 @@ pub(super) fn compile_search(
     Ok(CompiledSearch {
         root,
         matcher,
+        seek_literal_lines: !options.use_regex
+            && !options.whole_word
+            && !options.query.contains(['\r', '\n']),
         replacement_regex,
         include: build_globs(options.include_pattern.as_deref(), false)?,
         exclude: build_globs(options.exclude_pattern.as_deref(), true)?,
