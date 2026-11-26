@@ -386,16 +386,224 @@ void main() {
     );
     service.emitChanged('new.txt');
     await _flush();
-    secondRelease.complete();
-    await _flush();
+    // The new workspace's activation reconciliation and precise event
+    // both complete before the old workspace's metadata read is released.
     expect(registry.reloadBatches.map((batch) => batch.workspace).toList(), [
       '/repo/one',
+      '/repo/two',
       '/repo/two',
     ]);
     expect(registry.reloadBatches.map((batch) => batch.paths).toList(), [
       ['busy.txt'],
+      [''],
       ['new.txt'],
     ]);
+    secondRelease.complete();
+    await _flush();
+    expect(registry.reloadBatches, hasLength(3));
+  });
+
+  test('new workspace reload is independent and stale completion cannot release its queue', () async {
+    const oldWorkspace = '/repo/one';
+    const newWorkspace = '/repo/two';
+    final service = _WatcherFileService()
+      ..contentTokens['old.txt'] = 'old-external'
+      ..contentTokens['later.txt'] = 'later-external'
+      ..contentTokens['new.txt'] = 'new-external';
+    final registry = _RecordingEditorRegistry();
+    addTearDown(registry.dispose);
+    final oldDoc = registry.documentFor('old')
+      ..attachFile(workspacePath: oldWorkspace, relativePath: 'old.txt')
+      ..acceptLoaded(_editorFile('old', token: 'old-original'));
+    final laterDoc = registry.documentFor('later')
+      ..attachFile(workspacePath: oldWorkspace, relativePath: 'later.txt')
+      ..acceptLoaded(_editorFile('later', token: 'later-original'));
+    final newDoc = registry.documentFor('new')
+      ..attachFile(workspacePath: newWorkspace, relativePath: 'new.txt')
+      ..acceptLoaded(_editorFile('new', token: 'new-original'));
+    var oldReloads = 0;
+    var newReloads = 0;
+    registry.register(
+      'old',
+      EditorSessionHandle(
+        isDirty: () => oldDoc.isDirty,
+        save: () async {},
+        discard: () async {},
+        reload: () async {
+          oldReloads++;
+          oldDoc.acceptLoaded(
+            _editorFile('external old', token: 'old-external'),
+          );
+        },
+      ),
+    );
+    registry.register(
+      'new',
+      EditorSessionHandle(
+        isDirty: () => newDoc.isDirty,
+        save: () async {},
+        discard: () async {},
+        reload: () async {
+          newReloads++;
+          newDoc.acceptLoaded(
+            _editorFile('external new', token: 'new-external'),
+          );
+        },
+      ),
+    );
+    final oldViewer = registry.documentChangesForPath(
+      workspacePath: oldWorkspace,
+      relativePath: 'viewer.md',
+    );
+    final newViewer = registry.documentChangesForPath(
+      workspacePath: newWorkspace,
+      relativePath: 'viewer.md',
+    );
+    var oldNotifications = 0;
+    var newNotifications = 0;
+    void oldChanged() => oldNotifications++;
+    void newChanged() => newNotifications++;
+    oldViewer.addListener(oldChanged);
+    newViewer.addListener(newChanged);
+    addTearDown(() {
+      oldViewer.removeListener(oldChanged);
+      newViewer.removeListener(newChanged);
+    });
+
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    await watcher.update(
+      workspacePath: oldWorkspace,
+      openRelativePaths: ['old.txt', 'later.txt', 'viewer.md'],
+    );
+    final oldStarted = Completer<void>();
+    final newStarted = Completer<void>();
+    final oldRelease = Completer<void>();
+    final newRelease = Completer<void>();
+    addTearDown(() {
+      if (!oldRelease.isCompleted) oldRelease.complete();
+      if (!newRelease.isCompleted) newRelease.complete();
+    });
+    service.beforeContentTokenRead = (workspacePath, relativePath) async {
+      if (workspacePath == oldWorkspace && !oldStarted.isCompleted) {
+        oldStarted.complete();
+        await oldRelease.future;
+      }
+      if (workspacePath == newWorkspace && !newStarted.isCompleted) {
+        newStarted.complete();
+        await newRelease.future;
+      }
+    };
+    service.emitChanged('');
+    await oldStarted.future;
+    await watcher.update(
+      workspacePath: newWorkspace,
+      openRelativePaths: ['new.txt', 'viewer.md'],
+    );
+    await _flush();
+    expect(
+      newStarted.isCompleted,
+      isTrue,
+      reason: 'new IO starts before old IO completes',
+    );
+    service.emitChanged('viewer.md');
+    await _flush();
+    oldRelease.complete();
+    await _flush();
+    expect(oldReloads, 0);
+    expect(oldNotifications, 0);
+    expect(laterDoc.currentText, 'later');
+    expect(service.contentTokenReads, ['old.txt', 'new.txt']);
+    expect(registry.reloadBatches, hasLength(2));
+    expect(newNotifications, 0);
+    service.emitChanged('new.txt');
+    await _flush();
+    expect(
+      registry.reloadBatches,
+      hasLength(2),
+      reason: 'old completion cannot clear new in-flight flag',
+    );
+    newRelease.complete();
+    await _flush();
+    expect(newReloads, 1);
+    expect(newDoc.currentText, 'external new');
+    expect(registry.reloadBatches.last.paths, ['viewer.md', 'new.txt']);
+    expect(newNotifications, 2);
+    expect(oldNotifications, 0);
+
+    // Reactivation checks documents even if all precise old events were retired.
+    await watcher.update(
+      workspacePath: oldWorkspace,
+      openRelativePaths: ['old.txt', 'later.txt', 'viewer.md'],
+    );
+    await _flush();
+    expect(oldReloads, 1);
+    expect(oldDoc.currentText, 'external old');
+    expect(laterDoc.hasSnapshot, isFalse);
+    expect(oldNotifications, 1);
+  });
+
+  test('rapid switching caps retired IO and discards intermediate queued generations', () async {
+    final service = _WatcherFileService();
+    final registry = _RecordingEditorRegistry();
+    addTearDown(registry.dispose);
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    final paths = List.generate(7, (i) => '/repo/workspace-$i');
+    final started = <String>[];
+    final releases = <String, Completer<void>>{};
+    var active = 0;
+    var peak = 0;
+    service.beforeContentTokenRead = (workspacePath, relativePath) async {
+      started.add(workspacePath);
+      active++;
+      if (active > peak) peak = active;
+      final release = releases.putIfAbsent(workspacePath, Completer<void>.new);
+      await release.future;
+      active--;
+    };
+    addTearDown(() {
+      for (final release in releases.values) {
+        if (!release.isCompleted) release.complete();
+      }
+    });
+    for (var i = 0; i < paths.length; i++) {
+      registry.documentFor('tab-$i')
+        ..attachFile(workspacePath: paths[i], relativePath: 'file-$i.txt')
+        ..acceptLoaded(_editorFile('original $i', token: 'original-$i'));
+      service.contentTokens['file-$i.txt'] = 'external-$i';
+      await watcher.update(
+        workspacePath: paths[i],
+        openRelativePaths: ['file-$i.txt'],
+      );
+      if (i == 0) service.emitChanged('file-0.txt');
+      await _flush();
+    }
+    expect(started, paths.take(4).toList());
+    expect(active, 4);
+    expect(peak, 4);
+    releases[paths.first]!.complete();
+    await _flush();
+    expect(started, [...paths.take(4), paths.last]);
+    expect(peak, 4);
+    // Disposing the watcher retires even the newest generation; in-flight
+    // metadata may finish, but it cannot mutate documents or send notices.
+    await watcher.dispose();
+    for (final release in releases.values) {
+      if (!release.isCompleted) release.complete();
+    }
+    await _flush();
+    expect(active, 0);
+    expect(started, [...paths.take(4), paths.last]);
+    for (var i = 0; i < paths.length; i++) {
+      expect(registry.documentFor('tab-$i').currentText, 'original $i');
+    }
   });
 
   test(
@@ -572,6 +780,7 @@ class _RecordingEditorRegistry extends EditorSessionRegistry {
     required WorkspaceFileService workspaceFiles,
     required String workspacePath,
     required Iterable<String> relativePaths,
+    bool Function()? isCurrent,
   }) {
     final paths = relativePaths.toList(growable: false);
     reloadBatches.add((workspace: workspacePath, paths: paths));
@@ -579,6 +788,7 @@ class _RecordingEditorRegistry extends EditorSessionRegistry {
       workspaceFiles: workspaceFiles,
       workspacePath: workspacePath,
       relativePaths: paths,
+      isCurrent: isCurrent,
     );
   }
 }

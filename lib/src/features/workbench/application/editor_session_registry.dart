@@ -305,7 +305,9 @@ class EditorSessionRegistry extends ChangeNotifier
     required WorkspaceFileService workspaceFiles,
     required String workspacePath,
     required Iterable<String> relativePaths,
+    bool Function()? isCurrent,
   }) async {
+    if (isCurrent?.call() == false) return;
     final candidates = relativePaths.toSet();
     final reconcileAll = candidates.contains('');
     final observedTokens = <String, String?>{};
@@ -313,6 +315,7 @@ class EditorSessionRegistry extends ChangeNotifier
     // or open. Do not hold a live map iterator across those awaits.
     final documents = _documents.entries.toList(growable: false);
     for (final entry in documents) {
+      if (isCurrent?.call() == false) return;
       final tabId = entry.key;
       final document = entry.value;
       final relativePath = document.relativePath;
@@ -329,6 +332,9 @@ class EditorSessionRegistry extends ChangeNotifier
               workspacePath: workspacePath,
               relativePath: relativePath,
             );
+      // A workspace may have been retired during disk IO. Do not dispatch
+      // a reload or scan more documents for a stale watcher.
+      if (isCurrent?.call() == false) return;
       observedTokens[relativePath] = diskToken;
 
       // A watcher also observes Alera's own writes. A successful save already
