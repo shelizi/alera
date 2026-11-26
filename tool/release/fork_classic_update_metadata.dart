@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/updater/domain/fork_classic_update_target.dart';
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
@@ -166,12 +167,54 @@ Future<Map<String, Object?>> _artifactMetadata(
   if (length == 0) {
     throw const FormatException('The Classic update artifact is empty.');
   }
+  await _verifyArchiveLayout(target, file);
   return {
     'kind': 'zip',
     'url': target.artifactUrl(version).toString(),
     'sha256': (await sha256.bind(file.openRead()).first).toString(),
     'length': length,
   };
+}
+
+Future<void> _verifyArchiveLayout(
+  ForkClassicUpdateTarget target,
+  File file,
+) async {
+  final archive = ZipDecoder().decodeBytes(await file.readAsBytes());
+  final names = <String>{};
+  for (final entry in archive.files) {
+    final name = entry.name;
+    if (name == target.descriptorAppName ||
+        name == '${target.descriptorAppName}/') {
+      if (target == ForkClassicUpdateTarget.macosArm64 &&
+          (!entry.isDirectory || entry.isSymbolicLink)) {
+        throw const FormatException(
+          'Classic macOS bundle root is not a real directory.',
+        );
+      }
+    }
+    if (entry.isFile && !entry.isSymbolicLink && entry.size > 0) {
+      if (!names.add(name)) {
+        throw const FormatException('Duplicate Classic ZIP file.');
+      }
+    }
+  }
+  final required = target == ForkClassicUpdateTarget.macosArm64
+      ? [
+          '${target.descriptorAppName}/Contents/Info.plist',
+          '${target.descriptorAppName}/Contents/MacOS/Alera',
+        ]
+      : [
+          'Alera.exe',
+          'flutter_windows.dll',
+          'desktop_updater_plugin.dll',
+          'resources/alera/alera.exe',
+        ];
+  if (!names.containsAll(required)) {
+    throw FormatException(
+      'Classic ZIP does not match ${target.descriptorAppName}: missing ${required.where((name) => !names.contains(name)).join(', ')}',
+    );
+  }
 }
 
 Map<String, Object?> _descriptor(
@@ -183,7 +226,7 @@ Map<String, Object?> _descriptor(
 ) => {
   'schemaVersion': 3,
   'packageId': 'dev.leynier.alera',
-  'appName': 'Alera',
+  'appName': target.descriptorAppName,
   'version': version,
   'buildNumber': buildNumber,
   'platform': target.platform,
