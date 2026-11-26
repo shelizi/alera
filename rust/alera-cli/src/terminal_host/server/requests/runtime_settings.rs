@@ -33,6 +33,8 @@ impl ServerActor {
         payload: &Value,
     ) -> HostResult<Value> {
         let update = parse_runtime_settings_update(payload)?;
+        let summaries_were_enabled = self.runtime_store.effective_ai_assist_settings().await.ok()
+            .is_some_and(|settings| super::super::agent_report_summary::enabled(&settings));
         let revision = RuntimeSettingsStoreHandler::new(&self.runtime_store)
             .commit(&update)
             .await?;
@@ -51,8 +53,10 @@ impl ServerActor {
             self.account_push.active_subscriptions = 0;
         }
         if let Some(settings) = &update.ai_assist {
-            if !settings.enabled || !settings.auto_summarize_agent_reports {
+            if !super::super::agent_report_summary::enabled(settings) {
                 self.cancel_agent_reports();
+            } else if !summaries_were_enabled {
+                self.backfill_latest_agent_reports().await;
             }
             let cancel_titles = self
                 .agent_title_jobs

@@ -85,6 +85,8 @@ final agentContextRecoveryProvider = FutureProvider.autoDispose
                 ? saved.currentFocus
                 : history.currentFocus,
             progress: history.progress,
+            reportSummary: saved.reportSummary,
+            overallSummary: saved.overallSummary,
             timeline: mergeAgentContextTimelines(
               saved.timeline,
               history.timeline,
@@ -145,10 +147,16 @@ List<AgentContextMilestone> mergeAgentContextTimelines(
   List<AgentContextMilestone> recovered,
 ) {
   final result = <AgentContextMilestone>[];
-  final seen = <(String, String, int)>{};
+  final seen = <(String, String, String), int>{};
   for (final event in [...live, ...recovered]) {
-    final key = (event.kind, event.text, event.at.millisecondsSinceEpoch);
-    if (seen.add(key)) result.add(event);
+    final key = (event.kind, event.text, event.reportAt);
+    final index = seen[key];
+    if (index == null) {
+      seen[key] = result.length;
+      result.add(event);
+    } else if (result[index].summary.isEmpty && event.summary.isNotEmpty) {
+      result[index] = event;
+    }
   }
   result.sort((a, b) => b.at.compareTo(a.at));
   return result.take(16).toList(growable: false);

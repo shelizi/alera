@@ -304,7 +304,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "agentHistory.search" => local_deferred(DeferredReadRoute::AgentHistorySearch),
         "agentHistory.clear" => local_deferred(DeferredReadRoute::AgentHistoryClear),
         "agentHistory.locateExact" => LOCAL,
-        "agentHistory.messages" | "agentContext.get" => LOCAL,
+        "agentHistory.messages" | "agentContext.get" | "agentContext.summarize" => LOCAL,
         "agentHistory.resumeExact" => LOCAL_CONFLICT,
 
         "project.register" => {

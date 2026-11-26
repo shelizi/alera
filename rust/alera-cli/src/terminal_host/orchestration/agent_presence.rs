@@ -132,14 +132,6 @@ impl AgentPresenceRegistry {
             .retain(|_, entry| enabled_agents.contains(&entry.agent_type.as_str()));
     }
 
-    pub fn clear_report_summaries(&mut self) -> bool {
-        let mut changed = false;
-        for presence in self.entries.values_mut() {
-            changed |= presence.context.report_summary.take().is_some();
-        }
-        changed
-    }
-
     pub fn remove(&mut self, handle: &str) -> bool {
         self.entries.remove(handle).is_some()
     }
