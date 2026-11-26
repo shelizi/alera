@@ -19,6 +19,8 @@ part 'workspace_search_controller.g.dart';
 
 const int _workspaceSearchMaxResults = 2000;
 const Duration _workspaceSearchDebounce = Duration(milliseconds: 250);
+const Duration _workspaceLiteralDebounce = Duration(milliseconds: 120);
+const Duration _workspaceSlowSearchThreshold = Duration(milliseconds: 400);
 
 class const WorkspaceSearchState({
   final String query = '',
@@ -94,6 +96,7 @@ class const WorkspaceSearchDirtyFilesException(final List<String> paths)
 @Riverpod(keepAlive: true)
 class WorkspaceSearchController extends _$WorkspaceSearchController {
   Timer? _debounce;
+  Duration? _lastSearchDuration;
   int _requestGeneration = 0;
   String? _activeRequestId;
   WorkspaceSearchService? _searchService;
@@ -245,6 +248,7 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
     _activeRequestId = requestId;
     state = state.copyWith(loading: true, error: null);
     try {
+      final stopwatch = Stopwatch()..start();
       final searchOptions = _searchOptions(workspacePath);
       final result = state.hasReplacement
           ? (await _service.previewReplace(
@@ -260,6 +264,7 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
         return;
       }
       state = state.copyWith(loading: false, result: result, error: null);
+      _lastSearchDuration = stopwatch.elapsed;
     } catch (error) {
       if (generation != _requestGeneration) {
         return;
@@ -361,8 +366,16 @@ class WorkspaceSearchController extends _$WorkspaceSearchController {
       state = state.copyWith(loading: false, error: null, result: null);
       return;
     }
+    // A sufficiently selective plain query can start sooner. Keep the
+    // original delay for broad, expensive or recently slow searches.
+    final fastLiteral =
+        !state.useRegex &&
+        !state.wholeWord &&
+        !state.hasReplacement &&
+        state.query.runes.length >= 3 &&
+        (_lastSearchDuration ?? Duration.zero) <= _workspaceSlowSearchThreshold;
     _debounce = Timer(
-      _workspaceSearchDebounce,
+      fastLiteral ? _workspaceLiteralDebounce : _workspaceSearchDebounce,
       () => unawaited(searchNow(workspacePath)),
     );
   }

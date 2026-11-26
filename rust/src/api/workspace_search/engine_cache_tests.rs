@@ -146,6 +146,152 @@ fn replacement_preview_never_uses_cached_content() {
 }
 
 #[test]
+fn incremental_index_matches_fresh_scan_and_invalidates_on_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let ascii = root.join("ascii.txt");
+    let old = "ordinary source buffer\n".repeat(3500);
+    fs::write(&ascii, &old).unwrap();
+    fs::write(
+        root.join("unicode.txt"),
+        "\u{212a}\u{017f}x \u{4e16}\u{754c}\n".repeat(9000),
+    )
+    .unwrap();
+    let cache = RootCache::new(&root).unwrap();
+    let queries = [
+        "needle",
+        "needle_more",
+        "missing_one",
+        "missing_two",
+        "missing_three",
+        "ksx",
+        "ordinary",
+        "\u{4e16}\u{754c}",
+    ];
+    for query in queries {
+        let compiled = compile_search(&options(&root, query, 2000)).unwrap();
+        let reference = run_search_impl(&compiled, false, None, None, 1).unwrap();
+        let indexed = run_search_impl(&compiled, false, None, Some(&cache), 4).unwrap();
+        assert_same(&reference, &indexed);
+    }
+    let (built, refinements, trigrams) = cache.index_stats();
+    assert!(
+        built >= 1 && refinements >= 2 && trigrams >= 1,
+        "expected both proven refinement and trigram pruning: {built}/{refinements}/{trigrams}"
+    );
+    let original_time = fs::metadata(&ascii).unwrap().modified().unwrap();
+    let updated = format!("needle_more{}", &old["needle_more".len()..]);
+    assert_eq!(old.len(), updated.len());
+    fs::write(&ascii, updated).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&ascii)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(original_time))
+        .unwrap();
+    let compiled = compile_search(&options(&root, "needle_more", 2000)).unwrap();
+    // No watcher wait: the handle's stable stamp must independently reject
+    // stale negative evidence even if delivery of the watch event is delayed.
+    let reference = run_search_impl(&compiled, false, None, None, 1).unwrap();
+    let indexed = run_search_impl(&compiled, false, None, Some(&cache), 4).unwrap();
+    assert_eq!(reference.total_matches, 1);
+    assert_same(&reference, &indexed);
+    for (query, case_sensitive, whole_word, regex) in [
+        ("KSX", false, false, false),
+        ("ksx", true, false, false),
+        ("\u{212a}\u{017f}x", false, false, false),
+        ("ordinary", false, true, false),
+        ("needle_.*", true, false, true),
+    ] {
+        let mut opts = options(&root, query, 11);
+        opts.case_sensitive = case_sensitive;
+        opts.whole_word = whole_word;
+        opts.use_regex = regex;
+        let compiled = compile_search(&opts).unwrap();
+        assert_same(
+            &run_search_impl(&compiled, false, None, None, 1).unwrap(),
+            &run_search_impl(&compiled, false, None, Some(&cache), 4).unwrap(),
+        );
+    }
+}
+
+#[test]
+#[ignore = "measure indexed vs exact warm scans and lazy construction on the same tree"]
+fn compare_incremental_literal_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let base = "let value = workspace_file.read(options);\n".repeat(6000);
+    for n in 0..100 {
+        let path = root.join(format!("{n:03}.rs"));
+        if n % 25 == 0 {
+            fs::write(path, format!("{base}\nneedle_feature_x actual_match\n")).unwrap();
+        } else {
+            fs::write(path, &base).unwrap();
+        }
+    }
+    let cache = RootCache::new(&root).unwrap();
+    let run = |query: &str, indexed: bool| {
+        let mut compiled = compile_search(&options(&root, query, 2000)).unwrap();
+        if !indexed {
+            compiled.literal_query = None;
+        }
+        let start = Instant::now();
+        let result = run_search_impl(&compiled, false, None, Some(&cache), 4).unwrap();
+        (result, start.elapsed().as_secs_f64() * 1000.0)
+    };
+    let (reference, cold) = run("needle_feature", false);
+    let (primed, prime) = run("needle_feature", true);
+    assert_same(&reference, &primed);
+    let mut build_samples = Vec::new();
+    for query in ["unrelated_z1", "unrelated_z2", "unrelated_z3"] {
+        let (old, exact) = run(query, false);
+        let (new, indexed) = run(query, true);
+        assert_same(&old, &new);
+        build_samples.push((query, exact, indexed));
+    }
+    let mut times = [Vec::<f64>::new(), Vec::new(), Vec::new(), Vec::new()];
+    for n in 0..7 {
+        for (offset, query) in ["needle_feature_x", "absent_trigram_qz9"]
+            .into_iter()
+            .enumerate()
+        {
+            let (exact, a, indexed, b) = if n % 2 == 0 {
+                let (exact, a) = run(query, false);
+                let (indexed, b) = run(query, true);
+                (exact, a, indexed, b)
+            } else {
+                let (indexed, b) = run(query, true);
+                let (exact, a) = run(query, false);
+                (exact, a, indexed, b)
+            };
+            assert_same(&exact, &indexed);
+            times[offset * 2].push(a);
+            times[offset * 2 + 1].push(b);
+        }
+    }
+    let (built, refinements, trigrams) = cache.index_stats();
+    let (hits, entries, bytes) = cache.stats();
+    println!("LITERAL_INDEX files=100 approx_content_bytes={} cold_ms={cold:.3} prime_ms={prime:.3} warm_build_queries={build_samples:?}", base.len()*100);
+    for (name, times) in [
+        "refinement_exact",
+        "refinement_indexed",
+        "unrelated_exact",
+        "unrelated_indexed",
+    ]
+    .into_iter()
+    .zip(times.iter_mut())
+    {
+        times.sort_by(f64::total_cmp);
+        println!(
+            "LITERAL_INDEX mode={name} median_ms={:.3} samples={times:?}",
+            times[3]
+        );
+    }
+    println!("LITERAL_INDEX built={built} refinements={refinements} trigram_skips={trigrams} hits={hits} entries={entries} charged_bytes={bytes}");
+    assert!(built > 0 && refinements > 0 && trigrams > 0);
+}
+
+#[test]
 #[ignore = "synthetic complete file-tree I/O benchmark; run serialized"]
 fn compare_workspace_read_ahead_and_cache() {
     let dir = tempfile::tempdir().unwrap();

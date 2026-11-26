@@ -9,6 +9,7 @@ mod content_cache;
 mod engine;
 mod globs;
 mod line_ranges;
+mod literal_index;
 mod paths;
 mod preview;
 mod replace;

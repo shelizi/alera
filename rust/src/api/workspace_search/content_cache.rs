@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use super::literal_index::IndexedText;
+
 use notify::{
     event::{AccessKind, AccessMode},
     EventKind, RecursiveMode, Watcher,
@@ -109,7 +111,7 @@ impl FileStamp {
 }
 
 // None is a successfully read but non-searchable (binary/non-UTF-8) file.
-pub(super) type Text = Option<Arc<String>>;
+pub(super) type Text = Option<Arc<IndexedText>>;
 
 struct Entry {
     stamp: FileStamp,
@@ -173,20 +175,25 @@ impl State {
         if !self.healthy {
             return Lookup::Disabled;
         }
-        if let Some(mut entry) = self.remove(path) {
+        if let Some(entry) = self.entries.get_mut(path) {
             if &entry.stamp == stamp && entry.read_at.elapsed() < MAX_AGE {
                 let text = entry.text.clone();
                 self.clock = self.clock.wrapping_add(1);
+                // Reuse the existing LRU path allocation on hits instead of
+                // removing and reinserting the entire cached entry.
+                let key = self
+                    .lru
+                    .remove(&entry.order)
+                    .unwrap_or_else(|| path.to_path_buf());
                 entry.order = self.clock;
-                self.bytes += entry.charge;
-                self.lru.insert(entry.order, path.to_path_buf());
-                self.entries.insert(path.to_path_buf(), entry);
+                self.lru.insert(entry.order, key);
                 #[cfg(test)]
                 {
                     self.hits += 1;
                 }
                 return Lookup::Hit(text);
             }
+            self.remove(path);
         }
         Lookup::Miss(self.generation)
     }
@@ -198,7 +205,7 @@ impl State {
         // Charge for both owned keys, entry/map overhead and retained text.
         let charge = text
             .as_ref()
-            .map_or(0, |text| text.capacity())
+            .map_or(0, |text| text.charged_capacity())
             .saturating_add(path.as_os_str().len().saturating_mul(2))
             .saturating_add(256);
         if charge > self.max_bytes || self.max_entries == 0 {
@@ -361,6 +368,17 @@ impl RootCache {
         let state = self.state.lock().unwrap();
         (state.hits, state.entries.len(), state.bytes)
     }
+
+    #[cfg(test)]
+    pub(super) fn index_stats(&self) -> (usize, usize, usize) {
+        let state = self.state.lock().unwrap();
+        state
+            .entries
+            .values()
+            .filter_map(|entry| entry.text.as_ref())
+            .map(|text| text.index_stats())
+            .fold((0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+    }
 }
 
 struct RootEntry {
@@ -416,10 +434,15 @@ mod tests {
 
     #[test]
     fn lru_budget_expiry_and_metadata_changes_are_enforced() {
-        let mut state = State::new(2048, 2);
+        let mut state = State::new(4096, 2);
         let stamp = stamp();
         for path in ["a", "b"] {
-            state.insert(path.into(), stamp.clone(), Some(Arc::new("text".into())), 0);
+            state.insert(
+                path.into(),
+                stamp.clone(),
+                Some(Arc::new(IndexedText::new("text".into()))),
+                0,
+            );
         }
         assert!(matches!(
             state.lookup(Path::new("a"), &stamp),
@@ -431,7 +454,7 @@ mod tests {
             state.lookup(Path::new("c"), &stamp),
             Lookup::Hit(None)
         ));
-        assert!(state.bytes <= 2048);
+        assert!(state.bytes <= 4096);
         let mut changed = stamp.clone();
         changed.len += 1;
         assert!(matches!(
@@ -450,10 +473,15 @@ mod tests {
     #[test]
     fn watch_events_invalidate_files_directories_and_inflight_reads() {
         let root = Path::new("root");
-        let mut state = State::new(4096, 10);
+        let mut state = State::new(8192, 10);
         let stamp = stamp();
         for path in ["dir/a", "dir/b", "keep"] {
-            state.insert(path.into(), stamp.clone(), Some(Arc::new("old".into())), 0);
+            state.insert(
+                path.into(),
+                stamp.clone(),
+                Some(Arc::new(IndexedText::new("old".into()))),
+                0,
+            );
         }
         state.on_event(
             root,
@@ -467,7 +495,7 @@ mod tests {
         state.insert(
             "dir/a".into(),
             stamp.clone(),
-            Some(Arc::new("stale".into())),
+            Some(Arc::new(IndexedText::new("stale".into()))),
             0,
         );
         assert!(!state.entries.contains_key(Path::new("dir/a")));

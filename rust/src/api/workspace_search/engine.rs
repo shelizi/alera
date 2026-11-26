@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9,6 +10,7 @@ use ignore::WalkBuilder;
 use super::compile::CompiledSearch;
 use super::content_cache::{self, FileStamp, Lookup, RootCache};
 use super::globs::matches_globs;
+use super::literal_index::{IndexedText, LiteralQuery, Probe};
 use super::paths::{
     content_token, is_protected_relative_path, open_search_file, relative_string, should_walk_entry,
 };
@@ -108,13 +110,15 @@ fn candidate_file(
 struct LoadedFile {
     relative_path: String,
     content_token: String,
-    text: Arc<String>,
+    text: Arc<IndexedText>,
+    cacheable: bool,
 }
 
 fn load_file(
     root: &std::path::Path,
     candidate: CandidateFile,
     cache: Option<&RootCache>,
+    literal_query: Option<&LiteralQuery>,
 ) -> Option<LoadedFile> {
     let CandidateFile {
         path,
@@ -143,10 +147,15 @@ fn load_file(
     if let (Some(cache), Some(stamp)) = (cache, stamp.as_ref()) {
         match cache.lookup(key, stamp) {
             Lookup::Hit(text) => {
-                return text.map(|text| LoadedFile {
+                let text = text?;
+                if literal_query.is_some_and(|query| text.probe(query) != Probe::Scan) {
+                    return None;
+                }
+                return Some(LoadedFile {
                     relative_path,
                     content_token: content_token(&metadata),
                     text,
+                    cacheable: true,
                 });
             }
             Lookup::Miss(generation) => cache_generation = Some(generation),
@@ -165,8 +174,12 @@ fn load_file(
     let text = if bytes.contains(&0) {
         None
     } else {
-        String::from_utf8(bytes).ok().map(Arc::new)
+        String::from_utf8(bytes)
+            .ok()
+            .map(IndexedText::new)
+            .map(Arc::new)
     };
+    let mut cacheable = false;
     if let (Some(cache), Some(stamp), Some(generation)) = (cache, stamp, cache_generation) {
         // Never publish a read that raced an observed watch event, changed
         // handle metadata or a file growing/shrinking during the read.
@@ -179,12 +192,14 @@ fn load_file(
                 == Some(&stamp)
         {
             cache.insert(key.to_path_buf(), stamp, text.clone(), generation);
+            cacheable = true;
         }
     }
     text.map(|text| LoadedFile {
         relative_path,
         content_token: content_token(&metadata),
         text,
+        cacheable,
     })
 }
 
@@ -209,14 +224,22 @@ impl SearchAccumulator {
         };
         let matches = matches_in_file(
             &loaded.relative_path,
-            &loaded.text,
+            loaded.text.as_str(),
             compiled,
             full_lines,
             &mut self.total_matches,
             &mut self.truncated,
             cancellation,
         )?;
-        if !matches.is_empty() {
+        if matches.is_empty() {
+            // consume is called only before the global cap, and the exact
+            // matcher returned successfully. Never record a partial scan.
+            if loaded.cacheable {
+                if let Some(query) = &compiled.literal_query {
+                    loaded.text.remember_absent(query);
+                }
+            }
+        } else {
             self.files.push(WorkspaceSearchFileResult {
                 relative_path: loaded.relative_path,
                 content_token: loaded.content_token,
@@ -249,8 +272,14 @@ fn scan_sequential(
             out.truncated = true;
             break;
         }
-        let loaded = candidate_file(entry, compiled)
-            .and_then(|candidate| load_file(&compiled.root, candidate, cache));
+        let loaded = candidate_file(entry, compiled).and_then(|candidate| {
+            load_file(
+                &compiled.root,
+                candidate,
+                cache,
+                compiled.literal_query.as_deref(),
+            )
+        });
         out.consume(loaded, compiled, full_lines, cancellation)?;
     }
     Ok(out.finish())
@@ -308,11 +337,13 @@ fn scan_parallel(
     let jobs = Mutex::new(job_rx);
     let (result_tx, result_rx) = mpsc::channel::<(usize, Option<LoadedFile>)>();
     let root = &compiled.root;
+    let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let mut spawned = 0;
         for _ in 0..workers {
             let jobs = &jobs;
             let results = result_tx.clone();
+            let stop = &stop;
             if std::thread::Builder::new()
                 .name("alera-search-read".into())
                 .spawn_scoped(scope, move || loop {
@@ -323,8 +354,16 @@ fn scan_parallel(
                     let Ok(job) = job else {
                         break;
                     };
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let loaded = if ensure_not_cancelled(cancellation).is_ok() {
-                        load_file(root, job.candidate, cache)
+                        load_file(
+                            root,
+                            job.candidate,
+                            cache,
+                            compiled.literal_query.as_deref(),
+                        )
                     } else {
                         None
                     };
@@ -344,58 +383,66 @@ fn scan_parallel(
         }
         let result = (|| {
             let mut out = SearchAccumulator::default();
-            'walk: loop {
+            // A sliding window overlaps matching with subsequent I/O. Slots
+            // represent physical walker entries, including filtered entries,
+            // so result ordering and the existing truncation contract stay
+            // unchanged. Outer None is in-flight, Some(None) is skipped.
+            let mut slots: VecDeque<Option<Option<LoadedFile>>> =
+                VecDeque::with_capacity(READ_AHEAD_SLOTS);
+            let mut head = 0_usize;
+            let mut exhausted = false;
+            loop {
                 ensure_not_cancelled(cancellation)?;
                 if out.total_matches >= compiled.max_results {
-                    // The old loop marked truncation only when another
-                    // physical walker entry existed, even a non-file.
-                    out.truncated |= walker.next().is_some();
+                    out.truncated |= !slots.is_empty() || (!exhausted && walker.next().is_some());
                     break;
                 }
-                let mut slots = Vec::with_capacity(READ_AHEAD_SLOTS);
-                let mut sent = 0;
-                for slot in 0..READ_AHEAD_SLOTS {
+                while slots.len() < READ_AHEAD_SLOTS && !exhausted {
                     ensure_not_cancelled(cancellation)?;
                     let Some(entry) = walker.next() else {
+                        exhausted = true;
                         break;
                     };
-                    slots.push(None);
+                    let slot = head + slots.len();
                     if let Some(candidate) = candidate_file(entry, compiled) {
+                        slots.push_back(None);
                         job_tx.send(ReadJob { slot, candidate }).map_err(|_| {
                             WorkspaceSearchError::new(
                                 WorkspaceSearchErrorKind::Io,
                                 "search read workers stopped",
                             )
                         })?;
-                        sent += 1;
+                    } else {
+                        slots.push_back(Some(None));
                     }
                 }
                 if slots.is_empty() {
                     break;
                 }
-                for _ in 0..sent {
+                // Wait only until the next entry is ready, not for the
+                // slowest read in the entire window.
+                while slots.front().is_some_and(Option::is_none) {
+                    ensure_not_cancelled(cancellation)?;
                     let (slot, loaded) = result_rx.recv().map_err(|_| {
                         WorkspaceSearchError::new(
                             WorkspaceSearchErrorKind::Io,
                             "search read result missing",
                         )
                     })?;
-                    slots[slot] = loaded;
+                    let target = slots.get_mut(slot - head).expect("live read-ahead slot");
+                    *target = Some(loaded);
                 }
-                // Disk reads finish out of order, but matching and the
-                // global/per-file result caps retain original walk order.
-                for loaded in slots {
-                    ensure_not_cancelled(cancellation)?;
-                    if out.total_matches >= compiled.max_results {
-                        out.truncated = true;
-                        break 'walk;
-                    }
-                    out.consume(loaded, compiled, full_lines, cancellation)?;
-                }
+                let loaded = slots
+                    .pop_front()
+                    .expect("nonempty window")
+                    .expect("ready slot");
+                head += 1;
+                out.consume(loaded, compiled, full_lines, cancellation)?;
             }
             Ok(out.finish())
         })();
-        // Always disconnect before scope joins the waiting workers.
+        // Cancel queued speculation at cap/error/cancellation, then join.
+        stop.store(true, Ordering::Relaxed);
         drop(job_tx);
         result
     })
