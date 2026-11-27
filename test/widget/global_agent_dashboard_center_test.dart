@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/global_agent_dashboard_navigation.dart';
+import 'package:alera/src/features/workbench/application/global_agent_live_projection.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_dashboard_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/global_agent_launch_dialog.dart';
@@ -261,6 +262,42 @@ void main() {
       final originalB = tester.widget(find.text('Task b'));
       final originalAElement = tester.element(card('a'));
       final originalBElement = tester.element(card('b'));
+      Finder lane(GlobalAgentDashboardGroup group) =>
+          find.byKey(ValueKey(group));
+      final laneRects = [
+        for (final group in GlobalAgentDashboardGroup.values)
+          tester.getRect(lane(group)),
+      ];
+      void expectFixedLanes() {
+        for (final group in GlobalAgentDashboardGroup.values) {
+          final actual = tester.getRect(lane(group));
+          expect(actual.left, laneRects[group.index].left);
+          expect(actual.width, laneRects[group.index].width);
+        }
+      }
+
+      expectFixedLanes();
+      // Manual collapse hides content without shrinking or shifting a lane.
+      await tester.tap(
+        find.descendant(
+          of: lane(GlobalAgentDashboardGroup.blocked),
+          matching: find.text('Blocked'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expectFixedLanes();
+      expect(
+        find.byKey(const PageStorageKey<String>('agent-column-blocked')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.descendant(
+          of: lane(GlobalAgentDashboardGroup.blocked),
+          matching: find.text('Blocked'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expectFixedLanes();
       expect(
         tester.getTopLeft(card('a')).dy,
         lessThan(tester.getTopLeft(card('c')).dy),
@@ -337,8 +374,9 @@ void main() {
       );
       expect(
         find.byKey(const PageStorageKey<String>('agent-column-working')),
-        findsNothing,
+        findsOneWidget,
       );
+      expectFixedLanes();
       expect(card('a'), findsOneWidget);
       expect(card('b'), findsNothing);
 
@@ -374,6 +412,7 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('● Unread'), findsNWidgets(3));
+      expectFixedLanes();
       final receipts = workbenchTabCompletionAcknowledgementsControllerProvider;
       final sidebarStatus = container.read(
         agentStatusControllerProvider,

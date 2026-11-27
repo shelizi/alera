@@ -57,11 +57,13 @@ class GlobalAgentDashboardSection {
 
 /// Group live Agent cards by current Hook state. The Dashboard may opt in to
 /// persisted Tab pins first; other consumers keep newest-first ordering.
-/// Empty sections are omitted so the viewport stays compact.
+/// The Kanban board keeps empty lanes in fixed positions. Other consumers
+/// can retain the compact, nonempty-only projection.
 List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
   Iterable<GlobalAgentLiveRow> rows, {
   bool alreadySorted = false,
   bool pinnedFirst = false,
+  bool includeEmpty = false,
 }) {
   final grouped = <GlobalAgentDashboardGroup, List<GlobalAgentLiveRow>>{};
   for (final row in rows) {
@@ -74,11 +76,11 @@ List<GlobalAgentDashboardSection> groupGlobalAgentLiveRows(
   }
   return <GlobalAgentDashboardSection>[
     for (final group in GlobalAgentDashboardGroup.values)
-      if (grouped[group] case final sectionRows?)
+      if (includeEmpty || grouped.containsKey(group))
         GlobalAgentDashboardSection(
           group,
           _orderDashboardRows(
-            sectionRows,
+            grouped[group] ?? <GlobalAgentLiveRow>[],
             alreadySorted: alreadySorted,
             pinnedFirst: pinnedFirst,
           ),
