@@ -3666,40 +3666,20 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             .into_any_element();
     }
 
-    if sessions.is_empty() {
-        return list
-            .child(div().text_sm().text_color(rgb(MUTED)).child(
-                if view.global_agent_needs_review_only {
-                    "No verified Waiting/Blocked Agents need review."
-                } else {
-                    "No running Agent sessions in the connected Host."
-                },
-            ))
-            .into_any_element();
-    }
-
-    let mut sections: Vec<(u8, String, usize, Vec<gpui::AnyElement>)> = Vec::new();
-    let mut last_group = None;
+    // Seed every lane before projecting cards, including when the filtered
+    // inventory is empty. A status transition cannot move a lane's position.
+    let mut sections: Vec<(u8, String, usize, Vec<gpui::AnyElement>)> =
+        alera_gpui_desktop::agent_status_visual::DASHBOARD_STATUS_GROUPS
+            .iter()
+            .map(|&(rank, label)| (rank, label.to_owned(), 0, Vec::new()))
+            .collect();
     for (index, session) in sessions.iter().enumerate() {
-        let (group_rank, group_label) =
+        let (group_rank, _) =
             alera_gpui_desktop::agent_status_visual::dashboard_status_group(
                 session.agent_state,
                 session.interrupted,
             );
-        if last_group != Some(group_rank) {
-            let count = sessions
-                .iter()
-                .filter(|item| {
-                    alera_gpui_desktop::agent_status_visual::dashboard_status_group(
-                        item.agent_state,
-                        item.interrupted,
-                    )
-                    .0 == group_rank
-                })
-                .count();
-            sections.push((group_rank, group_label.to_owned(), count, Vec::new()));
-            last_group = Some(group_rank);
-        }
+        sections[usize::from(group_rank)].2 += 1;
         if view.global_agent_collapsed_groups.contains(&group_rank) {
             continue;
         }
@@ -3983,7 +3963,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             );
         }
 
-        sections.last_mut().expect("status section").3.push(
+        sections[usize::from(group_rank)].3.push(
             div()
                 .id(("global-agent-session-row", index))
                 .w_full()
@@ -4309,8 +4289,8 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 .into_any_element(),
         );
     }
-    // A fixed-width independent scroll lane per current Hook state. More
-    // statuses scroll sideways rather than squeezing cards into tiny tiles.
+    // Every status has its own fixed-width scroll lane. Collapse hides cards
+    // only; it does not move other statuses.
     let mut board = div()
         .id("global-agent-kanban-board")
         .w_full()
@@ -4356,7 +4336,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             }));
         let mut column = div()
             .id(("global-agent-kanban-column", rank as usize))
-            .w(px(if collapsed { 132.0 } else { 342.0 }))
+            .w(px(342.0))
             .flex_shrink_0()
             .flex()
             .flex_col()

@@ -18,6 +18,17 @@ pub enum AgentVisualState {
     Done,
 }
 
+/// All dashboard lanes, including the native-only Unknown lane. An empty
+/// lane is still present so changes to one session cannot shift other lanes.
+pub const DASHBOARD_STATUS_GROUPS: [(u8, &str); 6] = [
+    (0, "Blocked"),
+    (1, "Waiting"),
+    (2, "Working"),
+    (3, "Interrupted"),
+    (4, "Done"),
+    (5, "Unknown"),
+];
+
 /// Stable Dashboard section order. One verified Agent card belongs to exactly
 /// one state section; interrupted takes precedence over a stale Hook state.
 pub fn dashboard_status_group(
@@ -25,14 +36,14 @@ pub fn dashboard_status_group(
     interrupted: bool,
 ) -> (u8, &'static str) {
     if interrupted {
-        return (3, "Interrupted");
+        return DASHBOARD_STATUS_GROUPS[3];
     }
     match state {
-        Some(AgentActivityState::Blocked) => (0, "Blocked"),
-        Some(AgentActivityState::Waiting) => (1, "Waiting"),
-        Some(AgentActivityState::Working) => (2, "Working"),
-        Some(AgentActivityState::Done) => (4, "Done"),
-        None => (5, "Unknown"),
+        Some(AgentActivityState::Blocked) => DASHBOARD_STATUS_GROUPS[0],
+        Some(AgentActivityState::Waiting) => DASHBOARD_STATUS_GROUPS[1],
+        Some(AgentActivityState::Working) => DASHBOARD_STATUS_GROUPS[2],
+        Some(AgentActivityState::Done) => DASHBOARD_STATUS_GROUPS[4],
+        None => DASHBOARD_STATUS_GROUPS[5],
     }
 }
 
@@ -245,6 +256,15 @@ mod tests {
 
     #[test]
     fn dashboard_sections_group_each_state_and_prioritize_interrupted() {
+        assert_eq!(DASHBOARD_STATUS_GROUPS, [
+            (0, "Blocked"), (1, "Waiting"), (2, "Working"),
+            (3, "Interrupted"), (4, "Done"), (5, "Unknown"),
+        ]);
+        // Ranks are stable indices, including native sessions with no Hook
+        // state yet, even when no sessions occupy a lane.
+        for (index, (rank, _)) in DASHBOARD_STATUS_GROUPS.iter().enumerate() {
+            assert_eq!(usize::from(*rank), index);
+        }
         assert_eq!(
             dashboard_status_group(Some(AgentActivityState::Blocked), false),
             (0, "Blocked")

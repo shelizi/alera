@@ -54,11 +54,11 @@ class GlobalAgentDashboardPage extends ConsumerStatefulWidget {
       _GlobalAgentDashboardPageState();
 }
 
-/// Keep card widths readable. Three distinct statuses produce three columns;
-/// narrow windows scroll horizontally instead of crushing the cards.
+/// Always size against every status lane, independent of card counts and
+/// filtering. Narrow windows scroll horizontally instead of crushing cards.
 @visibleForTesting
-double globalAgentDashboardColumnWidth(double viewportWidth, int columns) {
-  if (columns < 1) return 0;
+double globalAgentDashboardColumnWidth(double viewportWidth) {
+  final columns = GlobalAgentDashboardGroup.values.length;
   const gap = 12.0;
   return math.max(
     280.0,
@@ -624,7 +624,7 @@ class _GlobalAgentDashboardPageState
     };
     return SizedBox(
       key: ValueKey(section.group),
-      width: collapsed ? 180 : width,
+      width: width,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -684,14 +684,10 @@ class _GlobalAgentDashboardPageState
   }
 
   Widget _board(List<GlobalAgentDashboardSection> columns) {
-    if (columns.isEmpty) {
-      return const Center(child: Text('No matching verified Agent Sessions.'));
-    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final columnWidth = globalAgentDashboardColumnWidth(
           constraints.maxWidth,
-          columns.length,
         );
         return Scrollbar(
           controller: _horizontal,
@@ -755,6 +751,7 @@ class _GlobalAgentDashboardPageState
       rows,
       alreadySorted: true,
       pinnedFirst: true,
+      includeEmpty: true,
     );
     for (final section in columns) {
       if (section.group == GlobalAgentDashboardGroup.done) {

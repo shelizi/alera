@@ -160,6 +160,32 @@ void main() {
       ],
     );
     expect(sections.every((section) => section.rows.length == 1), isTrue);
+    // Fixed-board consumers keep the exact same lane indices when a filter
+    // leaves only one status or removes every card.
+    final fixedOnlyWaiting = groupGlobalAgentLiveRows(
+      rows.where((row) => row.tab.id == 'wait'),
+      includeEmpty: true,
+    );
+    expect(
+      fixedOnlyWaiting.map((section) => section.group),
+      GlobalAgentDashboardGroup.values,
+    );
+    expect(fixedOnlyWaiting.map((section) => section.rows.length), [
+      0,
+      1,
+      0,
+      0,
+      0,
+    ]);
+    final fixedEmpty = groupGlobalAgentLiveRows(
+      const <GlobalAgentLiveRow>[],
+      includeEmpty: true,
+    );
+    expect(
+      fixedEmpty.map((section) => section.group),
+      GlobalAgentDashboardGroup.values,
+    );
+    expect(fixedEmpty.every((section) => section.rows.isEmpty), isTrue);
     final folded = globalAgentDashboardVisibleItems(
       rows,
       <GlobalAgentDashboardGroup>{
