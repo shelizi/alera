@@ -180,7 +180,7 @@ impl Workbench {
                         view.accept_sidebar_order_prefs(prefs);
                         order_project_groups(
                             &mut view.project_tree_groups,
-                            view.runtime_catalog.as_ref(),
+                            view.runtime_catalog.as_deref(),
                             view.sidebar_order_prefs.as_ref(),
                         );
                         view.model

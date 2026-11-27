@@ -1,7 +1,7 @@
-use super::{head_branch_name, open_repo, GitError};
+use super::{open_repo, read_head_branch_name, GitError};
 
 pub fn current_branch(path: &str) -> Result<String, GitError> {
-    Ok(head_branch_name(&open_repo(path)?))
+    Ok(read_head_branch_name(&open_repo(path)?))
 }
 
 pub fn is_worktree_clean(path: &str) -> Result<bool, GitError> {

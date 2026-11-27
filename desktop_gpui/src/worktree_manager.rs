@@ -2,6 +2,7 @@
 //! Git is invoked directly (never through a shell), prompts are disabled, and
 //! every invocation is bounded by a timeout. Only an explicitly managed
 //! checkout directly below the repository's own .worktrees/ may be removed.
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, ErrorKind, Read};
@@ -44,6 +45,39 @@ pub fn matching_branch_worktree<'a>(
     })
 }
 
+/// Successful read-only listings for a single sidebar refresh. Key by the
+/// exact canonical checkout root returned by Git discovery, never by a path
+/// prefix or project display ID. Errors are deliberately not cached.
+/// Drop after the refresh; never use these rows to authorize mutations.
+#[derive(Default)]
+pub struct WorktreeReadSnapshot {
+    listings: HashMap<PathBuf, Vec<WorktreeEntry>>,
+    #[cfg(test)]
+    pub(crate) list_reads: usize,
+    #[cfg(test)]
+    pub(crate) bypass_cache: bool,
+}
+
+impl WorktreeReadSnapshot {
+    pub(crate) fn list(&mut self, manager: &WorktreeManager) -> io::Result<&[WorktreeEntry]> {
+        #[cfg(test)]
+        if self.bypass_cache {
+            self.listings.clear();
+        }
+        use std::collections::hash_map::Entry;
+        match self.listings.entry(manager.root().to_path_buf()) {
+            Entry::Occupied(entry) => Ok(entry.into_mut().as_slice()),
+            Entry::Vacant(entry) => {
+                #[cfg(test)]
+                {
+                    self.list_reads += 1;
+                }
+                Ok(entry.insert(manager.list()?).as_slice())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorktreeManager {
     repo_root: PathBuf,
@@ -52,8 +86,14 @@ pub struct WorktreeManager {
 impl WorktreeManager {
     pub fn discover(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = dunce::canonicalize(root)?;
-        let repo = git2::Repository::discover(&root)
-            .map_err(|e| io::Error::new(ErrorKind::NotFound, e))?;
+        Self::discover_canonical(&root)
+    }
+
+    /// Read-side callers already canonicalized this exact path. Still ask
+    /// Git to discover the actual repository (nested repositories matter).
+    pub(crate) fn discover_canonical(root: &Path) -> io::Result<Self> {
+        let repo =
+            git2::Repository::discover(root).map_err(|e| io::Error::new(ErrorKind::NotFound, e))?;
         let repo_root = repo
             .workdir()
             .ok_or_else(|| invalid("Bare repositories cannot manage GUI worktrees"))?;
@@ -541,6 +581,33 @@ mod tests {
         drop(repo);
         let manager = WorktreeManager::discover(&root).unwrap();
         (temp, manager)
+    }
+
+    #[test]
+    fn read_snapshot_retries_failed_listing_and_keeps_mutation_checks_fresh() {
+        let (temp, manager) = initialized_repo();
+        let relocated = temp.path().join("relocated");
+        fs::rename(manager.root(), &relocated).unwrap();
+        let mut snapshot = WorktreeReadSnapshot::default();
+        assert!(snapshot.list(&manager).is_err());
+        assert_eq!(snapshot.list_reads, 1);
+        fs::rename(&relocated, manager.root()).unwrap();
+        let before = snapshot.list(&manager).unwrap().to_vec();
+        assert_eq!(before.len(), 1);
+        assert_eq!(snapshot.list_reads, 2);
+        let created = manager.create("new-checkout").unwrap();
+        assert_eq!(snapshot.list(&manager).unwrap(), before.as_slice());
+        assert_eq!(snapshot.list_reads, 2);
+        // Mutation/list entry points never consult this view-only snapshot.
+        let actual = manager.list().unwrap();
+        assert_eq!(actual.len(), 2);
+        assert!(actual
+            .iter()
+            .any(|row| row.path == dunce::canonicalize(&created).unwrap()));
+        assert_eq!(
+            WorktreeReadSnapshot::default().list(&manager).unwrap(),
+            actual.as_slice()
+        );
     }
 
     #[test]

@@ -135,6 +135,7 @@ pub(super) fn update(
             normalized_path,
             &replacement,
             next_version,
+            true,
         ) {
             return Ok(delta);
         }
@@ -194,12 +195,77 @@ fn direct_unique_files(relative_directory: &str, entries: &[super::WorkspaceFile
     })
 }
 
+// Small edits can use ordered vector insertion/removal instead of scanning
+// and sorting all loaded nodes. Bound memmove work; bulk edits retain the
+// previous linear retain and sort strategy.
+const MAX_SPARSE_FILE_EDITS: usize = 8;
+
+fn unique_sorted_index<T>(items: &[T], target: &str, key: impl Fn(&T) -> &str) -> Option<usize> {
+    let index = items.binary_search_by(|item| key(item).cmp(target)).ok()?;
+    if index
+        .checked_sub(1)
+        .is_some_and(|prior| key(&items[prior]) == target)
+        || items.get(index + 1).is_some_and(|next| key(next) == target)
+    {
+        return None;
+    }
+    Some(index)
+}
+
+/// Preflight an edit before mutating either vector. Ambiguous keys (e.g.
+/// synthetic placeholder paths) retain the legacy strategy. The caller's
+/// sorted collections are kept sorted across every successful edit.
+fn sparse_removal_plan<T>(
+    items: &[T],
+    removed: &[&str],
+    added: &[T],
+    key: impl Fn(&T) -> &str,
+) -> Option<Vec<usize>> {
+    let mut indices = Vec::with_capacity(removed.len());
+    for target in removed {
+        indices.push(unique_sorted_index(items, target, &key)?);
+    }
+    for item in added {
+        if items
+            .binary_search_by(|old| key(old).cmp(key(item)))
+            .is_ok()
+        {
+            return None;
+        }
+    }
+    indices.sort_unstable_by(|a, b| b.cmp(a));
+    if indices.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+    Some(indices)
+}
+
+fn apply_sparse_plan<T>(
+    items: &mut Vec<T>,
+    removed_indices: Vec<usize>,
+    added: impl IntoIterator<Item = T>,
+    key: impl Fn(&T) -> &str,
+) {
+    for index in removed_indices {
+        items.remove(index);
+    }
+    for item in added {
+        // Already checked that all new keys are absent from the original
+        // collection; caller constructs uniquely keyed additions.
+        let index = items
+            .binary_search_by(|old| key(old).cmp(key(&item)))
+            .expect_err("preflighted new key");
+        items.insert(index, item);
+    }
+}
+
 fn try_update_file_only_children(
     current: &mut ExplorerProjectionSession,
     directory_index: usize,
     relative_directory: &str,
     replacement: &WorkspaceExplorerDirectoryChildren,
     next_version: u64,
+    use_sparse_edits: bool,
 ) -> Option<WorkspaceExplorerProjectionDelta> {
     let previous = &current.projection.directories[directory_index];
     if !direct_unique_files(relative_directory, &previous.children)
@@ -212,11 +278,22 @@ fn try_update_file_only_children(
     } else {
         format!("path:{relative_directory}")
     };
-    let parent_index = current
-        .projection
-        .nodes
-        .iter()
-        .position(|node| node.id == parent_id)?;
+    let parent_virtual_path = format!("/{relative_directory}");
+    let parent_index = if use_sparse_edits {
+        unique_sorted_index(&current.projection.nodes, &parent_virtual_path, |node| {
+            &node.virtual_path
+        })
+        .filter(|&index| current.projection.nodes[index].id == parent_id)
+    } else {
+        None
+    }
+    .or_else(|| {
+        current
+            .projection
+            .nodes
+            .iter()
+            .position(|node| node.id == parent_id)
+    })?;
     let expected_old_ids: Vec<String> = previous
         .children
         .iter()
@@ -301,39 +378,91 @@ fn try_update_file_only_children(
     });
     new_bindings.sort_by(|left, right| left.node_id.cmp(&right.node_id));
 
-    if !removed_node_ids.is_empty() {
-        let removed = removed_node_ids
-            .iter()
-            .map(String::as_str)
-            .collect::<std::collections::HashSet<_>>();
-        current
-            .projection
-            .nodes
-            .retain(|node| !removed.contains(node.id.as_str()));
-        current
-            .projection
-            .entry_bindings
-            .retain(|binding| !removed.contains(binding.node_id.as_str()));
-    }
-    if !new_nodes.is_empty() {
-        current.projection.nodes.extend(new_nodes);
-        current.projection.nodes.sort_by(|left, right| {
-            if left.id == "workspace-root" {
-                std::cmp::Ordering::Less
-            } else if right.id == "workspace-root" {
-                std::cmp::Ordering::Greater
-            } else {
-                left.virtual_path.cmp(&right.virtual_path)
-            }
-        });
-        current
-            .projection
-            .entry_bindings
-            .extend(new_bindings.iter().cloned());
-        current
-            .projection
-            .entry_bindings
-            .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    let sparse_plan =
+        if use_sparse_edits && removed_node_ids.len() + new_nodes.len() <= MAX_SPARSE_FILE_EDITS {
+            // Virtual path order is the native node order; binding order is
+            // by node ID. Verify both plans before changing either vector.
+            let removed_paths = removed_node_ids
+                .iter()
+                .map(|id| format!("/{}", id.strip_prefix("path:").expect("file node ID")))
+                .collect::<Vec<_>>();
+            let removed_paths = removed_paths.iter().map(String::as_str).collect::<Vec<_>>();
+            let removed_ids = removed_node_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            sparse_removal_plan(
+                &current.projection.nodes,
+                &removed_paths,
+                &new_nodes,
+                |node| &node.virtual_path,
+            )
+            .filter(|indices| {
+                indices.iter().all(|&index| {
+                    removed_ids.contains(&current.projection.nodes[index].id.as_str())
+                })
+            })
+            .and_then(|node_indices| {
+                sparse_removal_plan(
+                    &current.projection.entry_bindings,
+                    &removed_ids,
+                    &new_bindings,
+                    |binding| &binding.node_id,
+                )
+                .map(|binding_indices| (node_indices, binding_indices))
+            })
+        } else {
+            None
+        };
+
+    if let Some((node_indices, binding_indices)) = sparse_plan {
+        apply_sparse_plan(
+            &mut current.projection.nodes,
+            node_indices,
+            new_nodes,
+            |node| &node.virtual_path,
+        );
+        apply_sparse_plan(
+            &mut current.projection.entry_bindings,
+            binding_indices,
+            new_bindings.iter().cloned(),
+            |binding| &binding.node_id,
+        );
+    } else {
+        if !removed_node_ids.is_empty() {
+            let removed = removed_node_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::HashSet<_>>();
+            current
+                .projection
+                .nodes
+                .retain(|node| !removed.contains(node.id.as_str()));
+            current
+                .projection
+                .entry_bindings
+                .retain(|binding| !removed.contains(binding.node_id.as_str()));
+        }
+        if !new_nodes.is_empty() {
+            current.projection.nodes.extend(new_nodes);
+            current.projection.nodes.sort_by(|left, right| {
+                if left.id == "workspace-root" {
+                    std::cmp::Ordering::Less
+                } else if right.id == "workspace-root" {
+                    std::cmp::Ordering::Greater
+                } else {
+                    left.virtual_path.cmp(&right.virtual_path)
+                }
+            });
+            current
+                .projection
+                .entry_bindings
+                .extend(new_bindings.iter().cloned());
+            current
+                .projection
+                .entry_bindings
+                .sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        }
     }
 
     current.projection.directories[directory_index].children = replacement.children.clone();
@@ -898,6 +1027,220 @@ mod tests {
             );
             stop(handle);
         }
+    }
+
+    fn assert_projection_equal(
+        actual: &WorkspaceExplorerTreeProjection,
+        expected: &WorkspaceExplorerTreeProjection,
+    ) {
+        assert_eq!(actual.directories, expected.directories);
+        assert_eq!(actual.nodes, expected.nodes);
+        assert_eq!(actual.entry_bindings, expected.entry_bindings);
+    }
+
+    fn assert_delta_equal(
+        actual: &WorkspaceExplorerProjectionDelta,
+        expected: &WorkspaceExplorerProjectionDelta,
+    ) {
+        assert_eq!(actual.version, expected.version);
+        assert_eq!(actual.changed_directories, expected.changed_directories);
+        assert_eq!(
+            actual.removed_directory_paths,
+            expected.removed_directory_paths
+        );
+        assert_eq!(actual.changed_nodes, expected.changed_nodes);
+        assert_eq!(actual.removed_node_ids, expected.removed_node_ids);
+        assert_eq!(actual.changed_bindings, expected.changed_bindings);
+        assert_eq!(
+            actual.removed_binding_node_ids,
+            expected.removed_binding_node_ids
+        );
+    }
+
+    #[test]
+    fn sparse_plan_keeps_order_and_rejects_ambiguous_or_existing_keys() {
+        let mut items = vec!["a", "c", "e", "g"];
+        let plan = sparse_removal_plan(&items, &["c", "g"], &["b", "f"], |item| item).unwrap();
+        assert_eq!(plan, vec![3, 1]);
+        apply_sparse_plan(&mut items, plan, ["b", "f"], |item| item);
+        assert_eq!(items, ["a", "b", "e", "f"]);
+        assert!(sparse_removal_plan(&["a", "a", "b"], &["a"], &["c"], |item| item).is_none());
+        assert!(sparse_removal_plan(&items, &["missing"], &["c"], |item| item).is_none());
+        assert!(sparse_removal_plan(&items, &["e", "e"], &["c"], |item| item).is_none());
+        assert!(sparse_removal_plan(&items, &["a"], &["e"], |item| item).is_none());
+    }
+
+    fn sparse_fixture(
+        folder_count: usize,
+        files_per_folder: usize,
+    ) -> WorkspaceExplorerTreeProjection {
+        let mut directories = vec![children(
+            "",
+            (0..folder_count)
+                .map(|index| {
+                    entry(
+                        &format!("folder-{index:03}"),
+                        WorkspaceFileKind::Directory,
+                        true,
+                    )
+                })
+                .collect(),
+        )];
+        for index in 0..folder_count {
+            let folder = format!("folder-{index:03}");
+            directories.push(children(
+                &folder,
+                (0..files_per_folder)
+                    .map(|number| {
+                        entry(
+                            &format!("{folder}/file-{number:04}.rs"),
+                            WorkspaceFileKind::File,
+                            false,
+                        )
+                    })
+                    .collect(),
+            ));
+        }
+        explorer_tree::project_tree("alera".into(), "/repo".into(), directories, None)
+    }
+
+    fn local_session(projection: WorkspaceExplorerTreeProjection) -> ExplorerProjectionSession {
+        ExplorerProjectionSession {
+            workspace_name: "alera".into(),
+            workspace_path: "/repo".into(),
+            version: 0,
+            projection,
+        }
+    }
+
+    fn apply_file_only(
+        session: &mut ExplorerProjectionSession,
+        replacement: &WorkspaceExplorerDirectoryChildren,
+        sparse: bool,
+    ) -> WorkspaceExplorerProjectionDelta {
+        let path = replacement.relative_path.as_str();
+        let directory_index = session
+            .projection
+            .directories
+            .binary_search_by(|dir| dir.relative_path.as_str().cmp(path))
+            .unwrap();
+        let version = session.version + 1;
+        try_update_file_only_children(session, directory_index, path, replacement, version, sparse)
+            .expect("fixture uses file-only update")
+    }
+
+    #[test]
+    fn sparse_and_bulk_file_edits_match_legacy_and_full_projection() {
+        let seed = sparse_fixture(6, 16);
+        let mut old = local_session(seed.clone());
+        let mut new = local_session(seed.clone());
+        let mut full = seed;
+        let path = "folder-003";
+        let original = full
+            .directories
+            .iter()
+            .find(|dir| dir.relative_path == path)
+            .unwrap()
+            .children
+            .clone();
+        for (round, removed_count) in [1usize, 4, 5, 0, 8, 16, 1].into_iter().enumerate() {
+            let mut rows = original
+                .iter()
+                .skip(removed_count)
+                .cloned()
+                .collect::<Vec<_>>();
+            for index in 0..removed_count {
+                rows.push(entry(
+                    &format!("{path}/rename-{round}-{index}.rs"),
+                    WorkspaceFileKind::File,
+                    false,
+                ));
+            }
+            if round % 2 == 0 {
+                rows.reverse();
+            }
+            if let Some(first) = rows.first_mut() {
+                first.size = round as u64;
+                first.git_status = Some(WorkspaceFileGitStatus::Modified);
+            }
+            let replacement = children(path, rows);
+            let expected = explorer_tree::project_tree(
+                "alera".into(),
+                "/repo".into(),
+                full.directories.clone(),
+                Some(replacement.clone()),
+            );
+            let expected_delta = diff_projections(&full, &expected, round as u64 + 1);
+            let old_delta = apply_file_only(&mut old, &replacement, false);
+            let new_delta = apply_file_only(&mut new, &replacement, true);
+            assert_delta_equal(&old_delta, &expected_delta);
+            assert_delta_equal(&new_delta, &expected_delta);
+            assert_projection_equal(&old.projection, &expected);
+            assert_projection_equal(&new.projection, &expected);
+            full = expected;
+        }
+    }
+
+    #[test]
+    #[ignore = "synthetic native sparse structural update benchmark"]
+    fn benchmark_sparse_explorer_structural_edits() {
+        use std::time::{Duration, Instant};
+        let seed = sparse_fixture(200, 200);
+        let replacements: Vec<_> = seed
+            .directories
+            .iter()
+            .filter(|dir| !dir.relative_path.is_empty())
+            .take(30)
+            .map(|dir| {
+                let mut rows = dir.children.clone();
+                rows.remove(0);
+                rows.push(entry(
+                    &format!("{}/renamed.rs", dir.relative_path),
+                    WorkspaceFileKind::File,
+                    false,
+                ));
+                children(&dir.relative_path, rows)
+            })
+            .collect();
+        let mut expected = local_session(seed.clone());
+        let mut warm = local_session(seed.clone());
+        for replacement in &replacements {
+            let old = apply_file_only(&mut expected, replacement, false);
+            let new = apply_file_only(&mut warm, replacement, true);
+            assert_delta_equal(&new, &old);
+            assert_projection_equal(&warm.projection, &expected.projection);
+        }
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for sample in 0..7 {
+            for sparse in if sample % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let mut session = local_session(seed.clone());
+                let start = Instant::now();
+                for replacement in &replacements {
+                    let delta = apply_file_only(&mut session, replacement, sparse);
+                    assert_eq!(delta.changed_nodes.len(), 2);
+                    assert_eq!(delta.removed_node_ids.len(), 1);
+                }
+                let elapsed = start.elapsed();
+                assert_projection_equal(&session.projection, &expected.projection);
+                if sparse {
+                    new.push(elapsed);
+                } else {
+                    old.push(elapsed);
+                }
+            }
+        }
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        let old = median(&mut old);
+        let new = median(&mut new);
+        println!("Classic native sparse update folders=200 nodes={} bindings={} renames={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), seed.entry_bindings.len(), replacements.len(), old/new);
     }
 
     #[test]

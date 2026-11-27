@@ -21,6 +21,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_launch
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_git_snapshot_refresh.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_projection_index.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_watch_refresh_queue.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -130,13 +131,14 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   static const int _filterResultLimit = 200;
 
   late tree.DirectoryTreeController _controller;
-  final Map<String, List<native.WorkspaceFileEntry>> _childrenByDirectory =
-      <String, List<native.WorkspaceFileEntry>>{};
-  final Map<String, native.WorkspaceFileEntry> _entryByPath =
-      <String, native.WorkspaceFileEntry>{};
-  final Map<String, native.WorkspaceFileEntry> _entryByNodeId =
-      <String, native.WorkspaceFileEntry>{};
-  native.WorkspaceExplorerTreeProjection? _projection;
+  final _projectionIndex = WorkspaceExplorerProjectionIndex();
+  Map<String, List<native.WorkspaceFileEntry>> get _childrenByDirectory =>
+      _projectionIndex.childrenByDirectory;
+  Map<String, native.WorkspaceFileEntry> get _entryByPath =>
+      _projectionIndex.entryByPath;
+  Map<String, native.WorkspaceFileEntry> get _entryByNodeId =>
+      _projectionIndex.entryByNodeId;
+  bool _hasProjection = false;
   // Retain Dart TreeNode objects for unchanged IDs across structural native
   // Delta updates; only changed/removed nodes require new objects.
   final Map<String, tree.TreeNode> _treeNodesById = <String, tree.TreeNode>{};
@@ -851,8 +853,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   }
 
   tree.TreeData _buildTreeData() {
-    final projection = _projection;
-    final nodes = projection == null
+    final nodes = !_hasProjection
         ? <String, tree.TreeNode>{
             _rootId: tree.TreeNode(
               id: _rootId,

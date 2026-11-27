@@ -354,11 +354,7 @@ pub fn order_project_groups(
         let name = project.map_or(group.label.as_str(), |project| project.name.as_str());
         (rank, name.to_lowercase())
     };
-    groups.sort_by(|left, right| {
-        key_for(left)
-            .cmp(&key_for(right))
-            .then_with(|| left.root.cmp(&right.root))
-    });
+    groups.sort_by_cached_key(|group| (key_for(group), group.root.clone()));
 }
 
 #[cfg(test)]

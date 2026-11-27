@@ -989,11 +989,24 @@ impl RuntimeCliBridge {
     /// Query Classic's persistent RuntimeStore using the existing CLI.
     /// Read-only; does not create an RPC session or start any Host.
     pub fn list_runtime_catalog(&self) -> io::Result<crate::runtime_catalog::RuntimeCatalog> {
+        self.list_runtime_catalog_with_snapshot(
+            &mut crate::worktree_manager::WorktreeReadSnapshot::default(),
+        )
+    }
+
+    pub fn list_runtime_catalog_with_snapshot(
+        &self,
+        snapshot: &mut crate::worktree_manager::WorktreeReadSnapshot,
+    ) -> io::Result<crate::runtime_catalog::RuntimeCatalog> {
         let projects = self.catalog_list_json("project")?;
         let workspaces = self.catalog_list_json("workspace")?;
         let tags = self.catalog_list_json("tag")?;
         let sections = self.catalog_list_json("workspace-section")?;
-        let mut catalog = crate::runtime_catalog::parse_runtime_catalog(&projects, &workspaces)?;
+        let mut catalog = crate::runtime_catalog::parse_runtime_catalog_with_snapshot(
+            &projects,
+            &workspaces,
+            snapshot,
+        )?;
         crate::runtime_catalog::attach_runtime_tags(&mut catalog, &tags)?;
         crate::runtime_catalog::attach_runtime_sections(&mut catalog, &sections)?;
         Ok(catalog)

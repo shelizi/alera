@@ -126,14 +126,14 @@ use alera_gpui_desktop::native_settings::{
     NativeSettings, NativeSettingsStore, NativeSidebarLayout,
 };
 use alera_gpui_desktop::project_tree::{
-    collect_project_tree_with_registered,
-    project_title_matches_search, reconcile_sidebar_on_workspace_switch,
-    sidebar_workspaces_for_group, worktree_matches_search, ProjectTreeGroup,
+    collect_project_tree_with_snapshot,
+    reconcile_sidebar_on_workspace_switch,
+    sidebar_workspaces_for_group, ProjectTreeGroup, SidebarSearch,
 };
 use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
-use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
+use alera_gpui_desktop::runtime_catalog::{RuntimeCatalog, SidebarCatalogIndex};
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
@@ -173,7 +173,7 @@ use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_sidebar_order::{
-    order_worktree_rows_sorted, visible_worktree_rows,
+    order_worktree_rows_indexed, visible_worktree_rows,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
@@ -181,7 +181,7 @@ use alera_gpui_desktop::worktree_content_search::{
     WorktreeContentScope,
 };
 use alera_gpui_desktop::worktree_manager::{
-    matching_branch_worktree, WorktreeEntry, WorktreeManager,
+    matching_branch_worktree, WorktreeEntry, WorktreeManager, WorktreeReadSnapshot,
 };
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
@@ -908,7 +908,8 @@ struct Workbench {
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
-    runtime_catalog: Option<RuntimeCatalog>,
+    // One immutable generation shared with render and menu callbacks.
+    runtime_catalog: Option<Arc<RuntimeCatalog>>,
     sidebar_order_prefs: Option<SidebarOrderPrefs>,
     sidebar_order_busy: bool,
     sidebar_sort_error: Option<String>,
@@ -1498,8 +1499,10 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let (mut groups, runtime_result, order_result) = cx
                 .background_spawn(async move {
-                    let runtime_result =
-                        bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
+                    let mut snapshot = WorktreeReadSnapshot::default();
+                    let runtime_result = bridge.as_ref().map(|bridge| {
+                        bridge.list_runtime_catalog_with_snapshot(&mut snapshot)
+                    });
                     let order_result = bridge
                         .as_ref()
                         .map(|bridge| bridge.sidebar_order_snapshot());
@@ -1514,8 +1517,9 @@ impl Workbench {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let groups =
-                        collect_project_tree_with_registered(&saved, &recent, &registered, &active);
+                    let groups = collect_project_tree_with_snapshot(
+                        &saved, &recent, &registered, &active, &mut snapshot,
+                    );
                     (groups, runtime_result, order_result)
                 })
                 .await;
@@ -1525,7 +1529,7 @@ impl Workbench {
                 }
                 match runtime_result {
                     Some(Ok(catalog)) => {
-                        view.runtime_catalog = Some(catalog);
+                        view.runtime_catalog = Some(Arc::new(catalog));
                         view.runtime_catalog_error = None;
                     }
                     Some(Err(error)) => {
@@ -1542,7 +1546,7 @@ impl Workbench {
                 }
                 order_project_groups(
                     &mut groups,
-                    view.runtime_catalog.as_ref(),
+                    view.runtime_catalog.as_deref(),
                     view.sidebar_order_prefs.as_ref(),
                 );
                 view.project_tree_groups = groups;
@@ -12991,7 +12995,7 @@ impl Render for Workbench {
             [&prefs.project_sort, &prefs.workspace_sort].iter().any(|mode|
                 matches!(mode.as_str(), "recent" | "activity"))) {
             SidebarSortContext::new(
-                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref(),
+                self.runtime_catalog.as_deref(), self.sidebar_order_prefs.as_ref(),
                 &self.terminals.sessions, !self.terminals.session_list_is_stale(),
                 chrono::Utc::now().timestamp_millis(),
             )
@@ -13003,6 +13007,11 @@ impl Render for Workbench {
             .map(|group| group.root.clone());
         let sidebar_has_git_projects = self.project_tree_groups.iter()
             .any(|group| !group.worktrees.is_empty());
+        // Clone only the Arc, not the catalog's strings, vectors and maps.
+        // The frame and its callbacks observe one consistent generation.
+        let runtime_catalog = self.runtime_catalog.clone();
+        let sidebar_catalog_index = SidebarCatalogIndex::new(runtime_catalog.as_deref());
+        let sidebar_search = SidebarSearch::new(&sidebar_search_query, &sidebar_catalog_index);
         let mut project_tree_rows: Vec<_> = self
             .project_tree_groups
             .iter()
@@ -13011,23 +13020,22 @@ impl Render for Workbench {
                 sidebar_filters.project_roots.is_empty() || sidebar_filters.project_roots.contains(&group.root)
             })
             .filter_map(|(index, group)| {
-                let catalog = self.runtime_catalog.as_ref();
+                let catalog = runtime_catalog.as_deref();
                 let show_all = !sidebar_search_active
-                    || project_title_matches_search(group, catalog, &sidebar_search_query);
+                    || sidebar_search.project_matches(group);
                 let mut entries = sidebar_workspaces_for_group(group, catalog);
                 entries.retain(|entry| {
-                    let has_terminal = catalog.is_some_and(|catalog| catalog.workspaces.iter()
-                        .any(|workspace| workspace.path == entry.path
-                            && active_sidebar_workspaces.contains(workspace.id.as_str())));
-                    sidebar_filters.includes_worktree(entry, catalog, has_terminal)
-                        && (show_all || worktree_matches_search(entry, catalog, &sidebar_search_query))
+                    let has_terminal = sidebar_catalog_index.workspaces_at(&entry.path).iter()
+                        .any(|workspace| active_sidebar_workspaces.contains(workspace.id.as_str()));
+                    sidebar_filters.includes_worktree(entry, &sidebar_catalog_index, has_terminal)
+                        && (show_all || sidebar_search.worktree_matches(entry))
                 });
                 if entries.is_empty() && (sidebar_filtered || !show_all) {
                     return None;
                 }
                 let order = self.sidebar_order_prefs.as_ref();
-                let rows = order_worktree_rows_sorted(
-                    &entries, catalog, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
+                let rows = order_worktree_rows_indexed(
+                    &entries, &sidebar_catalog_index, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
                     order.filter(|prefs| prefs.workspace_is_manual())
                         .map(|prefs| prefs.workspace_order.as_slice()),
                     &sidebar_sort,
@@ -13041,7 +13049,7 @@ impl Render for Workbench {
             .collect();
         project_tree_rows.sort_by_cached_key(|(_, group, _, rows)| {
             sidebar_sort.project_key(group, rows.iter().map(|row| row.entry.path.as_path()),
-                self.runtime_catalog.as_ref(), self.sidebar_order_prefs.as_ref())
+                runtime_catalog.as_deref(), self.sidebar_order_prefs.as_ref())
         });
         project_tree_rows.truncate(45);
 
@@ -13050,7 +13058,6 @@ impl Render for Workbench {
         let sidebar_search_empty = (sidebar_search_active || sidebar_filtered) && project_tree_rows.is_empty();
         let sidebar_collapse_roots: Vec<_> = project_tree_rows.iter().map(|(_, group, _, _)| group.root.clone()).collect();
         let project_tree_loading = self.project_tree_loading;
-        let runtime_catalog = self.runtime_catalog.clone();
         let sidebar_order_prefs = self.sidebar_order_prefs.clone();
         let sidebar_reorder_hold = self.sidebar_reorder_hold.clone();
         let sidebar_reorder_hint = tr(
@@ -13061,20 +13068,13 @@ impl Render for Workbench {
         let visible_project_ids: Vec<String> = project_tree_rows
             .iter()
             .filter_map(|(_, group, _, _)| {
-                runtime_catalog
-                    .as_ref()
-                    .and_then(|catalog| {
-                        catalog
-                            .projects
-                            .iter()
-                            .find(|project| project.root == group.root)
-                    })
+                sidebar_catalog_index.projects_at(&group.root).first()
                     .map(|project| project.id.clone())
             })
             .collect();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
-        let sidebar_menu_catalog = runtime_catalog.clone().map(Arc::new);
+        let sidebar_menu_catalog = runtime_catalog.clone();
         let sidebar_rename_input = if self.sidebar_options_modal_open { None } else { self.sidebar_rename_input.clone() };
         let sidebar_create_input = if self.sidebar_options_modal_open { None } else { self.sidebar_create_input.clone() };
         let worktree_rows: Vec<_> = self
@@ -17767,15 +17767,12 @@ impl Render for Workbench {
                                             .children(project_tree_rows.into_iter().map(|(index, group, collapsed, rows)| {
                                                 let fold_root = group.root.clone();
                                                 let current = group.is_active;
-                                                let menu_project_id = runtime_catalog.as_ref()
-                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
-                                                    .map(|project| project.id.clone());
+                                                let project_metadata = sidebar_catalog_index.projects_at(&group.root).first().copied();
+                                                let menu_project_id = project_metadata.map(|project| project.id.clone());
                                                 let project_context_root = group.root.clone();
                                                 let worktree_project_root = group.root.clone();
                                                 let git_project = !group.worktrees.is_empty();
-                                                let title = runtime_catalog.as_ref()
-                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
-                                                    .map(|project| project.name.clone())
+                                                let title = project_metadata.map(|project| project.name.clone())
                                                     .unwrap_or_else(|| group.label.clone());
                                                 let project_drag_id = menu_project_id.clone().unwrap_or_default();
                                                 let project_drop_id = menu_project_id.clone();
@@ -17795,9 +17792,7 @@ impl Render for Workbench {
                                                 let project_workspace_count = rows.len();
                                                 let project_create_root = group.root.clone();
                                                 let visible_worktree_ids: Vec<String> = rows.iter()
-                                                    .filter_map(|row| runtime_catalog.as_ref()
-                                                        .and_then(|catalog| catalog.workspaces.iter()
-                                                            .find(|workspace| workspace.path == row.entry.path))
+                                                    .filter_map(|row| sidebar_catalog_index.workspaces_at(&row.entry.path).first()
                                                         .map(|workspace| workspace.id.clone()))
                                                     .collect();
                                                 let error = group.error;
@@ -17927,9 +17922,7 @@ impl Render for Workbench {
                                                             && self.collapsed_worktree_paths.contains(&target);
                                                         let menu_catalog = sidebar_menu_catalog.clone();
                                                         let menu_confirmation = sidebar_pending_action.clone();
-                                                        let metadata = runtime_catalog.as_ref().and_then(|catalog|
-                                                            catalog.workspaces.iter().find(|workspace| workspace.path == target)
-                                                        );
+                                                        let metadata = sidebar_catalog_index.workspaces_at(&target).first().copied();
                                                         let workspace_drop_id = metadata.map(|workspace| workspace.id.clone());
                                                         let workspace_drag_id = workspace_drop_id.clone().unwrap_or_default();
                                                         let workspace_drop_visible = visible_worktree_ids.clone();

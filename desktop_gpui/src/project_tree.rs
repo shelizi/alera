@@ -7,7 +7,8 @@
 //! Non-Git directories become plain roots without worktrees. Collection is
 //! read-only: it canonicalizes paths and asks [`WorktreeManager`] for
 //! `git worktree list`; it never writes, moves or deletes anything.
-use crate::worktree_manager::{WorktreeEntry, WorktreeManager};
+use crate::runtime_catalog::SidebarCatalogIndex;
+use crate::worktree_manager::{WorktreeEntry, WorktreeManager, WorktreeReadSnapshot};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -61,17 +62,34 @@ pub fn collect_project_tree_with_registered(
     registered: &[PathBuf],
     active: &Path,
 ) -> Vec<ProjectTreeGroup> {
+    collect_project_tree_with_snapshot(
+        saved,
+        recent,
+        registered,
+        active,
+        &mut WorktreeReadSnapshot::default(),
+    )
+}
+
+/// Reuse successful catalog validation reads during the same sidebar refresh.
+pub fn collect_project_tree_with_snapshot(
+    saved: &[PathBuf],
+    recent: &[PathBuf],
+    registered: &[PathBuf],
+    active: &Path,
+    snapshot: &mut WorktreeReadSnapshot,
+) -> Vec<ProjectTreeGroup> {
     let mut state = State::default();
     for path in saved.iter().take(MAX_SAVED_PROJECTS) {
-        collect_candidate(path, true, false, &mut state);
+        collect_candidate(path, true, false, &mut state, snapshot);
     }
     for path in registered.iter().take(MAX_REGISTERED_PROJECTS) {
-        collect_candidate(path, false, false, &mut state);
+        collect_candidate(path, false, false, &mut state, snapshot);
     }
     for path in recent.iter().take(MAX_RECENT_WORKSPACES) {
-        collect_candidate(path, false, false, &mut state);
+        collect_candidate(path, false, false, &mut state, snapshot);
     }
-    collect_candidate(active, false, true, &mut state);
+    collect_candidate(active, false, true, &mut state, snapshot);
     state.groups
 }
 
@@ -138,7 +156,13 @@ struct Resolution {
     error: Option<String>,
 }
 
-fn collect_candidate(path: &Path, is_saved: bool, is_active: bool, state: &mut State) {
+fn collect_candidate(
+    path: &Path,
+    is_saved: bool,
+    is_active: bool,
+    state: &mut State,
+    snapshot: &mut WorktreeReadSnapshot,
+) {
     // Inputs are expected canonical already, but recanonicalizing keeps the
     // grouping correct for aliases and keeps every `root` canonical.
     let Ok(canonical) = dunce::canonicalize(path) else {
@@ -152,7 +176,7 @@ fn collect_candidate(path: &Path, is_saved: bool, is_active: bool, state: &mut S
             return;
         }
     }
-    let resolution = resolve(&canonical, &mut state.owners);
+    let resolution = resolve(&canonical, &mut state.owners, snapshot);
     let index = match state.positions.get(&resolution.root) {
         Some(&index) => index,
         None => {
@@ -181,25 +205,29 @@ fn collect_candidate(path: &Path, is_saved: bool, is_active: bool, state: &mut S
 /// itself. Successful listings also teach `owners` every worktree path (and
 /// the input path itself) so later candidates of the same repository skip
 /// Git entirely.
-fn resolve(path: &Path, owners: &mut HashMap<PathBuf, PathBuf>) -> Resolution {
-    match WorktreeManager::discover(path) {
+fn resolve(
+    path: &Path,
+    owners: &mut HashMap<PathBuf, PathBuf>,
+    snapshot: &mut WorktreeReadSnapshot,
+) -> Resolution {
+    match WorktreeManager::discover_canonical(path) {
         Ok(manager) => {
             let worktree_root = manager.root().to_path_buf();
-            match manager.list() {
+            match snapshot.list(&manager) {
                 Ok(entries) => {
                     let root = entries
                         .iter()
                         .find(|entry| entry.is_primary)
                         .map(|entry| entry.path.clone())
                         .unwrap_or_else(|| worktree_root.clone());
-                    for entry in &entries {
+                    for entry in entries {
                         owners.insert(entry.path.clone(), root.clone());
                     }
                     owners.insert(worktree_root, root.clone());
                     owners.insert(path.to_path_buf(), root.clone());
                     Resolution {
                         root,
-                        worktrees: entries,
+                        worktrees: entries.to_vec(),
                         error: None,
                     }
                 }
@@ -293,6 +321,65 @@ pub fn worktree_matches_search(
                         }))
             })
         })
+}
+
+/// Search using the same normalized query and catalog index across every
+/// project and worktree in a sidebar projection.
+pub struct SidebarSearch<'a, 'catalog> {
+    query: String,
+    catalog: &'a SidebarCatalogIndex<'catalog>,
+}
+
+impl<'a, 'catalog> SidebarSearch<'a, 'catalog> {
+    pub fn new(query: &str, catalog: &'a SidebarCatalogIndex<'catalog>) -> Self {
+        Self {
+            query: query.trim().to_lowercase(),
+            catalog,
+        }
+    }
+
+    pub fn project_matches(&self, group: &ProjectTreeGroup) -> bool {
+        let query = &self.query;
+        query.is_empty()
+            || group.label.to_lowercase().contains(query)
+            || group.root.to_string_lossy().to_lowercase().contains(query)
+            || self
+                .catalog
+                .projects_at(&group.root)
+                .iter()
+                .any(|project| project.name.to_lowercase().contains(query))
+    }
+
+    pub fn worktree_matches(&self, entry: &WorktreeEntry) -> bool {
+        let query = &self.query;
+        query.is_empty()
+            || entry.path.to_string_lossy().to_lowercase().contains(query)
+            || entry
+                .branch
+                .as_deref()
+                .is_some_and(|branch| branch.to_lowercase().contains(query))
+            || self
+                .catalog
+                .workspaces_at(&entry.path)
+                .iter()
+                .any(|workspace| {
+                    workspace.name.to_lowercase().contains(query)
+                        || workspace
+                            .branch
+                            .as_deref()
+                            .is_some_and(|branch| branch.to_lowercase().contains(query))
+                        || workspace
+                            .tag_names
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(query))
+                        || workspace.section_id.as_deref().is_some_and(|id| {
+                            self.catalog
+                                .sections_with_id(id)
+                                .iter()
+                                .any(|section| section.name.to_lowercase().contains(query))
+                        })
+                })
+    }
 }
 
 /// A matching branch must keep its parent project visible even when its
@@ -546,6 +633,184 @@ mod tests {
     fn plain_dir(dir: &Path) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         canonical(dir)
+    }
+
+    // A real RuntimeStore-shaped fixture: registered primary and linked
+    // checkouts, each with separate IDs and display metadata.
+    fn sidebar_fixture(
+        count: usize,
+    ) -> (
+        tempfile::TempDir,
+        serde_json::Value,
+        serde_json::Value,
+        Vec<PathBuf>,
+        Vec<PathBuf>,
+    ) {
+        use serde_json::json;
+        let temp = tempfile::tempdir().unwrap();
+        let mut projects = Vec::new();
+        let mut workspaces = Vec::new();
+        let mut roots = Vec::new();
+        let mut linked_paths = Vec::new();
+        for index in 0..count {
+            let manager = init_repo(&temp.path().join(format!("repo-{index:02}")));
+            let root = canonical(manager.root());
+            // Set up through libgit2 to avoid timing fixture subprocesses.
+            let repo = Repository::open(&root).unwrap();
+            let commit = repo.head().unwrap().peel_to_commit().unwrap();
+            let reference = repo
+                .branch("feature", &commit, false)
+                .unwrap()
+                .into_reference();
+            let mut options = git2::WorktreeAddOptions::new();
+            options.reference(Some(&reference));
+            let linked = temp.path().join(format!("linked-{index:02}"));
+            repo.worktree("feature", &linked, Some(&options)).unwrap();
+            let linked = canonical(&linked);
+            let id = format!("project-{index}");
+            projects.push(json!({"id":id,"name":id,"repoPath":root}));
+            workspaces.push(json!({"id":format!("main-{index}"),"projectId":id,"name":"Main","path":root,"isPinned":true}));
+            workspaces.push(json!({"id":format!("feature-{index}"),"projectId":id,"name":"Feature","path":linked,"branch":"feature","tagNames":["Review"]}));
+            // A different project's existing checkout must not be accepted.
+            if index > 0 {
+                workspaces.push(json!({"id":format!("foreign-{index}"),"projectId":id,"name":"Foreign","path":linked_paths[0]}));
+            }
+            roots.push(root);
+            linked_paths.push(linked);
+        }
+        (
+            temp,
+            json!({"kind":"projects","items":projects}),
+            json!({"kind":"workspaces","items":workspaces}),
+            roots,
+            linked_paths,
+        )
+    }
+
+    fn collect_sidebar_fixture(
+        projects: &serde_json::Value,
+        workspaces: &serde_json::Value,
+        roots: &[PathBuf],
+        linked: &[PathBuf],
+        reuse: bool,
+    ) -> (
+        crate::runtime_catalog::RuntimeCatalog,
+        Vec<ProjectTreeGroup>,
+        usize,
+    ) {
+        let mut snapshot = WorktreeReadSnapshot::default();
+        snapshot.bypass_cache = !reuse;
+        let catalog = crate::runtime_catalog::parse_runtime_catalog_with_snapshot(
+            projects,
+            workspaces,
+            &mut snapshot,
+        )
+        .unwrap();
+        let registered: Vec<_> = catalog
+            .projects
+            .iter()
+            .map(|project| project.root.clone())
+            .collect();
+        let groups = collect_project_tree_with_snapshot(
+            roots,
+            linked,
+            &registered,
+            &linked[0],
+            &mut snapshot,
+        );
+        (catalog, groups, snapshot.list_reads)
+    }
+
+    #[test]
+    fn catalog_and_project_tree_share_only_exact_verified_worktree_listings() {
+        let (_temp, projects, workspaces, roots, linked) = sidebar_fixture(4);
+        let old = collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, false);
+        let new = collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, true);
+        assert_eq!(new.0, old.0);
+        assert_eq!(new.1, old.1);
+        assert_eq!(new.0.workspaces.len(), 8);
+        assert_eq!(new.1.len(), 4);
+        assert_eq!(old.2, 8);
+        assert_eq!(new.2, 4);
+        assert!(new.1[0].is_active);
+        assert!(new.1.iter().all(|group| group.worktrees.len() == 2));
+        // Next refresh must see newly created worktrees, never a stale cache.
+        let manager = WorktreeManager::discover(&roots[0]).unwrap();
+        let created = manager.create("next-refresh").unwrap();
+        let next = collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, true);
+        assert_eq!(next.2, 4);
+        assert!(next.1[0]
+            .worktrees
+            .iter()
+            .any(|entry| entry.path == canonical(&created)));
+    }
+
+    #[test]
+    fn nested_paths_reuse_discovered_root_but_nested_repository_stays_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let primary = init_repo(&temp.path().join("outer"));
+        let root = canonical(primary.root());
+        let first = plain_dir(&root.join("first"));
+        let second = plain_dir(&root.join("second"));
+        let nested = init_repo(&root.join("independent"));
+        let nested_root = canonical(nested.root());
+        let nested_subdir = plain_dir(&nested_root.join("subdir"));
+        let saved = vec![root.clone(), first, second, nested_subdir];
+        let mut old = WorktreeReadSnapshot::default();
+        old.bypass_cache = true;
+        let expected = collect_project_tree_with_snapshot(&saved, &[], &[], &nested_root, &mut old);
+        let mut snapshot = WorktreeReadSnapshot::default();
+        let actual =
+            collect_project_tree_with_snapshot(&saved, &[], &[], &nested_root, &mut snapshot);
+        assert_eq!(actual, expected);
+        assert_eq!(old.list_reads, 4);
+        assert_eq!(snapshot.list_reads, 2);
+        assert_eq!(actual.len(), 2);
+        assert_eq!(actual[0].root, root);
+        assert_eq!(actual[1].root, nested_root);
+        assert!(actual[1].is_active);
+    }
+
+    #[test]
+    #[ignore = "real repository sidebar refresh benchmark"]
+    fn benchmark_shared_sidebar_worktree_snapshot() {
+        use std::time::{Duration, Instant};
+        let (_temp, projects, workspaces, roots, linked) = sidebar_fixture(12);
+        let expected = collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, false);
+        let warm = collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, true);
+        assert_eq!(warm.0, expected.0);
+        assert_eq!(warm.1, expected.1);
+        assert_eq!(expected.2, 24);
+        assert_eq!(warm.2, 12);
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for sample in 0..7 {
+            for reuse in if sample % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = Instant::now();
+                let actual =
+                    collect_sidebar_fixture(&projects, &workspaces, &roots, &linked, reuse);
+                let elapsed = start.elapsed();
+                assert_eq!(actual.0, expected.0);
+                assert_eq!(actual.1, expected.1);
+                assert_eq!(actual.2, if reuse { 12 } else { 24 });
+                if reuse {
+                    new.push(elapsed);
+                } else {
+                    old.push(elapsed);
+                }
+            }
+        }
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        let old = median(&mut old);
+        let new = median(&mut new);
+        println!("GPUI sidebar refresh repositories={} registered_workspaces={} groups={} git_list_old={} git_list_new={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", roots.len(), expected.0.workspaces.len(), expected.1.len(), expected.2, warm.2, old/new);
     }
 
     #[test]
