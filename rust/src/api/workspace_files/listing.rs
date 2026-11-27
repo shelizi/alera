@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use ignore::WalkBuilder;
 
@@ -12,6 +14,11 @@ use super::{
 
 const LISTABLE_DESCENDANT_MAX_DEPTH: usize = 32;
 const LISTABLE_DESCENDANT_MAX_VISITS: usize = 2048;
+// Small listings stay serial. Allow at most three additional probe workers
+// across the entire native library, not three extra threads per listing.
+const DIRECTORIES_PER_EXTRA_WORKER: usize = 32;
+const MAX_EXTRA_PROBE_WORKERS: usize = 3;
+static DIRECTORY_PROBE_BUDGET: ProbeWorkerBudget = ProbeWorkerBudget::new(MAX_EXTRA_PROBE_WORKERS);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HideIgnoredDirectoryKind {
@@ -42,6 +49,7 @@ pub(super) fn list_workspace_children_filtered(
         hide_ignored,
         hide_hidden,
         true,
+        cfg!(windows),
     )
 }
 
@@ -51,6 +59,7 @@ fn list_workspace_children_with_policy(
     hide_ignored: bool,
     hide_hidden: bool,
     reuse_enumerated_metadata: bool,
+    parallel_probes: bool,
 ) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let directory = resolve_existing(&root, &relative_path)?;
@@ -69,17 +78,14 @@ fn list_workspace_children_with_policy(
         read_dir_children(&directory, reuse_enumerated_metadata)?
     };
 
-    let mut entries = Vec::with_capacity(children.len());
-    for child in children {
-        // One unreadable child must not blank the whole directory. Preserve
-        // path-based stat for ambiguous names and non-regular entries.
-        let (path, metadata) = child.into_parts();
-        if let Ok(Some(entry)) =
-            entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden, metadata)
-        {
-            entries.push(entry);
-        }
-    }
+    let mut entries = collect_listing_entries(
+        &root,
+        children,
+        hide_ignored,
+        hide_hidden,
+        parallel_probes,
+        &DIRECTORY_PROBE_BUDGET,
+    );
     // The alternate policy is only used for parity and performance tests.
     #[cfg(test)]
     if !reuse_enumerated_metadata {
@@ -88,6 +94,125 @@ fn list_workspace_children_with_policy(
     }
     sort_entries(&mut entries);
     Ok(entries)
+}
+
+fn collect_listing_entries(
+    root: &Path,
+    children: Vec<ListingChild>,
+    hide_ignored: bool,
+    hide_hidden: bool,
+    parallel_probes: bool,
+    budget: &ProbeWorkerBudget,
+) -> Vec<WorkspaceFileEntry> {
+    let probe = |child: ListingChild| {
+        // Preserve the same metadata, ignore and bounded descendant checks.
+        // An unreadable child must not blank the whole directory.
+        let (path, metadata) = child.into_parts();
+        entry_for_path_filtered(root, &path, hide_ignored, hide_hidden, metadata)
+            .ok()
+            .flatten()
+    };
+    if !hide_ignored || !parallel_probes {
+        return children.into_iter().filter_map(probe).collect();
+    }
+
+    let directories = children.iter().filter(|child| child.is_directory).count();
+    let requested = (directories / DIRECTORIES_PER_EXTRA_WORKER).min(MAX_EXTRA_PROBE_WORKERS);
+    if requested == 0 {
+        return children.into_iter().filter_map(probe).collect();
+    }
+    let cpu_slots = thread::available_parallelism()
+        .map(|count| count.get().saturating_sub(1))
+        .unwrap_or(0);
+    let permits: Vec<_> = (0..requested.min(cpu_slots))
+        .map_while(|_| budget.try_claim())
+        .collect();
+    if permits.is_empty() {
+        return children.into_iter().filter_map(probe).collect();
+    }
+
+    // Only expensive directory visibility probes use the shared work queue.
+    // The original caller handles ordinary files and helps drain the queue.
+    let (directories, files): (Vec<_>, Vec<_>) = children
+        .into_iter()
+        .enumerate()
+        .partition(|(_, child)| child.is_directory);
+    let pending = Mutex::new(directories.into_iter());
+    let indexed_probe = |(index, child)| probe(child).map(|entry| (index, entry));
+    let drain = || {
+        let mut entries = Vec::new();
+        loop {
+            let child = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .next();
+            match child {
+                Some(child) => entries.extend(indexed_probe(child)),
+                None => return entries,
+            }
+        }
+    };
+
+    thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(permits.len());
+        for permit in permits {
+            let drain = &drain;
+            // Failure to create a thread releases its permit and leaves all
+            // its work in the queue for the caller or other workers.
+            if let Ok(worker) = thread::Builder::new()
+                .name("alera-explorer-probe".to_string())
+                .spawn_scoped(scope, move || {
+                    let _permit = permit;
+                    drain()
+                })
+            {
+                workers.push(worker);
+            }
+        }
+        let mut entries: Vec<_> = files.into_iter().filter_map(indexed_probe).collect();
+        entries.extend(drain());
+        for worker in workers {
+            match worker.join() {
+                Ok(rows) => entries.extend(rows),
+                Err(panic) => std::panic::resume_unwind(panic),
+            }
+        }
+        // Stable ordering for equal keys (including lossy non-Unicode
+        // filenames) must not depend on which probe finishes first.
+        entries.sort_unstable_by_key(|(index, _)| *index);
+        entries.into_iter().map(|(_, entry)| entry).collect()
+    })
+}
+
+struct ProbeWorkerBudget {
+    active: AtomicUsize,
+    limit: usize,
+}
+
+impl ProbeWorkerBudget {
+    const fn new(limit: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            limit,
+        }
+    }
+
+    fn try_claim(&self) -> Option<ProbeWorkerPermit<'_>> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |active| {
+                (active < self.limit).then_some(active + 1)
+            })
+            .ok()?;
+        Some(ProbeWorkerPermit(self))
+    }
+}
+
+struct ProbeWorkerPermit<'a>(&'a ProbeWorkerBudget);
+
+impl Drop for ProbeWorkerPermit<'_> {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::Release);
+    }
 }
 
 fn sort_entries(entries: &mut [WorkspaceFileEntry]) {
@@ -116,12 +241,18 @@ fn sort_entries_uncached(entries: &mut [WorkspaceFileEntry]) {
 
 struct ListingChild {
     path: PathBuf,
+    is_directory: bool,
     #[cfg(windows)]
     metadata: Option<fs::Metadata>,
 }
 
 impl ListingChild {
-    fn new(path: PathBuf, reuse: bool, metadata: impl FnOnce() -> Option<fs::Metadata>) -> Self {
+    fn new(
+        path: PathBuf,
+        is_directory: bool,
+        reuse: bool,
+        metadata: impl FnOnce() -> Option<fs::Metadata>,
+    ) -> Self {
         #[cfg(windows)]
         let metadata = if reuse && is_ordinary_windows_filename(&path) {
             metadata().filter(reusable_windows_metadata)
@@ -132,6 +263,7 @@ impl ListingChild {
         let _ = (reuse, metadata);
         Self {
             path,
+            is_directory,
             #[cfg(windows)]
             metadata,
         }
@@ -212,9 +344,13 @@ fn ignored_aware_children(
         if is_protected_child_path(entry.path()) {
             continue;
         }
-        paths.push(ListingChild::new(entry.path().to_path_buf(), reuse, || {
-            entry.metadata().ok()
-        }));
+        let is_directory = entry.file_type().is_some_and(|kind| kind.is_dir());
+        paths.push(ListingChild::new(
+            entry.path().to_path_buf(),
+            is_directory,
+            reuse,
+            || entry.metadata().ok(),
+        ));
     }
     Ok(paths)
 }
@@ -233,7 +369,10 @@ fn read_dir_children(
         if is_protected_child_path(&path) {
             continue;
         }
-        paths.push(ListingChild::new(path, reuse, || entry.metadata().ok()));
+        // Show-all listings never run expensive ignore descendant probes.
+        paths.push(ListingChild::new(path, false, reuse, || {
+            entry.metadata().ok()
+        }));
     }
     Ok(paths)
 }
@@ -423,8 +562,212 @@ mod tests {
             hide_ignored,
             hide_hidden,
             optimized,
+            false,
         )
         .unwrap()
+    }
+
+    fn directory_heavy_fixture(count: usize) -> tempfile::TempDir {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        git2::Repository::init(root).unwrap();
+        fs::write(root.join(".gitignore"), "*.tmp\nignored-*/**\n").unwrap();
+        fs::write(root.join(".ignore"), "scratch.txt\n").unwrap();
+        fs::write(root.join(".git/info/exclude"), "local-only.txt\n").unwrap();
+        fs::write(root.join("README.md"), "workspace").unwrap();
+        for index in 0..count {
+            let dir = root.join(format!("package-{index:03}"));
+            fs::create_dir(&dir).unwrap();
+            match index % 6 {
+                0 => {
+                    fs::write(dir.join("main.rs"), "visible").unwrap();
+                    fs::write(dir.join("cache.tmp"), "ignored").unwrap();
+                }
+                1 => {
+                    let nested = dir.join("src/deep");
+                    fs::create_dir_all(&nested).unwrap();
+                    fs::write(nested.join("main.rs"), "visible").unwrap();
+                }
+                2 => {
+                    fs::write(dir.join("cache.tmp"), "ignored").unwrap();
+                    fs::write(dir.join("scratch.txt"), "ignored").unwrap();
+                    fs::write(dir.join("local-only.txt"), "ignored").unwrap();
+                }
+                3 => {} // Physically empty directory.
+                4 => {
+                    fs::create_dir(dir.join(".hg")).unwrap();
+                    fs::write(dir.join(".hg/state"), "protected").unwrap();
+                }
+                _ => {
+                    fs::write(dir.join(".gitignore"), "!keep.tmp\n").unwrap();
+                    fs::write(dir.join("keep.tmp"), "unignored").unwrap();
+                }
+            }
+        }
+        workspace
+    }
+
+    fn list_directory_probe_policy(
+        workspace: &tempfile::TempDir,
+        hide_ignored: bool,
+        hide_hidden: bool,
+        parallel: bool,
+    ) -> Vec<WorkspaceFileEntry> {
+        list_workspace_children_with_policy(
+            workspace_path(workspace),
+            String::new(),
+            hide_ignored,
+            hide_hidden,
+            true,
+            parallel,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parallel_directory_probes_preserve_full_listing_and_freshness() {
+        let workspace = directory_heavy_fixture(120);
+        for hide_ignored in [false, true] {
+            for hide_hidden in [false, true] {
+                assert_eq!(
+                    list_directory_probe_policy(&workspace, hide_ignored, hide_hidden, false),
+                    list_directory_probe_policy(&workspace, hide_ignored, hide_hidden, true),
+                );
+            }
+        }
+
+        let hidden = list_directory_probe_policy(&workspace, true, false, true);
+        let names = entry_names(&hidden);
+        assert!(names.contains(&"package-000"));
+        assert!(names.contains(&"package-001"));
+        assert!(!names.contains(&"package-002"));
+        assert!(names.contains(&"package-003"));
+        assert!(names.contains(&"package-004"));
+        assert!(names.contains(&"package-005"));
+        for name in ["package-003", "package-004"] {
+            assert!(
+                !hidden
+                    .iter()
+                    .find(|row| row.name == name)
+                    .unwrap()
+                    .has_children_hint
+            );
+        }
+        assert!(
+            hidden
+                .iter()
+                .find(|row| row.name == "package-005")
+                .unwrap()
+                .has_children_hint
+        );
+
+        fs::write(
+            workspace.path().join("package-002/visible.rs"),
+            "now visible",
+        )
+        .unwrap();
+        fs::remove_file(workspace.path().join("package-000/main.rs")).unwrap();
+        let latest = list_directory_probe_policy(&workspace, true, false, true);
+        assert_eq!(
+            latest,
+            list_directory_probe_policy(&workspace, true, false, false)
+        );
+        assert!(entry_names(&latest).contains(&"package-002"));
+        assert!(!entry_names(&latest).contains(&"package-000"));
+    }
+
+    #[test]
+    fn probe_worker_budget_caps_concurrent_claims_and_releases_permits() {
+        use std::sync::Barrier;
+        let budget = ProbeWorkerBudget::new(3);
+        let rendezvous = Barrier::new(9);
+        let release = Barrier::new(9);
+        let claims = AtomicUsize::new(0);
+        let held = thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    let permit = budget.try_claim();
+                    if permit.is_some() {
+                        claims.fetch_add(1, Ordering::Relaxed);
+                    }
+                    rendezvous.wait();
+                    release.wait();
+                    drop(permit);
+                });
+            }
+            rendezvous.wait();
+            let active = budget.active.load(Ordering::Acquire);
+            let extra = budget.try_claim();
+            release.wait();
+            (active, extra.is_none())
+        });
+        assert_eq!(held, (3, true));
+        assert_eq!(claims.load(Ordering::Relaxed), 3);
+        assert_eq!(budget.active.load(Ordering::Acquire), 0);
+        assert!(budget.try_claim().is_some());
+    }
+
+    #[test]
+    fn saturated_probe_budget_falls_back_to_complete_serial_listing() {
+        let workspace = directory_heavy_fixture(32);
+        let root = workspace_root(&workspace_path(&workspace)).unwrap();
+        let budget = ProbeWorkerBudget::new(3);
+        let _permits: Vec<_> = (0..3).map(|_| budget.try_claim().unwrap()).collect();
+        let mut rows = collect_listing_entries(
+            &root,
+            ignored_aware_children(&root, true).unwrap(),
+            true,
+            false,
+            true,
+            &budget,
+        );
+        sort_entries(&mut rows);
+        assert_eq!(
+            rows,
+            list_directory_probe_policy(&workspace, true, false, false)
+        );
+        assert_eq!(budget.active.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    #[ignore = "directory-heavy filesystem benchmark"]
+    fn benchmark_workspace_listing_parallel_directory_probes() {
+        use std::time::{Duration, Instant};
+        let workspace = directory_heavy_fixture(192);
+        let expected = list_directory_probe_policy(&workspace, true, false, false);
+        assert_eq!(
+            expected,
+            list_directory_probe_policy(&workspace, true, false, true)
+        );
+        let mut serial = Vec::new();
+        let mut parallel = Vec::new();
+        for index in 0..7 {
+            for optimized in if index % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let started = Instant::now();
+                let actual = list_directory_probe_policy(&workspace, true, false, optimized);
+                let elapsed = started.elapsed();
+                assert_eq!(actual, expected);
+                if optimized {
+                    parallel.push(elapsed);
+                } else {
+                    serial.push(elapsed);
+                }
+            }
+        }
+        fn median(values: &mut [Duration]) -> f64 {
+            values.sort();
+            values[values.len() / 2].as_secs_f64() * 1000.0
+        }
+        let serial = median(&mut serial);
+        let parallel = median(&mut parallel);
+        println!(
+            "directory probes: dirs=192 rows={} serial_ms={serial:.3} parallel_ms={parallel:.3} speedup={:.2}x cpu={:?}",
+            expected.len(), serial / parallel, thread::available_parallelism(),
+        );
     }
 
     #[test]
