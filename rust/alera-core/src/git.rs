@@ -264,13 +264,27 @@ pub fn remove_worktree(repo_path: &str, path: &str, force: bool) -> Result<(), G
 }
 
 pub fn list_worktrees(repo_path: &str) -> Result<Vec<GitWorktreeEntry>, GitError> {
+    list_worktrees_with_policy(repo_path, true)
+}
+
+fn list_worktrees_with_policy(
+    repo_path: &str,
+    reuse_read_metadata: bool,
+) -> Result<Vec<GitWorktreeEntry>, GitError> {
     let repo = open_repo(repo_path)?;
     let mut entries = Vec::new();
+    let branch_name = |repo: &Repository| {
+        if reuse_read_metadata {
+            read_head_branch_name(repo)
+        } else {
+            head_branch_name(repo)
+        }
+    };
 
     if let Some(workdir) = repo.workdir() {
         entries.push(GitWorktreeEntry {
             path: workdir.to_string_lossy().trim_end_matches('/').to_string(),
-            branch: head_branch_name(&repo),
+            branch: branch_name(&repo),
         });
     }
 
@@ -281,9 +295,18 @@ pub fn list_worktrees(repo_path: &str) -> Result<Vec<GitWorktreeEntry>, GitError
         };
         if let Ok(worktree) = repo.find_worktree(name) {
             let worktree_path = worktree.path().to_string_lossy().to_string();
-            let branch = match Repository::open(worktree.path()) {
-                Ok(worktree_repo) => head_branch_name(&worktree_repo),
-                Err(_) => "HEAD".to_string(),
+            // A listing requested from a linked checkout may encounter that
+            // same checkout again in the administrative list. Preserve the
+            // existing rows/order, but reuse its already-read branch only
+            // for exact native path equality. All other checkouts are opened
+            // and validated as before; missing ones still yield HEAD.
+            let branch = if reuse_read_metadata && repo.workdir() == Some(worktree.path()) {
+                entries.first().expect("workdir row exists").branch.clone()
+            } else {
+                match Repository::open(worktree.path()) {
+                    Ok(worktree_repo) => branch_name(&worktree_repo),
+                    Err(_) => "HEAD".to_string(),
+                }
             };
             entries.push(GitWorktreeEntry {
                 path: worktree_path.trim_end_matches('/').to_string(),
@@ -301,9 +324,26 @@ fn open_repo(path: &str) -> Result<Repository, GitError> {
     })
 }
 
+/// Read-only branch display metadata, shared by the Classic bridge and GPUI
+/// model. A resolved local-branch reference already establishes that HEAD
+/// was symbolic when resolved. Avoid reopening HEAD and initializing the
+/// object database just to ask whether that same snapshot is detached.
+/// Keep the old behavior for all other references and errors.
+pub fn read_head_branch_name(repo: &Repository) -> String {
+    head_branch_name_with_policy(repo, true)
+}
+
+// Mutation preflights keep their existing separate detached-HEAD check.
 fn head_branch_name(repo: &Repository) -> String {
+    head_branch_name_with_policy(repo, false)
+}
+
+fn head_branch_name_with_policy(repo: &Repository, read_only_fast_path: bool) -> String {
     match repo.head() {
         Ok(head) => {
+            if read_only_fast_path && head.is_branch() {
+                return head.shorthand().unwrap_or("HEAD").to_string();
+            }
             if repo.head_detached().unwrap_or(false) {
                 "HEAD".to_string()
             } else {

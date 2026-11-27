@@ -314,3 +314,181 @@ fn workdir(repo: &Repository) -> &Path {
 fn path_str(path: &Path) -> &str {
     path.to_str().expect("utf-8 path")
 }
+
+fn metadata_worktree_fixture(repo: &Repository, count: usize) -> TempDir {
+    let checkouts = TempDir::new().expect("temporary worktrees");
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    for index in 0..count {
+        let name = format!("metadata-{index:02}");
+        let reference = repo.branch(&name, &head, false).unwrap().into_reference();
+        let mut options = WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        repo.worktree(&name, &checkouts.path().join(&name), Some(&options))
+            .unwrap();
+    }
+    checkouts
+}
+
+#[test]
+fn readonly_head_metadata_matches_legacy_for_live_unborn_and_unusual_refs() {
+    let (_directory, repo) = init_repo();
+    let oid = repo.head().unwrap().target().unwrap();
+    let assert_parity = |repo: &Repository, expected: &str| {
+        assert_eq!(
+            super::read_head_branch_name(repo),
+            super::head_branch_name(repo)
+        );
+        assert_eq!(super::read_head_branch_name(repo), expected);
+    };
+    assert_parity(&repo, "main");
+    let commit = repo.find_commit(oid).unwrap();
+    repo.branch("feature/metadata", &commit, false).unwrap();
+    repo.set_head("refs/heads/feature/metadata").unwrap();
+    assert_parity(&repo, "feature/metadata");
+    repo.set_head_detached(oid).unwrap();
+    assert_parity(&repo, "HEAD");
+
+    repo.reference("refs/tags/metadata", oid, false, "fixture")
+        .unwrap();
+    repo.reference_symbolic("HEAD", "refs/tags/metadata", true, "fixture")
+        .unwrap();
+    assert_eq!(
+        super::read_head_branch_name(&repo),
+        super::head_branch_name(&repo)
+    );
+    assert!(!repo.head().unwrap().is_branch());
+
+    repo.set_head("refs/heads/unborn-metadata").unwrap();
+    assert_parity(&repo, "unborn-metadata");
+    // Broken HEAD keeps the exact former fallback behavior.
+    fs::write(repo.path().join("HEAD"), "not-a-valid-ref\n").unwrap();
+    let fresh = Repository::open(repo.workdir().unwrap()).unwrap();
+    assert_eq!(
+        super::read_head_branch_name(&fresh),
+        super::head_branch_name(&fresh)
+    );
+}
+
+#[test]
+fn readonly_worktree_listing_keeps_rows_order_and_fresh_branch_metadata() {
+    let (_directory, repo) = init_repo();
+    let checkouts = metadata_worktree_fixture(&repo, 5);
+    let linked = checkouts.path().join("metadata-00");
+    let linked_repo = Repository::open(&linked).unwrap();
+    let detached_path = checkouts.path().join("metadata-01");
+    let detached = Repository::open(&detached_path).unwrap();
+    detached
+        .set_head_detached(detached.head().unwrap().target().unwrap())
+        .unwrap();
+    drop(detached);
+    let missing = checkouts.path().join("metadata-04");
+    fs::remove_dir_all(&missing).unwrap();
+
+    for path in [repo.workdir().unwrap(), linked.as_path()] {
+        let path = path_str(path);
+        let old = super::list_worktrees_with_policy(path, false).unwrap();
+        let new = super::list_worktrees(path).unwrap();
+        assert_eq!(old, new);
+        assert!(new.iter().any(|row| row.branch == "metadata-00"));
+        assert!(new
+            .iter()
+            .any(|row| row.path.contains("metadata-01") && row.branch == "HEAD"));
+        // A removed checkout, if listed by libgit2, must retain the old HEAD fallback.
+        assert!(new
+            .iter()
+            .all(|row| !row.path.contains("metadata-04") || row.branch == "HEAD"));
+    }
+    // When discovery starts in a linked checkout the old API includes it both
+    // as the input workdir and in the linked rows; preserve that API contract.
+    let old = super::list_worktrees_with_policy(path_str(&linked), false).unwrap();
+    assert!(old.iter().filter(|row| row.branch == "metadata-00").count() >= 2);
+    linked_repo
+        .set_head_detached(linked_repo.head().unwrap().target().unwrap())
+        .unwrap();
+    let fresh = super::list_worktrees(path_str(&linked)).unwrap();
+    assert_eq!(
+        fresh,
+        super::list_worktrees_with_policy(path_str(&linked), false).unwrap()
+    );
+    assert!(fresh.iter().all(|row| row.branch != "metadata-00"));
+    assert!(fresh
+        .iter()
+        .any(|row| row.path.contains("metadata-00") && row.branch == "HEAD"));
+}
+
+#[test]
+#[ignore = "real linked worktree metadata performance benchmark"]
+fn benchmark_shared_readonly_head_metadata() {
+    use std::time::{Duration, Instant};
+    let (_directory, repo) = init_repo();
+    let checkouts = metadata_worktree_fixture(&repo, 32);
+    let root = repo.workdir().unwrap();
+    let linked = checkouts.path().join("metadata-00");
+    fn median(samples: &mut [Duration]) -> f64 {
+        samples.sort();
+        samples[samples.len() / 2].as_secs_f64() * 1000.0
+    }
+    for (scope, path) in [("main", root), ("linked", linked.as_path())] {
+        let path = path_str(path);
+        let expected = super::list_worktrees_with_policy(path, false).unwrap();
+        assert_eq!(super::list_worktrees(path).unwrap(), expected);
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for sample in 0..7 {
+            for optimized in if sample % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let start = Instant::now();
+                let actual = super::list_worktrees_with_policy(path, optimized).unwrap();
+                let elapsed = start.elapsed();
+                assert_eq!(actual, expected);
+                if optimized {
+                    new.push(elapsed);
+                } else {
+                    old.push(elapsed);
+                }
+            }
+        }
+        let old = median(&mut old);
+        let new = median(&mut new);
+        println!("Worktree list scope={scope} linked=32 rows={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", expected.len(), old/new);
+    }
+    // Freshly open/discover each repository, as current_branch does in
+    // production. This measures the shared branch display path, not a warm
+    // already-initialized object database.
+    let path = path_str(&linked);
+    let mut old = Vec::new();
+    let mut new = Vec::new();
+    for optimized in [false, true] {
+        let opened = super::open_repo(path).unwrap();
+        assert_eq!(
+            super::head_branch_name_with_policy(&opened, optimized),
+            "metadata-00"
+        );
+    }
+    for sample in 0..7 {
+        for optimized in if sample % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let start = Instant::now();
+            for _ in 0..100 {
+                let opened = super::open_repo(path).unwrap();
+                let name = super::head_branch_name_with_policy(&opened, optimized);
+                assert_eq!(name, "metadata-00");
+            }
+            let elapsed = start.elapsed();
+            if optimized {
+                new.push(elapsed);
+            } else {
+                old.push(elapsed);
+            }
+        }
+    }
+    let old = median(&mut old) / 100.0;
+    let new = median(&mut new) / 100.0;
+    println!("Shared current_branch fresh linked discovery old_ms={old:.3} new_ms={new:.3} speedup={:.2}x (100 reads/sample)", old/new);
+}
