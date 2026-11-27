@@ -1322,14 +1322,22 @@ struct Workbench {
     global_agent_expanded_timeline: Option<(String, String, String)>,
     /// Secondary actions remain discoverable without making each Kanban card enormous.
     global_agent_actions_expanded: Option<(String, String, String)>,
-    /// Dashboard-only explicit cross-project Profile launch; no pane reattachment.
+    /// Shared by the sidebar and the Dashboard; keyed by exact Host identity
+    /// and completion epoch, not by the most recent background update.
+    agent_completion_acknowledgements: HashMap<(String, String, String), String>,
+    global_agent_search_input: Entity<QuickOpenInput>,
+    global_agent_create_filter_input: Entity<QuickOpenInput>,
+    global_agent_create_project: Option<String>,
+    global_agent_create_picker: Option<u8>,
+    /// Dashboard-only explicit cross-project launch; no pane reattachment.
     global_agent_create_open: bool,
     global_agent_create_workspace: Option<String>,
+    global_agent_create_agent: Option<String>,
     global_agent_create_profile: Option<String>,
     global_agent_create_prompt_input: Entity<QuickOpenInput>,
     global_agent_create_busy: bool,
     global_agent_create_request: u64,
-    global_agent_create_pending: Option<LaunchedAgentTab>,
+    global_agent_create_pending: Option<native_global_agents_ui::GlobalAgentLaunchReceipt>,
     global_agent_create_expected_agent: Option<String>,
     global_agent_create_journal: Option<(PathBuf, PendingHostCreate)>,
     global_agent_create_inventory_verified: bool,
@@ -13129,9 +13137,10 @@ impl Render for Workbench {
             self.settings_native_profile_migrated && self.settings_shared_error.is_none(),
             self.settings_extra_values.get("agents.showTaskSummariesInSidebar"),
         );
-        let active_sidebar_session = if self.center_view == CenterView::Terminal {
+        let active_sidebar_session = if self.center_view == CenterView::Terminal && !self.global_agent_maximized {
             self.terminals.active().map(|tab| (tab.handle.clone(), tab.workspace_id.clone(), tab.tab_id.clone()))
         } else { None };
+        self.sync_visible_agent_completion(active_sidebar_session.as_ref());
         let registered_sidebar_workspaces: HashMap<&str, &PathBuf> = self
             .mcp_host_workspaces
             .iter()
@@ -13139,7 +13148,7 @@ impl Render for Workbench {
             .collect();
         let mut sidebar_agents_by_workspace: HashMap<
             PathBuf,
-            Vec<(String, String, String, String, Option<AgentVisualState>, Option<String>)>,
+            Vec<(String, String, String, String, Option<AgentVisualState>, bool, Option<String>)>,
         > = HashMap::new();
         if !self.terminals.session_list_is_stale() {
             for session in &self.terminals.sessions {
@@ -13159,6 +13168,7 @@ impl Render for Workbench {
                         session.tab_id.clone(),
                         agent_type.to_owned(),
                         AgentVisualState::for_session(session, agent_inventory_current),
+                        native_global_agents_ui::dashboard_done_unread(session, &self.agent_completion_acknowledgements),
                         if show_agent_task_summaries {
                             session.agent_context.as_ref().and_then(|context| {
                                 let text = if context.progress.trim().is_empty() { &context.goal } else { &context.progress };
@@ -17903,9 +17913,10 @@ impl Render for Workbench {
                                                         let sidebar_agents = sidebar_agents_by_workspace
                                                             .get(&target).cloned().unwrap_or_default();
                                                         let workspace_agent_state = sidebar_agents.iter()
-                                                            .find_map(|(_, _, _, _, state, _)| *state);
+                                                            .find_map(|(_, _, _, _, state, _, _)| *state);
+                                                        let workspace_done_unread = sidebar_agents.iter().any(|(_, _, _, _, _, unread, _)| *unread);
                                                         let mut sibling_agent_counts: HashMap<String, usize> = HashMap::new();
-                                                        for (_, _, _, kind, _, _) in &sidebar_agents {
+                                                        for (_, _, _, kind, _, _, _) in &sidebar_agents {
                                                             *sibling_agent_counts.entry(kind.clone()).or_default() += 1;
                                                         }
                                                         let active = workspace_root == target;
@@ -17968,7 +17979,9 @@ impl Render for Workbench {
                                                                     .child(
                                                                         div().w(px(12.0)).h(px(12.0)).flex_shrink_0()
                                                                             .flex().items_center().justify_center()
-                                                                            .child(if let Some(state) = workspace_agent_state {
+                                                                            .child(if workspace_done_unread && matches!(workspace_agent_state, Some(AgentVisualState::Done)) {
+                                                                                div().w(px(10.0)).h(px(10.0)).rounded_full().bg(rgb(AGENT_WAITING)).into_any_element()
+                                                                            } else if let Some(state) = workspace_agent_state {
                                                                                 native_agent_quota_ui::agent_run_indicator(state, 10.0)
                                                                             } else {
                                                                                 div().w(px(8.0)).h(px(8.0)).rounded_full()
@@ -18044,7 +18057,7 @@ impl Render for Workbench {
                                                                 is_primary_workspace, active,
                                                             )))
                                                             .children(sidebar_agents.into_iter().enumerate().map(
-                                                                |(_agent_index, (handle, workspace_id, tab_id, agent_type, visual_state, summary))| {
+                                                                |(_agent_index, (handle, workspace_id, tab_id, agent_type, visual_state, done_unread, summary))| {
                                                                     let provider_name = if agent_type == "terminal" { "Terminal" } else { native_agent_quota_ui::classic_agent_display_name(&agent_type) };
                                                                     let duplicate = sibling_agent_counts.get(&agent_type).copied().unwrap_or(0) > 1;
                                                                     let agent_caption = if duplicate {
@@ -18052,8 +18065,10 @@ impl Render for Workbench {
                                                                     } else {
                                                                         provider_name.to_owned()
                                                                     };
-                                                                    let agent_tooltip = visual_state.map(|state| state.tooltip(&agent_type, agent_ui_locale))
-                                                                        .unwrap_or_else(|| format!("Open {provider_name}"));
+                                                                    let agent_tooltip = if done_unread {
+                                                                        format!("{} · {}", provider_name, tr(agent_ui_locale, "Done (Unread)"))
+                                                                    } else { visual_state.map(|state| state.tooltip(&agent_type, agent_ui_locale))
+                                                                        .unwrap_or_else(|| format!("Open {provider_name}")) };
                                                                     let selected = active_sidebar_session.as_ref().is_some_and(|(h, w, t)|
                                                                         h == &handle && w == &workspace_id && t == &tab_id);
                                                                     let closing = self.host_tab_closing.contains(&(handle.clone(), workspace_id.clone(), tab_id.clone()));
@@ -18076,7 +18091,9 @@ impl Render for Workbench {
                                                                         .child(
                                                                             div().w(px(12.0)).h(px(12.0)).flex_shrink_0()
                                                                                 .flex().items_center().justify_center()
-                                                                                .child(if let Some(state) = visual_state {
+                                                                                .child(if done_unread {
+                                                                                    div().w(px(10.0)).h(px(10.0)).rounded_full().bg(rgb(AGENT_WAITING)).into_any_element()
+                                                                                } else if let Some(state) = visual_state {
                                                                                     native_agent_quota_ui::agent_run_indicator(state, 10.0)
                                                                                 } else {
                                                                                     div().w(px(7.0)).h(px(7.0)).rounded_full()
@@ -18839,6 +18856,16 @@ fn main() {
                         });
                         cx.observe(&sidebar_search_input, |_, _, cx| cx.notify())
                             .detach();
+                        let global_agent_search_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search Agents", cx)
+                        });
+                        cx.observe(&global_agent_search_input, |_, _, cx| cx.notify())
+                            .detach();
+                        let global_agent_create_filter_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Filter choices", cx)
+                        });
+                        cx.observe(&global_agent_create_filter_input, |_, _, cx| cx.notify())
+                            .detach();
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |view: &mut Workbench, _, cx| {
@@ -19398,9 +19425,15 @@ fn main() {
                             global_agent_needs_review_only: false,
                             global_agent_expanded_timeline: None,
                             global_agent_actions_expanded: None,
+                            agent_completion_acknowledgements: HashMap::new(),
+                            global_agent_search_input,
+                            global_agent_create_filter_input,
+                            global_agent_create_project: None,
+                            global_agent_create_picker: None,
                             global_agent_create_open: false,
                             global_agent_create_workspace: None,
                             global_agent_create_profile: None,
+                            global_agent_create_agent: None,
                             global_agent_create_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::profile_command(cx)
                             }),

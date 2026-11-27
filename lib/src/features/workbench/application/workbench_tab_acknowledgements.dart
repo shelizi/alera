@@ -30,6 +30,15 @@ class WorkbenchTabCompletionAcknowledgementsController
     };
   }
 
+  /// Restores unread for this exact viewed completion, not a newer epoch.
+  void markUnread(AgentStatusEntry? status) {
+    if (!isCompletionAcknowledged(state, status)) return;
+    state = <String, DateTime>{
+      for (final entry in state.entries)
+        if (entry.key != status!.terminalSessionId) entry.key: entry.value,
+    };
+  }
+
   /// Drops acknowledgements for terminal sessions that no longer exist.
   void retainTerminalSessions(Set<String> terminalSessionIds) {
     if (state.keys.every(terminalSessionIds.contains)) {

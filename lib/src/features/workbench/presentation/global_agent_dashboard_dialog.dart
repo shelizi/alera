@@ -11,6 +11,7 @@ import 'package:alera/src/features/workbench/presentation/global_agent_history_p
 import 'package:alera/src/features/workbench/presentation/global_agent_inspector_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
+import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +26,7 @@ typedef _DashboardCardState = ({
   bool armedTerminate,
   bool pinning,
   bool openingInspector,
+  bool doneUnread,
 });
 
 /// Open the live inspector as a true modal: only tapping its outside barrier
@@ -70,6 +72,37 @@ class _GlobalAgentDashboardPageState
   final Set<String> _pinningTabIds = <String>{};
   bool _openingInspector = false;
   String _query = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  bool _isDoneUnread(GlobalAgentLiveRow row) =>
+      GlobalAgentDashboardGroup.forStatus(row.status) ==
+          GlobalAgentDashboardGroup.done &&
+      !isCompletionAcknowledged(
+        ref.read(workbenchTabCompletionAcknowledgementsControllerProvider),
+        row.status,
+      );
+
+  void _setDoneRead(GlobalAgentLiveRow row, bool read) {
+    final current = ref.read(
+      agentStatusControllerProvider,
+    )[row.identity.sessionId];
+    if (current == null ||
+        current.workspaceId != row.identity.workspaceId ||
+        current.tabId != row.identity.tabId ||
+        GlobalAgentDashboardGroup.forStatus(current) !=
+            GlobalAgentDashboardGroup.done ||
+        current.stateStartedAt != row.status.stateStartedAt)
+      return;
+    final acknowledgements = ref.read(
+      workbenchTabCompletionAcknowledgementsControllerProvider.notifier,
+    );
+    if (read) {
+      acknowledgements.acknowledge(current);
+    } else {
+      acknowledgements.markUnread(current);
+    }
+  }
+
   bool _historyMode = false;
   bool _needsReviewOnly = false;
   final TextEditingController _instruction = TextEditingController();
@@ -198,6 +231,7 @@ class _GlobalAgentDashboardPageState
       armedTerminate: armed(true),
       pinning: _pinningTabIds.contains(row.tab.id),
       openingInspector: _openingInspector,
+      doneUnread: _isDoneUnread(row),
     );
     final previous = _cardWidgets[identity];
     if (previous != null && previous.state == state) return previous.widget;
@@ -365,6 +399,7 @@ class _GlobalAgentDashboardPageState
   @override
   void dispose() {
     _horizontal.dispose();
+    _searchController.dispose();
     _instruction.dispose();
     super.dispose();
   }
@@ -468,6 +503,7 @@ class _GlobalAgentDashboardPageState
           tabId: status.tabId,
         );
     if (mounted) {
+      if (_isDoneUnread(row)) _setDoneRead(row, true);
       ref.read(globalAgentDashboardNavigationProvider.notifier).close();
     }
   }
@@ -548,6 +584,7 @@ class _GlobalAgentDashboardPageState
       overlay.open(identity.sessionId);
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
+      if (_isDoneUnread(row)) _setDoneRead(row, true);
       await showAgentInspectorModal(
         context,
         GlobalAgentInspectorDialog(row: row, session: session),
@@ -681,6 +718,11 @@ class _GlobalAgentDashboardPageState
 
   @override
   Widget build(BuildContext context) {
+    // The sidebar and tab strip use this same completion receipt provider.
+    // Rebuild and invalidate only changed cards when either surface reads a run.
+    if (!_historyMode) {
+      ref.watch(workbenchTabCompletionAcknowledgementsControllerProvider);
+    }
     // History browsing does not subscribe to the high-frequency live map.
     final all = _historyMode
         ? const <GlobalAgentLiveRow>[]
@@ -714,6 +756,20 @@ class _GlobalAgentDashboardPageState
       alreadySorted: true,
       pinnedFirst: true,
     );
+    for (final section in columns) {
+      if (section.group == GlobalAgentDashboardGroup.done) {
+        section.rows.sort((a, b) {
+          final unread = (_isDoneUnread(b) ? 1 : 0).compareTo(
+            _isDoneUnread(a) ? 1 : 0,
+          );
+          if (unread != 0) return unread;
+          final completed = b.status.stateStartedAt.compareTo(
+            a.status.stateStartedAt,
+          );
+          return completed != 0 ? completed : a.tab.id.compareTo(b.tab.id);
+        });
+      }
+    }
     final visible = {
       for (final section in columns)
         if (!_collapsedGroups.contains(section.group))
@@ -726,122 +782,155 @@ class _GlobalAgentDashboardPageState
       color: AleraTokens.bg,
       child: SizedBox.expand(
         child: Padding(
-          padding: const EdgeInsets.all(AleraTokens.space24),
+          padding: const EdgeInsets.all(AleraTokens.space8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
                   Expanded(
-                    child: Text(
-                      'Global Agent Dashboard',
-                      style: Theme.of(context).textTheme.titleLarge,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final searchWidth = (constraints.maxWidth * .30)
+                            .clamp(120.0, 280.0)
+                            .toDouble();
+                        return SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Tooltip(
+                                message:
+                                    '${rows.length} of ${all.length} Agent sessions',
+                                child: Text(
+                                  'Agents',
+                                  style: Theme.of(context).textTheme.titleSmall,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              if (!_historyMode)
+                                SizedBox(
+                                  width: searchWidth,
+                                  height: 34,
+                                  child: TextField(
+                                    controller: _searchController,
+                                    decoration: InputDecoration(
+                                      prefixIcon: const Icon(
+                                        Icons.search,
+                                        size: 16,
+                                      ),
+                                      hintText: 'Search Agents',
+                                      isDense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                          ),
+                                      suffixIcon: _query.isEmpty
+                                          ? null
+                                          : IconButton(
+                                              tooltip: 'Clear search',
+                                              icon: const Icon(
+                                                Icons.close,
+                                                size: 14,
+                                              ),
+                                              onPressed: () => setState(() {
+                                                _searchController.clear();
+                                                _query = '';
+                                              }),
+                                            ),
+                                    ),
+                                    onChanged: (value) =>
+                                        setState(() => _query = value),
+                                  ),
+                                ),
+                              const SizedBox(width: 4),
+                              if (!_historyMode) ...[
+                                Tooltip(
+                                  message: 'Waiting / blocked Agents requiring review (not inferred approval)',
+                                  child: FilterChip(
+                                    visualDensity: VisualDensity.compact,
+                                    showCheckmark: false,
+                                    selected: _needsReviewOnly,
+                                    label: Text(
+                                      'Needs You ($needsReviewCount)',
+                                    ),
+                                    onSelected: (selected) => setState(() {
+                                      _needsReviewOnly = selected;
+                                      _closeHistoricalMessages();
+                                      _collapsedGroups.clear();
+                                      _target = null;
+                                      _armedControl = null;
+                                      _sendFeedback = null;
+                                    }),
+                                  ),
+                                ),
+                                if (_hiddenCards.isNotEmpty || _showHidden) ...[
+                                  const SizedBox(width: 4),
+                                  Tooltip(
+                                    message: _showHidden
+                                        ? 'Show visible only'
+                                        : 'Show hidden cards',
+                                    child: FilterChip(
+                                      visualDensity: VisualDensity.compact,
+                                      showCheckmark: false,
+                                      selected: _showHidden,
+                                      avatar: Icon(
+                                        _showHidden
+                                            ? Icons.visibility
+                                            : Icons.visibility_off,
+                                        size: 15,
+                                      ),
+                                      label: Text('${_hiddenCards.length}'),
+                                      onSelected: (selected) => setState(
+                                        () => _showHidden = selected,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                tooltip: _historyMode
+                                    ? 'Live Agents'
+                                    : 'History Search',
+                                icon: Icon(
+                                  _historyMode
+                                      ? Icons.view_kanban_outlined
+                                      : Icons.history,
+                                  size: 19,
+                                ),
+                                onPressed: () => setState(
+                                  () => _historyMode = !_historyMode,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
                   TextButton.icon(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
                     onPressed: _launch,
-                    icon: const Icon(Icons.add),
-                    label: const Text('New Agent'),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Agent'),
                   ),
                   IconButton(
                     tooltip: 'Close',
+                    visualDensity: VisualDensity.compact,
                     onPressed: () => ref
                         .read(globalAgentDashboardNavigationProvider.notifier)
                         .close(),
-                    icon: const Icon(Icons.close),
+                    icon: const Icon(Icons.close, size: 18),
                   ),
                 ],
               ),
-              const SizedBox(height: AleraTokens.space8),
-              Text(
-                'All registered projects and worktrees. Each state has its own column. '
-                'Select a card to inspect its existing live Terminal.',
-                style: muted,
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: () => setState(() => _historyMode = false),
-                    icon: const Icon(Icons.smart_toy_outlined),
-                    label: Text(_historyMode ? 'Live Agents' : '● Live Agents'),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: () => setState(() => _historyMode = true),
-                    icon: const Icon(Icons.history),
-                    label: Text(
-                      _historyMode ? '● History Search' : 'History Search',
-                    ),
-                  ),
-                ],
-              ),
+              const SizedBox(height: 4),
               if (_historyMode)
                 const Expanded(child: GlobalAgentHistoryPanel())
               else ...[
-                const SizedBox(height: AleraTokens.space16),
-                TextField(
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
-                    labelText: 'Search Live Sessions',
-                    hintText: 'Project, Agent, overall objective or progress',
-                  ),
-                  onChanged: (value) => setState(() => _query = value),
-                ),
-                const SizedBox(height: AleraTokens.space12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${rows.length} of ${all.length} Agent sessions',
-                        style: muted,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () =>
-                          setState(() => _showHidden = !_showHidden),
-                      child: Text(
-                        _showHidden
-                            ? 'Show visible only'
-                            : 'Show hidden cards (${_hiddenCards.length})',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Needs You is a review queue based on last verified Waiting/Blocked Hook state; approval is not inferred.',
-                        style: muted,
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => setState(() {
-                        _needsReviewOnly = !_needsReviewOnly;
-                        _closeHistoricalMessages();
-                        _collapsedGroups.clear();
-                        _target = null;
-                        _armedControl = null;
-                        _sendFeedback =
-                            'Filter changed; select an Agent before sending.';
-                      }),
-                      icon: Icon(
-                        _needsReviewOnly
-                            ? Icons.filter_alt_off_outlined
-                            : Icons.notification_important_outlined,
-                      ),
-                      label: Text(
-                        _needsReviewOnly
-                            ? 'Show all Agents'
-                            : 'Needs You ($needsReviewCount)',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: AleraTokens.space8),
                 if (_target != null) ...[
                   Text(
                     'Target: ${_target!.workspaceId} / ${_target!.tabId}',
@@ -902,6 +991,20 @@ class _GlobalAgentDashboardPageState
   Widget _buildAgentCard(BuildContext context, GlobalAgentLiveRow row) {
     final identity = _identity(row);
     final expanded = _expandedTimelines.contains(identity);
+    final done =
+        GlobalAgentDashboardGroup.forStatus(row.status) ==
+        GlobalAgentDashboardGroup.done;
+    final doneUnread = _isDoneUnread(row);
+    bool armed(bool terminate) =>
+        _armedControl ==
+        (
+          sessionId: identity.sessionId,
+          workspaceId: identity.workspaceId,
+          tabId: identity.tabId,
+          terminate: terminate,
+        );
+    final armedInterrupt = armed(false);
+    final armedTerminate = armed(true);
     final muted = Theme.of(context).textTheme.bodySmall
         ?.copyWith(color: AleraTokens.foregroundMuted);
     return Material(
@@ -911,12 +1014,21 @@ class _GlobalAgentDashboardPageState
         borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: AleraTokens.surface,
-            border: Border.all(color: AleraTokens.borderSubtle),
+            color: doneUnread
+                ? Color.alphaBlend(
+                    AleraTokens.success.withValues(alpha: .15),
+                    AleraTokens.surface,
+                  )
+                : AleraTokens.surface,
+            border: Border.all(
+              color: doneUnread
+                  ? AleraTokens.success.withValues(alpha: .6)
+                  : AleraTokens.borderSubtle,
+            ),
             borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
           ),
           child: Padding(
-            padding: const EdgeInsets.all(AleraTokens.space16),
+            padding: const EdgeInsets.all(AleraTokens.space12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -953,9 +1065,24 @@ class _GlobalAgentDashboardPageState
                     ),
                   ],
                 ),
-                Text(
-                  '${row.status.agentType.key} - ${row.status.state.key}',
-                  style: muted,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${row.status.agentType.key} · ${row.status.state.key}',
+                        style: muted,
+                      ),
+                    ),
+                    if (done)
+                      Text(
+                        doneUnread ? '● Unread' : 'Read',
+                        style: muted?.copyWith(
+                          color: doneUnread
+                              ? AleraTokens.success
+                              : AleraTokens.foregroundMuted,
+                        ),
+                      ),
+                  ],
                 ),
                 if (row.needsReview) ...[
                   const SizedBox(height: AleraTokens.space4),
@@ -967,16 +1094,17 @@ class _GlobalAgentDashboardPageState
                 const SizedBox(height: AleraTokens.space8),
                 Text(
                   row.goal.isEmpty ? row.tab.title : row.goal,
-                  maxLines: 3,
+                  maxLines: 6,
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (row.progress.isNotEmpty) ...[
                   const SizedBox(height: AleraTokens.space4),
                   Text(
                     row.progress,
-                    maxLines: 2,
+                    maxLines: 8,
                     overflow: TextOverflow.ellipsis,
-                    style: muted,
+                    style: Theme.of(context).textTheme.bodyMedium
+                        ?.copyWith(color: AleraTokens.foregroundMuted),
                   ),
                 ],
                 if (row.timeline.isNotEmpty) ...[
@@ -1013,86 +1141,109 @@ class _GlobalAgentDashboardPageState
                         ),
                       ),
                 ],
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 4,
-                  runSpacing: 0,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    TextButton.icon(
+                    IconButton(
+                      tooltip: 'Steer',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.edit_note, size: 19),
                       onPressed: () => setState(() {
-                        _target = (
-                          sessionId: row.tab.terminalSessionId,
-                          workspaceId: row.status.workspaceId,
-                          tabId: row.tab.id,
-                        );
+                        _target = identity;
                         _sendFeedback = null;
                       }),
-                      icon: const Icon(Icons.edit_note),
-                      label: const Text('Steer'),
                     ),
-                    if (row.status.agentType.key == 'claude' ||
-                        row.status.agentType.key == 'codex')
-                      TextButton.icon(
-                        onPressed: _historicalBusy
-                            ? null
-                            : () => _readHistoricalMessages(row),
-                        icon: const Icon(Icons.menu_book_outlined),
-                        label: const Text('Original conversation'),
-                      ),
-                    TextButton.icon(
+                    IconButton(
+                      tooltip: 'Open Agent',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.open_in_new, size: 18),
                       onPressed: () => _focus(row),
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text('Open Agent'),
                     ),
-                    TextButton.icon(
-                      onPressed: () => _toggleHidden(row),
-                      icon: Icon(
-                        _hiddenCards.contains(identity)
-                            ? Icons.visibility
-                            : Icons.visibility_off,
-                      ),
-                      label: Text(
-                        _hiddenCards.contains(identity)
-                            ? 'Show card'
-                            : 'Hide (keeps running)',
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: _controlling || _sending
-                          ? null
-                          : () => _controlAgent(row, false),
-                      icon: const Icon(Icons.pause_circle_outline),
-                      label: Text(
-                        _armedControl ==
-                                (
-                                  sessionId: row.tab.terminalSessionId,
-                                  workspaceId: row.status.workspaceId,
-                                  tabId: row.tab.id,
-                                  terminate: false,
-                                )
-                            ? 'Confirm interrupt'
-                            : 'Interrupt',
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: _controlling || _sending
-                          ? null
-                          : () => _controlAgent(row, true),
-                      icon: const Icon(Icons.stop_circle_outlined),
-                      label: Text(
-                        _armedControl ==
-                                (
-                                  sessionId: row.tab.terminalSessionId,
-                                  workspaceId: row.status.workspaceId,
-                                  tabId: row.tab.id,
-                                  terminate: true,
-                                )
-                            ? 'Confirm terminate'
-                            : 'Terminate',
-                      ),
+                    PopupMenuButton<String>(
+                      tooltip: 'More actions',
+                      icon: const Icon(Icons.more_horiz, size: 20),
+                      onSelected: (action) {
+                        switch (action) {
+                          case 'read':
+                            _setDoneRead(row, doneUnread);
+                            break;
+                          case 'history':
+                            _readHistoricalMessages(row);
+                            break;
+                          case 'hide':
+                            _toggleHidden(row);
+                            break;
+                          case 'interrupt':
+                            if (!armedInterrupt) _controlAgent(row, false);
+                            break;
+                          case 'terminate':
+                            if (!armedTerminate) _controlAgent(row, true);
+                            break;
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        if (done)
+                          PopupMenuItem(
+                            value: 'read',
+                            child: Text(
+                              doneUnread ? 'Mark as read' : 'Mark as unread',
+                            ),
+                          ),
+                        if (row.status.agentType.key == 'claude' ||
+                            row.status.agentType.key == 'codex')
+                          PopupMenuItem(
+                            value: 'history',
+                            enabled: !_historicalBusy,
+                            child: const Text('Original conversation'),
+                          ),
+                        PopupMenuItem(
+                          value: 'hide',
+                          child: Text(
+                            _hiddenCards.contains(identity)
+                                ? 'Show card'
+                                : 'Hide (keeps running)',
+                          ),
+                        ),
+                        const PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: 'interrupt',
+                          enabled: !_controlling && !_sending,
+                          child: const Text('Interrupt'),
+                        ),
+                        PopupMenuItem(
+                          value: 'terminate',
+                          enabled: !_controlling && !_sending,
+                          child: const Text('Terminate'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
+                if (armedInterrupt || armedTerminate)
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: _controlling || _sending
+                              ? null
+                              : () => _controlAgent(row, armedTerminate),
+                          child: Text(
+                            armedTerminate
+                                ? 'Confirm terminate'
+                                : 'Confirm interrupt',
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Cancel confirmation',
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () => setState(() {
+                          _armedControl = null;
+                          _sendFeedback = null;
+                        }),
+                      ),
+                    ],
+                  ),
                 if (_historicalTarget == identity) ...[
                   const Divider(height: 16),
                   Row(
