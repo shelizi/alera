@@ -201,17 +201,41 @@ fn build_nodes(
         },
     );
 
-    let mut directory_paths = directories_by_path.keys().cloned().collect::<Vec<_>>();
-    directory_paths.sort_by(|left, right| {
-        left.matches('/')
-            .count()
-            .cmp(&right.matches('/').count())
-            .then_with(|| left.cmp(right))
-    });
-    for directory_path in directory_paths {
-        if let Some(entries) = directories_by_path.get(&directory_path) {
+    // Borrow directory keys and compute depth once rather than cloning
+    // every path and rescanning it in the sort comparator.
+    let mut directory_paths = directories_by_path
+        .keys()
+        .map(|path| (path.matches('/').count(), path))
+        .collect::<Vec<_>>();
+    directory_paths.sort_unstable();
+    for (_, directory_path) in directory_paths {
+        if let Some(entries) = directories_by_path.get(directory_path) {
+            // A canonical cached directory whose parent node already exists
+            // needs no repeated ancestor traversal for each direct child.
+            let parent_id = if directory_path.is_empty() {
+                ROOT_ID.to_owned()
+            } else {
+                node_id_for_path(directory_path)
+            };
+            let direct_prefix = if directory_path.is_empty() {
+                Some(String::new())
+            } else if !directory_path.split('/').any(str::is_empty)
+                && nodes.contains_key(&parent_id)
+            {
+                Some(format!("{directory_path}/"))
+            } else {
+                None
+            };
             for entry in entries {
-                add_entry_node(&mut nodes, &mut entry_bindings, entry);
+                let direct_name = direct_prefix.as_deref().and_then(|prefix| {
+                    let name = entry.relative_path.strip_prefix(prefix)?;
+                    (!name.is_empty() && !name.contains('/')).then_some(name)
+                });
+                if let Some(name) = direct_name {
+                    add_direct_entry_node(&mut nodes, &mut entry_bindings, &parent_id, name, entry);
+                } else {
+                    add_entry_node(&mut nodes, &mut entry_bindings, entry);
+                }
                 if matches!(entry.kind, WorkspaceFileKind::Directory)
                     && entry.has_children_hint
                     && !directories_by_path.contains_key(&entry.relative_path)
@@ -236,32 +260,71 @@ fn build_nodes(
     (nodes, entry_bindings)
 }
 
+/// The caller already verified the existing parent and exact direct path.
+/// Preserve first-inserted node fields and all duplicate bindings, just as
+/// the general path walker does.
+fn add_direct_entry_node(
+    nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
+    entry_bindings: &mut Vec<WorkspaceExplorerEntryBinding>,
+    parent_id: &str,
+    name: &str,
+    entry: &WorkspaceFileEntry,
+) {
+    let path = &entry.relative_path;
+    let node_id = node_id_for_path(path);
+    if !nodes.contains_key(&node_id) {
+        nodes.insert(
+            node_id.clone(),
+            WorkspaceExplorerTreeNode {
+                id: node_id.clone(),
+                name: name.to_owned(),
+                kind: if entry.kind == WorkspaceFileKind::Directory {
+                    WorkspaceExplorerTreeNodeKind::Folder
+                } else {
+                    WorkspaceExplorerTreeNodeKind::File
+                },
+                parent_id: parent_id.to_owned(),
+                virtual_path: format!("/{path}"),
+                source_path: path.clone(),
+                entry_id: Some(path.clone()),
+                child_ids: Vec::new(),
+                is_expanded: false,
+                is_virtual: false,
+            },
+        );
+        append_new_child(nodes, parent_id, &node_id);
+    }
+    entry_bindings.push(WorkspaceExplorerEntryBinding {
+        node_id,
+        relative_path: path.clone(),
+    });
+}
+
 fn add_entry_node(
     nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
     entry_bindings: &mut Vec<WorkspaceExplorerEntryBinding>,
     entry: &WorkspaceFileEntry,
 ) {
-    let parts = entry
+    let mut parts = entry
         .relative_path
         .split('/')
         .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
+        .peekable();
     let mut parent_id = ROOT_ID.to_string();
     let mut current_path = String::new();
-    for (index, part) in parts.iter().enumerate() {
-        current_path = if current_path.is_empty() {
-            (*part).to_string()
-        } else {
-            format!("{current_path}/{part}")
-        };
-        let is_leaf = index == parts.len() - 1;
+    while let Some(part) = parts.next() {
+        if !current_path.is_empty() {
+            current_path.push('/');
+        }
+        current_path.push_str(part);
+        let is_leaf = parts.peek().is_none();
         let node_id = node_id_for_path(&current_path);
         if !nodes.contains_key(&node_id) {
             nodes.insert(
                 node_id.clone(),
                 WorkspaceExplorerTreeNode {
                     id: node_id.clone(),
-                    name: (*part).to_string(),
+                    name: part.to_string(),
                     kind: if is_leaf && !matches!(entry.kind, WorkspaceFileKind::Directory) {
                         WorkspaceExplorerTreeNodeKind::File
                     } else {
@@ -276,7 +339,7 @@ fn add_entry_node(
                     is_virtual: false,
                 },
             );
-            append_child(nodes, &parent_id, &node_id);
+            append_new_child(nodes, &parent_id, &node_id);
         }
         if is_leaf {
             entry_bindings.push(WorkspaceExplorerEntryBinding {
@@ -309,10 +372,14 @@ fn add_placeholder(nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>, paren
             is_virtual: true,
         },
     );
-    append_child(nodes, &parent_id, &node_id);
+    append_new_child(nodes, &parent_id, &node_id);
 }
 
-fn append_child(
+/// Both callers invoke this only immediately after inserting a previously
+/// absent globally unique node ID. No child list could already contain that
+/// ID: all links are created here, and build_nodes never removes nodes.
+/// Keep insertion order without a quadratic sibling scan or another set.
+fn append_new_child(
     nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
     parent_id: &str,
     child_id: &str,
@@ -320,9 +387,7 @@ fn append_child(
     let Some(parent) = nodes.get_mut(parent_id) else {
         return;
     };
-    if !parent.child_ids.iter().any(|id| id == child_id) {
-        parent.child_ids.push(child_id.to_string());
-    }
+    parent.child_ids.push(child_id.to_string());
 }
 
 fn sorted_directories(
@@ -633,6 +698,287 @@ mod tests {
             legacy_prune_unreachable_directories(&mut expected);
             prune_unreachable_directories(&mut cache);
             assert_eq!(cache, expected);
+        }
+    }
+
+    // The previous builder is an independent oracle for node contents,
+    // child insertion order, duplicate bindings and lazy placeholders.
+    fn legacy_build_nodes(
+        workspace_name: &str,
+        workspace_path: &str,
+        directories_by_path: &HashMap<String, Vec<WorkspaceFileEntry>>,
+    ) -> (
+        Vec<WorkspaceExplorerTreeNode>,
+        Vec<WorkspaceExplorerEntryBinding>,
+    ) {
+        let mut nodes = HashMap::<String, WorkspaceExplorerTreeNode>::new();
+        let mut entry_bindings = Vec::<WorkspaceExplorerEntryBinding>::new();
+        nodes.insert(
+            ROOT_ID.to_string(),
+            WorkspaceExplorerTreeNode {
+                id: ROOT_ID.to_string(),
+                name: workspace_name.to_string(),
+                kind: WorkspaceExplorerTreeNodeKind::Root,
+                parent_id: String::new(),
+                virtual_path: "/".to_string(),
+                source_path: workspace_path.to_string(),
+                entry_id: None,
+                child_ids: Vec::new(),
+                is_expanded: true,
+                is_virtual: false,
+            },
+        );
+
+        let mut directory_paths = directories_by_path.keys().cloned().collect::<Vec<_>>();
+        directory_paths.sort_by(|left, right| {
+            left.matches('/')
+                .count()
+                .cmp(&right.matches('/').count())
+                .then_with(|| left.cmp(right))
+        });
+        for directory_path in directory_paths {
+            if let Some(entries) = directories_by_path.get(&directory_path) {
+                for entry in entries {
+                    legacy_add_entry_node(&mut nodes, &mut entry_bindings, entry);
+                    if matches!(entry.kind, WorkspaceFileKind::Directory)
+                        && entry.has_children_hint
+                        && !directories_by_path.contains_key(&entry.relative_path)
+                    {
+                        legacy_add_placeholder(&mut nodes, &entry.relative_path);
+                    }
+                }
+            }
+        }
+
+        let mut nodes = nodes.into_values().collect::<Vec<_>>();
+        nodes.sort_by(|left, right| {
+            if left.id == ROOT_ID {
+                return std::cmp::Ordering::Less;
+            }
+            if right.id == ROOT_ID {
+                return std::cmp::Ordering::Greater;
+            }
+            left.virtual_path.cmp(&right.virtual_path)
+        });
+        entry_bindings.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+        (nodes, entry_bindings)
+    }
+
+    fn legacy_add_entry_node(
+        nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
+        entry_bindings: &mut Vec<WorkspaceExplorerEntryBinding>,
+        entry: &WorkspaceFileEntry,
+    ) {
+        let parts = entry
+            .relative_path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        let mut parent_id = ROOT_ID.to_string();
+        let mut current_path = String::new();
+        for (index, part) in parts.iter().enumerate() {
+            current_path = if current_path.is_empty() {
+                (*part).to_string()
+            } else {
+                format!("{current_path}/{part}")
+            };
+            let is_leaf = index == parts.len() - 1;
+            let node_id = node_id_for_path(&current_path);
+            if !nodes.contains_key(&node_id) {
+                nodes.insert(
+                    node_id.clone(),
+                    WorkspaceExplorerTreeNode {
+                        id: node_id.clone(),
+                        name: (*part).to_string(),
+                        kind: if is_leaf && !matches!(entry.kind, WorkspaceFileKind::Directory) {
+                            WorkspaceExplorerTreeNodeKind::File
+                        } else {
+                            WorkspaceExplorerTreeNodeKind::Folder
+                        },
+                        parent_id: parent_id.clone(),
+                        virtual_path: format!("/{current_path}"),
+                        source_path: current_path.clone(),
+                        entry_id: is_leaf.then_some(entry.relative_path.clone()),
+                        child_ids: Vec::new(),
+                        is_expanded: false,
+                        is_virtual: false,
+                    },
+                );
+                legacy_append_child(nodes, &parent_id, &node_id);
+            }
+            if is_leaf {
+                entry_bindings.push(WorkspaceExplorerEntryBinding {
+                    node_id: node_id.clone(),
+                    relative_path: entry.relative_path.clone(),
+                });
+            }
+            parent_id = node_id;
+        }
+    }
+
+    fn legacy_add_placeholder(
+        nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
+        parent_path: &str,
+    ) {
+        let parent_id = node_id_for_path(parent_path);
+        let node_id = format!("{PLACEHOLDER_PREFIX}{parent_path}");
+        if nodes.contains_key(&node_id) || !nodes.contains_key(&parent_id) {
+            return;
+        }
+        nodes.insert(
+            node_id.clone(),
+            WorkspaceExplorerTreeNode {
+                id: node_id.clone(),
+                name: String::new(),
+                kind: WorkspaceExplorerTreeNodeKind::File,
+                parent_id: parent_id.clone(),
+                virtual_path: format!("/{parent_path}/.alera-placeholder"),
+                source_path: String::new(),
+                entry_id: None,
+                child_ids: Vec::new(),
+                is_expanded: false,
+                is_virtual: true,
+            },
+        );
+        legacy_append_child(nodes, &parent_id, &node_id);
+    }
+
+    fn legacy_append_child(
+        nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>,
+        parent_id: &str,
+        child_id: &str,
+    ) {
+        let Some(parent) = nodes.get_mut(parent_id) else {
+            return;
+        };
+        if !parent.child_ids.iter().any(|id| id == child_id) {
+            parent.child_ids.push(child_id.to_string());
+        }
+    }
+
+    #[test]
+    fn linear_child_links_preserve_legacy_projection_for_duplicate_and_implicit_paths() {
+        let fixtures = [
+            wide_cache(4, 40),
+            DirectoryCache::from([
+                (
+                    "".into(),
+                    vec![
+                        file("z.txt"),
+                        file("a/deep/first"),
+                        dir("a"),
+                        dir("a/lazy"),
+                        file("a/lazy/.alera-placeholder"),
+                        file("a//deep/first"),
+                        file("a/deep/second"),
+                        dir("a/lazy"),
+                        file(""),
+                        file("/"),
+                        file("a/深/文件"),
+                        file("a/deep/first"),
+                        dir("a/space dir"),
+                        file("a/space dir/name.txt"),
+                    ],
+                ),
+                (
+                    "a/deep".into(),
+                    vec![file("a/deep/second"), file("a/deep/third")],
+                ),
+                ("a/深".into(), vec![file("a/深/新")]),
+            ]),
+            DirectoryCache::from([
+                ("".into(), vec![dir("lazy"), dir("loaded"), dir("empty")]),
+                (
+                    "loaded".into(),
+                    vec![file("loaded/z"), file("loaded/a"), dir("loaded/sub")],
+                ),
+                ("empty".into(), vec![]),
+            ]),
+            DirectoryCache::new(),
+        ];
+        for fixture in fixtures {
+            let (mut actual_nodes, actual_bindings) = build_nodes("alera", "/repo", &fixture);
+            let (mut expected_nodes, expected_bindings) =
+                legacy_build_nodes("alera", "/repo", &fixture);
+            // The original output sort is by virtual path; an actual file
+            // named .alera-placeholder may tie a synthetic placeholder.
+            // Compare that ordered path sequence and every node's fields,
+            // including child order. Relative order of equal sort keys was
+            // never guaranteed because HashMap iteration is randomized.
+            assert_eq!(
+                actual_nodes
+                    .iter()
+                    .map(|node| node.virtual_path.as_str())
+                    .collect::<Vec<_>>(),
+                expected_nodes
+                    .iter()
+                    .map(|node| node.virtual_path.as_str())
+                    .collect::<Vec<_>>()
+            );
+            actual_nodes.sort_by(|a, b| a.id.cmp(&b.id));
+            expected_nodes.sort_by(|a, b| a.id.cmp(&b.id));
+            assert_eq!(actual_nodes, expected_nodes);
+            assert_eq!(actual_bindings, expected_bindings);
+
+            let by_id: HashMap<_, _> = actual_nodes
+                .iter()
+                .map(|node| (node.id.as_str(), node))
+                .collect();
+            assert_eq!(by_id.len(), actual_nodes.len());
+            for node in &actual_nodes {
+                let unique: HashSet<_> = node.child_ids.iter().collect();
+                assert_eq!(unique.len(), node.child_ids.len());
+                for child in &node.child_ids {
+                    assert_eq!(by_id[child.as_str()].parent_id, node.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "synthetic native full Explorer tree construction benchmark"]
+    fn benchmark_linear_explorer_child_links() {
+        let wide = DirectoryCache::from([(
+            String::new(),
+            (0..12000)
+                .rev()
+                .map(|index| file(&format!("file-{index:05}.txt")))
+                .collect(),
+        )]);
+        let nested = wide_cache(200, 200);
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        for (label, fixture) in [("wide", wide), ("nested", nested)] {
+            let expected = legacy_build_nodes("alera", "/repo", &fixture);
+            assert_eq!(build_nodes("alera", "/repo", &fixture), expected);
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let start = Instant::now();
+                    let actual = if optimized {
+                        build_nodes("alera", "/repo", &fixture)
+                    } else {
+                        legacy_build_nodes("alera", "/repo", &fixture)
+                    };
+                    let elapsed = start.elapsed();
+                    assert_eq!(actual, expected);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("Classic full node build shape={label} cached_dirs={} nodes={} bindings={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", fixture.len(), expected.0.len(), expected.1.len(), old/new);
         }
     }
 
