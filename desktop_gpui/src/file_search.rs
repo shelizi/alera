@@ -63,7 +63,7 @@ impl WorkspaceFileIndex {
                     continue;
                 }
                 if (!kind.is_dir() && !kind.is_file())
-                    || !visibility.includes(&entry.path(), kind.is_dir())
+                    || !visibility.includes_entry(&entry, kind.is_dir())
                 {
                     continue;
                 }

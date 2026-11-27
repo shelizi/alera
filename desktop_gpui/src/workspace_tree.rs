@@ -1,6 +1,7 @@
 //! Lazy, read-only workspace tree for the native GPUI Explorer.
 //! The UI owns selection; this model owns expansion and safe visible rows.
 use crate::explorer_visibility::{ExplorerVisibility, ExplorerVisibilityOptions};
+use alera_core::workspace_files::desktop_listing::sort_desktop_directory_entries;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -216,16 +217,12 @@ impl WorkspaceTree {
             if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
                 continue;
             }
-            if !self.visibility.includes(&entry.path(), kind.is_dir()) {
+            if !self.visibility.includes_entry(&entry, kind.is_dir()) {
                 continue;
             }
             entries.push((name, kind.is_dir(), relative.join(entry.file_name())));
         }
-        entries.sort_by(|a, b| {
-            b.1.cmp(&a.1)
-                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
-                .then_with(|| a.0.cmp(&b.0))
-        });
+        sort_desktop_directory_entries(&mut entries, |entry| (entry.0.as_str(), entry.1));
         for (name, is_directory, path) in entries {
             if rows.len() >= MAX_TREE_ROWS {
                 *truncated = true;

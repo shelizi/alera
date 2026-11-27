@@ -5,6 +5,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+#[cfg(all(windows, test))]
+use alera_core::workspace_files::desktop_listing::is_ordinary_windows_filename;
+#[cfg(windows)]
+use alera_core::workspace_files::desktop_listing::reusable_desktop_enumeration_metadata;
+use alera_core::workspace_files::desktop_listing::sort_desktop_directory_entries;
 use ignore::WalkBuilder;
 
 use super::{
@@ -216,13 +221,10 @@ impl Drop for ProbeWorkerPermit<'_> {
 }
 
 fn sort_entries(entries: &mut [WorkspaceFileEntry]) {
-    // Compute Unicode lowercase keys once per row instead of allocating two
-    // temporary strings in every comparison. Preserve exact tie ordering.
-    entries.sort_by_cached_key(|entry| {
+    sort_desktop_directory_entries(entries, |entry| {
         (
-            !matches!(entry.kind, WorkspaceFileKind::Directory),
-            entry.name.to_lowercase(),
-            entry.name.clone(),
+            &entry.name,
+            matches!(entry.kind, WorkspaceFileKind::Directory),
         )
     });
 }
@@ -254,8 +256,8 @@ impl ListingChild {
         metadata: impl FnOnce() -> Option<fs::Metadata>,
     ) -> Self {
         #[cfg(windows)]
-        let metadata = if reuse && is_ordinary_windows_filename(&path) {
-            metadata().filter(reusable_windows_metadata)
+        let metadata = if reuse {
+            reusable_desktop_enumeration_metadata(&path, metadata)
         } else {
             None
         };
@@ -279,48 +281,6 @@ impl ListingChild {
             (self.path, None)
         }
     }
-}
-
-// Windows directory enumeration already carries file size, timestamps and
-// attributes. Limit reuse to ordinary ASCII names; preserve the old path
-// stat for device aliases, unusual Win32 names, Unicode, directories,
-// symlinks and reparse points. This is listing metadata only: all actual
-// reads/writes/mutations still resolve paths and obtain fresh metadata.
-#[cfg(windows)]
-fn is_ordinary_windows_filename(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    if name.is_empty()
-        || name.ends_with('.')
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-    {
-        return false;
-    }
-    let stem = name.split('.').next().unwrap_or_default();
-    if ["CON", "PRN", "AUX", "NUL", "CLOCK"]
-        .iter()
-        .any(|device| stem.eq_ignore_ascii_case(device))
-    {
-        return false;
-    }
-    let bytes = stem.as_bytes();
-    if bytes.len() == 4
-        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
-        && bytes[3].is_ascii_digit()
-    {
-        return false;
-    }
-    true
-}
-
-#[cfg(windows)]
-fn reusable_windows_metadata(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
 }
 
 fn ignored_aware_children(

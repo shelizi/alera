@@ -8,6 +8,7 @@ use same_file::Handle;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+pub mod desktop_listing;
 mod mime;
 mod move_file;
 mod prompts;
