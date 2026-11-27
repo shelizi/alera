@@ -97,6 +97,31 @@ final class WorkspaceExplorerProjectionIndex {
     }
   }
 
+  /// Resolve only requested paths in the canonical index. For arbitrary
+  /// native binding IDs, retain the original map iteration order and all
+  /// aliases (restoration previously expanded every matching binding).
+  Iterable<String> boundNodeIdsForPaths(Set<String> paths) sync* {
+    if (paths.isEmpty) return;
+    if (_directPaths) {
+      for (final path in paths) {
+        final id = _nodeId(path);
+        if (entryByNodeId.containsKey(id)) yield id;
+      }
+      return;
+    }
+    for (final binding in entryByNodeId.entries) {
+      if (paths.contains(binding.value.relativePath)) yield binding.key;
+    }
+  }
+
+  String? firstBoundNodeIdForPath(String path) {
+    if (_directPaths) {
+      final id = _nodeId(path);
+      return entryByNodeId.containsKey(id) ? id : null;
+    }
+    return boundNodeIdsForPaths({path}).firstOrNull;
+  }
+
   List<native.WorkspaceExplorerDirectoryChildren> snapshots() {
     final paths = childrenByDirectory.keys.toList()..sort();
     return [

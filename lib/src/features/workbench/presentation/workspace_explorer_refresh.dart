@@ -104,17 +104,14 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         _entryByPath.containsKey(savedState.selectedRelativePath)
         ? savedState.selectedRelativePath
         : null;
-    _rebuildTree();
+    _publishPendingTreeStructure();
 
-    for (final entry in _entryByNodeId.entries) {
-      final relativePath = entry.value.relativePath;
-      if (_expandedDirectoryPaths.contains(relativePath)) {
-        _controller.expansions.setExpanded(entry.key, true);
-      }
-      if (relativePath == _selectedRelativePath) {
-        _controller.selection.selectOnly(entry.key);
-      }
-    }
+    restoreWorkspaceExplorerControllerState(
+      controller: _controller,
+      index: _projectionIndex,
+      expandedPaths: _expandedDirectoryPaths,
+      selectedPath: _selectedRelativePath,
+    );
   }
 
   Future<void> _replaceDirectoryChildren(

@@ -536,7 +536,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       await _loadDirectory(relativePath);
       if (!stillCurrent()) return false;
     }
-    _rebuildTree();
+    _publishPendingTreeStructure();
     final targetNodeId = _nodeIdForRelativePath(relativePath);
     if (targetNodeId == null) return false;
     final ancestors = <String>[];
@@ -545,16 +545,18 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       if (_isDirectoryEntry(_entryByPath[parent])) ancestors.add(parent);
       parent = _parentPath(parent);
     }
+    final expandedIds = <String>[];
     for (final path in ancestors.reversed) {
       final nodeId = _nodeIdForRelativePath(path);
       if (nodeId == null) continue;
       _expandedDirectoryPaths.add(path);
-      _controller.expansions.setExpanded(nodeId, true);
+      expandedIds.add(nodeId);
     }
     if (expandDirectory && _isDirectoryEntry(target)) {
       _expandedDirectoryPaths.add(relativePath);
-      _controller.expansions.setExpanded(targetNodeId, true);
+      expandedIds.add(targetNodeId);
     }
+    _controller.expansions.expandAll(expandedIds);
     _selectedRelativePath = relativePath;
     _controller.selection.selectOnly(targetNodeId);
     // Save immediately, not only on widget disposal or the next project
@@ -587,14 +589,9 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
   }
 
-  String? _nodeIdForRelativePath(String relativePath) {
-    for (final binding in _entryByNodeId.entries) {
-      if (binding.value.relativePath == relativePath) {
-        return binding.key;
-      }
-    }
-    return 'path:$relativePath';
-  }
+  String? _nodeIdForRelativePath(String relativePath) =>
+      _projectionIndex.firstBoundNodeIdForPath(relativePath) ??
+      'path:$relativePath';
 
   Future<void> _reveal(native.WorkspaceFileEntry entry) async {
     final result = await _folderOpener.reveal(

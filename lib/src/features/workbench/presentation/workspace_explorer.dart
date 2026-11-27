@@ -20,6 +20,7 @@ import 'package:alera/src/features/external_editor/application/external_editor_p
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_controller_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_git_snapshot_refresh.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_projection_index.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
@@ -933,7 +934,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       if (!mounted) {
         return;
       }
-      _rebuildTree();
+      _publishPendingTreeStructure();
     }
     _controller.toggle(node.id);
     final relativePath = directory.relativePath;
@@ -951,10 +952,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     final keyboard = HardwareKeyboard.instance;
     final toggle = keyboard.isControlPressed || keyboard.isMetaPressed;
     if (keyboard.isShiftPressed) {
-      final anchor = _entryByNodeId.entries
-          .where((entry) => entry.value.relativePath == _selectedRelativePath)
-          .map((entry) => entry.key)
-          .firstOrNull;
+      final selectedPath = _selectedRelativePath;
+      final anchor = selectedPath == null
+          ? null
+          : _projectionIndex.firstBoundNodeIdForPath(selectedPath);
       if (anchor != null) {
         _controller.selectRange(anchorId: anchor, toId: node.id);
       } else {
@@ -1031,10 +1032,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         .where((node) => _entryByNodeId.containsKey(node.id))
         .toList(growable: false);
     if (nodes.isEmpty) return;
-    _controller.selection.selectOnly(nodes.first.id);
-    for (final node in nodes.skip(1)) {
-      _controller.selection.toggle(node.id);
-    }
+    selectAllWorkspaceExplorerNodes(_controller, nodes);
     _selectedRelativePath = _entryByNodeId[nodes.first.id]?.relativePath;
     setState(() {});
   }

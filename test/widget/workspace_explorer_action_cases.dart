@@ -904,7 +904,15 @@ void _registerWorkspaceExplorerActionTests() {
       ];
     await _pumpExplorer(tester, service);
     await tester.tap(find.text('one.txt'));
+    final controller = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller;
+    var selectionNotifications = 0;
+    void countSelection() => selectionNotifications++;
+    controller.selection.addListener(countSelection);
     await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyA);
+    controller.selection.removeListener(countSelection);
+    expect(selectionNotifications, 1);
     await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyC);
     expect(service.systemClipboardWrites, hasLength(1));
     expect(

@@ -1,6 +1,56 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerRevealTests() {
+  testWidgets(
+    'deep reveal batches ancestor expansion and reuses an unchanged tree snapshot',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [_directory('a', hasChildrenHint: true)]
+        ..childrenByDirectory['a'] = [_directory('a/b', hasChildrenHint: true)]
+        ..childrenByDirectory['a/b'] = [
+          _directory('a/b/c', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['a/b/c'] = [_file('a/b/c/target.dart')];
+      await _pumpExplorer(tester, service);
+      final controller = tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller;
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(WorkspaceExplorer)),
+      );
+      final reveal = container.read(
+        workspaceExplorerRevealControllerProvider.notifier,
+      );
+      var expansionNotifications = 0;
+      void countExpansion() => expansionNotifications++;
+      controller.expansions.addListener(countExpansion);
+      reveal.reveal(
+        workspaceId: 'workspace-1',
+        relativePath: 'a/b/c/target.dart',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('target.dart'), findsOneWidget);
+      expect(
+        controller.expansions.expandedIds,
+        containsAll(['path:a', 'path:a/b', 'path:a/b/c']),
+      );
+      expect(controller.selection.selectedIds, {'path:a/b/c/target.dart'});
+      expect(expansionNotifications, 1);
+      final snapshot = controller.data;
+      final visible = controller.visibleNodes;
+      reveal.reveal(
+        workspaceId: 'workspace-1',
+        relativePath: 'a/b/c/target.dart',
+      );
+      await tester.pumpAndSettle();
+      controller.expansions.removeListener(countExpansion);
+      expect(expansionNotifications, 1);
+      expect(controller.data, same(snapshot));
+      expect(controller.visibleNodes, same(visible));
+      expect(container.read(workspaceExplorerRevealControllerProvider), isNull);
+    },
+  );
+
   testWidgets('queued reveal expands ancestors and selects the file', (
     tester,
   ) async {
