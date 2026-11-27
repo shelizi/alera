@@ -16,6 +16,7 @@ mod commit_operations;
 #[path = "git_commit_ops_tests.rs"]
 mod commit_ops_tests;
 mod commit_replay_operations;
+pub mod explorer_ancestors;
 pub mod hosted_review;
 mod merge_operations;
 #[cfg(test)]
