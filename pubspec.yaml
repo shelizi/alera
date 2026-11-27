@@ -87,6 +87,9 @@ dev_dependencies:
   yaml: ^3.1.4
 
 dependency_overrides:
+  # Local upstream 1.0.0 source with opt-in lazy immutable-tree lookup indexes.
+  flutter_directory_tree:
+    path: third_party/flutter_directory_tree
   # Keep Alera's editor dependency reviewable while carrying narrow
   # large-file performance fixes pending upstream adoption.
   code_forge:

@@ -502,10 +502,9 @@ packages:
   flutter_directory_tree:
     dependency: "direct main"
     description:
-      name: flutter_directory_tree
-      sha256: "6f0e523dceb049a70ddfdd07a4c4aba706878ce9a216271b54a5ea4fb3ed4958"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/flutter_directory_tree"
+      relative: true
+    source: path
     version: "1.0.0"
   flutter_driver:
     dependency: transitive

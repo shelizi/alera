@@ -240,6 +240,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       data: _buildTreeData(),
       selection: tree.SelectionController(mode: tree.SelectionMode.multi),
       flattenStrategy: const _AleraFlattenStrategy(),
+      lazyLookupIndexes: true,
     );
     unawaited(_bootstrapExplorer());
   }
@@ -281,6 +282,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         data: _buildTreeData(),
         selection: tree.SelectionController(mode: tree.SelectionMode.multi),
         flattenStrategy: const _AleraFlattenStrategy(),
+        lazyLookupIndexes: true,
       );
       unawaited(_restartExplorer());
     } else if (oldWidget.workspace.branch != widget.workspace.branch) {
