@@ -115,7 +115,23 @@ pub fn resolve_windows_executable(
     executable.to_string()
 }
 
-/// Builds a windowless asynchronous command invoked through the platform shell.
+// A resolved native executable needs no cmd.exe wrapper for a literal version
+// query. A hidden shell does not guarantee that a console grandchild remains
+// hidden on Windows, and cmd.exe also expands percent-delimited path tokens.
+// Keep the shell for .cmd/.bat shims, unresolved commands and general calls.
+#[cfg(windows)]
+fn direct_native_version_probe(executable: &str, arguments: &[String]) -> bool {
+    let path = std::path::Path::new(executable);
+    arguments.len() == 1
+        && arguments[0] == "--version"
+        && path.is_absolute()
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+}
+
+/// Builds a windowless asynchronous command, using the shell when needed.
 #[cfg(feature = "async-process")]
 pub fn windowless_async_shell_command(
     executable: &str,
@@ -130,6 +146,13 @@ pub fn windowless_async_shell_command(
         let _ = (working_directory, environment_path);
         executable.to_string()
     };
+
+    #[cfg(windows)]
+    if direct_native_version_probe(&resolved, arguments) {
+        let mut command = crate::child_process::windowless_async_command(&resolved);
+        command.args(arguments);
+        return command;
+    }
 
     match shell_invocation(&resolved, arguments) {
         ShellInvocation::Posix { program, arguments } => {
@@ -156,7 +179,7 @@ pub fn windowless_async_shell_command(
     }
 }
 
-/// Builds a windowless synchronous command invoked through the platform shell.
+/// Builds a windowless synchronous command, using the shell when needed.
 pub fn windowless_shell_command(
     executable: &str,
     arguments: &[String],
@@ -170,6 +193,13 @@ pub fn windowless_shell_command(
         let _ = (working_directory, environment_path);
         executable.to_string()
     };
+
+    #[cfg(windows)]
+    if direct_native_version_probe(&resolved, arguments) {
+        let mut command = crate::child_process::windowless_command(&resolved);
+        command.args(arguments);
+        return command;
+    }
 
     match shell_invocation(&resolved, arguments) {
         ShellInvocation::Posix { program, arguments } => {
@@ -203,4 +233,53 @@ fn single_quoted(value: &str) -> String {
 
 fn double_quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
+}
+
+#[cfg(all(test, windows))]
+mod windows_version_probe_tests {
+    use super::*;
+
+    #[test]
+    fn native_version_probe_preserves_exact_path_and_bypasses_cmd() {
+        let executable = r"C:\Program Files\%ALERA_PROBE%\agy.EXE";
+        let arguments = vec!["--version".to_owned()];
+        let command = windowless_shell_command(executable, &arguments, None, None);
+        assert_eq!(command.get_program(), std::ffi::OsStr::new(executable));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("--version")]
+        );
+    }
+
+    #[test]
+    fn version_probe_keeps_batch_wrappers_and_other_calls_in_shell() {
+        let version = vec!["--version".to_owned()];
+        for executable in [r"C:\Agents\agy.cmd", r"C:\Agents\agy.BAT"] {
+            let command = windowless_shell_command(executable, &version, None, None);
+            assert_eq!(command.get_program(), std::ffi::OsStr::new("cmd.exe"));
+        }
+        for arguments in [vec![], vec!["--version".into(), "--help".into()]] {
+            let command = windowless_shell_command(r"C:\Agents\agy.exe", &arguments, None, None);
+            assert_eq!(command.get_program(), std::ffi::OsStr::new("cmd.exe"));
+        }
+        assert!(!direct_native_version_probe("agy.exe", &version));
+    }
+
+    #[cfg(feature = "async-process")]
+    #[test]
+    fn async_version_probe_uses_the_same_direct_native_path() {
+        let executable = r"C:\Program Files\%ALERA_PROBE%\agy.EXE";
+        let arguments = vec!["--version".to_owned()];
+        let command = windowless_async_shell_command(executable, &arguments, None, None);
+        assert_eq!(
+            command.as_std().get_program(),
+            std::ffi::OsStr::new(executable)
+        );
+        assert_eq!(
+            command.as_std().get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new("--version")]
+        );
+        let shim = windowless_async_shell_command(r"C:\Agents\agy.cmd", &arguments, None, None);
+        assert_eq!(shim.as_std().get_program(), std::ffi::OsStr::new("cmd.exe"));
+    }
 }
