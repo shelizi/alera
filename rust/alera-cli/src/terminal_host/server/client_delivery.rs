@@ -349,6 +349,7 @@ mod tests {
             agent_title_jobs: HashMap::new(),
             agent_report_jobs: HashMap::new(),
         agent_report_queue: std::collections::VecDeque::new(),
+        agent_report_results: std::collections::VecDeque::new(),
             managed_workspace_jobs: 0,
             mutation_queue: Default::default(),
             agent_quota_cache: None,

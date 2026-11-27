@@ -207,7 +207,8 @@ impl ServerActor {
             }
         }
         Ok(json!({"contextOverview":context,"readOnly":true,"fromHistory":from_history,
-            "summaryJobs":self.agent_context_pending_reports(&id, &title.conversation_id)}))
+            "summaryJobs":self.agent_context_pending_reports(&id, &title.conversation_id),
+            "summaryResults":self.agent_context_report_results(&id, &title.conversation_id)}))
     }
 }
 

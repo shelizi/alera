@@ -393,15 +393,105 @@ void main() {
     expect(find.text('最新工作回報（原始回覆）'), findsOneWidget);
     expect(find.text('展開摘要'), findsNothing);
     expect(find.text('展開回覆'), findsOneWidget);
+    expect(
+      tester.getBottomLeft(find.text(reply)).dy,
+      lessThanOrEqualTo(tester.getTopLeft(find.text('展開回覆')).dy),
+    );
     await tester.tap(find.text('展開回覆'));
     await tester.pumpAndSettle();
     expect(
       find.byWidgetPredicate((w) => w is SelectableText && w.data == reply),
       findsOneWidget,
     );
+    await tester.ensureVisible(find.text('收合回覆'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getBottomLeft(
+            find.byWidgetPredicate(
+              (w) => w is SelectableText && w.data == reply,
+            ),
+          )
+          .dy,
+      lessThanOrEqualTo(tester.getTopLeft(find.text('收合回覆')).dy),
+    );
     await tester.tap(find.text('收合回覆'));
     await tester.pumpAndSettle();
     expect(find.text('展開回覆'), findsOneWidget);
+  });
+  testWidgets('long objective and cumulative summary expand independently', (
+    tester,
+  ) async {
+    final goal = List.filled(20, 'Retain the full objective. ').join().trim();
+    final overall = List.filled(20, 'Cumulative verified work. ').join().trim();
+    final entry = live.copyWith(
+      contextOverview: {'goal': goal, 'overallSummary': overall},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 320,
+              child: AgentContextReportView(sessionId: 'terminal', live: entry),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final fullGoal = find.byWidgetPredicate(
+      (w) => w is SelectableText && w.data == goal,
+    );
+    final fullOverall = find.byWidgetPredicate(
+      (w) => w is SelectableText && w.data == overall,
+    );
+    expect(find.text('展開目標'), findsOneWidget);
+    expect(find.text('展開總摘要'), findsOneWidget);
+    expect(
+      tester.getBottomLeft(find.text(goal)).dy,
+      lessThanOrEqualTo(tester.getTopLeft(find.text('展開目標')).dy),
+    );
+    expect(
+      tester.getBottomLeft(find.text(overall)).dy,
+      lessThanOrEqualTo(tester.getTopLeft(find.text('展開總摘要')).dy),
+    );
+    await tester.tap(find.text('展開目標'));
+    await tester.pumpAndSettle();
+    expect(fullGoal, findsOneWidget);
+    await tester.ensureVisible(find.text('收合目標'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('收合目標'));
+    await tester.pumpAndSettle();
+    expect(fullGoal, findsNothing);
+    await tester.ensureVisible(find.text('展開總摘要'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('展開總摘要'));
+    await tester.pumpAndSettle();
+    expect(fullOverall, findsOneWidget);
+    await tester.ensureVisible(find.text('收合總摘要'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('收合總摘要'));
+    await tester.pumpAndSettle();
+    expect(fullOverall, findsNothing);
+  });
+  testWidgets('manual summary errors remain visible on the action', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      AgentContextReportView(
+        sessionId: 'terminal',
+        live: live,
+        summarize: (_) async =>
+            throw StateError('Summary model is unavailable'),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('overall-summary-action')));
+    await tester.pumpAndSettle();
+    expect(find.text('摘要失敗，重試'), findsOneWidget);
+    expect(find.textContaining('Summary model is unavailable'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
   testWidgets(
     'long summary expands, collapses and resets on selection change',

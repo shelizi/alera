@@ -72,6 +72,8 @@ pub(super) enum AiTextOperation {
     AgentTitle,
     WorkspaceIdentity,
     SpeechMessage,
+    DiscoverModels,
+    TestSummaryModel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +427,8 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "aiText.speechMessage.generate" => {
             mobile_deferred_job(DeferredJobRoute::AiText(AiTextOperation::SpeechMessage))
         }
+        "aiText.models.discover" => local_deferred_job(DeferredJobRoute::AiText(AiTextOperation::DiscoverModels)),
+        "aiText.agentWorkReport.testModel" => local_deferred_job(DeferredJobRoute::AiText(AiTextOperation::TestSummaryModel)),
         "aiDictation.transcribe" => local_deferred_job(DeferredJobRoute::AiDictation(
             AiDictationOperation::LocalTranscribe,
         )),

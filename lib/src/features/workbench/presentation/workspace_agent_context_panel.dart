@@ -94,8 +94,9 @@ class const WorkspaceAgentContextPanel({
       provider: report?.provider ?? provider ?? '',
     );
     // Only the visible selected tab can request its exact verified history.
-    // Live Hook reports take precedence. A separate checkpoint can survive a
-    // Host restart or SessionEnd without making the Agent appear idle.
+    // The checkpoint also owns manually generated summaries. Keep it observed
+    // even when all live report fields are populated, so invalidating it after
+    // generation actually refreshes the visible report.
     final needsRecovery =
         overview.goal.isEmpty ||
         (overview.progress.isEmpty && overview.reportSummary.isEmpty) ||
@@ -104,11 +105,11 @@ class const WorkspaceAgentContextPanel({
     // restart and SessionEnd. A previously cached empty result must not hide
     // a more recent durable report. Selection changes use a different key.
     ref.listen(_agentContextLiveReportProvider(tab), (previous, next) {
-      if (previous != null && next == null) {
+      if (previous != null && previous.overview != next?.overview) {
         ref.invalidate(agentContextRecoveryProvider(identity));
       }
     });
-    final recovered = needsRecovery
+    final recovered = needsRecovery || identity.conversationId.isNotEmpty
         ? ref.watch(agentContextRecoveryProvider(identity))
         : null;
     return AgentContextReportView._projected(
@@ -117,7 +118,7 @@ class const WorkspaceAgentContextPanel({
       report: report,
       recovery: recovered?.asData?.value,
       loading: recovered?.isLoading ?? false,
-      refresh: needsRecovery
+      refresh: recovered != null
           ? () => ref.invalidate(agentContextRecoveryProvider(identity))
           : null,
       summarize: identity.conversationId.isEmpty
@@ -130,47 +131,104 @@ class const WorkspaceAgentContextPanel({
                 'sessionId': identity.sessionId,
                 'conversationId': identity.conversationId,
               };
-              try {
-                final result = await host.runtimeRequest(
-                  'agentContext.summarize',
-                  {
-                    ...owner,
-                    if (reportAt == null)
-                      'overall': true
-                    else
-                      'reportAt': reportAt,
-                  },
-                );
-                if (result is! Map || result['queued'] != true) {
-                  throw StateError('Host did not accept the summary request');
-                }
-                // Poll only after an explicit action, not during normal rendering.
-                for (var i = 0; i < 90 && context.mounted; i++) {
-                  await Future<void>.delayed(const Duration(seconds: 2));
-                  if (!context.mounted) return;
-                  final status = await host.runtimeRequest(
-                    'agentContext.get',
-                    owner,
-                  );
-                  if (status is! Map || status['summaryJobs'] is! List) break;
-                  final pending = (status['summaryJobs'] as List).any(
-                    (job) =>
-                        job is Map &&
-                        (reportAt == null
-                            ? job['overall'] == true
-                            : job['overall'] != true &&
-                                  job['reportAt'] == reportAt),
-                  );
-                  if (!pending) break;
-                }
-                if (context.mounted)
-                  ref.invalidate(agentContextRecoveryProvider(identity));
-              } catch (error) {
-                if (context.mounted) {
-                  ScaffoldMessenger.maybeOf(context)
-                      ?.showSnackBar(SnackBar(content: Text('無法生成摘要：$error')));
-                }
+              bool stillSelected() {
+                if (!context.mounted) return false;
+                final active = ref
+                    .read(workbenchControllerProvider)
+                    .activeWorkspaceTab;
+                return active?.workspaceId == identity.workspaceId &&
+                    active?.id == identity.tabId &&
+                    active?.terminalSessionId == identity.sessionId &&
+                    active?.payload['agentTitleConversationId']?.toString() ==
+                        identity.conversationId;
               }
+
+              String summaryFrom(AgentContextOverview value) {
+                if (reportAt == null) return value.overallSummary;
+                for (final event in value.timeline) {
+                  if (event.kind == 'report' && event.reportAt == reportAt) {
+                    return event.summary;
+                  }
+                }
+                return '';
+              }
+
+              final storedBefore = summaryFrom(
+                recovered?.asData?.value.overview ??
+                    const AgentContextOverview(),
+              );
+              final before = storedBefore.isNotEmpty
+                  ? storedBefore
+                  : summaryFrom(overview);
+              final result = await host.runtimeRequest(
+                'agentContext.summarize',
+                {
+                  ...owner,
+                  if (reportAt == null)
+                    'overall': true
+                  else
+                    'reportAt': reportAt,
+                },
+              );
+              if (result is! Map || result['queued'] != true) {
+                throw StateError('Host did not accept the summary request');
+              }
+              final requestId = result['requestId'];
+              // Poll only after an explicit action. Completion means the
+              // checkpoint has been updated, not merely that the job vanished.
+              for (var i = 0; i < 90; i++) {
+                if (!stillSelected()) return;
+                await Future<void>.delayed(const Duration(seconds: 2));
+                if (!stillSelected()) return;
+                final status = await host.runtimeRequest(
+                  'agentContext.get',
+                  owner,
+                );
+                if (!stillSelected()) return;
+                if (status is! Map || status['summaryJobs'] is! List) {
+                  throw StateError('Host 未提供摘要狀態，請確認 Runtime Host 已更新。');
+                }
+                final results = status['summaryResults'];
+                if (requestId is String && results is List) {
+                  for (final outcome in results) {
+                    if (outcome is! Map || outcome['requestId'] != requestId) {
+                      continue;
+                    }
+                    if (outcome['status'] != 'succeeded') {
+                      throw StateError(
+                        outcome['message']?.toString() ?? '摘要生成失敗',
+                      );
+                    }
+                    ref.invalidate(agentContextRecoveryProvider(identity));
+                    await ref.read(
+                      agentContextRecoveryProvider(identity).future,
+                    );
+                    return;
+                  }
+                }
+                final pending = (status['summaryJobs'] as List).any(
+                  (job) =>
+                      job is Map &&
+                      (requestId is String && job['requestId'] != null
+                          ? job['requestId'] == requestId
+                          : reportAt == null
+                          ? job['overall'] == true
+                          : job['overall'] != true &&
+                                job['reportAt'] == reportAt),
+                );
+                if (pending) continue;
+                final saved = AgentContextOverview.fromRaw(
+                  status['contextOverview'],
+                );
+                final after = summaryFrom(saved);
+                ref.invalidate(agentContextRecoveryProvider(identity));
+                await ref.read(agentContextRecoveryProvider(identity).future);
+                if (after.isNotEmpty && after != before) return;
+                throw StateError(
+                  '未取得新的摘要或完成狀態。請確認 AI Assist 模型、登入及 Runtime Host 版本，再重試。',
+                );
+              }
+              throw StateError('摘要尚未完成，請稍後重新讀取工作回報。');
             },
     );
   }
@@ -225,7 +283,35 @@ class AgentContextReportView extends StatelessWidget {
         overview.progress.isNotEmpty ||
         overview.reportSummary.isNotEmpty ||
         fallback.isNotEmpty;
-    final summary = liveHasReport
+    // Use the saved summary only for an exact matching report. A checkpoint
+    // from an earlier round must never replace a newer live reply.
+    final timeline = mergeAgentContextTimelines(
+      overview.timeline,
+      stored.timeline,
+      preferRecoveredSummaries: true,
+    );
+    final reports = timeline
+        .where((event) => event.kind == 'report')
+        .toList(growable: false);
+    final liveReports = overview.timeline.where(
+      (event) => event.kind == 'report',
+    );
+    final latestLive = liveReports.isEmpty ? null : liveReports.first;
+    final latestReport = liveHasReport
+        ? (latestLive == null
+              ? null
+              : reports
+                    .where(
+                      (event) =>
+                          event.reportAt == latestLive.reportAt &&
+                          event.text == latestLive.text,
+                    )
+                    .firstOrNull)
+        : reports.firstOrNull;
+    final savedSummary = latestReport?.summary ?? '';
+    final summary = savedSummary.isNotEmpty
+        ? savedSummary
+        : liveHasReport
         ? overview.reportSummary
         : stored.reportSummary;
     final rawReply = liveHasReport
@@ -234,17 +320,9 @@ class AgentContextReportView extends StatelessWidget {
     final displayedReport = summary.isNotEmpty ? summary : rawReply;
     final hasRawReport = summary.isEmpty && rawReply.isNotEmpty;
     final textStyle = Theme.of(context).textTheme.bodySmall;
-    // Keep recovered earlier milestones as well as the new live ones.
-    final timeline = mergeAgentContextTimelines(
-      overview.timeline,
-      stored.timeline,
-    );
-    final overall = overview.overallSummary.isNotEmpty
-        ? overview.overallSummary
-        : stored.overallSummary;
-    final reports = timeline
-        .where((event) => event.kind == 'report')
-        .toList(growable: false);
+    final overall = stored.overallSummary.isNotEmpty
+        ? stored.overallSummary
+        : overview.overallSummary;
     return ListView(
       key: ValueKey<String>('agent-context-$sessionId'),
       padding: const EdgeInsets.all(14),
@@ -274,9 +352,9 @@ class AgentContextReportView extends StatelessWidget {
         const SizedBox(height: 18),
         _ContextSection(
           title: '整體作業目標',
-          content: goal.isNotEmpty
-              ? compactAgentContextTask(goal)
-              : '尚未取得任務目標。請先在 Agent 輸入工作需求。',
+          content: goal.isNotEmpty ? goal : '尚未取得任務目標。請先在 Agent 輸入工作需求。',
+          expandable: goal.isNotEmpty,
+          expansionLabel: '目標',
         ),
         if (overall.isNotEmpty ||
             (summarize != null && reports.isNotEmpty)) ...[
@@ -285,6 +363,7 @@ class AgentContextReportView extends StatelessWidget {
             title: '整體進度摘要',
             content: overall.isNotEmpty ? overall : '尚未建立整體進度摘要。可整理已保留的工作回報。',
             expandable: overall.isNotEmpty,
+            expansionLabel: '總摘要',
             action: summarize == null || reports.isEmpty
                 ? null
                 : _SummaryAction(
@@ -308,15 +387,15 @@ class AgentContextReportView extends StatelessWidget {
               : '尚未取得工作回報。',
           expandable: displayedReport.isNotEmpty,
           isSummary: summary.isNotEmpty,
-          action: summarize == null || reports.isEmpty
+          action: summarize == null || latestReport == null
               ? null
               : _SummaryAction(
                   key: ValueKey((
                     'latest-summary-action',
-                    reports.first.reportAt,
+                    latestReport.reportAt,
                   )),
                   label: summary.isEmpty ? '生成摘要' : '重做摘要',
-                  onGenerate: () => summarize!(reports.first.reportAt),
+                  onGenerate: () => summarize!(latestReport.reportAt),
                 ),
         ),
         if (summary.isEmpty ||
@@ -325,7 +404,7 @@ class AgentContextReportView extends StatelessWidget {
             )) ...[
           const SizedBox(height: 8),
           Text(
-            '可至設定 → AI Assist → Agent Work Report 啟用 Auto-Summarize Agent Work Reports。摘要生成後會優先顯示。',
+            '手動生成使用設定 → AI Assist → Agent Work Reports 的模型及 Instructions（自訂摘要指示），不必開啟自動摘要。可啟用 Auto-Summarize Agent Work Reports 自動整理後續回報。',
             style: textStyle?.copyWith(color: AleraTokens.foregroundMuted),
           ),
         ],
@@ -408,6 +487,7 @@ class const _ContextSection({
   required final String content,
   final bool expandable = false,
   final bool isSummary = true,
+  final String? expansionLabel,
   final Widget? action,
 }) extends StatelessWidget {
   @override
@@ -442,6 +522,7 @@ class const _ContextSection({
               key: ValueKey((content, isSummary)),
               content: content,
               isSummary: isSummary,
+              expansionLabel: expansionLabel,
             )
           else
             Text(content, style: Theme.of(context).textTheme.bodySmall),
@@ -465,31 +546,54 @@ class _SummaryAction extends StatefulWidget {
 
 class _SummaryActionState extends State<_SummaryAction> {
   bool _busy = false;
+  String? _failure;
   @override
-  Widget build(BuildContext context) => TextButton.icon(
-    style: TextButton.styleFrom(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      minimumSize: const Size(32, 28),
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  Widget build(BuildContext context) => Tooltip(
+    message: _failure ?? widget.label,
+    child: TextButton.icon(
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        minimumSize: const Size(32, 28),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: _busy
+          ? null
+          : () async {
+              setState(() {
+                _busy = true;
+                _failure = null;
+              });
+              try {
+                await widget.onGenerate();
+                if (mounted) {
+                  ScaffoldMessenger.maybeOf(context)
+                      ?.showSnackBar(const SnackBar(content: Text('摘要已更新')));
+                }
+              } catch (error) {
+                if (mounted) {
+                  setState(() => _failure = error.toString());
+                  ScaffoldMessenger.maybeOf(context)
+                      ?.showSnackBar(SnackBar(content: Text('無法生成摘要：$error')));
+                }
+              } finally {
+                if (mounted) setState(() => _busy = false);
+              }
+            },
+      icon: _busy
+          ? const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.refresh, size: 14),
+      label: Text(
+        _busy
+            ? '摘要中…'
+            : _failure != null
+            ? '摘要失敗，重試'
+            : widget.label,
+      ),
     ),
-    onPressed: _busy
-        ? null
-        : () async {
-            setState(() => _busy = true);
-            try {
-              await widget.onGenerate();
-            } finally {
-              if (mounted) setState(() => _busy = false);
-            }
-          },
-    icon: _busy
-        ? const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        : const Icon(Icons.refresh, size: 14),
-    label: Text(_busy ? '摘要中…' : widget.label),
   );
 }
 
@@ -506,9 +610,11 @@ class _ExpandableContextSummary extends StatefulWidget {
     super.key,
     required this.content,
     this.isSummary = true,
+    this.expansionLabel,
   });
   final String content;
   final bool isSummary;
+  final String? expansionLabel;
   @override
   State<_ExpandableContextSummary> createState() =>
       _ExpandableContextSummaryState();
@@ -533,22 +639,6 @@ class _ExpandableContextSummaryState extends State<_ExpandableContextSummary> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Keep the toggle above a long expanded summary, so the user
-            // does not need to scroll through the entire report to collapse.
-            if (overflow)
-              TextButton(
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  minimumSize: const Size(48, 32),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: () => setState(() => _expanded = !_expanded),
-                child: Text(
-                  widget.isSummary
-                      ? (_expanded ? '收合摘要' : '展開摘要')
-                      : (_expanded ? '收合回覆' : '展開回覆'),
-                ),
-              ),
             if (_expanded && overflow)
               SelectableText(widget.content, style: style)
             else
@@ -557,6 +647,30 @@ class _ExpandableContextSummaryState extends State<_ExpandableContextSummary> {
                 style: style,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
+              ),
+            // Read the preview first, then reveal more using a compact,
+            // directional control immediately below the content.
+            if (overflow)
+              TextButton(
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: const Size(48, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${_expanded ? '收合' : '展開'}${widget.expansionLabel ?? (widget.isSummary ? '摘要' : '回覆')}',
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      size: 16,
+                    ),
+                  ],
+                ),
               ),
           ],
         );

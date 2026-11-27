@@ -313,6 +313,31 @@ openai-codex    gpt-5.5                 272K     128K     yes       yes
       ]);
     });
 
+    test('Pi model discovery rejects warnings and respects native default', () {
+      final models = parsePiModels('''
+warning login required
+provider model context max-out thinking images
+openai-codex gpt-5.5 272K 128K yes yes
+not a model 0 no false
+''');
+      expect(models.map((model) => model.id), ['openai-codex/gpt-5.5']);
+      const settings = AiAssistSettings(agent: 'pi');
+      expect(defaultModelIdForAgentType(AgentType.pi, settings), '');
+      final spec = aiAssistCapabilityFor(AgentType.pi)!;
+      expect(
+        spec.buildArgs(model: '', prompt: 'test', timeoutSeconds: 60),
+        isNot(contains('--model')),
+      );
+      expect(
+        spec.buildArgs(
+          model: 'openai-codex/gpt-5.5',
+          prompt: 'test',
+          timeoutSeconds: 60,
+        ),
+        containsAllInOrder(['--model', 'openai-codex/gpt-5.5']),
+      );
+    });
+
     test('returns static models without spawning for static agents', () async {
       final runner = _FakeProcessRunner(stdout: 'unused');
       final service = CliAiAssistModelDiscoveryService(processRunner: runner);
