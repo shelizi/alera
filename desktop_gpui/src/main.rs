@@ -10808,6 +10808,7 @@ impl Workbench {
         drag_generation: u64,
         host_sessions: &[TerminalSession],
         inventory_current: bool,
+        show_task_summaries: bool,
         locale: UiLocale,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -10824,11 +10825,17 @@ impl Workbench {
         let stopped_label = tab.stopped_label();
         // Classic tooltips describe the live Agent state in the selected
         // language; raw Host IDs are still available in Session details.
-        let agent_tooltip = if tab.kind == WorkbenchTabKind::Agent && tab.running {
-            tab.agent_state.and_then(|state| {
-                tab.verified_agent_brand(host_sessions).map(|agent_type| {
+        let task = native_agent_context_ui::AgentTaskPresentation::from_context(
+            if inventory_current {
+                tab.verified_agent_session(host_sessions).and_then(|session| session.agent_context.as_ref())
+            } else { None },
+        );
+        let agent_tooltip = if inventory_current && tab.kind == WorkbenchTabKind::Agent && tab.running {
+            tab.verified_agent_brand(host_sessions).map(|agent_type| {
+                let state = tab.agent_state.map(|state| {
                     AgentVisualState::from_hook(state, tab.interrupted).tooltip(agent_type, locale)
-                })
+                }).unwrap_or_else(|| native_agent_quota_ui::classic_agent_display_name(agent_type).to_owned());
+                task.tooltip(&state, locale)
             })
         } else {
             None
@@ -10887,7 +10894,7 @@ impl Workbench {
         } else {
             None
         };
-        let title = tab.title;
+        let title = task.title(show_task_summaries, &tab.title);
         // The title has its own hover target. Show the same Agent state
         // tooltip there, rather than masking it with a title-only bubble.
         let tab_tooltip_title = agent_tooltip.clone().unwrap_or_else(|| title.clone());
@@ -13148,7 +13155,7 @@ impl Render for Workbench {
             .collect();
         let mut sidebar_agents_by_workspace: HashMap<
             PathBuf,
-            Vec<(String, String, String, String, Option<AgentVisualState>, bool, Option<String>)>,
+            Vec<(String, String, String, String, Option<AgentVisualState>, bool, native_agent_context_ui::AgentTaskPresentation)>,
         > = HashMap::new();
         if !self.terminals.session_list_is_stale() {
             for session in &self.terminals.sessions {
@@ -13169,12 +13176,9 @@ impl Render for Workbench {
                         agent_type.to_owned(),
                         AgentVisualState::for_session(session, agent_inventory_current),
                         native_global_agents_ui::dashboard_done_unread(session, &self.agent_completion_acknowledgements),
-                        if show_agent_task_summaries {
-                            session.agent_context.as_ref().and_then(|context| {
-                                let text = if context.progress.trim().is_empty() { &context.goal } else { &context.progress };
-                                (!text.trim().is_empty()).then(|| text.chars().take(160).collect::<String>())
-                            })
-                        } else { None },
+                        native_agent_context_ui::AgentTaskPresentation::from_context(
+                            session.agent_type.as_ref().and(session.agent_context.as_ref()),
+                        ),
                     ));
             }
         }
@@ -16429,7 +16433,7 @@ impl Render for Workbench {
                                                     mixed_drag_generation,
                                                     &self.terminals.sessions,
                                                     !self.terminals.session_list_is_stale(),
-                                                    self.settings_menu_locale,
+                                                    show_agent_task_summaries, self.settings_menu_locale,
                                                     cx,
                                                 )
                                             }))
@@ -16485,7 +16489,7 @@ impl Render for Workbench {
                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index, tab, PaneSlot::Primary, selected, pinned,
-                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
+                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), show_agent_task_summaries, self.settings_menu_locale, cx,
                                                 )
                                             }))
                                             .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
@@ -16688,7 +16692,7 @@ impl Render for Workbench {
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
                                                                     !self.terminals.session_list_is_stale(),
-                                                                    self.settings_menu_locale,
+                                                                    show_agent_task_summaries, self.settings_menu_locale,
                                                                     cx,
                                                                 )
                                                             }))
@@ -16719,7 +16723,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), show_agent_task_summaries, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .child(
@@ -17279,7 +17283,7 @@ impl Render for Workbench {
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
                                                                     !self.terminals.session_list_is_stale(),
-                                                                    self.settings_menu_locale,
+                                                                    show_agent_task_summaries, self.settings_menu_locale,
                                                                     cx,
                                                                 )
                                                             }))
@@ -17311,7 +17315,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), self.settings_menu_locale, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, !self.terminals.session_list_is_stale(), show_agent_task_summaries, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .child(
@@ -18050,7 +18054,7 @@ impl Render for Workbench {
                                                                 is_primary_workspace, active,
                                                             )))
                                                             .children(sidebar_agents.into_iter().enumerate().map(
-                                                                |(_agent_index, (handle, workspace_id, tab_id, agent_type, visual_state, done_unread, summary))| {
+                                                                |(_agent_index, (handle, workspace_id, tab_id, agent_type, visual_state, done_unread, task))| {
                                                                     let provider_name = if agent_type == "terminal" { "Terminal" } else { native_agent_quota_ui::classic_agent_display_name(&agent_type) };
                                                                     let duplicate = sibling_agent_counts.get(&agent_type).copied().unwrap_or(0) > 1;
                                                                     let agent_caption = if duplicate {
@@ -18058,10 +18062,13 @@ impl Render for Workbench {
                                                                     } else {
                                                                         provider_name.to_owned()
                                                                     };
+                                                                    let agent_caption = task.title(show_agent_task_summaries, &agent_caption);
+                                                                    let summary = task.inline_progress(show_agent_task_summaries);
                                                                     let agent_tooltip = if done_unread {
                                                                         format!("{} · {}", provider_name, tr(agent_ui_locale, "Done (Unread)"))
                                                                     } else { visual_state.map(|state| state.tooltip(&agent_type, agent_ui_locale))
                                                                         .unwrap_or_else(|| format!("Open {provider_name}")) };
+                                                                    let agent_tooltip = task.tooltip(&agent_tooltip, agent_ui_locale);
                                                                     let selected = active_sidebar_session.as_ref().is_some_and(|(h, w, t)|
                                                                         h == &handle && w == &workspace_id && t == &tab_id);
                                                                     let closing = self.host_tab_closing.contains(&(handle.clone(), workspace_id.clone(), tab_id.clone()));
