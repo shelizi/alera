@@ -87,6 +87,19 @@ Map<String, tree.TreeNode> _fixture(int folders, int files) {
   return nodes;
 }
 
+/// Put many expanded branches beneath two single-child wrappers.
+Map<String, tree.TreeNode> _nestedFixture(int folders, int files) {
+  final nodes = _fixture(folders, files);
+  final dirs = nodes[_root]!.childIds;
+  for (final id in dirs) {
+    nodes[id] = _node(id, 'inner', children: nodes[id]!.childIds);
+  }
+  nodes['inner'] = _node('inner', 'outer', children: dirs);
+  nodes['outer'] = _node('outer', _root, children: ['inner']);
+  nodes[_root] = _node(_root, '', children: ['outer']);
+  return nodes;
+}
+
 final class _Harness {
   _Harness(Map<String, tree.TreeNode> nodes)
     : store = (WorkspaceExplorerNodeSnapshots<tree.TreeNode>()
@@ -597,6 +610,317 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     },
+  );
+  test(
+    'nested single-root segments retain sibling rows and exact deep offsets',
+    () {
+      final seed = _nestedFixture(16, 200);
+      final harness = _Harness(seed);
+      addTearDown(harness.dispose);
+      final dirs = seed['inner']!.childIds;
+      harness.expand(['outer', 'inner', ...dirs]);
+      final controller = harness.controller;
+      final initial = controller.visibleNodes;
+      expect(initial, isA<tree.IndexedVisibleRows>());
+      expect(initial.length, 3218);
+      expect(controller.indexOfNode('outer'), 0);
+      expect(controller.indexOfNode('inner'), 1);
+      expect(controller.indexOfNode('dir-0'), 2);
+      expect(controller.indexOfNode('dir-0/file-0.dart'), 3);
+      expect(initial[3].depth, 3);
+      final previous = initial.map(_fields).toList();
+      const stableId = 'dir-9/file-123.dart';
+      final stableIndex = controller.indexOfNode(stableId);
+      final stable = initial[stableIndex];
+
+      const added = 'dir-0/added.dart';
+      harness.store.put(added, _node(added, 'dir-0'));
+      harness.store.put(
+        'dir-0',
+        seed['dir-0']!.copyWith(childIds: [added, ...seed['dir-0']!.childIds]),
+      );
+      harness.publish();
+      expect(controller.indexOfNode(stableId), stableIndex + 1);
+      expect(controller.visibleNodes[stableIndex + 1], same(stable));
+      expect(initial.map(_fields).toList(), previous);
+
+      harness.store.put(
+        'inner',
+        seed['inner']!.copyWith(childIds: dirs.reversed.toList()),
+      );
+      harness.publish();
+      expect(controller.visibleNodes[2].id, dirs.last);
+      expect(
+        controller.visibleNodes[controller.indexOfNode(stableId)],
+        same(stable),
+      );
+      controller.selectRange(
+        anchorId: 'dir-9/file-120.dart',
+        toId: 'dir-8/file-2.dart',
+      );
+      harness.reference.selectRange(
+        anchorId: 'dir-9/file-120.dart',
+        toId: 'dir-8/file-2.dart',
+      );
+      harness.check();
+
+      harness.collapse('dir-0');
+      final collapsed = controller.visibleNodes;
+      harness.store.put(
+        added,
+        _node(added, 'dir-0', name: 'changed while collapsed'),
+      );
+      harness.publish();
+      expect(controller.indexOfNode(added), -1);
+      expect(
+        controller.visibleNodes[controller.indexOfNode(stableId)],
+        same(stable),
+      );
+      // The collapsed child's header remains identical.
+      expect(
+        controller.visibleNodes[controller.indexOfNode('dir-0')],
+        same(collapsed.firstWhere((row) => row.id == 'dir-0')),
+      );
+      harness.expand(['dir-0']);
+      expect(
+        controller.visibleNodes[controller.indexOfNode(added)].name,
+        'changed while collapsed',
+      );
+
+      // Move a loaded folder to a different depth. Its old branch must not
+      // be reused with stale depth or indexes, and other descendants stay.
+      harness.store.put(
+        'inner',
+        seed['inner']!.copyWith(
+          childIds: [
+            for (final id in dirs.reversed)
+              if (id != 'dir-0') id,
+          ],
+        ),
+      );
+      harness.store.put(
+        'outer',
+        seed['outer']!.copyWith(childIds: ['inner', 'dir-0']),
+      );
+      harness.store.put(
+        'dir-0',
+        _node('dir-0', 'outer', children: [added, ...seed['dir-0']!.childIds]),
+      );
+      harness.publish();
+      expect(controller.visibleNodes[controller.indexOfNode(added)].depth, 2);
+      expect(
+        controller.visibleNodes[controller.indexOfNode(stableId)],
+        same(stable),
+      );
+      harness.collapse('outer');
+      expect(controller.visibleNodes.length, 1);
+      harness.expand(['outer']);
+      expect(controller.visibleNodes[controller.indexOfNode(added)].depth, 2);
+      harness.filter('changed while collapsed');
+      harness.filter('');
+      expect(initial.map(_fields).toList(), previous);
+    },
+  );
+
+  test('wide direct-file overlays retain rows, indexes and old snapshots', () {
+    final seed = _fixture(1, 2600);
+    final harness = _Harness(seed);
+    addTearDown(harness.dispose);
+    const dir = 'dir-0';
+    harness.expand([dir]);
+    final controller = harness.controller;
+    final before = controller.visibleNodes;
+    expect(before, isA<tree.IndexedVisibleRows>());
+    final oldFields = before.map(_fields).toList();
+    final stable = before[2500];
+    var children = List<String>.of(seed[dir]!.childIds);
+
+    void replaceAt(int i, String id) {
+      harness.store.remove(children[i]);
+      children[i] = id;
+      harness.store.put(id, _node(id, dir));
+      harness.store.put(dir, seed[dir]!.copyWith(childIds: List.of(children)));
+    }
+
+    const removed = 'dir-0/file-10.dart';
+    const added = 'dir-0/replacement.dart';
+    replaceAt(10, added);
+    harness.publish();
+    final patched = controller.visibleNodes;
+    expect(controller.indexOfNode(removed), -1);
+    expect(controller.indexOfNode(added), 11);
+    expect(patched[2500], same(stable));
+    expect(before.map(_fields).toList(), oldFields);
+    harness.store.put(added, _node(added, dir, name: 'renamed same id'));
+    harness.publish();
+    expect(controller.visibleNodes[11].name, 'renamed same id');
+    expect(patched[11].name, added);
+    // Reintroduce a removed base ID at another edited position.
+    replaceAt(20, removed);
+    harness.publish();
+    expect(controller.indexOfNode(removed), 21);
+    expect(controller.indexOfNode(added), 11);
+    expect(controller.visibleNodes[2500], same(stable));
+    expect(before[11].id, removed);
+
+    // Retained-ID reorder and length changes must use complete traversal.
+    final reordered = List<String>.of(children);
+    final first = reordered[0];
+    reordered[0] = reordered[1];
+    reordered[1] = first;
+    children = reordered;
+    harness.store.put(dir, seed[dir]!.copyWith(childIds: List.of(children)));
+    harness.publish();
+    expect(controller.visibleNodes[1].id, reordered.first);
+    expect(controller.visibleNodes[2500], isNot(same(stable)));
+    final rebuilt = controller.visibleNodes[2500];
+    replaceAt(30, 'dir-0/after-reorder.dart');
+    harness.publish();
+    expect(controller.visibleNodes[2500], same(rebuilt));
+    const extra = 'dir-0/extra.dart';
+    children.add(extra);
+    harness.store.put(extra, _node(extra, dir));
+    harness.store.put(dir, seed[dir]!.copyWith(childIds: List.of(children)));
+    harness.publish();
+    expect(controller.indexOfNode(extra), children.length);
+    expect(controller.visibleNodes.length, 2602);
+    harness.collapse(dir);
+    expect(controller.indexOfNode(extra), -1);
+    harness.expand([dir]);
+    expect(controller.indexOfNode(extra), children.length);
+    expect(before.map(_fields).toList(), oldFields);
+  });
+
+  test('wide overlay compacts after the bounded accumulated replacements', () {
+    final seed = _fixture(1, 2200);
+    final harness = _Harness(seed);
+    addTearDown(harness.dispose);
+    const dir = 'dir-0';
+    harness.expand([dir]);
+    final controller = harness.controller;
+    final initial = controller.visibleNodes;
+    final stable = initial.last;
+    final originalFields = initial.map(_fields).toList();
+    final children = List<String>.of(seed[dir]!.childIds);
+    // Each publication touches 31 file slots plus the folder header.
+    for (var batch = 0; batch < 17; batch++) {
+      for (var j = 0; j < 31; j++) {
+        final index = batch * 31 + j;
+        harness.store.remove(children[index]);
+        final id = '$dir/replaced-$index.dart';
+        children[index] = id;
+        harness.store.put(id, _node(id, dir));
+      }
+      harness.store.put(dir, seed[dir]!.copyWith(childIds: List.of(children)));
+      harness.publish();
+      if (batch < 16) {
+        expect(controller.visibleNodes.last, same(stable));
+      } else {
+        // 527 distinct file slots exceed the 512-row overlay limit.
+        expect(controller.visibleNodes.last, isNot(same(stable)));
+      }
+    }
+    expect(initial.map(_fields).toList(), originalFields);
+    expect(controller.indexOfNode('dir-0/replaced-526.dart'), 527);
+    expect(controller.indexOfNode('dir-0/file-526.dart'), -1);
+  });
+
+  test(
+    'benchmark nested branches and wide direct-file overlays',
+    () {
+      const updates = 12;
+
+      ({int elapsed, List<Object> rows, int reusedRows}) run(
+        Map<String, tree.TreeNode> seed,
+        bool nested,
+        bool wide,
+      ) {
+        final store = WorkspaceExplorerNodeSnapshots<tree.TreeNode>()
+          ..replace(seed.entries);
+        final strategy = WorkspaceExplorerFlattenStrategy(
+          nestedBranches: nested,
+        );
+        final initial = _data(store.snapshot());
+        strategy.prepareUpdate(initial, store.takeChangedKeys());
+        final controller = tree.DirectoryTreeController(
+          data: initial,
+          flattenStrategy: strategy,
+          immutableVisibleRows: true,
+          lazyLookupIndexes: true,
+        );
+        final dirs = wide ? ['dir-0'] : seed['inner']!.childIds;
+        controller.expansions.expandAll(
+          wide ? dirs : ['outer', 'inner', ...dirs],
+        );
+        var elapsed = 0;
+        var reusedRows = 0;
+        for (var i = 0; i < updates; i++) {
+          final dir = dirs[i % dirs.length];
+          final oldId = '$dir/file-$i.dart';
+          final newId = '$dir/replaced-$i.dart';
+          final parent = store.snapshot()[dir]!;
+          final oldStable = controller.visibleNodes.last;
+          final watch = Stopwatch()..start();
+          store.remove(oldId);
+          store.put(newId, _node(newId, dir));
+          store.put(
+            dir,
+            parent.copyWith(
+              childIds: [
+                for (final id in parent.childIds) id == oldId ? newId : id,
+              ],
+            ),
+          );
+          final next = _data(store.snapshot());
+          strategy.prepareUpdate(next, store.takeChangedKeys());
+          controller.rebuild(next);
+          final index = controller.indexOfNode(newId);
+          final removedIndex = controller.indexOfNode(oldId);
+          final lastIndex = controller.indexOfNode(oldStable.id);
+          final found = controller.visibleNodes[index];
+          watch.stop();
+          elapsed += watch.elapsedMicroseconds;
+          expect(found.id, newId);
+          expect(removedIndex, -1);
+          expect(lastIndex, controller.visibleNodes.length - 1);
+          if (identical(controller.visibleNodes.last, oldStable)) reusedRows++;
+        }
+        final rows = controller.visibleNodes.map(_fields).toList();
+        controller.dispose();
+        return (elapsed: elapsed, rows: rows, reusedRows: reusedRows);
+      }
+
+      double median(List<int> samples) {
+        samples.sort();
+        return samples[samples.length ~/ 2] / 1000;
+      }
+
+      for (final wide in [false, true]) {
+        final seed = wide ? _fixture(1, 40000) : _nestedFixture(200, 200);
+        final reference = run(seed, false, wide);
+        final warm = run(seed, true, wide);
+        expect(warm.rows, reference.rows);
+        expect(warm.reusedRows, updates);
+        final old = <int>[];
+        final optimized = <int>[];
+        for (var sample = 0; sample < 7; sample++) {
+          for (final nested in sample.isEven ? [false, true] : [true, false]) {
+            final measured = run(seed, nested, wide);
+            expect(measured.rows, reference.rows);
+            expect(measured.reusedRows, nested ? updates : 0);
+            (nested ? optimized : old).add(measured.elapsed);
+          }
+        }
+        final oldMs = median(old);
+        final newMs = median(optimized);
+        // ignore: avoid_print
+        print(
+          'Explorer nested/wide publication shape=${wide ? 'wide-direct-files' : 'nested-single-root'} nodes=${seed.length} visible=${reference.rows.length} updates=$updates old_ms=${oldMs.toStringAsFixed(3)} new_ms=${newMs.toStringAsFixed(3)} speedup=${(oldMs / newMs).toStringAsFixed(2)}x',
+        );
+      }
+    },
+    skip: !const bool.fromEnvironment('ALERA_EXPLORER_BENCHMARK'),
+    timeout: const Timeout(Duration(minutes: 10)),
   );
   test(
     'benchmark segmented visible list publication and lookups',
