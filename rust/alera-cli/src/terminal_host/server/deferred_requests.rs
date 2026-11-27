@@ -180,6 +180,14 @@ impl ServerActor {
                         self.start_ai_assist_speech_message(client_id, request_id, payload)?;
                         true
                     }
+                    AiTextOperation::DiscoverModels => {
+                        self.start_ai_assist_model_diagnostic(client_id, request_id, payload, false)?;
+                        true
+                    }
+                    AiTextOperation::TestSummaryModel => {
+                        self.start_ai_assist_model_diagnostic(client_id, request_id, payload, true)?;
+                        true
+                    }
                 },
                 DeferredJobRoute::AiDictation(operation) => match operation {
                     AiDictationOperation::LocalTranscribe => {

@@ -3,6 +3,7 @@ import 'package:alera/src/features/ai_assist/application/ai_assist_service.dart'
 import 'package:alera/src/features/ai_assist/application/ai_assist_model_discovery_service.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_providers.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'ai_assist_providers.g.dart';
@@ -23,7 +24,7 @@ AiAssistService aiAssistService(Ref ref) {
 
 @Riverpod(keepAlive: true)
 AiAssistModelDiscoveryService aiAssistModelDiscoveryService(Ref ref) {
-  return CliAiAssistModelDiscoveryService(
-    processRunner: ref.read(processRunnerProvider),
+  return RuntimeAiAssistModelDiscoveryService(
+    ref.read(runtimeHostClientProvider),
   );
 }

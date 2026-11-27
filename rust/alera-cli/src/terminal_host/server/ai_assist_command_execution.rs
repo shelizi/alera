@@ -8,6 +8,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+pub(super) struct AiAssistCommandOutput {
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+}
+
 fn ai_assist_timeout_error(timeout_seconds: u64) -> HostError {
     HostError::timeout(format!("AI Assist timed out after {timeout_seconds}s."))
 }
@@ -18,6 +23,15 @@ pub(super) async fn run_command(
     timeout_seconds: u64,
     cancel_rx: oneshot::Receiver<()>,
 ) -> HostResult<String> {
+    Ok(run_command_capture(plan, working_directory, timeout_seconds, cancel_rx).await?.stdout)
+}
+
+pub(super) async fn run_command_capture(
+    plan: AiAssistCommandPlan,
+    working_directory: &str,
+    timeout_seconds: u64,
+    cancel_rx: oneshot::Receiver<()>,
+) -> HostResult<AiAssistCommandOutput> {
     let path = plan.environment.get("PATH").map(String::as_str);
     let mut command = windowless_async_shell_command(
         &plan.binary,
@@ -92,10 +106,13 @@ pub(super) async fn run_command(
                         plan.label
                     ),
                 }))
-            } else if output.stdout.len() > MAX_OUTPUT_BYTES {
+            } else if output.stdout.len() > MAX_OUTPUT_BYTES || output.stderr.len() > MAX_OUTPUT_BYTES {
                 Err(HostError::state(format!("{} returned too much output.", plan.label)))
             } else {
-                Ok(stdout)
+                Ok(AiAssistCommandOutput {
+                    stdout,
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                })
             }
         }
     };

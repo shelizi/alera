@@ -60,7 +60,7 @@ pub(super) fn panel(
     let overall = if context.overall_summary.is_empty() {
         div().text_xs().text_color(rgb(MUTED)).child("No cumulative summary yet. Generate from retained reports.").into_any_element()
     } else {
-        summary_text("overall".to_owned(), context.overall_summary.clone(), true, expanded, cx)
+        summary_text("overall".to_owned(), context.overall_summary.clone(), "summary", expanded, cx)
     };
     let mut overall_body = div().flex().flex_col().gap_1().child(overall);
     if latest.is_some() {
@@ -69,14 +69,14 @@ pub(super) fn panel(
     let latest_body = if context.progress.is_empty() {
         div().text_sm().child(progress).into_any_element()
     } else {
-        summary_text("latest".to_owned(), progress, context.is_summary, expanded, cx)
+        summary_text("latest".to_owned(), progress, if context.is_summary { "summary" } else { "reply" }, expanded, cx)
     };
     let mut latest_body = div().flex().flex_col().gap_1().child(latest_body);
     if let Some(event) = latest {
         latest_body = latest_body.child(summary_action("latest", selection, Some(&event.at), context.is_summary, pending, cx));
     }
     let mut body = body
-        .child(section("OVERALL OBJECTIVE", div().text_sm().child(goal).into_any_element()))
+        .child(section("OVERALL OBJECTIVE", summary_text("goal".to_owned(), goal, "objective", expanded, cx)))
         .when(latest.is_some() || !context.overall_summary.is_empty(), |body| body.child(section("CUMULATIVE PROGRESS SUMMARY", overall_body.into_any_element())))
         .child(section(if context.is_summary { "LATEST AGENT REPORT · AI SUMMARY" } else if context.has_report { "LATEST AGENT REPORT · ORIGINAL REPLY" } else { "LATEST AGENT REPORT" }, latest_body.into_any_element()))
         .when_some(feedback.map(str::to_owned), |body, message| body.child(div().text_xs().text_color(rgb(MUTED)).child(message)))
@@ -138,7 +138,7 @@ pub(super) fn panel(
                         if event.text.is_empty() {
                             div().text_xs().text_color(rgb(MUTED)).child("Report received · no summary").into_any_element()
                         } else {
-                            summary_text(format!("event-{index}-{}", event.at), event.text.clone(), event.is_summary, expanded, cx)
+                            summary_text(format!("event-{index}-{}", event.at), event.text.clone(), if event.is_summary { "summary" } else { "reply" }, expanded, cx)
                         }
                     } else {
                         div().min_w_0().text_sm().child(event.text.clone()).into_any_element()
@@ -237,19 +237,21 @@ fn section(title: &'static str, value: gpui::AnyElement) -> gpui::AnyElement {
 fn summary_text(
     id: String,
     value: String,
-    is_summary: bool,
+    label: &'static str,
     expanded: &HashSet<String>,
     cx: &mut Context<Workbench>,
 ) -> gpui::AnyElement {
     let long = value.chars().count() > 120;
-    let key = format!("{id}:{is_summary}:{value}");
+    let key = format!("{id}:{label}:{value}");
     let open = expanded.contains(&key);
     let text = if long && !open {
         format!("{}…", value.chars().take(117).collect::<String>())
     } else {
         value
     };
-    let mut body = div().min_w_0().flex().flex_col().gap_1();
+    // Match Classic: the preview or expanded text comes before its control.
+    let mut body = div().min_w_0().flex().flex_col().gap_1()
+        .child(div().min_w_0().text_sm().child(text));
     if long {
         body = body.child(
             div()
@@ -257,7 +259,8 @@ fn summary_text(
                 .text_xs()
                 .text_color(rgb(ACCENT))
                 .cursor_pointer()
-                .child(match (is_summary, open) { (true, true) => "Collapse summary", (true, false) => "Expand summary", (false, true) => "Collapse reply", (false, false) => "Expand reply" })
+                .child(format!("{} {label} {}", if open { "Collapse" } else { "Expand" },
+                    if open { "▴" } else { "▾" }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !this.agent_context_expanded.remove(&key) {
                         if this.agent_context_expanded.len() >= 32 {
@@ -269,7 +272,7 @@ fn summary_text(
                 })),
         );
     }
-    body.child(div().min_w_0().text_sm().child(text)).into_any_element()
+    body.into_any_element()
 }
 
 /// Sidebar summaries are opt-in. Missing, stale, or non-boolean Host values

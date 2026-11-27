@@ -92,7 +92,7 @@ impl AgentContextOverview {
 
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        let goal = Self::text(object.get("goal"), 120);
+        let goal = Self::text(object.get("goal"), 600);
         let summary = Self::text(object.get("reportSummary"), 420);
         let is_summary = !summary.is_empty();
         let progress = if is_summary { summary.clone() } else { Self::text(object.get("progress"), 420) };

@@ -144,8 +144,9 @@ AgentContextOverview contextFromNativeMessages(List<dynamic> messages) {
 
 List<AgentContextMilestone> mergeAgentContextTimelines(
   List<AgentContextMilestone> live,
-  List<AgentContextMilestone> recovered,
-) {
+  List<AgentContextMilestone> recovered, {
+  bool preferRecoveredSummaries = false,
+}) {
   final result = <AgentContextMilestone>[];
   final seen = <(String, String, String), int>{};
   for (final event in [...live, ...recovered]) {
@@ -154,7 +155,8 @@ List<AgentContextMilestone> mergeAgentContextTimelines(
     if (index == null) {
       seen[key] = result.length;
       result.add(event);
-    } else if (result[index].summary.isEmpty && event.summary.isNotEmpty) {
+    } else if (event.summary.isNotEmpty &&
+        (result[index].summary.isEmpty || preferRecoveredSummaries)) {
       result[index] = event;
     }
   }

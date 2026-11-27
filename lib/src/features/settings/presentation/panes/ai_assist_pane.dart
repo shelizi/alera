@@ -12,6 +12,8 @@ import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/settings/presentation/panes/ai_assist_setting_rows.dart';
 import 'package:alera/src/features/settings/presentation/panes/ai_assist_custom_command_dialog.dart';
 import 'package:alera/src/features/settings/presentation/rows/settings_rows.dart';
+import 'package:alera/src/design_system/forms/alera_setting_row.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -43,6 +45,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   final Map<AgentType, _AiAssistModelDiscoveryState> _discovery =
       <AgentType, _AiAssistModelDiscoveryState>{};
   final Set<AgentType> _autoDiscovered = <AgentType>{};
+  bool _summaryTestBusy = false;
+  String? _summaryTestMessage;
+  (String, String, String?)? _summaryTestIdentity;
 
   @override
   void initState() {
@@ -132,7 +137,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
               else if (spec != null)
                 AiAssistModelRow(
                   agentType: agentType,
-                  models: models,
+                  models: _labelModels(agentType, settings, models),
                   value: model.id,
                   canDiscoverModels: canDiscoverModels,
                   discovering: discovery.loading,
@@ -205,6 +210,8 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
                   ),
                 ..._promptOverrideRows(settings, operation),
                 ..._thinkingRows(settings, operation),
+                if (operation == AiAssistOperation.agentWorkReport)
+                  _summaryTestRow(settings),
                 _instructionRow(settings, operation),
               ],
             ),
@@ -263,6 +270,117 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         ),
       ),
     ];
+  }
+
+  List<AiAssistModel> _labelModels(
+    AgentType agent,
+    AiAssistSettings settings,
+    List<AiAssistModel> models,
+  ) {
+    final state = _discovery[agent];
+    final spec = aiAssistCapabilityFor(agent);
+    if (spec?.modelsCommand == null) return models;
+    final cached = settings
+        .discoveredModelsForType(agent)
+        .map((m) => m.id)
+        .toSet();
+    final builtIn = spec!.models.map((m) => m.id).toSet();
+    return [
+      for (final model in models)
+        AiAssistModel(
+          id: model.id,
+          label: model.id.isEmpty
+              ? model.label
+              : '${model.label} · ${state?.detectedIds.contains(model.id) == true
+                    ? 'Detected'
+                    : cached.contains(model.id)
+                    ? 'Cached (unverified)'
+                    : builtIn.contains(model.id)
+                    ? 'Built-in (unverified)'
+                    : 'Configured (unverified)'}',
+          thinkingLevels: model.thinkingLevels,
+          defaultThinkingLevel: model.defaultThinkingLevel,
+        ),
+    ];
+  }
+
+  (String, String, String?)? _summaryIdentity(AiAssistSettings settings) {
+    const operation = AiAssistOperation.agentWorkReport;
+    final agent = settings.agentTypeFor(operation);
+    if (agent == null ||
+        !const {
+          AgentType.codex,
+          AgentType.claude,
+          AgentType.pi,
+        }.contains(agent)) {
+      return null;
+    }
+    final model =
+        settings.modelForOperation(operation) ??
+        defaultModelIdForAgentType(agent, settings);
+    return (agent.key, model, settings.thinkingForOperation(operation, model));
+  }
+
+  Widget _summaryTestRow(AiAssistSettings settings) {
+    final identity = _summaryIdentity(settings);
+    final message = _summaryTestIdentity == identity
+        ? _summaryTestMessage
+        : null;
+    return AleraSettingRow(
+      title: 'Test Summary Model',
+      description: message ?? 'Verify the saved agent, login and model through Runtime Host using a synthetic prompt. Uses model quota but sends no work reports.',
+      child: TextButton(
+        onPressed: !settings.enabled || identity == null || _summaryTestBusy
+            ? null
+            : () => unawaited(_testSummaryModel(settings, identity)),
+        child: Text(_summaryTestBusy ? 'Testing…' : 'Test Model'),
+      ),
+    );
+  }
+
+  Future<void> _testSummaryModel(
+    AiAssistSettings settings,
+    (String, String, String?) identity,
+  ) async {
+    setState(() {
+      _summaryTestBusy = true;
+      _summaryTestIdentity = identity;
+      _summaryTestMessage = 'Testing the saved Runtime Host model…';
+    });
+    final stopwatch = Stopwatch()..start();
+    String message;
+    try {
+      final result = await ref.read(runtimeHostClientProvider).runtimeRequest(
+        'aiText.agentWorkReport.testModel',
+        {
+          'confirmTest': true,
+          'expectedAgent': identity.$1,
+          'expectedModel': identity.$2,
+          'expectedThinking': identity.$3,
+        },
+        Duration(seconds: settings.timeoutSeconds + 30),
+      );
+      if (result is! Map ||
+          result['passed'] != true ||
+          result['agent'] != identity.$1 ||
+          result['model'] != identity.$2) {
+        throw StateError('Host returned no verified generation result');
+      }
+      final elapsed = result['elapsedMs'];
+      final seconds = elapsed is num
+          ? (elapsed / 1000).toStringAsFixed(1)
+          : (stopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1);
+      message =
+          'Passed · ${identity.$1} / ${identity.$2.isEmpty ? 'Agent Default' : identity.$2} · ${seconds}s';
+    } catch (error) {
+      message =
+          'Test failed (${(stopwatch.elapsedMilliseconds / 1000).toStringAsFixed(1)}s): $error';
+    }
+    if (!mounted) return;
+    setState(() {
+      _summaryTestBusy = false;
+      _summaryTestMessage = message;
+    });
   }
 
   Widget _instructionRow(
@@ -344,8 +462,14 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         AiAssistPromptModelRow(
           operation: operation,
           agentType: agentType,
-          models: modelsForAgentType(agentType, settings),
-          inheritedModel: inheritedModel,
+          models: _labelModels(
+            agentType,
+            settings,
+            modelsForAgentType(agentType, settings),
+          ),
+          inheritedModel: _labelModels(agentType, settings, [
+            inheritedModel,
+          ]).single,
           value: effectivePromptModel,
           discovering: discovery.loading,
           discoveryError: discovery.error,
@@ -514,7 +638,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       );
     });
     setState(() {
-      _discovery[agentType] = const _AiAssistModelDiscoveryState();
+      _discovery[agentType] = _AiAssistModelDiscoveryState(
+        detectedIds: result.models.map((model) => model.id).toSet(),
+      );
     });
   }
 
@@ -536,4 +662,5 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
 class const _AiAssistModelDiscoveryState({
   final bool loading = false,
   final String? error,
+  final Set<String> detectedIds = const {},
 });
