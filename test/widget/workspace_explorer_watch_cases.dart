@@ -698,6 +698,43 @@ void _registerWorkspaceExplorerWatchTests() {
   );
 
   testWidgets(
+    'large loaded tree publications keep previous snapshots immutable',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [
+          _directory('src', hasChildrenHint: true),
+          for (var i = 0; i < 300; i++) _file('stable_$i.dart'),
+        ]
+        ..childrenByDirectory['src'] = [_file('src/old.dart')];
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('src'));
+      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller;
+      final before = controller.data;
+      final stable = before.nodes['path:stable_42.dart'];
+      service.childrenByDirectory['src'] = [_file('src/new.dart')];
+      service.emitWatchBatch(['src']);
+      await _pumpWatchedRefresh(tester);
+      final after = controller.data;
+      expect(after.nodes['path:stable_42.dart'], same(stable));
+      expect(after.nodes.containsKey('path:src/old.dart'), isFalse);
+      expect(after.nodes.containsKey('path:src/new.dart'), isTrue);
+      expect(before.nodes.containsKey('path:src/old.dart'), isTrue);
+      expect(before.nodes.containsKey('path:src/new.dart'), isFalse);
+      expect(before.nodes['path:src']!.childIds, ['path:src/old.dart']);
+      expect(after.nodes['path:src']!.childIds, ['path:src/new.dart']);
+      expect(controller.expansions.isExpanded('path:src'), isTrue);
+      service.childrenByDirectory['src'] = [_file('src/last.dart')];
+      service.emitWatchBatch(['src']);
+      await _pumpWatchedRefresh(tester);
+      expect(after.nodes.containsKey('path:src/new.dart'), isTrue);
+      expect(after.nodes.containsKey('path:src/last.dart'), isFalse);
+      expect(controller.data.nodes.containsKey('path:src/last.dart'), isTrue);
+    },
+  );
+  testWidgets(
     'native Explorer delta recovers from stale handle by full fallback',
     (tester) async {
       final service = _FakeWorkspaceFileService()

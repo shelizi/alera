@@ -22,6 +22,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_spec.d
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_controller_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_git_snapshot_refresh.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_node_snapshots.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_projection_index.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_watch_refresh_queue.dart';
@@ -140,9 +141,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   Map<String, native.WorkspaceFileEntry> get _entryByNodeId =>
       _projectionIndex.entryByNodeId;
   bool _hasProjection = false;
-  // Retain Dart TreeNode objects for unchanged IDs across structural native
-  // Delta updates; only changed/removed nodes require new objects.
-  final Map<String, tree.TreeNode> _treeNodesById = <String, tree.TreeNode>{};
+  // Share immutable node graph bases across small structural publications.
+  // Pending native edits never mutate a snapshot held by the controller.
+  final _treeNodesById = WorkspaceExplorerNodeSnapshots<tree.TreeNode>();
   // Structural revisions change DirectoryTreeController.data; metadata
   // revisions repaint only mounted rows (DirectoryTreeView caches ListView).
   int _treeStructureRevision = 0;
@@ -857,7 +858,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
 
   tree.TreeData _buildTreeData() {
     final nodes = !_hasProjection
-        ? <String, tree.TreeNode>{
+        ? Map<String, tree.TreeNode>.unmodifiableOf({
             _rootId: tree.TreeNode(
               id: _rootId,
               name: widget.workspace.name,
@@ -867,10 +868,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
               sourcePath: widget.workspace.path,
               isExpanded: true,
             ),
-          }
-        : _treeNodesById;
+          })
+        : _treeNodesById.snapshot();
     return tree.TreeData(
-      nodes: Map<String, tree.TreeNode>.unmodifiableOf(nodes),
+      nodes: nodes,
       rootId: _rootId,
       visibleRootId: _rootId,
       omitContainerRowAtRoot: true,

@@ -1,5 +1,7 @@
 import 'dart:collection';
 
+import 'package:alera/src/features/workbench/application/workspace_explorer_node_snapshots.dart';
+
 import 'package:flutter_directory_tree/flutter_directory_tree.dart' as tree;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -205,6 +207,143 @@ void main() {
     expect(lazy.nodeIdForEntryId('shared'), 'duplicate');
   });
 
+  test(
+    'shared snapshots keep duplicate lookup order across remove and reinsert',
+    () async {
+      final nodes = _smallNodes();
+      nodes['other'] = _folder('other', [
+        'keep',
+        for (var i = 0; i < 300; i++) 'hidden-$i',
+      ]);
+      for (var i = 0; i < 300; i++) {
+        nodes['hidden-$i'] = _file('hidden-$i', 'other', '/other/$i');
+      }
+      final store = WorkspaceExplorerNodeSnapshots<tree.TreeNode>()
+        ..replace(nodes.entries);
+      final before = store.snapshot();
+      final controller = _controller(_data(before), lazy: true);
+      addTearDown(controller.dispose);
+      expect(controller.nodeIdForEntryId('shared'), 'duplicate');
+      store.remove('old');
+      store.put('old', nodes['old']!);
+      controller.rebuild(_data(store.snapshot()));
+      expect(controller.nodeIdForEntryId('shared'), 'old');
+      await controller.reveal(virtualPath: '/folder/same.txt', select: true);
+      expect(controller.selection.selectedIds, {'old'});
+      expect(before.keys.toList(), nodes.keys.toList());
+      expect(before['old'], same(nodes['old']));
+    },
+  );
+
+  test(
+    'benchmark shared node snapshots and controller publication',
+    () {
+      const folderCount = 200;
+      const filesPerFolder = 200;
+      const updates = 12;
+      final folders = [for (var i = 0; i < folderCount; i++) 'folder-$i'];
+      final seed = <String, tree.TreeNode>{
+        'root': _folder('root', folders, root: true),
+      };
+      for (final folder in folders) {
+        final ids = [
+          for (var j = 0; j < filesPerFolder; j++) '$folder/file-$j.dart',
+        ];
+        seed[folder] = _folder(folder, ids);
+        for (final id in ids) {
+          seed[id] = _file(id, folder, '/$id');
+        }
+      }
+      final initial = _data(Map.unmodifiable(seed));
+
+      ({int snapshotUs, int totalUs, tree.DirectoryTreeController controller})
+      run(bool shared, bool expanded) {
+        final controller = _controller(initial, lazy: true);
+        controller.expansions.expandAll(expanded ? folders : folders.take(5));
+        controller.selectOnly('folder-0/file-1.dart');
+        final mutable = Map<String, tree.TreeNode>.of(seed);
+        final store = WorkspaceExplorerNodeSnapshots<tree.TreeNode>()
+          ..replace(seed.entries);
+        var snapshotUs = 0;
+        var totalUs = 0;
+        for (var i = 0; i < updates; i++) {
+          final folder = folders[i];
+          final oldId = '$folder/file-0.dart';
+          final newId = '$folder/renamed.dart';
+          final newFile = _file(newId, folder, '/$newId');
+          final newParent = _folder(folder, [
+            newId,
+            ...seed[folder]!.childIds.skip(1),
+          ]);
+          final watch = Stopwatch()..start();
+          if (shared) {
+            store.remove(oldId);
+            store.put(newId, newFile);
+            store.put(folder, newParent);
+          } else {
+            mutable.remove(oldId);
+            mutable[newId] = newFile;
+            mutable[folder] = newParent;
+          }
+          final snapshot = _data(
+            shared
+                ? store.snapshot()
+                : Map<String, tree.TreeNode>.unmodifiableOf(mutable),
+          );
+          snapshotUs += watch.elapsedMicroseconds;
+          controller.rebuild(snapshot);
+          totalUs += watch.elapsedMicroseconds;
+          watch.stop();
+        }
+        return (
+          snapshotUs: snapshotUs,
+          totalUs: totalUs,
+          controller: controller,
+        );
+      }
+
+      double median(List<int> samples) {
+        samples.sort();
+        return samples[samples.length ~/ 2] / 1000;
+      }
+
+      for (final expanded in [false, true]) {
+        final reference = run(false, expanded).controller;
+        final warm = run(true, expanded).controller;
+        _expectState(warm, reference);
+        warm.dispose();
+        final oldSnapshots = <int>[];
+        final newSnapshots = <int>[];
+        final oldTotals = <int>[];
+        final newTotals = <int>[];
+        for (var sample = 0; sample < 7; sample++) {
+          for (final shared in sample.isEven ? [false, true] : [true, false]) {
+            final measured = run(shared, expanded);
+            (shared ? newSnapshots : oldSnapshots).add(measured.snapshotUs);
+            (shared ? newTotals : oldTotals).add(measured.totalUs);
+            _expectState(measured.controller, reference);
+            expect(
+              measured.controller.data.nodes.keys.toList(),
+              reference.data.nodes.keys.toList(),
+            );
+            measured.controller.dispose();
+          }
+        }
+        final rows = reference.visibleNodes.length;
+        reference.dispose();
+        final before = median(oldSnapshots);
+        final after = median(newSnapshots);
+        final beforeTotal = median(oldTotals);
+        final afterTotal = median(newTotals);
+        // ignore: avoid_print
+        print(
+          'Explorer shared snapshots shape=${expanded ? 'all-expanded' : 'five-expanded'} nodes=${seed.length} visible=$rows updates=$updates old_snapshot_ms=${before.toStringAsFixed(3)} new_snapshot_ms=${after.toStringAsFixed(3)} snapshot_speedup=${(before / after).toStringAsFixed(2)}x old_total_ms=${beforeTotal.toStringAsFixed(3)} new_total_ms=${afterTotal.toStringAsFixed(3)} total_speedup=${(beforeTotal / afterTotal).toStringAsFixed(2)}x',
+        );
+      }
+    },
+    skip: !const bool.fromEnvironment('ALERA_EXPLORER_BENCHMARK'),
+    timeout: const Timeout(Duration(minutes: 10)),
+  );
   test(
     'benchmark large tree structural snapshot publication',
     () {

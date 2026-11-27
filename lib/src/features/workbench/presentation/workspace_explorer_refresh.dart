@@ -220,7 +220,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
         _treeNodesById.remove(id);
       }
       for (final node in delta.changedNodes) {
-        _treeNodesById[node.id] = _toDartExplorerTreeNode(node);
+        _treeNodesById.put(node.id, _toDartExplorerTreeNode(node));
       }
       _hasProjection = true;
       _treeStructureRevision += 1;
@@ -278,13 +278,11 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
     _hasProjection = true;
     _treeStructureRevision += 1;
     _entryProjectionRevision += 1;
-    _treeNodesById
-      ..clear()
-      ..addEntries(
-        projection.nodes.map(
-          (node) => MapEntry(node.id, _toDartExplorerTreeNode(node)),
-        ),
-      );
+    _treeNodesById.replace(
+      projection.nodes.map(
+        (node) => MapEntry(node.id, _toDartExplorerTreeNode(node)),
+      ),
+    );
   }
 
   List<native.WorkspaceExplorerDirectoryChildren> _directorySnapshots() =>
