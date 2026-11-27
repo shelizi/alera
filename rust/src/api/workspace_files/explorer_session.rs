@@ -124,10 +124,9 @@ pub(super) fn update(
             });
         }
     }
-    // File-only structural updates cannot prune cached child directories or
-    // create lazy placeholder nodes. Edit only this folder's entries, its
-    // child-node list, and the added/removed file bindings. Keep the full
-    // projector as the authoritative fallback for mixed/complex changes.
+    // Prefer the file-only and sparse mixed paths for small edits. The
+    // bulk rooted-cache path handles simultaneous additions and subtree
+    // removals. Keep the full projector for unvalidated/ambiguous input.
     if let Ok(index) = current
         .projection
         .directories
@@ -149,7 +148,7 @@ pub(super) fn update(
             return Ok(delta);
         }
         if let Some(delta) =
-            try_prune_loaded_children(current, index, normalized_path, &replacement, next_version)
+            try_update_bulk_children(current, index, normalized_path, &replacement, next_version)
         {
             return Ok(delta);
         }
@@ -521,7 +520,7 @@ fn try_update_file_only_children(
 }
 
 /// Bound vector memmoves for sparse mixed edits. Bulk mutations and loaded
-/// directory removal use the full owned-cache projector.
+/// directory removal use the range-based bulk path.
 const MAX_MIXED_NODE_EDITS: usize = 16;
 
 fn append_local_leaf_nodes(
@@ -919,12 +918,64 @@ fn try_expand_directory(
     })
 }
 
-/// Prune loaded subtrees for a removal-only listing update (including
-/// loaded folder-to-file conversions). Surviving child nodes may reorder,
-/// and retained loaded folders may change their lazy hint. Other simultaneous
-/// graph changes use the full projector. The validated cache guarantees that
-/// descendants are owned exclusively by the corresponding directory.
-fn try_prune_loaded_children(
+/// Confirm that every new key is distinct and absent in the old vector.
+/// Rooted direct-cache edits never reinsert an existing key: retained
+/// identities are modified in place, and removed placeholders cannot
+/// collide with new sibling paths.
+fn additions_are_disjoint<T>(items: &[T], added: &[T], key: impl Fn(&T) -> &str) -> bool {
+    strictly_ordered(added, &key)
+        && added.iter().all(|item| {
+            items
+                .binary_search_by(|old| key(old).cmp(key(item)))
+                .is_err()
+        })
+}
+
+/// Consume sorted additions and normalized removal ranges. Small edits
+/// keep bounded memmoves; large edits move surviving records once into a
+/// correctly sized vector, without cloning their strings or child buffers.
+fn apply_range_edits<T>(
+    items: &mut Vec<T>,
+    ranges: &[Range<usize>],
+    added: Vec<T>,
+    key: impl Fn(&T) -> &str,
+) {
+    if added.len() <= 4 {
+        remove_ranges(items, ranges);
+        for item in added {
+            let index = items
+                .binary_search_by(|old| key(old).cmp(key(&item)))
+                .expect_err("preflighted new key");
+            items.insert(index, item);
+        }
+        return;
+    }
+    let removed_count: usize = ranges.iter().map(|range| range.len()).sum();
+    let mut merged = Vec::with_capacity(items.len() - removed_count + added.len());
+    let mut added = added.into_iter().peekable();
+    let mut range_index = 0;
+    for (index, item) in std::mem::take(items).into_iter().enumerate() {
+        while range_index < ranges.len() && index >= ranges[range_index].end {
+            range_index += 1;
+        }
+        if range_index < ranges.len() && index >= ranges[range_index].start {
+            continue;
+        }
+        while added.peek().is_some_and(|new| key(new) < key(&item)) {
+            merged.push(added.next().expect("peeked addition"));
+        }
+        merged.push(item);
+    }
+    merged.extend(added);
+    *items = merged;
+}
+
+/// Plan all local graph changes for a validated direct directory listing.
+/// Loaded folders that survive retain their descendants. Removed or
+/// converted folders contribute sorted descendant ranges, while new
+/// leaves and lazy placeholders contribute ordered additions. No graph
+/// changes occur until the complete plan is validated.
+fn try_update_bulk_children(
     current: &mut ExplorerProjectionSession,
     directory_index: usize,
     relative_directory: &str,
@@ -966,11 +1017,12 @@ fn try_prune_loaded_children(
         .map(|entry| (entry.relative_path.as_str(), entry))
         .collect();
     let mut matched = 0;
-    let mut has_loaded_removal = false;
     let mut node_ranges = Vec::new();
     let mut binding_ranges = Vec::new();
     let mut directory_ranges = Vec::new();
     let mut modified_nodes = Vec::new();
+    let mut added_nodes = Vec::new();
+    let mut added_bindings = Vec::new();
     for old in &previous.children {
         let path = old.relative_path.as_str();
         let next = new_by_path.get(path).copied();
@@ -989,14 +1041,9 @@ fn try_prune_loaded_children(
             if loaded_index.is_some() && next.kind == WorkspaceFileKind::Directory {
                 continue;
             }
-            if loaded_index.is_none() {
-                if leaf_shape(old) == leaf_shape(next) {
-                    continue;
-                }
-                return None;
+            if loaded_index.is_none() && leaf_shape(old) == leaf_shape(next) {
+                continue;
             }
-            // A loaded directory converted to a leaf keeps its binding and
-            // root node identity, but loses every cached descendant.
         }
         let node_id = explorer_tree::node_id_for_path(path);
         let node_path = format!("/{path}");
@@ -1012,11 +1059,16 @@ fn try_prune_loaded_children(
             return None;
         }
         if let Some(next) = next {
+            // Same-path kind/hint changes preserve the root binding and
+            // identity. Replace its child list and optional placeholder.
             let name = path.rsplit('/').next().expect("direct child");
-            modified_nodes.push((
-                node_index,
-                explorer_tree::direct_entry_node(&parent_id, name, next, &node_id),
-            ));
+            let mut node = explorer_tree::direct_entry_node(&parent_id, name, next, &node_id);
+            if next.kind == WorkspaceFileKind::Directory && next.has_children_hint {
+                let placeholder = explorer_tree::placeholder_node(path, &node_id);
+                node.child_ids.push(placeholder.id.clone());
+                added_nodes.push(placeholder);
+            }
+            modified_nodes.push((node_index, node));
         } else {
             add_range(&mut node_ranges, node_index..node_index + 1);
             add_range(&mut binding_ranges, binding_index..binding_index + 1);
@@ -1032,7 +1084,6 @@ fn try_prune_loaded_children(
             }),
         );
         if let Some(index) = loaded_index {
-            has_loaded_removal = true;
             add_range(&mut directory_ranges, index..index + 1);
             add_range(
                 &mut directory_ranges,
@@ -1040,12 +1091,36 @@ fn try_prune_loaded_children(
             );
         }
     }
-    if !has_loaded_removal || matched != replacement.children.len() {
-        return None;
+    if matched != replacement.children.len() {
+        let old_paths = previous
+            .children
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        for entry in &replacement.children {
+            if old_paths.contains(entry.relative_path.as_str()) {
+                continue;
+            }
+            append_local_leaf_nodes(&mut added_nodes, &parent_id, entry);
+            added_bindings.push(WorkspaceExplorerEntryBinding {
+                node_id: explorer_tree::node_id_for_path(&entry.relative_path),
+                relative_path: entry.relative_path.clone(),
+            });
+        }
     }
+
     let node_ranges = normalize_ranges(node_ranges)?;
     let binding_ranges = normalize_ranges(binding_ranges)?;
     let directory_ranges = normalize_ranges(directory_ranges)?;
+    added_nodes.sort_unstable_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    added_bindings.sort_unstable_by(|a, b| a.node_id.cmp(&b.node_id));
+    if !additions_are_disjoint(&projection.nodes, &added_nodes, |node| &node.virtual_path)
+        || !additions_are_disjoint(&projection.entry_bindings, &added_bindings, |binding| {
+            &binding.node_id
+        })
+    {
+        return None;
+    }
     let removed_node_ids = removed_range_keys(&projection.nodes, &node_ranges, |node| &node.id);
     let removed_binding_node_ids =
         removed_range_keys(&projection.entry_bindings, &binding_ranges, |binding| {
@@ -1069,17 +1144,33 @@ fn try_prune_loaded_children(
         .iter()
         .map(|(_, node)| node.clone())
         .collect::<Vec<_>>();
+    changed_nodes.extend(added_nodes.iter().cloned());
     changed_nodes.sort_unstable_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    let changed_directory = previous.children != replacement.children;
 
-    // All ranges and keys are preflighted. Update nodes and the parent row
-    // before removing ranges so their original indices are still valid.
+    // No fallible preflight remains. Update the original indexed records
+    // before moving any vector, then combine removals and sorted additions.
     for (index, node) in modified_nodes {
         current.projection.nodes[index] = node;
     }
-    current.projection.directories[directory_index].children = replacement.children.clone();
-    let changed_directories = vec![current.projection.directories[directory_index].clone()];
-    remove_ranges(&mut current.projection.nodes, &node_ranges);
-    remove_ranges(&mut current.projection.entry_bindings, &binding_ranges);
+    let changed_directories = if changed_directory {
+        current.projection.directories[directory_index].children = replacement.children.clone();
+        vec![current.projection.directories[directory_index].clone()]
+    } else {
+        Vec::new()
+    };
+    apply_range_edits(
+        &mut current.projection.nodes,
+        &node_ranges,
+        added_nodes,
+        |node| &node.virtual_path,
+    );
+    apply_range_edits(
+        &mut current.projection.entry_bindings,
+        &binding_ranges,
+        added_bindings.clone(),
+        |binding| &binding.node_id,
+    );
     remove_ranges(&mut current.projection.directories, &directory_ranges);
     current.version = next_version;
     Some(WorkspaceExplorerProjectionDelta {
@@ -1088,7 +1179,7 @@ fn try_prune_loaded_children(
         removed_directory_paths,
         changed_nodes,
         removed_node_ids,
-        changed_bindings: Vec::new(),
+        changed_bindings: added_bindings,
         removed_binding_node_ids,
     })
 }
@@ -2280,7 +2371,7 @@ mod tests {
             .directories
             .binary_search_by(|row| row.relative_path.as_str().cmp(path))
         {
-            Ok(index) => try_prune_loaded_children(session, index, path, replacement, version),
+            Ok(index) => try_update_bulk_children(session, index, path, replacement, version),
             Err(_) => try_expand_directory(session, path, replacement, version),
         }
     }
@@ -2493,11 +2584,14 @@ mod tests {
             ),
             children(
                 "",
-                vec![entry("lazy", Directory, true), entry("new", File, false)],
+                vec![
+                    entry("lazy", Directory, true),
+                    entry("new/nested", File, false),
+                ],
             ),
             children(
                 "",
-                vec![entry("lazy", Directory, false), entry("file", File, false)],
+                vec![entry("lazy", Directory, false), entry("lazy", File, false)],
             ),
         ];
         for replacement in rejected {
@@ -2605,6 +2699,355 @@ mod tests {
             let old = median(&mut old);
             let new = median(&mut new);
             println!("Classic expansion/pruning shape={label} before_nodes={} changed_nodes={} removed_nodes={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), expected.changed_nodes.len(), expected.removed_node_ids.len(), old/new);
+        }
+    }
+
+    #[test]
+    fn bulk_mixed_children_preserve_subtrees_and_all_delta_fields() {
+        use WorkspaceFileKind::{Directory, File};
+        let mut session = direct_test_session(vec![
+            children(
+                "",
+                vec![
+                    entry("src", Directory, true),
+                    entry("src-old", Directory, true),
+                    entry("convert", Directory, true),
+                    entry("lazy", Directory, true),
+                    entry("empty", Directory, false),
+                    entry("file", File, false),
+                    entry("gone", File, false),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/deep", Directory, true),
+                    entry("src/lazy", Directory, true),
+                ],
+            ),
+            children(
+                "src/deep",
+                vec![entry("src/deep/.alera-placeholder", File, false)],
+            ),
+            children("src-old", vec![entry("src-old/untouched", File, false)]),
+            children("convert", vec![entry("convert/nested", Directory, true)]),
+            children(
+                "convert/nested",
+                vec![entry("convert/nested/file", File, false)],
+            ),
+        ]);
+        let mut reference = local_session(session.projection.clone());
+        let unchanged = session
+            .projection
+            .nodes
+            .iter()
+            .find(|node| node.id == "path:src-old/untouched")
+            .unwrap()
+            .id
+            .as_ptr();
+        let mut first = vec![
+            entry("file", Directory, true),
+            entry("convert", File, false),
+            entry("src-old", Directory, false),
+            entry("renamed-src", Directory, true),
+            entry("lazy", Directory, false),
+            entry("empty", Directory, true),
+        ];
+        first.extend((0..64).map(|index| {
+            entry(
+                &format!("new-{index:03}"),
+                if index % 2 == 0 { Directory } else { File },
+                true,
+            )
+        }));
+        let mut second = first.clone();
+        second.reverse();
+        second.retain(|row| !row.relative_path.starts_with("new-0"));
+        second.extend(
+            (0..24).map(|index| entry(&format!("replacement-{index:03}"), Directory, true)),
+        );
+        second
+            .iter_mut()
+            .find(|row| row.relative_path == "file")
+            .unwrap()
+            .kind = File;
+        second
+            .iter_mut()
+            .find(|row| row.relative_path == "empty")
+            .unwrap()
+            .has_children_hint = false;
+        let updates = [children("/", first), children("", second)];
+        for (index, replacement) in updates.into_iter().enumerate() {
+            let version = index as u64 + 1;
+            let expected = rebuild_reference(&mut reference, replacement.clone(), version);
+            let actual = apply_expansion_or_prune_test(&mut session, &replacement, version)
+                .expect("bulk mixed path");
+            assert_delta_equal(&actual, &expected);
+            assert_projection_equal(&session.projection, &reference.projection);
+            assert_eq!(session.version, version);
+            assert!(session.direct_cache);
+            assert_eq!(
+                session
+                    .projection
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == "path:src-old/untouched")
+                    .unwrap()
+                    .id
+                    .as_ptr(),
+                unchanged
+            );
+            if index == 0 {
+                assert_eq!(
+                    actual.removed_directory_paths,
+                    ["convert", "convert/nested", "src", "src/deep"]
+                );
+                assert!(actual
+                    .removed_node_ids
+                    .iter()
+                    .any(|id| id == "__alera_placeholder__:src/lazy"));
+                assert!(!actual
+                    .removed_binding_node_ids
+                    .iter()
+                    .any(|id| id == "path:convert"));
+                assert!(actual
+                    .changed_nodes
+                    .iter()
+                    .any(|node| node.id == "__alera_placeholder__:file"));
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_mixed_nested_updates_dispatch_and_reject_stale_listings() {
+        use WorkspaceFileKind::{Directory, File};
+        let seed = vec![
+            children(
+                "",
+                vec![
+                    entry("parent", Directory, true),
+                    entry("keep", Directory, true),
+                ],
+            ),
+            children(
+                "parent",
+                vec![
+                    entry("parent/loaded", Directory, true),
+                    entry("parent/loaded-old", Directory, true),
+                    entry("parent/lazy", Directory, true),
+                    entry("parent/file", File, false),
+                ],
+            ),
+            children(
+                "parent/loaded",
+                vec![entry("parent/loaded/child", File, false)],
+            ),
+            children(
+                "parent/loaded-old",
+                vec![entry("parent/loaded-old/keep", File, false)],
+            ),
+            children("keep", vec![entry("keep/file", File, false)]),
+        ];
+        let mut reference = direct_test_session(seed.clone());
+        let handle = start("alera".into(), "/repo".into(), seed).unwrap();
+        let untouched = {
+            let registry = sessions().lock().unwrap();
+            registry[&handle.id]
+                .projection
+                .nodes
+                .iter()
+                .find(|node| node.id == "path:keep/file")
+                .unwrap()
+                .id
+                .as_ptr()
+        };
+        let mut mixed = vec![
+            entry("parent/loaded-old", Directory, false),
+            entry("parent/renamed-loaded", Directory, true),
+            entry("parent/lazy", File, false),
+            entry("parent/file", Directory, true),
+            entry("parent/.alera-placeholder", File, false),
+        ];
+        mixed.extend((0..48).map(|index| entry(&format!("parent/中文-{index:03}"), File, false)));
+        let updates = [
+            children("parent/", mixed),
+            children(
+                "parent/renamed-loaded",
+                vec![entry(
+                    "parent/renamed-loaded/.alera-placeholder",
+                    File,
+                    false,
+                )],
+            ),
+            children(
+                "parent/loaded",
+                vec![entry("parent/loaded/late", File, false)],
+            ),
+        ];
+        for (index, replacement) in updates.into_iter().enumerate() {
+            let version = index as u64 + 1;
+            let expected = rebuild_reference(&mut reference, replacement.clone(), version);
+            let actual = update(
+                WorkspaceExplorerProjectionHandle {
+                    id: handle.id,
+                    version: index as u64,
+                },
+                replacement,
+            )
+            .unwrap();
+            assert_delta_equal(&actual, &expected);
+            let registry = sessions().lock().unwrap();
+            let current = &registry[&handle.id];
+            assert_projection_equal(&current.projection, &reference.projection);
+            if index < 2 {
+                assert_eq!(
+                    current
+                        .projection
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == "path:keep/file")
+                        .unwrap()
+                        .id
+                        .as_ptr(),
+                    untouched
+                );
+            }
+            assert!(current.direct_cache);
+        }
+        stop(handle);
+    }
+
+    #[test]
+    fn range_edits_merge_sorted_additions_without_reallocating_surviving_strings() {
+        let mut items = (0..32)
+            .map(|index| format!("{:03}", index * 2))
+            .collect::<Vec<_>>();
+        let untouched = items[10].as_ptr();
+        let ranges = normalize_ranges(vec![1..4, 8..9, 16..20, 30..32]).unwrap();
+        let added = (0..32)
+            .step_by(3)
+            .map(|index| format!("{:03}", index * 2 + 1))
+            .collect::<Vec<_>>();
+        assert!(additions_are_disjoint(&items, &added, |item| item));
+        assert!(!additions_are_disjoint(
+            &items,
+            &["020".to_string()],
+            |item| item
+        ));
+        assert!(!additions_are_disjoint(
+            &items,
+            &["001".to_string(), "001".to_string()],
+            |item| item
+        ));
+        let mut expected = items
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !ranges.iter().any(|range| range.contains(index)))
+            .map(|(_, item)| item.clone())
+            .collect::<Vec<_>>();
+        expected.extend(added.iter().cloned());
+        expected.sort_unstable();
+        apply_range_edits(&mut items, &ranges, added, |item| item);
+        assert_eq!(items, expected);
+        assert_eq!(
+            items
+                .iter()
+                .find(|item| item.as_str() == "020")
+                .unwrap()
+                .as_ptr(),
+            untouched
+        );
+    }
+
+    #[test]
+    #[ignore = "synthetic native bulk mixed structural update benchmark"]
+    fn benchmark_bulk_mixed_explorer_updates() {
+        use std::time::{Duration, Instant};
+        use WorkspaceFileKind::{Directory, File};
+        let seed = sparse_fixture(200, 200);
+        let nested = children(
+            "folder-100",
+            (0..200)
+                .map(|index| {
+                    if index % 2 == 0 {
+                        entry(&format!("folder-100/renamed-{index:04}"), Directory, true)
+                    } else {
+                        entry(&format!("folder-100/file-{index:04}.rs"), File, false)
+                    }
+                })
+                .collect(),
+        );
+        let mut mixed = seed.directories[0].clone();
+        mixed.children = mixed
+            .children
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, mut child)| {
+                if index < 160 && index % 2 == 0 {
+                    None
+                } else {
+                    if index >= 180 {
+                        child.kind = File;
+                        child.has_children_hint = false;
+                    }
+                    Some(child)
+                }
+            })
+            .collect();
+        mixed.children.extend((0..200).map(|index| {
+            entry(
+                &format!("new-folder-{index:03}"),
+                if index % 2 == 0 { Directory } else { File },
+                true,
+            )
+        }));
+        mixed.children.reverse();
+        let mut additions = seed.directories[0].clone();
+        additions.children.extend(
+            (0..1000).map(|index| entry(&format!("new-folder-{index:04}"), Directory, true)),
+        );
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        for (label, replacement) in [
+            ("mixed-rename-100", nested),
+            ("remove-80-convert-20-add-200", mixed),
+            ("add-1000", additions),
+        ] {
+            let mut reference = local_session(seed.clone());
+            let expected = rebuild_projection(&mut reference, replacement.clone(), 1);
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let mut session = local_session(seed.clone());
+                    session.direct_cache = true;
+                    let update = replacement.clone();
+                    let start = Instant::now();
+                    let actual = if optimized {
+                        apply_expansion_or_prune_test(&mut session, &update, 1)
+                            .expect("eligible bulk mixed fixture")
+                    } else {
+                        rebuild_projection(&mut session, update, 1)
+                    };
+                    let elapsed = start.elapsed();
+                    assert_delta_equal(&actual, &expected);
+                    assert_projection_equal(&session.projection, &reference.projection);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("Classic bulk mixed shape={label} before_nodes={} changed_nodes={} removed_nodes={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), expected.changed_nodes.len(), expected.removed_node_ids.len(), old/new);
         }
     }
 
