@@ -387,7 +387,6 @@ function Get-RemoteHash {
 
 function Invoke-FileServerCommand([string]$Command) {
     return @(Invoke-Checked -FilePath $script:Ssh -Arguments @(
-        '-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2',
         $RemoteHost, $Command
     ) -Capture)
 }
