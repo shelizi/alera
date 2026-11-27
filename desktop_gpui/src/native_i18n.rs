@@ -408,8 +408,8 @@ mod tests {
             "Copy into folder…",
             "Duplicate",
             "Delete permanently…",
-            "Copy selection",
-            "Cut selection",
+            "Copy",
+            "Cut",
             "Paste",
             "Open in Alera",
             "Show in file manager",
@@ -731,14 +731,26 @@ mod tests {
         }
     }
     #[test]
+    fn file_clipboard_actions_have_short_labels_in_all_locales() {
+        for (locale, copy, cut) in [
+            (UiLocale::English, "Copy", "Cut"),
+            (UiLocale::TraditionalChinese, "複製", "剪下"),
+            (UiLocale::SimplifiedChinese, "复制", "剪切"),
+            (UiLocale::Japanese, "コピー", "切り取り"),
+        ] {
+            assert_eq!(tr(locale, "Copy"), copy);
+            assert_eq!(tr(locale, "Cut"), cut);
+        }
+    }
+    #[test]
     fn right_git_file_folder_context_actions_have_four_locales() {
         for label in [
             "Open with Default Application",
             "Preview changes",
             "Open worktree file in Alera",
             "Open worktree file externally",
-            "Copy worktree file(s)",
-            "Cut worktree file(s)",
+            "Copy",
+            "Cut",
             "Paste into containing folder",
             "Reveal worktree file in file manager",
             "Open Git original in read-only tab (HEAD / Index)",
@@ -749,8 +761,6 @@ mod tests {
             "Move untracked file(s) to Recycle Bin (confirm)",
             "Confirm Discard unstaged changes",
             "Discard unstaged changes (confirm)",
-            "Copy worktree folder / selected items",
-            "Cut worktree folder / selected items",
             "Paste into this folder",
             "Reveal folder in file manager",
             "Copy relative folder path",

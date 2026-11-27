@@ -36,11 +36,11 @@ _version: 2
   zh-TW: "永久刪除…"
   zh-CN: "永久删除…"
   ja: "完全に削除…"
-"Cut selection":
-  en: "Cut selection"
-  zh-TW: "剪下選取項目"
-  zh-CN: "剪切所选项"
-  ja: "選択項目を切り取り"
+"Cut":
+  en: "Cut"
+  zh-TW: "剪下"
+  zh-CN: "剪切"
+  ja: "切り取り"
 "Paste":
   en: "Paste"
   zh-TW: "貼上"
@@ -86,11 +86,11 @@ _version: 2
   zh-TW: "檔案總管項目已變更，請重新整理資料夾"
   zh-CN: "文件管理器项目已更改，请刷新文件夹"
   ja: "エクスプローラーの項目が変更されました。フォルダーを更新してください"
-"Copy selection":
-  en: "Copy selection"
-  zh-TW: "複製選取項目"
-  zh-CN: "复制所选项"
-  ja: "選択項目をコピー"
+"Copy":
+  en: "Copy"
+  zh-TW: "複製"
+  zh-CN: "复制"
+  ja: "コピー"
 "Refresh":
   en: "Refresh"
   zh-TW: "重新整理"

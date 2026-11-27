@@ -592,8 +592,8 @@ impl Workbench {
                 .map(|entity| entity.read(cx).settings_menu_locale)
                 .unwrap_or_else(|| UiLocale::from_preference("system"));
             for (label, action) in [
-                ("Copy worktree folder / selected items", GitFolderMenuAction::Copy),
-                ("Cut worktree folder / selected items", GitFolderMenuAction::Cut),
+                ("Copy", GitFolderMenuAction::Copy),
+                ("Cut", GitFolderMenuAction::Cut),
                 ("Paste into this folder", GitFolderMenuAction::Paste),
                 ("Reveal folder in file manager", GitFolderMenuAction::Reveal),
                 ("Copy relative folder path", GitFolderMenuAction::CopyPath),
@@ -640,8 +640,8 @@ impl Workbench {
                     "Open worktree file externally",
                     GitChangeMenuAction::OpenExternal,
                 ),
-                ("Copy worktree file(s)", GitChangeMenuAction::CopyFiles),
-                ("Cut worktree file(s)", GitChangeMenuAction::CutFiles),
+                ("Copy", GitChangeMenuAction::CopyFiles),
+                ("Cut", GitChangeMenuAction::CutFiles),
                 ("Paste into containing folder", GitChangeMenuAction::PasteFiles),
                 ("Reveal worktree file in file manager", GitChangeMenuAction::RevealFile),
                 ("Copy relative path", GitChangeMenuAction::CopyPath),
