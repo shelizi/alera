@@ -36,6 +36,22 @@ pub(super) fn list_workspace_children_filtered(
     hide_ignored: bool,
     hide_hidden: bool,
 ) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
+    list_workspace_children_with_policy(
+        workspace_path,
+        relative_path,
+        hide_ignored,
+        hide_hidden,
+        true,
+    )
+}
+
+fn list_workspace_children_with_policy(
+    workspace_path: String,
+    relative_path: String,
+    hide_ignored: bool,
+    hide_hidden: bool,
+    reuse_enumerated_metadata: bool,
+) -> Result<Vec<WorkspaceFileEntry>, WorkspaceFileError> {
     let root = workspace_root(&workspace_path)?;
     let directory = resolve_existing(&root, &relative_path)?;
     let metadata = fs::symlink_metadata(&directory)
@@ -47,21 +63,47 @@ pub(super) fn list_workspace_children_filtered(
         ));
     }
 
-    let paths = if hide_ignored {
-        ignored_aware_children(&directory)?
+    let children = if hide_ignored {
+        ignored_aware_children(&directory, reuse_enumerated_metadata)?
     } else {
-        read_dir_children(&directory)?
+        read_dir_children(&directory, reuse_enumerated_metadata)?
     };
 
-    let mut entries = Vec::with_capacity(paths.len());
-    for path in paths {
-        // One unreadable child must not blank the whole directory: a Windows
-        // reserved name such as a stray `nul` file cannot be stat'ed through
-        // its plain path, and a child can vanish between listing and stat.
-        if let Ok(Some(entry)) = entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden) {
+    let mut entries = Vec::with_capacity(children.len());
+    for child in children {
+        // One unreadable child must not blank the whole directory. Preserve
+        // path-based stat for ambiguous names and non-regular entries.
+        let (path, metadata) = child.into_parts();
+        if let Ok(Some(entry)) =
+            entry_for_path_filtered(&root, &path, hide_ignored, hide_hidden, metadata)
+        {
             entries.push(entry);
         }
     }
+    // The alternate policy is only used for parity and performance tests.
+    #[cfg(test)]
+    if !reuse_enumerated_metadata {
+        sort_entries_uncached(&mut entries);
+        return Ok(entries);
+    }
+    sort_entries(&mut entries);
+    Ok(entries)
+}
+
+fn sort_entries(entries: &mut [WorkspaceFileEntry]) {
+    // Compute Unicode lowercase keys once per row instead of allocating two
+    // temporary strings in every comparison. Preserve exact tie ordering.
+    entries.sort_by_cached_key(|entry| {
+        (
+            !matches!(entry.kind, WorkspaceFileKind::Directory),
+            entry.name.to_lowercase(),
+            entry.name.clone(),
+        )
+    });
+}
+
+#[cfg(test)]
+fn sort_entries_uncached(entries: &mut [WorkspaceFileEntry]) {
     entries.sort_by(|left, right| {
         let left_dir = matches!(left.kind, WorkspaceFileKind::Directory);
         let right_dir = matches!(right.kind, WorkspaceFileKind::Directory);
@@ -70,10 +112,89 @@ pub(super) fn list_workspace_children_filtered(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.name.cmp(&right.name))
     });
-    Ok(entries)
 }
 
-fn ignored_aware_children(directory: &Path) -> Result<Vec<PathBuf>, WorkspaceFileError> {
+struct ListingChild {
+    path: PathBuf,
+    #[cfg(windows)]
+    metadata: Option<fs::Metadata>,
+}
+
+impl ListingChild {
+    fn new(path: PathBuf, reuse: bool, metadata: impl FnOnce() -> Option<fs::Metadata>) -> Self {
+        #[cfg(windows)]
+        let metadata = if reuse && is_ordinary_windows_filename(&path) {
+            metadata().filter(reusable_windows_metadata)
+        } else {
+            None
+        };
+        #[cfg(not(windows))]
+        let _ = (reuse, metadata);
+        Self {
+            path,
+            #[cfg(windows)]
+            metadata,
+        }
+    }
+
+    fn into_parts(self) -> (PathBuf, Option<fs::Metadata>) {
+        #[cfg(windows)]
+        {
+            (self.path, self.metadata)
+        }
+        #[cfg(not(windows))]
+        {
+            (self.path, None)
+        }
+    }
+}
+
+// Windows directory enumeration already carries file size, timestamps and
+// attributes. Limit reuse to ordinary ASCII names; preserve the old path
+// stat for device aliases, unusual Win32 names, Unicode, directories,
+// symlinks and reparse points. This is listing metadata only: all actual
+// reads/writes/mutations still resolve paths and obtain fresh metadata.
+#[cfg(windows)]
+fn is_ordinary_windows_filename(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.is_empty()
+        || name.ends_with('.')
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return false;
+    }
+    let stem = name.split('.').next().unwrap_or_default();
+    if ["CON", "PRN", "AUX", "NUL", "CLOCK"]
+        .iter()
+        .any(|device| stem.eq_ignore_ascii_case(device))
+    {
+        return false;
+    }
+    let bytes = stem.as_bytes();
+    if bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && bytes[3].is_ascii_digit()
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(windows)]
+fn reusable_windows_metadata(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+}
+
+fn ignored_aware_children(
+    directory: &Path,
+    reuse: bool,
+) -> Result<Vec<ListingChild>, WorkspaceFileError> {
     let mut paths = Vec::new();
     let walker = WalkBuilder::new(directory)
         .max_depth(Some(1))
@@ -91,12 +212,17 @@ fn ignored_aware_children(directory: &Path) -> Result<Vec<PathBuf>, WorkspaceFil
         if is_protected_child_path(entry.path()) {
             continue;
         }
-        paths.push(entry.path().to_path_buf());
+        paths.push(ListingChild::new(entry.path().to_path_buf(), reuse, || {
+            entry.metadata().ok()
+        }));
     }
     Ok(paths)
 }
 
-fn read_dir_children(directory: &Path) -> Result<Vec<PathBuf>, WorkspaceFileError> {
+fn read_dir_children(
+    directory: &Path,
+    reuse: bool,
+) -> Result<Vec<ListingChild>, WorkspaceFileError> {
     let mut paths = Vec::new();
     for result in fs::read_dir(directory)
         .map_err(|error| WorkspaceFileError::from_io(error, directory.to_string_lossy()))?
@@ -107,7 +233,7 @@ fn read_dir_children(directory: &Path) -> Result<Vec<PathBuf>, WorkspaceFileErro
         if is_protected_child_path(&path) {
             continue;
         }
-        paths.push(path);
+        paths.push(ListingChild::new(path, reuse, || entry.metadata().ok()));
     }
     Ok(paths)
 }
@@ -281,6 +407,210 @@ mod tests {
         fn drop(&mut self) {
             use std::os::unix::fs::PermissionsExt;
             let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(self.mode));
+        }
+    }
+
+    fn list_with_policy(
+        workspace: &tempfile::TempDir,
+        relative: &str,
+        hide_ignored: bool,
+        hide_hidden: bool,
+        optimized: bool,
+    ) -> Vec<WorkspaceFileEntry> {
+        list_workspace_children_with_policy(
+            workspace_path(workspace),
+            relative.to_string(),
+            hide_ignored,
+            hide_hidden,
+            optimized,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn optimized_listing_matches_fresh_path_stats_and_ignore_modes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        git2::Repository::init(root).unwrap();
+        fs::write(root.join(".gitignore"), "*.tmp\nonly-ignored/*\n").unwrap();
+        fs::write(root.join(".ignore"), "ignored-by-ignore.txt\n").unwrap();
+        fs::write(root.join(".git/info/exclude"), "local-only.txt\n").unwrap();
+        for name in [
+            "z.txt",
+            "Alpha.txt",
+            "beta.txt",
+            "case-file.RS",
+            "space name.txt",
+            "unicode-\u{00e9}.txt",
+            ".hidden",
+            "ignored.tmp",
+            "ignored-by-ignore.txt",
+            "local-only.txt",
+        ] {
+            fs::write(root.join(name), name).unwrap();
+        }
+        for name in ["src", "empty", "only-ignored", "nested/ignored"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("src/.gitignore"), "nested.tmp\n").unwrap();
+        fs::write(root.join("src/nested.tmp"), "ignored").unwrap();
+        fs::write(root.join("only-ignored/data.txt"), "ignored").unwrap();
+        fs::write(root.join("nested/ignored/data.tmp"), "ignored").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("src/main.rs"), root.join("link.rs")).unwrap();
+
+        for relative in ["", "src", "nested"] {
+            for hide_ignored in [false, true] {
+                for hide_hidden in [false, true] {
+                    assert_eq!(
+                        list_with_policy(&workspace, relative, hide_ignored, hide_hidden, false),
+                        list_with_policy(&workspace, relative, hide_ignored, hide_hidden, true),
+                        "listing mismatch: {relative}, ignored={hide_ignored}, hidden={hide_hidden}",
+                    );
+                }
+            }
+        }
+        let before = list_with_policy(&workspace, "", true, false, true);
+        assert!(!entry_names(&before).contains(&"ignored.tmp"));
+        assert!(!entry_names(&before).contains(&"local-only.txt"));
+        assert!(!entry_names(&before).contains(&"ignored-by-ignore.txt"));
+        assert!(!entry_names(&before).contains(&"only-ignored"));
+        assert!(entry_names(&before).contains(&"empty"));
+        let old_token = before
+            .iter()
+            .find(|entry| entry.name == "z.txt")
+            .unwrap()
+            .content_token
+            .clone();
+        fs::write(root.join("z.txt"), "fresh larger content").unwrap();
+        fs::write(root.join(".gitignore"), "only-ignored/*\n").unwrap();
+        fs::remove_file(root.join("Alpha.txt")).unwrap();
+        let after = list_with_policy(&workspace, "", true, false, true);
+        assert_eq!(after, list_with_policy(&workspace, "", true, false, false));
+        assert!(entry_names(&after).contains(&"ignored.tmp"));
+        assert!(!entry_names(&after).contains(&"Alpha.txt"));
+        assert_ne!(
+            after
+                .iter()
+                .find(|entry| entry.name == "z.txt")
+                .unwrap()
+                .content_token,
+            old_token,
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cached_windows_metadata_only_used_for_safe_regular_files() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        fs::write(root.join("ordinary.txt"), "ordinary").unwrap();
+        fs::write(root.join("space name.txt"), "space").unwrap();
+        fs::write(root.join("unicode-\u{00e9}.txt"), "unicode").unwrap();
+        fs::create_dir(root.join("folder")).unwrap();
+        for name in [
+            "nul",
+            "NUL.txt",
+            "aux",
+            "CON.txt",
+            "PRN",
+            "COM1.rs",
+            "lpt9.txt",
+            "COM0",
+            "LPT0",
+            "COM\u{00b9}.txt",
+            "file.",
+            "file ",
+            "CONIN$",
+            "CONOUT$",
+            "CLOCK$",
+            "file:name",
+            "space name.txt",
+            "unicode-\u{00e9}.txt",
+        ] {
+            assert!(!is_ordinary_windows_filename(Path::new(name)), "{name}");
+        }
+        for name in ["ordinary.txt", "Main_RS-1.rs", ".gitignore", "COM10.txt"] {
+            assert!(is_ordinary_windows_filename(Path::new(name)), "{name}");
+        }
+        for children in [
+            read_dir_children(root, true).unwrap(),
+            ignored_aware_children(root, true).unwrap(),
+        ] {
+            let cached: Vec<_> = children
+                .into_iter()
+                .filter_map(|child| {
+                    let (path, metadata) = child.into_parts();
+                    metadata.map(|metadata| {
+                        assert_eq!(metadata.len(), fs::symlink_metadata(&path).unwrap().len());
+                        path.file_name().unwrap().to_string_lossy().into_owned()
+                    })
+                })
+                .collect();
+            assert_eq!(cached, vec!["ordinary.txt"]);
+        }
+        assert!(read_dir_children(root, false)
+            .unwrap()
+            .into_iter()
+            .all(|child| child.into_parts().1.is_none()));
+    }
+
+    #[test]
+    #[ignore = "filesystem performance benchmark"]
+    fn benchmark_workspace_listing_enumerated_metadata() {
+        use std::time::{Duration, Instant};
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        git2::Repository::init(root).unwrap();
+        fs::write(root.join(".gitignore"), "*.tmp\n").unwrap();
+        for index in 0..1600 {
+            let name = if index % 5 == 0 {
+                format!("cache-{index:05}.tmp")
+            } else if index % 2 == 0 {
+                format!("Item-{index:05}.rs")
+            } else {
+                format!("item-{index:05}.txt")
+            };
+            fs::write(root.join(name), "fixture\n").unwrap();
+        }
+        for index in 0..16 {
+            let dir = root.join(format!("dir-{index:02}"));
+            fs::create_dir(&dir).unwrap();
+            fs::write(dir.join("nested.txt"), "nested").unwrap();
+        }
+        fn median(values: &mut [Duration]) -> f64 {
+            values.sort();
+            values[values.len() / 2].as_secs_f64() * 1000.0
+        }
+        for hide_ignored in [false, true] {
+            let expected = list_with_policy(&workspace, "", hide_ignored, false, false);
+            assert_eq!(
+                expected,
+                list_with_policy(&workspace, "", hide_ignored, false, true)
+            );
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for index in 0..7 {
+                for optimized in if index % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let started = Instant::now();
+                    let entries = list_with_policy(&workspace, "", hide_ignored, false, optimized);
+                    let elapsed = started.elapsed();
+                    assert_eq!(entries, expected);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("listing hide_ignored={hide_ignored} rows={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", expected.len(), old / new);
         }
     }
 

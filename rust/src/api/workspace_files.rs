@@ -1090,7 +1090,7 @@ fn entry_for_path(
     path: &Path,
     hide_ignored: bool,
 ) -> Result<Option<WorkspaceFileEntry>, WorkspaceFileError> {
-    entry_for_path_filtered(root, path, hide_ignored, false)
+    entry_for_path_filtered(root, path, hide_ignored, false, None)
 }
 
 fn entry_for_path_filtered(
@@ -1098,9 +1098,13 @@ fn entry_for_path_filtered(
     path: &Path,
     hide_ignored: bool,
     hide_hidden: bool,
+    enumerated_metadata: Option<fs::Metadata>,
 ) -> Result<Option<WorkspaceFileEntry>, WorkspaceFileError> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| WorkspaceFileError::from_io(error, path.to_string_lossy()))?;
+    let metadata = match enumerated_metadata {
+        Some(metadata) => metadata,
+        None => fs::symlink_metadata(path)
+            .map_err(|error| WorkspaceFileError::from_io(error, path.to_string_lossy()))?,
+    };
     let Some(name) = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1140,13 +1144,15 @@ fn entry_for_path_filtered(
     } else {
         false
     };
+    let size = metadata.len();
+    let modified_millis = modified_millis(&metadata);
     Ok(Some(WorkspaceFileEntry {
-        relative_path: relative_path.clone(),
-        name: name.clone(),
+        relative_path,
+        name,
         kind,
-        size: metadata.len(),
-        modified_millis: modified_millis(&metadata),
-        content_token: content_token(&metadata),
+        size,
+        modified_millis,
+        content_token: format!("{size}:{modified_millis}"),
         is_ignored: false,
         is_hidden,
         is_symlink,
