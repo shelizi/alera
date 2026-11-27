@@ -15,6 +15,17 @@ pub(super) fn project_tree(
     directories: Vec<WorkspaceExplorerDirectoryChildren>,
     replacement: Option<WorkspaceExplorerDirectoryChildren>,
 ) -> WorkspaceExplorerTreeProjection {
+    project_tree_with_direct_cache(workspace_name, workspace_path, directories, replacement).0
+}
+
+/// Return the validation result used to choose the rooted vector projector.
+/// Sessions may retain this invariant across validated incremental edits.
+pub(super) fn project_tree_with_direct_cache(
+    workspace_name: String,
+    workspace_path: String,
+    directories: Vec<WorkspaceExplorerDirectoryChildren>,
+    replacement: Option<WorkspaceExplorerDirectoryChildren>,
+) -> (WorkspaceExplorerTreeProjection, bool) {
     let mut directories_by_path = directories
         .into_iter()
         .map(|directory| {
@@ -33,10 +44,13 @@ pub(super) fn project_tree(
         );
     }
     let direct_cache = prune_unreachable_directories(&mut directories_by_path);
-    finish_projection(
-        &workspace_name,
-        &workspace_path,
-        directories_by_path,
+    (
+        finish_projection(
+            &workspace_name,
+            &workspace_path,
+            directories_by_path,
+            direct_cache,
+        ),
         direct_cache,
     )
 }
@@ -44,6 +58,7 @@ pub(super) fn project_tree(
 pub(super) struct DirectoryChanges {
     pub changed: Vec<WorkspaceExplorerDirectoryChildren>,
     pub removed: Vec<String>,
+    pub direct_cache: bool,
 }
 
 /// The session owns the normalized, uniquely keyed directory rows already.
@@ -88,7 +103,14 @@ pub(super) fn update_owned_tree(
         .filter(|row| changed_paths.contains(&row.relative_path))
         .cloned()
         .collect();
-    (projection, DirectoryChanges { changed, removed })
+    (
+        projection,
+        DirectoryChanges {
+            changed,
+            removed,
+            direct_cache,
+        },
+    )
 }
 
 fn finish_projection(
@@ -198,28 +220,32 @@ fn remove_cached_subtrees_tracked(
 /// payloads accepted by the stateless API (including duplicate bindings).
 fn is_direct_cache(directories: &HashMap<String, Vec<WorkspaceFileEntry>>) -> bool {
     directories.contains_key("")
-        && directories.iter().all(|(path, children)| {
-            if !path.is_empty()
-                && path
-                    .split('/')
-                    .any(|part| part.is_empty() || part == "." || part == "..")
-            {
-                return false;
-            }
-            let mut seen = HashSet::with_capacity(children.len());
-            children.iter().all(|entry| {
-                let (parent, name) = entry
-                    .relative_path
-                    .rsplit_once('/')
-                    .unwrap_or(("", entry.relative_path.as_str()));
-                parent == path
-                    && !name.is_empty()
-                    && name != "."
-                    && name != ".."
-                    && !entry.relative_path.starts_with('/')
-                    && seen.insert(entry.relative_path.as_str())
-            })
-        })
+        && directories
+            .iter()
+            .all(|(path, children)| direct_children_are_valid(path, children))
+}
+
+pub(super) fn direct_children_are_valid(path: &str, children: &[WorkspaceFileEntry]) -> bool {
+    if !path.is_empty()
+        && path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return false;
+    }
+    let mut seen = HashSet::with_capacity(children.len());
+    children.iter().all(|entry| {
+        let (parent, name) = entry
+            .relative_path
+            .rsplit_once('/')
+            .unwrap_or(("", entry.relative_path.as_str()));
+        parent == path
+            && !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !entry.relative_path.starts_with('/')
+            && seen.insert(entry.relative_path.as_str())
+    })
 }
 
 /// Return whether the pruned cache is a validated rooted direct-child tree.
@@ -434,7 +460,7 @@ fn add_direct_entry_node(
     });
 }
 
-fn direct_entry_node(
+pub(super) fn direct_entry_node(
     parent_id: &str,
     name: &str,
     entry: &WorkspaceFileEntry,
@@ -520,7 +546,7 @@ fn add_placeholder(nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>, paren
     append_new_child(nodes, &parent_id, &node_id);
 }
 
-fn placeholder_node(parent_path: &str, parent_id: &str) -> WorkspaceExplorerTreeNode {
+pub(super) fn placeholder_node(parent_path: &str, parent_id: &str) -> WorkspaceExplorerTreeNode {
     WorkspaceExplorerTreeNode {
         id: format!("{PLACEHOLDER_PREFIX}{parent_path}"),
         name: String::new(),
@@ -566,7 +592,7 @@ fn sorted_directories(
     directories
 }
 
-fn node_id_for_path(relative_path: &str) -> String {
+pub(super) fn node_id_for_path(relative_path: &str) -> String {
     format!("path:{relative_path}")
 }
 

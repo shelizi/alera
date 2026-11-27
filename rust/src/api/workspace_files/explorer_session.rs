@@ -18,6 +18,8 @@ struct ExplorerProjectionSession {
     workspace_path: String,
     version: u64,
     projection: WorkspaceExplorerTreeProjection,
+    // Proven by the full projector, preserved only by validated local edits.
+    direct_cache: bool,
 }
 
 fn sessions() -> &'static Mutex<HashMap<u64, ExplorerProjectionSession>> {
@@ -35,7 +37,7 @@ pub(super) fn start(
     workspace_path: String,
     directories: Vec<WorkspaceExplorerDirectoryChildren>,
 ) -> Result<WorkspaceExplorerProjectionHandle, WorkspaceFileError> {
-    let projection = explorer_tree::project_tree(
+    let (projection, direct_cache) = explorer_tree::project_tree_with_direct_cache(
         workspace_name.clone(),
         workspace_path.clone(),
         directories,
@@ -58,6 +60,7 @@ pub(super) fn start(
             workspace_path,
             version: 0,
             projection,
+            direct_cache,
         },
     );
     Ok(WorkspaceExplorerProjectionHandle { id, version: 0 })
@@ -139,6 +142,11 @@ pub(super) fn update(
         ) {
             return Ok(delta);
         }
+        if let Some(delta) =
+            try_update_mixed_children(current, index, normalized_path, &replacement, next_version)
+        {
+            return Ok(delta);
+        }
     }
 
     Ok(rebuild_projection(current, replacement, next_version))
@@ -169,6 +177,7 @@ fn rebuild_projection(
     delta.changed_directories = directory_changes.changed;
     delta.removed_directory_paths = directory_changes.removed;
     current.version = next_version;
+    current.direct_cache = directory_changes.direct_cache;
     current.projection = updated;
     delta
 }
@@ -210,7 +219,11 @@ fn direct_unique_files(relative_directory: &str, entries: &[super::WorkspaceFile
         let Some(name) = entry.relative_path.strip_prefix(&prefix) else {
             return false;
         };
-        !name.is_empty() && !name.contains('/') && seen.insert(entry.relative_path.as_str())
+        !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !name.contains('/')
+            && seen.insert(entry.relative_path.as_str())
     })
 }
 
@@ -494,6 +507,230 @@ fn try_update_file_only_children(
         removed_node_ids: removed_node_ids.clone(),
         changed_bindings: new_bindings,
         removed_binding_node_ids: removed_node_ids,
+    })
+}
+
+/// Bound vector memmoves for sparse mixed edits. Bulk mutations and loaded
+/// directory removal use the full owned-cache projector.
+const MAX_MIXED_NODE_EDITS: usize = 16;
+
+fn append_local_leaf_nodes(
+    nodes: &mut Vec<WorkspaceExplorerTreeNode>,
+    parent_id: &str,
+    entry: &super::WorkspaceFileEntry,
+) {
+    let path = &entry.relative_path;
+    let node_id = explorer_tree::node_id_for_path(path);
+    let name = path.rsplit('/').next().expect("direct child");
+    let mut node = explorer_tree::direct_entry_node(parent_id, name, entry, &node_id);
+    if entry.kind == WorkspaceFileKind::Directory && entry.has_children_hint {
+        let placeholder = explorer_tree::placeholder_node(path, &node_id);
+        node.child_ids.push(placeholder.id.clone());
+        nodes.push(placeholder);
+    }
+    nodes.push(node);
+}
+
+fn leaf_shape(entry: &super::WorkspaceFileEntry) -> (bool, bool) {
+    let folder = entry.kind == WorkspaceFileKind::Directory;
+    (folder, folder && entry.has_children_hint)
+}
+
+/// A rooted, unique direct-child cache has no cross-owner references or
+/// orphan directory rows. If all loaded child folders survive as folders,
+/// only this parent's links, changed leaves and their lazy placeholders can
+/// change. Plan every edit before touching session state.
+fn try_update_mixed_children(
+    current: &mut ExplorerProjectionSession,
+    directory_index: usize,
+    relative_directory: &str,
+    replacement: &WorkspaceExplorerDirectoryChildren,
+    next_version: u64,
+) -> Option<WorkspaceExplorerProjectionDelta> {
+    if !current.direct_cache
+        || !explorer_tree::direct_children_are_valid(relative_directory, &replacement.children)
+    {
+        return None;
+    }
+    let projection = &current.projection;
+    let previous = &projection.directories[directory_index];
+    let parent_id = if relative_directory.is_empty() {
+        "workspace-root".to_owned()
+    } else {
+        explorer_tree::node_id_for_path(relative_directory)
+    };
+    let parent_index = unique_sorted_index(
+        &projection.nodes,
+        &format!("/{relative_directory}"),
+        |node| &node.virtual_path,
+    )?;
+    let parent = &projection.nodes[parent_index];
+    if parent.id != parent_id
+        || parent.child_ids.len() != previous.children.len()
+        || !parent
+            .child_ids
+            .iter()
+            .zip(&previous.children)
+            .all(|(id, child)| id.strip_prefix("path:") == Some(child.relative_path.as_str()))
+    {
+        return None;
+    }
+
+    let old_by_path: HashMap<_, _> = previous
+        .children
+        .iter()
+        .map(|entry| (entry.relative_path.as_str(), entry))
+        .collect();
+    let new_by_path: HashMap<_, _> = replacement
+        .children
+        .iter()
+        .map(|entry| (entry.relative_path.as_str(), entry))
+        .collect();
+    let mut old_local = Vec::new();
+    let mut new_local = Vec::new();
+    let mut removed_bindings = Vec::new();
+    let mut added_bindings = Vec::new();
+    for old in &previous.children {
+        let path = old.relative_path.as_str();
+        let next = new_by_path.get(path).copied();
+        if old.kind == WorkspaceFileKind::Directory
+            && projection
+                .directories
+                .binary_search_by(|row| row.relative_path.as_str().cmp(path))
+                .is_ok()
+        {
+            // Loaded folders keep their existing descendant graph, even if
+            // has_children_hint changes. Removal or a kind conversion prunes
+            // the subtree and is deliberately left to the full projector.
+            if !next.is_some_and(|entry| entry.kind == WorkspaceFileKind::Directory) {
+                return None;
+            }
+            continue;
+        }
+        if next.is_some_and(|entry| leaf_shape(entry) == leaf_shape(old)) {
+            continue;
+        }
+        append_local_leaf_nodes(&mut old_local, &parent_id, old);
+        if let Some(entry) = next {
+            append_local_leaf_nodes(&mut new_local, &parent_id, entry);
+        } else {
+            removed_bindings.push(explorer_tree::node_id_for_path(path));
+        }
+        if old_local.len() + new_local.len() > MAX_MIXED_NODE_EDITS {
+            return None;
+        }
+    }
+    for new in &replacement.children {
+        if old_by_path.contains_key(new.relative_path.as_str()) {
+            continue;
+        }
+        append_local_leaf_nodes(&mut new_local, &parent_id, new);
+        added_bindings.push(WorkspaceExplorerEntryBinding {
+            node_id: explorer_tree::node_id_for_path(&new.relative_path),
+            relative_path: new.relative_path.clone(),
+        });
+        if old_local.len() + new_local.len() > MAX_MIXED_NODE_EDITS {
+            return None;
+        }
+    }
+
+    old_local.sort_unstable_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    new_local.sort_unstable_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    removed_bindings.sort_unstable();
+    added_bindings.sort_unstable_by(|a, b| a.node_id.cmp(&b.node_id));
+    // Check the planned old local nodes against the authoritative graph.
+    // Also protects against any future change in projection invariants.
+    for old in &old_local {
+        let index = unique_sorted_index(&projection.nodes, &old.virtual_path, |node| {
+            &node.virtual_path
+        })?;
+        if projection.nodes[index] != *old {
+            return None;
+        }
+    }
+    let (mut changed_nodes, removed_node_ids) = diff_ordered(
+        &old_local,
+        &new_local,
+        |node| &node.virtual_path,
+        |node| &node.id,
+    );
+    let removed_paths = old_local
+        .iter()
+        .filter(|node| removed_node_ids.contains(&node.id))
+        .map(|node| node.virtual_path.as_str())
+        .collect::<Vec<_>>();
+    let mut added_nodes = Vec::new();
+    let mut modified_nodes = Vec::new();
+    for node in &changed_nodes {
+        if old_local
+            .binary_search_by(|old| old.virtual_path.cmp(&node.virtual_path))
+            .is_ok()
+        {
+            let index = unique_sorted_index(&projection.nodes, &node.virtual_path, |old| {
+                &old.virtual_path
+            })?;
+            if projection.nodes[index].id != node.id {
+                return None;
+            }
+            modified_nodes.push((index, node.clone()));
+        } else {
+            added_nodes.push(node.clone());
+        }
+    }
+    let node_indices =
+        sparse_removal_plan(&projection.nodes, &removed_paths, &added_nodes, |node| {
+            &node.virtual_path
+        })?;
+    let removed_ids = removed_bindings
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let binding_indices = sparse_removal_plan(
+        &projection.entry_bindings,
+        &removed_ids,
+        &added_bindings,
+        |binding| &binding.node_id,
+    )?;
+    let next_child_ids = replacement
+        .children
+        .iter()
+        .map(|entry| explorer_tree::node_id_for_path(&entry.relative_path))
+        .collect::<Vec<_>>();
+
+    // No fallible preflight remains: all mutations below affect only this
+    // parent and the bounded, previously validated local edit plan.
+    if parent.child_ids != next_child_ids {
+        let mut next_parent = parent.clone();
+        next_parent.child_ids = next_child_ids;
+        modified_nodes.push((parent_index, next_parent.clone()));
+        changed_nodes.push(next_parent);
+    }
+    for (index, node) in modified_nodes {
+        current.projection.nodes[index] = node;
+    }
+    apply_sparse_plan(
+        &mut current.projection.nodes,
+        node_indices,
+        added_nodes,
+        |node| &node.virtual_path,
+    );
+    apply_sparse_plan(
+        &mut current.projection.entry_bindings,
+        binding_indices,
+        added_bindings.iter().cloned(),
+        |binding| &binding.node_id,
+    );
+    changed_nodes.sort_unstable_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    current.projection.directories[directory_index].children = replacement.children.clone();
+    current.version = next_version;
+    Some(WorkspaceExplorerProjectionDelta {
+        version: next_version,
+        changed_directories: vec![current.projection.directories[directory_index].clone()],
+        removed_directory_paths: Vec::new(),
+        changed_nodes,
+        removed_node_ids,
+        changed_bindings: added_bindings,
+        removed_binding_node_ids: removed_bindings,
     })
 }
 
@@ -1310,6 +1547,7 @@ mod tests {
             workspace_path: "/repo".into(),
             version: 0,
             projection,
+            direct_cache: false,
         }
     }
 
@@ -1328,6 +1566,348 @@ mod tests {
         session.version = version;
         session.projection = updated;
         delta
+    }
+
+    fn direct_test_session(
+        directories: Vec<WorkspaceExplorerDirectoryChildren>,
+    ) -> ExplorerProjectionSession {
+        let (projection, direct_cache) = explorer_tree::project_tree_with_direct_cache(
+            "alera".into(),
+            "/repo".into(),
+            directories,
+            None,
+        );
+        assert!(direct_cache);
+        let mut session = local_session(projection);
+        session.direct_cache = true;
+        session
+    }
+
+    fn apply_mixed_test(
+        session: &mut ExplorerProjectionSession,
+        replacement: &WorkspaceExplorerDirectoryChildren,
+        version: u64,
+    ) -> Option<WorkspaceExplorerProjectionDelta> {
+        let path = replacement.relative_path.trim_matches('/');
+        let index = session
+            .projection
+            .directories
+            .binary_search_by(|row| row.relative_path.as_str().cmp(path))
+            .ok()?;
+        try_update_mixed_children(session, index, path, replacement, version)
+    }
+
+    #[test]
+    fn mixed_incremental_preserves_loaded_subtrees_lazy_kind_and_child_order() {
+        use WorkspaceFileKind::{Directory, File};
+        let mut session = direct_test_session(vec![
+            children(
+                "",
+                vec![
+                    entry("src", Directory, true),
+                    entry("keep", Directory, true),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/lazy", Directory, true),
+                    entry("src/file", File, false),
+                ],
+            ),
+            children(
+                "src/loaded",
+                vec![entry("src/loaded/.alera-placeholder", File, false)],
+            ),
+            children("keep", vec![entry("keep/untouched", File, false)]),
+        ]);
+        let mut reference = local_session(session.projection.clone());
+        let untouched_id = session
+            .projection
+            .nodes
+            .iter()
+            .find(|node| node.id == "path:keep/untouched")
+            .unwrap()
+            .id
+            .as_ptr();
+        let loaded_id = session
+            .projection
+            .nodes
+            .iter()
+            .find(|node| node.id == "path:src/loaded/.alera-placeholder")
+            .unwrap()
+            .id
+            .as_ptr();
+        let updates = [
+            children(
+                "src",
+                vec![
+                    entry("src/file", Directory, true),
+                    entry("src/loaded", Directory, false),
+                    entry("src/lazy", Directory, false),
+                    entry("src/new", File, false),
+                ],
+            ),
+            children(
+                "/src/",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/file", File, false),
+                    entry("src/lazy", File, false),
+                    entry("src/new", Directory, true),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/new", Directory, false),
+                    entry("src/loaded", Directory, true),
+                    entry("src/lazy", Directory, true),
+                ],
+            ),
+            children(
+                "",
+                vec![
+                    entry("keep", Directory, false),
+                    entry("src", Directory, true),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/lazy", Directory, true),
+                ],
+            ),
+        ];
+        for (index, replacement) in updates.into_iter().enumerate() {
+            let version = index as u64 + 1;
+            let expected = rebuild_reference(&mut reference, replacement.clone(), version);
+            let actual = apply_mixed_test(&mut session, &replacement, version)
+                .expect("eligible sparse mixed edit");
+            assert_delta_equal(&actual, &expected);
+            assert_projection_equal(&session.projection, &reference.projection);
+            assert!(session.direct_cache);
+            assert_eq!(
+                session
+                    .projection
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == "path:keep/untouched")
+                    .unwrap()
+                    .id
+                    .as_ptr(),
+                untouched_id
+            );
+            assert_eq!(
+                session
+                    .projection
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == "path:src/loaded/.alera-placeholder")
+                    .unwrap()
+                    .id
+                    .as_ptr(),
+                loaded_id
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_incremental_rejects_loaded_removal_noncanonical_duplicates_and_bulk_before_mutation() {
+        use WorkspaceFileKind::{Directory, File};
+        let mut session = direct_test_session(vec![
+            children("", vec![entry("src", Directory, true)]),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/file", File, false),
+                ],
+            ),
+            children("src/loaded", vec![entry("src/loaded/child", File, false)]),
+        ]);
+        let seed = session.projection.clone();
+        let mut bulk = vec![
+            entry("src/loaded", Directory, true),
+            entry("src/file", File, false),
+        ];
+        bulk.extend((0..20).map(|n| entry(&format!("src/lazy-{n}"), Directory, true)));
+        let rejected = [
+            children("src", vec![entry("src/file", File, false)]),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", File, false),
+                    entry("src/file", File, false),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/.", File, false),
+                ],
+            ),
+            children(
+                "src",
+                vec![
+                    entry("src/loaded", Directory, true),
+                    entry("src/file", File, false),
+                    entry("src/file", Directory, true),
+                ],
+            ),
+            children("src", bulk),
+        ];
+        for replacement in rejected {
+            assert!(apply_mixed_test(&mut session, &replacement, 1).is_none());
+            assert_projection_equal(&session.projection, &seed);
+            assert_eq!(session.version, 0);
+            let mut fallback = local_session(seed.clone());
+            let mut reference = local_session(seed.clone());
+            let actual = rebuild_projection(&mut fallback, replacement.clone(), 1);
+            let expected = rebuild_reference(&mut reference, replacement, 1);
+            assert_delta_equal(&actual, &expected);
+            assert_projection_equal(&fallback.projection, &reference.projection);
+        }
+        session.direct_cache = false;
+        let replacement = children(
+            "src",
+            vec![
+                entry("src/loaded", Directory, true),
+                entry("src/lazy", Directory, true),
+            ],
+        );
+        assert!(apply_mixed_test(&mut session, &replacement, 1).is_none());
+        assert_projection_equal(&session.projection, &seed);
+    }
+
+    #[test]
+    fn mixed_incremental_session_flag_survives_fast_edits_and_revalidates_on_rebuild() {
+        use WorkspaceFileKind::{Directory, File};
+        let seed = vec![
+            children("", vec![entry("src", Directory, true)]),
+            children("src", vec![entry("src/file", File, false)]),
+        ];
+        let mut reference = direct_test_session(seed.clone());
+        let handle = start("alera".into(), "/repo".into(), seed).unwrap();
+        let updates = [
+            children("src", vec![entry("src/renamed", File, false)]),
+            children(
+                "src",
+                vec![
+                    entry("src/renamed", File, false),
+                    entry("src/lazy", Directory, true),
+                ],
+            ),
+            children(
+                "src/lazy",
+                vec![entry("src/lazy/.alera-placeholder", File, false)],
+            ),
+            children("src", vec![entry("src/lazy", File, false)]),
+            children("src", vec![entry("src/.", File, false)]),
+            children(
+                "src",
+                vec![
+                    entry("src/file", File, false),
+                    entry("src/new", Directory, true),
+                ],
+            ),
+        ];
+        for (index, replacement) in updates.into_iter().enumerate() {
+            let version = index as u64 + 1;
+            let expected = rebuild_reference(&mut reference, replacement.clone(), version);
+            let actual = update(
+                WorkspaceExplorerProjectionHandle {
+                    id: handle.id,
+                    version: index as u64,
+                },
+                replacement,
+            )
+            .unwrap();
+            assert_delta_equal(&actual, &expected);
+            let registry = sessions().lock().unwrap();
+            let current = &registry[&handle.id];
+            assert_projection_equal(&current.projection, &reference.projection);
+            assert_eq!(current.direct_cache, index != 4);
+        }
+        stop(handle);
+    }
+
+    #[test]
+    #[ignore = "synthetic native sparse mixed structural update benchmark"]
+    fn benchmark_mixed_explorer_incremental() {
+        use std::time::{Duration, Instant};
+        use WorkspaceFileKind::Directory;
+        let seed = sparse_fixture(200, 200);
+        let mut mixed = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path == "folder-100")
+            .unwrap()
+            .clone();
+        mixed
+            .children
+            .push(entry("folder-100/lazy", Directory, true));
+        let mut reordered = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path.is_empty())
+            .unwrap()
+            .clone();
+        reordered.children.reverse();
+        let mut root_add = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path.is_empty())
+            .unwrap()
+            .clone();
+        root_add
+            .children
+            .push(entry("new-root-folder", Directory, true));
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        for (label, replacement) in [
+            ("mixed-add", mixed),
+            ("root-reorder", reordered),
+            ("root-add", root_add),
+        ] {
+            let mut reference = local_session(seed.clone());
+            let expected = rebuild_projection(&mut reference, replacement.clone(), 1);
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let mut session = local_session(seed.clone());
+                    session.direct_cache = true;
+                    let update = replacement.clone();
+                    let start = Instant::now();
+                    let actual = if optimized {
+                        apply_mixed_test(&mut session, &update, 1).expect("eligible mixed fixture")
+                    } else {
+                        rebuild_projection(&mut session, update, 1)
+                    };
+                    let elapsed = start.elapsed();
+                    assert_delta_equal(&actual, &expected);
+                    assert_projection_equal(&session.projection, &reference.projection);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("Classic mixed incremental shape={label} before_nodes={} changed_nodes={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), expected.changed_nodes.len(), old/new);
+        }
     }
 
     fn check_owned_rebuild_sequence(
