@@ -141,17 +141,36 @@ pub(super) fn update(
         }
     }
 
-    let updated = explorer_tree::project_tree(
-        current.workspace_name.clone(),
-        current.workspace_path.clone(),
-        current.projection.directories.clone(),
-        Some(replacement),
+    Ok(rebuild_projection(current, replacement, next_version))
+}
+
+/// The session already owns the old directory buffers. Move them into
+/// the next tree, tracking the directory delta during replacement/pruning.
+/// Only the old node/binding graph is needed for the remaining diff.
+fn rebuild_projection(
+    current: &mut ExplorerProjectionSession,
+    replacement: WorkspaceExplorerDirectoryChildren,
+    next_version: u64,
+) -> WorkspaceExplorerProjectionDelta {
+    let directories = std::mem::take(&mut current.projection.directories);
+    let was_empty = directories.is_empty();
+    let (updated, directory_changes) = explorer_tree::update_owned_tree(
+        &current.workspace_name,
+        &current.workspace_path,
+        directories,
+        replacement,
     );
-    let next_version = current.version + 1;
-    let delta = diff_projections(&current.projection, &updated, next_version);
+    let bootstrap_root = was_empty && !updated.directories.is_empty();
+    let mut delta =
+        try_diff_sorted_graph(&current.projection, &updated, next_version, bootstrap_root)
+            .unwrap_or_else(|| {
+                diff_graph_legacy(&current.projection, &updated, next_version, bootstrap_root)
+            });
+    delta.changed_directories = directory_changes.changed;
+    delta.removed_directory_paths = directory_changes.removed;
     current.version = next_version;
     current.projection = updated;
-    Ok(delta)
+    delta
 }
 
 /// These are precisely the input fields affecting Explorer's node graph.
@@ -484,6 +503,7 @@ pub(super) fn stop(handle: WorkspaceExplorerProjectionHandle) {
     }
 }
 
+#[cfg(test)]
 fn diff_projections(
     before: &WorkspaceExplorerTreeProjection,
     after: &WorkspaceExplorerTreeProjection,
@@ -560,16 +580,43 @@ fn diff_ordered<T: Clone + PartialEq>(
     (changed, removed)
 }
 
+#[cfg(test)]
 fn try_diff_sorted_projections(
     before: &WorkspaceExplorerTreeProjection,
     after: &WorkspaceExplorerTreeProjection,
     version: u64,
 ) -> Option<WorkspaceExplorerProjectionDelta> {
-    // Use noncapturing functions for the borrowed keys to preserve the
-    // input lifetime across the generic comparison helper.
     fn directory_path(directory: &WorkspaceExplorerDirectoryChildren) -> &str {
         &directory.relative_path
     }
+    if !strictly_ordered(&before.directories, directory_path)
+        || !strictly_ordered(&after.directories, directory_path)
+    {
+        return None;
+    }
+    let mut delta = try_diff_sorted_graph(
+        before,
+        after,
+        version,
+        before.directories.is_empty() && !after.directories.is_empty(),
+    )?;
+    (delta.changed_directories, delta.removed_directory_paths) = diff_ordered(
+        &before.directories,
+        &after.directories,
+        directory_path,
+        directory_path,
+    );
+    Some(delta)
+}
+
+fn try_diff_sorted_graph(
+    before: &WorkspaceExplorerTreeProjection,
+    after: &WorkspaceExplorerTreeProjection,
+    version: u64,
+    bootstrap_root: bool,
+) -> Option<WorkspaceExplorerProjectionDelta> {
+    // Use noncapturing functions for the borrowed keys to preserve the
+    // input lifetime across the generic comparison helper.
     fn binding_id(binding: &WorkspaceExplorerEntryBinding) -> &str {
         &binding.node_id
     }
@@ -580,20 +627,13 @@ fn try_diff_sorted_projections(
         &node.id
     }
     for projection in [before, after] {
-        if !strictly_ordered(&projection.directories, directory_path)
-            || !strictly_ordered(&projection.nodes, node_path)
+        if !strictly_ordered(&projection.nodes, node_path)
             || !strictly_ordered(&projection.entry_bindings, binding_id)
             || !projection.nodes.iter().all(node_path_identifies_id)
         {
             return None;
         }
     }
-    let (changed_directories, removed_directory_paths) = diff_ordered(
-        &before.directories,
-        &after.directories,
-        directory_path,
-        directory_path,
-    );
     let (mut changed_nodes, removed_node_ids) =
         diff_ordered(&before.nodes, &after.nodes, node_path, node_id);
     let (changed_bindings, removed_binding_node_ids) = diff_ordered(
@@ -603,7 +643,7 @@ fn try_diff_sorted_projections(
         binding_id,
     );
     // Match legacy first-loaded-empty-root bootstrap behavior.
-    if before.directories.is_empty() && !after.directories.is_empty() {
+    if bootstrap_root {
         if let Some(root) = after
             .nodes
             .first()
@@ -619,8 +659,8 @@ fn try_diff_sorted_projections(
     }
     Some(WorkspaceExplorerProjectionDelta {
         version,
-        changed_directories,
-        removed_directory_paths,
+        changed_directories: Vec::new(),
+        removed_directory_paths: Vec::new(),
         changed_nodes,
         removed_node_ids,
         changed_bindings,
@@ -628,6 +668,7 @@ fn try_diff_sorted_projections(
     })
 }
 
+#[cfg(test)]
 fn diff_projections_legacy(
     before: &WorkspaceExplorerTreeProjection,
     after: &WorkspaceExplorerTreeProjection,
@@ -660,6 +701,23 @@ fn diff_projections_legacy(
         .map(|directory| directory.relative_path.clone())
         .collect();
 
+    let mut delta = diff_graph_legacy(
+        before,
+        after,
+        version,
+        before.directories.is_empty() && !after.directories.is_empty(),
+    );
+    delta.changed_directories = changed_directories;
+    delta.removed_directory_paths = removed_directory_paths;
+    delta
+}
+
+fn diff_graph_legacy(
+    before: &WorkspaceExplorerTreeProjection,
+    after: &WorkspaceExplorerTreeProjection,
+    version: u64,
+    bootstrap_root: bool,
+) -> WorkspaceExplorerProjectionDelta {
     let previous_nodes = before
         .nodes
         .iter()
@@ -677,9 +735,7 @@ fn diff_projections_legacy(
             // The first client update may turn an empty native workspace into
             // an explicitly loaded (but still empty) root directory. The UI
             // has no local projection yet, so include the root node once.
-            (node.id == "workspace-root"
-                && before.directories.is_empty()
-                && !after.directories.is_empty())
+            (node.id == "workspace-root" && bootstrap_root)
                 || previous_nodes
                     .get(node.id.as_str())
                     .is_none_or(|previous| *previous != *node)
@@ -722,8 +778,8 @@ fn diff_projections_legacy(
 
     WorkspaceExplorerProjectionDelta {
         version,
-        changed_directories,
-        removed_directory_paths,
+        changed_directories: Vec::new(),
+        removed_directory_paths: Vec::new(),
         changed_nodes,
         removed_node_ids,
         changed_bindings,
@@ -1254,6 +1310,252 @@ mod tests {
             workspace_path: "/repo".into(),
             version: 0,
             projection,
+        }
+    }
+
+    fn rebuild_reference(
+        session: &mut ExplorerProjectionSession,
+        replacement: WorkspaceExplorerDirectoryChildren,
+        version: u64,
+    ) -> WorkspaceExplorerProjectionDelta {
+        let updated = explorer_tree::project_tree(
+            session.workspace_name.clone(),
+            session.workspace_path.clone(),
+            session.projection.directories.clone(),
+            Some(replacement),
+        );
+        let delta = diff_projections(&session.projection, &updated, version);
+        session.version = version;
+        session.projection = updated;
+        delta
+    }
+
+    fn check_owned_rebuild_sequence(
+        seed: WorkspaceExplorerTreeProjection,
+        updates: Vec<WorkspaceExplorerDirectoryChildren>,
+    ) {
+        let mut reference = local_session(seed.clone());
+        let mut owned = local_session(seed);
+        for (index, replacement) in updates.into_iter().enumerate() {
+            let version = index as u64 + 1;
+            let expected = rebuild_reference(&mut reference, replacement.clone(), version);
+            let actual = rebuild_projection(&mut owned, replacement, version);
+            assert_delta_equal(&actual, &expected);
+            assert_projection_equal(&owned.projection, &reference.projection);
+            assert_eq!(owned.version, version);
+        }
+    }
+
+    #[test]
+    fn owned_rebuild_preserves_bootstrap_lazy_kind_and_late_update_deltas() {
+        use WorkspaceFileKind::{Directory, File};
+        let seed = explorer_tree::project_tree("alera".into(), "/repo".into(), vec![], None);
+        check_owned_rebuild_sequence(
+            seed,
+            vec![
+                children("", vec![]),
+                children(
+                    "/",
+                    vec![
+                        entry("src", Directory, true),
+                        entry("src-old", Directory, true),
+                    ],
+                ),
+                children(
+                    "src",
+                    vec![
+                        entry("src/a", File, false),
+                        entry("src/sub", Directory, true),
+                    ],
+                ),
+                children("src/sub", vec![entry("src/sub/deep", File, false)]),
+                children("src-old", vec![entry("src-old/keep", File, false)]),
+                children(
+                    "src/",
+                    vec![
+                        entry("src/sub", Directory, true),
+                        entry("src/a", File, false),
+                    ],
+                ),
+                children(
+                    "src",
+                    vec![entry("src/sub", File, false), entry("src/a", File, false)],
+                ),
+                children("src/sub", vec![entry("src/sub/late", File, false)]),
+                children("", vec![entry("src-old", Directory, true)]),
+                children("src", vec![entry("src/late", File, false)]),
+                children(
+                    "",
+                    vec![
+                        entry("src-old", Directory, true),
+                        entry("src", Directory, true),
+                    ],
+                ),
+                children("src", vec![entry("src/new", File, false)]),
+                children("/src/", vec![entry("src/new", File, false)]),
+            ],
+        );
+    }
+
+    #[test]
+    fn owned_rebuild_tracks_cross_owner_pruning_and_reuses_untouched_buffers() {
+        use WorkspaceFileKind::{Directory, File};
+        // A stateless noncanonical listing can reference another owner's
+        // entries. Removing a subtree must report every retained row edited
+        // by pruning, not just the replacement row.
+        let seed = explorer_tree::project_tree(
+            "alera".into(),
+            "/repo".into(),
+            vec![
+                children(
+                    "",
+                    vec![
+                        entry("a", Directory, true),
+                        entry("keep", Directory, true),
+                        entry("untouched", Directory, true),
+                    ],
+                ),
+                children("a", vec![entry("a/sub", Directory, true)]),
+                children("a/sub", vec![entry("a/sub/shared", File, false)]),
+                children(
+                    "keep",
+                    vec![
+                        entry("a/sub/shared", File, false),
+                        entry("keep/file", File, false),
+                    ],
+                ),
+                children("untouched", vec![entry("untouched/file", File, false)]),
+            ],
+            None,
+        );
+        let mut owned = local_session(seed.clone());
+        let mut reference = local_session(seed);
+        let replacement = children("a", vec![entry("a/new", File, false)]);
+        let before = owned
+            .projection
+            .directories
+            .iter()
+            .find(|row| row.relative_path == "untouched")
+            .unwrap();
+        let entry_buffer = before.children.as_ptr();
+        let path_buffer = before.children[0].relative_path.as_ptr();
+        let expected = rebuild_reference(&mut reference, replacement.clone(), 1);
+        let actual = rebuild_projection(&mut owned, replacement, 1);
+        assert_delta_equal(&actual, &expected);
+        assert_projection_equal(&owned.projection, &reference.projection);
+        assert_eq!(
+            actual
+                .changed_directories
+                .iter()
+                .map(|row| row.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "keep"]
+        );
+        assert_eq!(actual.removed_directory_paths, ["a/sub"]);
+        let after = owned
+            .projection
+            .directories
+            .iter()
+            .find(|row| row.relative_path == "untouched")
+            .unwrap();
+        assert_eq!(after.children.as_ptr(), entry_buffer);
+        assert_eq!(after.children[0].relative_path.as_ptr(), path_buffer);
+
+        // Rootless and duplicate-path inputs use the original graph fallback.
+        let rootless = explorer_tree::project_tree(
+            "alera".into(),
+            "/repo".into(),
+            vec![
+                children("parent", vec![entry("parent/sub", Directory, true)]),
+                children(
+                    "parent/sub",
+                    vec![
+                        entry("parent/sub/x", File, false),
+                        entry("parent/sub/x", File, false),
+                    ],
+                ),
+            ],
+            None,
+        );
+        check_owned_rebuild_sequence(
+            rootless,
+            vec![
+                children("parent/sub", vec![entry("parent/sub/y", File, false)]),
+                children("", vec![entry("parent", Directory, true)]),
+                children("parent", vec![entry("parent/sub", Directory, true)]),
+            ],
+        );
+    }
+
+    #[test]
+    #[ignore = "synthetic native owned-cache full Explorer rebuild benchmark"]
+    fn benchmark_owned_explorer_cache_rebuild() {
+        use std::time::{Duration, Instant};
+        use WorkspaceFileKind::Directory;
+        let seed = sparse_fixture(200, 200);
+        let mut mixed = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path == "folder-100")
+            .unwrap()
+            .clone();
+        mixed
+            .children
+            .push(entry("folder-100/lazy", Directory, true));
+        let mut removed = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path.is_empty())
+            .unwrap()
+            .clone();
+        removed.children.drain(..80);
+        let mut reordered = seed
+            .directories
+            .iter()
+            .find(|row| row.relative_path.is_empty())
+            .unwrap()
+            .clone();
+        reordered.children.reverse();
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        for (label, replacement) in [
+            ("mixed", mixed),
+            ("remove-80", removed),
+            ("reorder", reordered),
+        ] {
+            let mut reference = local_session(seed.clone());
+            let expected = rebuild_reference(&mut reference, replacement.clone(), 1);
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let mut session = local_session(seed.clone());
+                    let update = replacement.clone();
+                    let start = Instant::now();
+                    let delta = if optimized {
+                        rebuild_projection(&mut session, update, 1)
+                    } else {
+                        rebuild_reference(&mut session, update, 1)
+                    };
+                    let elapsed = start.elapsed();
+                    assert_delta_equal(&delta, &expected);
+                    assert_projection_equal(&session.projection, &reference.projection);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("Classic owned cache rebuild shape={label} before_nodes={} changed_dirs={} removed_dirs={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), expected.changed_directories.len(), expected.removed_directory_paths.len(), old/new);
         }
     }
 

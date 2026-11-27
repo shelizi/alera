@@ -33,11 +33,74 @@ pub(super) fn project_tree(
         );
     }
     let direct_cache = prune_unreachable_directories(&mut directories_by_path);
+    finish_projection(
+        &workspace_name,
+        &workspace_path,
+        directories_by_path,
+        direct_cache,
+    )
+}
 
+pub(super) struct DirectoryChanges {
+    pub changed: Vec<WorkspaceExplorerDirectoryChildren>,
+    pub removed: Vec<String>,
+}
+
+/// The session owns the normalized, uniquely keyed directory rows already.
+/// Move their entry buffers into the next projection and record only rows
+/// changed by replacement or pruning instead of cloning the entire cache.
+pub(super) fn update_owned_tree(
+    workspace_name: &str,
+    workspace_path: &str,
+    directories: Vec<WorkspaceExplorerDirectoryChildren>,
+    replacement: WorkspaceExplorerDirectoryChildren,
+) -> (WorkspaceExplorerTreeProjection, DirectoryChanges) {
+    let old_paths = directories
+        .iter()
+        .map(|row| row.relative_path.clone())
+        .collect::<Vec<_>>();
+    let mut cache = directories
+        .into_iter()
+        .map(|row| (row.relative_path, row.children))
+        .collect::<HashMap<_, _>>();
+    let path = normalize_relative_path(&replacement.relative_path);
+    let replacement_changed = cache
+        .get(&path)
+        .is_none_or(|old| old != &replacement.children);
+    let mut changed_paths = HashSet::new();
+    replace_directory_children_tracked(&mut cache, path.clone(), replacement.children, |changed| {
+        if changed != path {
+            changed_paths.insert(changed.to_owned());
+        }
+    });
+    if replacement_changed {
+        changed_paths.insert(path);
+    }
+    let direct_cache = prune_unreachable_directories(&mut cache);
+    let removed = old_paths
+        .into_iter()
+        .filter(|path| !cache.contains_key(path))
+        .collect();
+    let projection = finish_projection(workspace_name, workspace_path, cache, direct_cache);
+    let changed = projection
+        .directories
+        .iter()
+        .filter(|row| changed_paths.contains(&row.relative_path))
+        .cloned()
+        .collect();
+    (projection, DirectoryChanges { changed, removed })
+}
+
+fn finish_projection(
+    workspace_name: &str,
+    workspace_path: &str,
+    directories_by_path: HashMap<String, Vec<WorkspaceFileEntry>>,
+    direct_cache: bool,
+) -> WorkspaceExplorerTreeProjection {
     let (nodes, entry_bindings) = if direct_cache {
-        build_direct_nodes(&workspace_name, &workspace_path, &directories_by_path)
+        build_direct_nodes(workspace_name, workspace_path, &directories_by_path)
     } else {
-        build_nodes(&workspace_name, &workspace_path, &directories_by_path)
+        build_nodes(workspace_name, workspace_path, &directories_by_path)
     };
     let directories = sorted_directories(directories_by_path);
 
@@ -52,6 +115,15 @@ fn replace_directory_children(
     directories_by_path: &mut HashMap<String, Vec<WorkspaceFileEntry>>,
     relative_path: String,
     children: Vec<WorkspaceFileEntry>,
+) {
+    replace_directory_children_tracked(directories_by_path, relative_path, children, |_| {});
+}
+
+fn replace_directory_children_tracked(
+    directories_by_path: &mut HashMap<String, Vec<WorkspaceFileEntry>>,
+    relative_path: String,
+    children: Vec<WorkspaceFileEntry>,
+    on_changed: impl FnMut(&str),
 ) {
     if let Some(previous) = directories_by_path.get(&relative_path) {
         let next_paths = children
@@ -72,16 +144,25 @@ fn replace_directory_children(
             })
             .map(|entry| entry.relative_path.clone())
             .collect::<HashSet<_>>();
-        remove_cached_subtrees(directories_by_path, &removed_paths);
+        remove_cached_subtrees_tracked(directories_by_path, &removed_paths, on_changed);
     }
     // Insert after pruning: a directory replaced by a same-path file stays
     // in its parent's new listing, but its old loaded descendants do not.
     directories_by_path.insert(relative_path, children);
 }
 
+#[cfg(test)]
 fn remove_cached_subtrees(
     directories_by_path: &mut HashMap<String, Vec<WorkspaceFileEntry>>,
     removed: &HashSet<String>,
+) {
+    remove_cached_subtrees_tracked(directories_by_path, removed, |_| {});
+}
+
+fn remove_cached_subtrees_tracked(
+    directories_by_path: &mut HashMap<String, Vec<WorkspaceFileEntry>>,
+    removed: &HashSet<String>,
+    mut on_changed: impl FnMut(&str),
 ) {
     if removed.is_empty() {
         return;
@@ -103,8 +184,12 @@ fn remove_cached_subtrees(
                 .any(|(index, _)| removed.contains(&path[..index]))
     };
     directories_by_path.retain(|path, _| !is_removed(path));
-    for children in directories_by_path.values_mut() {
+    for (path, children) in directories_by_path.iter_mut() {
+        let old_len = children.len();
         children.retain(|child| !is_removed(&child.relative_path));
+        if old_len != children.len() {
+            on_changed(path);
+        }
     }
 }
 
