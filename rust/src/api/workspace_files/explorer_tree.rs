@@ -32,10 +32,13 @@ pub(super) fn project_tree(
             replacement.children,
         );
     }
-    prune_unreachable_directories(&mut directories_by_path);
+    let direct_cache = prune_unreachable_directories(&mut directories_by_path);
 
-    let (nodes, entry_bindings) =
-        build_nodes(&workspace_name, &workspace_path, &directories_by_path);
+    let (nodes, entry_bindings) = if direct_cache {
+        build_direct_nodes(&workspace_name, &workspace_path, &directories_by_path)
+    } else {
+        build_nodes(&workspace_name, &workspace_path, &directories_by_path)
+    };
     let directories = sorted_directories(directories_by_path);
 
     WorkspaceExplorerTreeProjection {
@@ -134,12 +137,16 @@ fn is_direct_cache(directories: &HashMap<String, Vec<WorkspaceFileEntry>>) -> bo
         })
 }
 
-fn prune_unreachable_directories(directories: &mut HashMap<String, Vec<WorkspaceFileEntry>>) {
+/// Return whether the pruned cache is a validated rooted direct-child tree.
+fn prune_unreachable_directories(
+    directories: &mut HashMap<String, Vec<WorkspaceFileEntry>>,
+) -> bool {
     // Collect only stale directory keys (not owned copies of all entries).
     // Normal caches must be transitively reachable from the loaded root
     // through actual directory entries. A stale late update, a removed
     // ancestor, or a directory becoming a file must not resurrect a subtree.
-    let stale = if is_direct_cache(directories) {
+    let direct_cache = is_direct_cache(directories);
+    let stale = if direct_cache {
         let mut reachable = HashSet::from([""]);
         let mut pending = vec![""];
         while let Some(path) = pending.pop() {
@@ -173,6 +180,74 @@ fn prune_unreachable_directories(directories: &mut HashMap<String, Vec<Workspace
     for path in stale {
         directories.remove(&path);
     }
+    direct_cache
+}
+
+/// A validated, pruned direct cache has one parent per entry, no duplicate
+/// paths and no unreachable loaded directories. Build directly in vectors:
+/// file leaves need neither an owned hash key nor a parent-node hash lookup.
+fn build_direct_nodes(
+    workspace_name: &str,
+    workspace_path: &str,
+    directories: &HashMap<String, Vec<WorkspaceFileEntry>>,
+) -> (
+    Vec<WorkspaceExplorerTreeNode>,
+    Vec<WorkspaceExplorerEntryBinding>,
+) {
+    let entry_count = directories.values().map(Vec::len).sum::<usize>();
+    let mut nodes = Vec::with_capacity(entry_count + 1);
+    let mut bindings = Vec::with_capacity(entry_count);
+    nodes.push(root_node(workspace_name, workspace_path));
+    let mut pending = vec![(0, directories[""].as_slice())];
+    while let Some((parent_index, entries)) = pending.pop() {
+        let parent_id = nodes[parent_index].id.clone();
+        let mut child_ids = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let path = &entry.relative_path;
+            let name = path.rsplit('/').next().expect("validated direct path");
+            let node_id = node_id_for_path(path);
+            let mut node = direct_entry_node(&parent_id, name, entry, &node_id);
+            let mut placeholder = None;
+            if entry.kind == WorkspaceFileKind::Directory {
+                if let Some(children) = directories.get(path) {
+                    pending.push((nodes.len(), children.as_slice()));
+                } else if entry.has_children_hint {
+                    let lazy = placeholder_node(path, &node_id);
+                    node.child_ids.push(lazy.id.clone());
+                    placeholder = Some(lazy);
+                }
+            }
+            nodes.push(node);
+            if let Some(lazy) = placeholder {
+                nodes.push(lazy);
+            }
+            child_ids.push(node_id.clone());
+            bindings.push(WorkspaceExplorerEntryBinding {
+                node_id,
+                relative_path: path.clone(),
+            });
+        }
+        nodes[parent_index].child_ids = child_ids;
+    }
+    // Root remains first. All other virtual paths and binding IDs are unique.
+    nodes[1..].sort_unstable_by(|left, right| left.virtual_path.cmp(&right.virtual_path));
+    bindings.sort_unstable_by(|left, right| left.node_id.cmp(&right.node_id));
+    (nodes, bindings)
+}
+
+fn root_node(workspace_name: &str, workspace_path: &str) -> WorkspaceExplorerTreeNode {
+    WorkspaceExplorerTreeNode {
+        id: ROOT_ID.to_string(),
+        name: workspace_name.to_string(),
+        kind: WorkspaceExplorerTreeNodeKind::Root,
+        parent_id: String::new(),
+        virtual_path: "/".to_string(),
+        source_path: workspace_path.to_string(),
+        entry_id: None,
+        child_ids: Vec::new(),
+        is_expanded: true,
+        is_virtual: false,
+    }
 }
 
 fn build_nodes(
@@ -187,18 +262,7 @@ fn build_nodes(
     let mut entry_bindings = Vec::<WorkspaceExplorerEntryBinding>::new();
     nodes.insert(
         ROOT_ID.to_string(),
-        WorkspaceExplorerTreeNode {
-            id: ROOT_ID.to_string(),
-            name: workspace_name.to_string(),
-            kind: WorkspaceExplorerTreeNodeKind::Root,
-            parent_id: String::new(),
-            virtual_path: "/".to_string(),
-            source_path: workspace_path.to_string(),
-            entry_id: None,
-            child_ids: Vec::new(),
-            is_expanded: true,
-            is_virtual: false,
-        },
+        root_node(workspace_name, workspace_path),
     );
 
     // Borrow directory keys and compute depth once rather than cloning
@@ -275,22 +339,7 @@ fn add_direct_entry_node(
     if !nodes.contains_key(&node_id) {
         nodes.insert(
             node_id.clone(),
-            WorkspaceExplorerTreeNode {
-                id: node_id.clone(),
-                name: name.to_owned(),
-                kind: if entry.kind == WorkspaceFileKind::Directory {
-                    WorkspaceExplorerTreeNodeKind::Folder
-                } else {
-                    WorkspaceExplorerTreeNodeKind::File
-                },
-                parent_id: parent_id.to_owned(),
-                virtual_path: format!("/{path}"),
-                source_path: path.clone(),
-                entry_id: Some(path.clone()),
-                child_ids: Vec::new(),
-                is_expanded: false,
-                is_virtual: false,
-            },
+            direct_entry_node(parent_id, name, entry, &node_id),
         );
         append_new_child(nodes, parent_id, &node_id);
     }
@@ -298,6 +347,31 @@ fn add_direct_entry_node(
         node_id,
         relative_path: path.clone(),
     });
+}
+
+fn direct_entry_node(
+    parent_id: &str,
+    name: &str,
+    entry: &WorkspaceFileEntry,
+    node_id: &str,
+) -> WorkspaceExplorerTreeNode {
+    let path = &entry.relative_path;
+    WorkspaceExplorerTreeNode {
+        id: node_id.to_owned(),
+        name: name.to_owned(),
+        kind: if entry.kind == WorkspaceFileKind::Directory {
+            WorkspaceExplorerTreeNodeKind::Folder
+        } else {
+            WorkspaceExplorerTreeNodeKind::File
+        },
+        parent_id: parent_id.to_owned(),
+        virtual_path: format!("/{path}"),
+        source_path: path.clone(),
+        entry_id: Some(path.clone()),
+        child_ids: Vec::new(),
+        is_expanded: false,
+        is_virtual: false,
+    }
 }
 
 fn add_entry_node(
@@ -357,22 +431,23 @@ fn add_placeholder(nodes: &mut HashMap<String, WorkspaceExplorerTreeNode>, paren
     if nodes.contains_key(&node_id) || !nodes.contains_key(&parent_id) {
         return;
     }
-    nodes.insert(
-        node_id.clone(),
-        WorkspaceExplorerTreeNode {
-            id: node_id.clone(),
-            name: String::new(),
-            kind: WorkspaceExplorerTreeNodeKind::File,
-            parent_id: parent_id.clone(),
-            virtual_path: format!("/{parent_path}/.alera-placeholder"),
-            source_path: String::new(),
-            entry_id: None,
-            child_ids: Vec::new(),
-            is_expanded: false,
-            is_virtual: true,
-        },
-    );
+    nodes.insert(node_id.clone(), placeholder_node(parent_path, &parent_id));
     append_new_child(nodes, &parent_id, &node_id);
+}
+
+fn placeholder_node(parent_path: &str, parent_id: &str) -> WorkspaceExplorerTreeNode {
+    WorkspaceExplorerTreeNode {
+        id: format!("{PLACEHOLDER_PREFIX}{parent_path}"),
+        name: String::new(),
+        kind: WorkspaceExplorerTreeNodeKind::File,
+        parent_id: parent_id.to_owned(),
+        virtual_path: format!("/{parent_path}/.alera-placeholder"),
+        source_path: String::new(),
+        entry_id: None,
+        child_ids: Vec::new(),
+        is_expanded: false,
+        is_virtual: true,
+    }
 }
 
 /// Both callers invoke this only immediately after inserting a previously
@@ -979,6 +1054,135 @@ mod tests {
             let old = median(&mut old);
             let new = median(&mut new);
             println!("Classic full node build shape={label} cached_dirs={} nodes={} bindings={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", fixture.len(), expected.0.len(), expected.1.len(), old/new);
+        }
+    }
+
+    #[test]
+    fn direct_vector_projection_matches_previous_builder_and_prunes_stale_directories() {
+        let fixtures = [
+            DirectoryCache::from([(String::new(), vec![])]),
+            wide_cache(3, 19),
+            DirectoryCache::from([
+                (
+                    "".into(),
+                    vec![
+                        dir("z"),
+                        dir("empty"),
+                        dir("lazy"),
+                        file("中文.txt"),
+                        dir("a"),
+                    ],
+                ),
+                (
+                    "a".into(),
+                    vec![file("a/.alera-placeholder"), dir("a/deep"), file("a/z")],
+                ),
+                (
+                    "a/deep".into(),
+                    vec![file("a/deep/first"), dir("a/deep/child")],
+                ),
+                ("a/deep/child".into(), vec![file("a/deep/child/x")]),
+                ("z".into(), vec![file("z/second"), file("z/first")]),
+                ("empty".into(), vec![]),
+                ("orphan".into(), vec![dir("orphan/child")]),
+                ("orphan/child".into(), vec![file("orphan/child/stale")]),
+                ("中文.txt".into(), vec![file("中文.txt/stale")]),
+            ]),
+        ];
+        for mut cache in fixtures {
+            let raw = cache
+                .iter()
+                .map(|(path, entries)| children(path, entries.clone()))
+                .collect();
+            assert!(prune_unreachable_directories(&mut cache));
+            let expected = build_nodes("alera", "/repo", &cache);
+            assert_eq!(build_direct_nodes("alera", "/repo", &cache), expected);
+            let actual = project(raw, None);
+            assert_eq!((actual.nodes, actual.entry_bindings), expected);
+            assert!(actual
+                .directories
+                .iter()
+                .all(|dir| cache.contains_key(&dir.relative_path)));
+        }
+    }
+
+    #[test]
+    fn direct_vector_projection_handles_loaded_empty_and_lazy_directory_hints() {
+        let mut loaded = dir("loaded");
+        loaded.has_children_hint = false;
+        let mut empty = dir("empty");
+        empty.has_children_hint = false;
+        let cache = DirectoryCache::from([
+            ("".into(), vec![dir("lazy"), loaded, empty]),
+            ("loaded".into(), vec![file("loaded/file")]),
+        ]);
+        assert!(is_direct_cache(&cache));
+        let (nodes, bindings) = build_direct_nodes("alera", "/repo", &cache);
+        assert_eq!(
+            (nodes.clone(), bindings),
+            build_nodes("alera", "/repo", &cache)
+        );
+        assert!(nodes
+            .iter()
+            .any(|node| node.id == "__alera_placeholder__:lazy"));
+        assert!(nodes
+            .iter()
+            .all(|node| node.id != "__alera_placeholder__:empty"));
+        assert!(nodes.iter().any(|node| node.id == "path:loaded/file"));
+    }
+
+    #[test]
+    #[ignore = "synthetic native direct-vector Explorer projection benchmark"]
+    fn benchmark_direct_vector_explorer_projection() {
+        let wide = DirectoryCache::from([(
+            String::new(),
+            (0..12000)
+                .rev()
+                .map(|index| file(&format!("file-{index:05}.txt")))
+                .collect(),
+        )]);
+        let nested = wide_cache(200, 200);
+        let lazy = DirectoryCache::from([(
+            String::new(),
+            (0..12000)
+                .rev()
+                .map(|index| dir(&format!("dir-{index:05}")))
+                .collect(),
+        )]);
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        for (label, mut cache) in [("wide", wide), ("nested", nested), ("lazy", lazy)] {
+            assert!(prune_unreachable_directories(&mut cache));
+            let expected = build_nodes("alera", "/repo", &cache);
+            assert_eq!(build_direct_nodes("alera", "/repo", &cache), expected);
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let start = Instant::now();
+                    let actual = if optimized {
+                        build_direct_nodes("alera", "/repo", &cache)
+                    } else {
+                        build_nodes("alera", "/repo", &cache)
+                    };
+                    let elapsed = start.elapsed();
+                    assert_eq!(actual, expected);
+                    if optimized {
+                        new.push(elapsed);
+                    } else {
+                        old.push(elapsed);
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("Classic direct vector projection shape={label} nodes={} bindings={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", expected.0.len(), expected.1.len(), old/new);
         }
     }
 
