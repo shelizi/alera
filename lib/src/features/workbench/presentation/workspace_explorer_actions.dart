@@ -423,12 +423,38 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       _showInfo('Cannot move a folder into itself.');
       return false;
     }
-    for (final path in relativePaths) {
-      if (!await _moveEntry(path, targetDir) || !mounted) {
-        return false;
+    final workspacePath = widget.workspace.path;
+    final workspaceId = widget.workspace.id;
+    bool isCurrent() =>
+        mounted &&
+        widget.workspace.path == workspacePath &&
+        widget.workspace.id == workspaceId;
+    final affectedDirectories = <String>{};
+    try {
+      for (final path in relativePaths) {
+        if (!isCurrent()) return false;
+        final moved = await _workspaceFiles.moveEntry(
+          workspacePath: workspacePath,
+          relativePath: path,
+          targetParentRelativePath: targetDir,
+        );
+        // Record completed mutations before the callback, which can itself
+        // fail. Partial success must still refresh the affected directories.
+        affectedDirectories
+          ..add(_parentPath(path))
+          ..add(targetDir);
+        if (!isCurrent()) return false;
+        await widget.onPathMoved(path, moved.relativePath);
+      }
+    } catch (error) {
+      if (isCurrent()) _showError(error);
+      return false;
+    } finally {
+      if (isCurrent()) {
+        await _refreshDirectoriesAfterMove(affectedDirectories);
       }
     }
-    return true;
+    return isCurrent();
   }
 
   Future<void> _duplicate(native.WorkspaceFileEntry entry) async {
@@ -623,35 +649,6 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     }
   }
 
-  Future<bool> _moveEntry(String relativePath, String targetDir) async {
-    try {
-      final sourceParent = _parentPath(relativePath);
-      final moved = await _workspaceFiles.moveEntry(
-        workspacePath: widget.workspace.path,
-        relativePath: relativePath,
-        targetParentRelativePath: targetDir,
-      );
-      if (!mounted) {
-        return false;
-      }
-      await widget.onPathMoved(relativePath, moved.relativePath);
-      if (!mounted) {
-        return false;
-      }
-      await _refreshDirectory(sourceParent);
-      if (!mounted) {
-        return false;
-      }
-      if (sourceParent != targetDir) {
-        await _refreshDirectory(targetDir);
-      }
-      return true;
-    } catch (error) {
-      _showError(error);
-      return false;
-    }
-  }
-
   Future<void> _delete(native.WorkspaceFileEntry entry) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -698,6 +695,33 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       );
     } catch (error) {
       _showError(error);
+    }
+  }
+
+  /// All filesystem mutations in one move action have completed. Read the
+  /// repository snapshot once and refresh each affected parent exactly once.
+  Future<void> _refreshDirectoriesAfterMove(Set<String> directories) async {
+    if (directories.isEmpty || !mounted) return;
+    final generation = _nativeProjectionGeneration;
+    final workspacePath = widget.workspace.path;
+    bool isCurrent() =>
+        mounted &&
+        generation == _nativeProjectionGeneration &&
+        workspacePath == widget.workspace.path;
+    await _refreshGitStatusSnapshot();
+    for (final directory in directories) {
+      if (!isCurrent()) return;
+      await _refreshDirectory(
+        directory,
+        refreshGitStatus: false,
+        refreshQuickOpen: false,
+      );
+    }
+    if (isCurrent() && _isFiltering) {
+      _workspaceFiles.scheduleQuickOpenRefresh(
+        workspacePath: workspacePath,
+        debounce: Duration.zero,
+      );
     }
   }
 

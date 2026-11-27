@@ -57,6 +57,7 @@ class _FakeWorkspaceFileService({
   final List<String> renamedFiles = <String>[];
   final List<String> deletedFiles = <String>[];
   final List<String> movedFiles = <String>[];
+  void Function(String sourcePath, String movedPath)? beforeMoveEntry;
   final List<_SystemClipboardWrite> systemClipboardWrites =
       <_SystemClipboardWrite>[];
   final List<_ImportedClipboardCall> importedClipboardCalls =
@@ -422,11 +423,12 @@ class _FakeWorkspaceFileService({
     required String relativePath,
     required String targetParentRelativePath,
   }) async {
-    movedFiles.add('$relativePath->$targetParentRelativePath');
     final name = relativePath.split('/').last;
     final movedPath = targetParentRelativePath.isEmpty
         ? name
         : '$targetParentRelativePath/$name';
+    beforeMoveEntry?.call(relativePath, movedPath);
+    movedFiles.add('$relativePath->$targetParentRelativePath');
     return _file(movedPath);
   }
 

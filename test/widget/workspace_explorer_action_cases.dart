@@ -681,6 +681,173 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.clearedClipboardSequences, <int>[cutSequence]);
   });
 
+  testWidgets(
+    'multi-file internal move refreshes Git and each distinct parent once',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [
+          _directory('a', hasChildrenHint: true),
+          _directory('b', hasChildrenHint: true),
+          _directory('dest', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['a'] = [_file('a/one.txt'), _file('a/two.txt')]
+        ..childrenByDirectory['b'] = [_file('b/three.txt'), _file('b/four.txt')]
+        ..childrenByDirectory['dest'] = [_file('dest/keep.txt')];
+      final git = FakeGitBackend();
+      final pathMoves = <String>[];
+      final gitStatuses = <String, GitExplorerStatus>{};
+      service.beforeMoveEntry = (source, moved) {
+        final parent = source.split('/').first;
+        service.childrenByDirectory[parent]!.removeWhere(
+          (entry) => entry.relativePath == source,
+        );
+        service.childrenByDirectory['dest']!.add(_file(moved));
+        gitStatuses[moved] = GitExplorerStatus.added;
+        git.gitExplorerStatusSnapshot = GitExplorerStatusSnapshot(gitStatuses);
+      };
+      await _pumpExplorer(
+        tester,
+        service,
+        gitBackend: git,
+        onPathMoved: (source, moved) async {
+          pathMoves.add('$source->$moved');
+        },
+      );
+      for (final folder in ['a', 'b', 'dest']) {
+        await tester.tap(find.text(folder));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.text('one.txt'));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      for (final name in ['two.txt', 'three.txt', 'four.txt']) {
+        await tester.tap(find.text(name));
+      }
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyX);
+      final cutSequence = service.systemClipboardSequence;
+
+      final readBaseline = service.listChildrenCalls.length;
+      final statusBaseline = git.calls
+          .where((call) => call.method == 'explorerStatusSnapshot')
+          .length;
+      await tester.tap(find.text('dest'), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Paste'));
+      await tester.pumpAndSettle();
+
+      expect(service.movedFiles, [
+        'a/one.txt->dest',
+        'a/two.txt->dest',
+        'b/three.txt->dest',
+        'b/four.txt->dest',
+      ]);
+      expect(pathMoves, [
+        'a/one.txt->dest/one.txt',
+        'a/two.txt->dest/two.txt',
+        'b/three.txt->dest/three.txt',
+        'b/four.txt->dest/four.txt',
+      ]);
+      expect(
+        git.calls
+                .where((call) => call.method == 'explorerStatusSnapshot')
+                .length -
+            statusBaseline,
+        1,
+      );
+      expect(
+        service.listChildrenCalls
+            .skip(readBaseline)
+            .map((call) => call.relativePath)
+            .toList(),
+        ['a', 'dest', 'b'],
+      );
+      expect(service.clearedClipboardSequences, [cutSequence]);
+      expect(find.text('A'), findsNWidgets(4));
+      for (final name in ['one.txt', 'two.txt', 'three.txt', 'four.txt']) {
+        expect(find.text(name), findsOneWidget);
+      }
+    },
+  );
+
+  testWidgets(
+    'partial move failure refreshes completed moves and retains cut clipboard',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [
+          _file('one.txt'),
+          _file('two.txt'),
+          _file('three.txt'),
+          _directory('dest', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['dest'] = [_file('dest/keep.txt')];
+      final git = FakeGitBackend();
+      final pathMoves = <String>[];
+      final attempts = <String>[];
+      service.beforeMoveEntry = (source, moved) {
+        attempts.add(source);
+        if (attempts.length == 2) {
+          throw StateError('simulated move conflict');
+        }
+        service.childrenByDirectory['']!.removeWhere(
+          (entry) => entry.relativePath == source,
+        );
+        service.childrenByDirectory['dest']!.add(_file(moved));
+        git.gitExplorerStatusSnapshot = GitExplorerStatusSnapshot({
+          moved: GitExplorerStatus.added,
+        });
+      };
+      await _pumpExplorer(
+        tester,
+        service,
+        gitBackend: git,
+        onPathMoved: (source, moved) async {
+          pathMoves.add('$source->$moved');
+        },
+      );
+      await tester.tap(find.text('dest'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('one.txt'));
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.tap(find.text('two.txt'));
+      await tester.tap(find.text('three.txt'));
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+      await _pressExplorerFileShortcut(tester, LogicalKeyboardKey.keyX);
+      final readBaseline = service.listChildrenCalls.length;
+      final statusBaseline = git.calls
+          .where((call) => call.method == 'explorerStatusSnapshot')
+          .length;
+      await tester.tap(find.text('dest'), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Paste'));
+      await tester.pumpAndSettle();
+
+      expect(attempts, hasLength(2));
+      expect(service.movedFiles, ['${attempts.first}->dest']);
+      expect(pathMoves, ['${attempts.first}->dest/${attempts.first}']);
+      expect(
+        git.calls
+                .where((call) => call.method == 'explorerStatusSnapshot')
+                .length -
+            statusBaseline,
+        1,
+      );
+      expect(
+        service.listChildrenCalls
+            .skip(readBaseline)
+            .map((call) => call.relativePath)
+            .toList(),
+        ['', 'dest'],
+      );
+      expect(service.clearedClipboardSequences, isEmpty);
+      expect(find.text('A'), findsOneWidget);
+      for (final name in ['one.txt', 'two.txt', 'three.txt']) {
+        expect(find.text(name), findsOneWidget);
+      }
+    },
+  );
+
   testWidgets('Ctrl multi-select and Ctrl+C copies selected files', (
     tester,
   ) async {
