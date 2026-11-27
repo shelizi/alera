@@ -118,15 +118,18 @@ AgentStatusEntry? matchingAgentStatusForTab({
   required WorkspaceTabRecord tab,
   required Map<String, AgentStatusEntry> agentStatuses,
 }) {
-  if (tab.kind != WorkspaceTabKind.terminal) {
-    return null;
-  }
   final entry = agentStatuses[tab.terminalSessionId];
-  if (entry == null ||
+  return agentStatusMatchesTab(tab, entry) ? entry : null;
+}
+
+/// Shared identity guard for map-backed and individual-tab projections.
+bool agentStatusMatchesTab(WorkspaceTabRecord tab, AgentStatusEntry? entry) {
+  if (tab.kind != WorkspaceTabKind.terminal ||
+      entry == null ||
       entry.workspaceId != tab.workspaceId ||
       entry.tabId != tab.id ||
       entry.terminalSessionId != tab.terminalSessionId) {
-    return null;
+    return false;
   }
   // The opaque Host activation token follows the native conversation, not
   // the PTY. Ignore an old presence snapshot during a tab/session switch.
@@ -137,9 +140,9 @@ AgentStatusEntry? matchingAgentStatusForTab({
       tabConversation is String &&
       tabConversation.isNotEmpty &&
       contextConversation != tabConversation) {
-    return null;
+    return false;
   }
-  return entry;
+  return true;
 }
 
 // Urgency ranking for the aggregate workspace status only; row order stays

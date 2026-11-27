@@ -49,22 +49,25 @@ impl WorkbenchTab {
     /// closed PTY or generic Terminal must never inherit another Agent logo.
     /// This is a display-only lookup and does not alter any Host ownership.
     pub fn verified_agent_brand<'a>(&self, sessions: &'a [TerminalSession]) -> Option<&'a str> {
+        self.verified_agent_session(sessions)
+            .and_then(|session| session.agent_type.as_deref())
+    }
+
+    /// Shared exact live owner lookup for branding and task context.
+    pub fn verified_agent_session<'a>(&self, sessions: &'a [TerminalSession]) -> Option<&'a TerminalSession> {
         if self.kind != WorkbenchTabKind::Agent || !self.running {
             return None;
         }
         let WorkbenchTabIdentity::Host(target) = &self.identity else {
             return None;
         };
-        sessions
-            .iter()
-            .find(|session| {
-                session.running
-                    && session.handle == target.handle
-                    && session.workspace_id == target.workspace_id()
-                    && session.tab_id == target.tab_id()
-            })
-            .and_then(|session| session.agent_type.as_deref())
-            .filter(|kind| !kind.trim().is_empty())
+        sessions.iter().find(|session| {
+            session.running
+                && session.handle == target.handle
+                && session.workspace_id == target.workspace_id()
+                && session.tab_id == target.tab_id()
+                && session.agent_type.as_deref().is_some_and(|kind| !kind.trim().is_empty())
+        })
     }
 
     /// Only a current, matching live Host Terminal may supply an MCP indicator.

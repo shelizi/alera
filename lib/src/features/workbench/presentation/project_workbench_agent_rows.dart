@@ -34,19 +34,27 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
       ),
     );
     final groupLabel = context.tr(workspaceAgentGroupLabel(widget.displayKind));
-    // Opt-in only: don't parse or allocate summary history for hidden rows.
-    final overview = showTaskSummaries
-        ? AgentContextOverview.fromRaw(widget.status.contextOverview)
-        : const AgentContextOverview();
-    final description = _agentRunLabel(
+    final presentation = agentSessionPresentation(
       showTaskSummaries: showTaskSummaries,
-      overview: overview,
       tab: widget.tab,
       status: widget.status,
-      displayKind: widget.displayKind,
       showTabTitle: showTabTitle,
-      groupLabel: groupLabel,
     );
+    final description =
+        presentation?.taskTitle ??
+        _agentRunDescription(
+          widget.status,
+          displayKind: widget.displayKind,
+          groupLabel: groupLabel,
+        );
+    final progress = presentation?.progress ?? '';
+    final tooltip = presentation != null
+        ? agentSessionTooltip(
+            presentation,
+            (label) => context.tr(label),
+            stateLabel: groupLabel,
+          )
+        : description;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -75,19 +83,24 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                 crossAxisAlignment: .center,
                 children: <Widget>[
                   Tooltip(
-                    message: groupLabel,
+                    message: tooltip,
+                    constraints: const BoxConstraints(maxWidth: 480),
                     child: WorkspaceAgentGroupGlyph(
                       kind: widget.displayKind,
                       size: 12,
                     ),
                   ),
                   const SizedBox(width: AleraTokens.space6),
-                  AgentIdentityIcon(
-                    agentType: widget.status.agentType,
-                    size: 13,
-                    color: isActive
-                        ? AleraTokens.foreground
-                        : AleraTokens.foregroundMuted,
+                  Tooltip(
+                    message: tooltip,
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: AgentIdentityIcon(
+                      agentType: widget.status.agentType,
+                      size: 13,
+                      color: isActive
+                          ? AleraTokens.foreground
+                          : AleraTokens.foregroundMuted,
+                    ),
                   ),
                   const SizedBox(width: AleraTokens.space6),
                   Expanded(
@@ -96,7 +109,8 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         Tooltip(
-                          message: description,
+                          message: tooltip,
+                          constraints: const BoxConstraints(maxWidth: 480),
                           child: Text(
                             description,
                             maxLines: showTaskSummaries
@@ -116,20 +130,25 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
                           ),
                         ),
                         if (showTaskSummaries &&
-                            overview.displayProgress.isNotEmpty) ...<Widget>[
+                            progress.isNotEmpty) ...<Widget>[
                           const SizedBox(height: 3),
-                          Text(
-                            '最新回報：${overview.displayProgress}',
-                            maxLines: _expanded ? null : 2,
-                            overflow: _expanded ? null : TextOverflow.ellipsis,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: AleraTokens.foregroundMuted,
+                          Tooltip(
+                            message: tooltip,
+                            constraints: const BoxConstraints(maxWidth: 480),
+                            child: Text(
+                              '最新回報：$progress',
+                              maxLines: _expanded ? null : 2,
+                              overflow: _expanded
+                                  ? null
+                                  : TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: AleraTokens.foregroundMuted,
+                              ),
                             ),
                           ),
                         ],
                         if (showTaskSummaries &&
-                            (description.length > 75 ||
-                                overview.displayProgress.length > 55))
+                            (description.length > 75 || progress.length > 55))
                           InkWell(
                             onTap: () => setState(() => _expanded = !_expanded),
                             child: Padding(
@@ -210,33 +229,6 @@ class _AgentRunRowState extends ConsumerState<_AgentRunRow> {
       );
     }
   }
-}
-
-String _agentRunLabel({
-  required bool showTaskSummaries,
-  required AgentContextOverview overview,
-  required WorkspaceTabRecord tab,
-  required AgentStatusEntry status,
-  required WorkspaceAgentGroupKind displayKind,
-  required bool showTabTitle,
-  required String groupLabel,
-}) {
-  if (showTaskSummaries) {
-    if (overview.goal.isNotEmpty) return overview.goal;
-    final prompt = status.prompt.trim();
-    if (prompt.isNotEmpty) return prompt;
-  }
-  if (showTabTitle) {
-    final title = tab.title.trim();
-    if (title.isNotEmpty) {
-      return title;
-    }
-  }
-  return _agentRunDescription(
-    status,
-    displayKind: displayKind,
-    groupLabel: groupLabel,
-  );
 }
 
 String _agentRunDescription(

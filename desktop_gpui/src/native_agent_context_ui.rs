@@ -5,6 +5,49 @@ use super::*;
 use alera_gpui_desktop::terminal::AgentContextOverview;
 use alera_gpui_desktop::visual_tokens::ACCENT;
 
+/// Bounded display projection shared by sidebar Session rows and Tab chips.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct AgentTaskPresentation {
+    pub(super) goal: String,
+    pub(super) progress: String,
+    pub(super) overall: String,
+    pub(super) is_summary: bool,
+}
+
+impl AgentTaskPresentation {
+    pub(super) fn from_context(context: Option<&AgentContextOverview>) -> Self {
+        context.map(|value| Self {
+            goal: value.goal.trim().to_owned(),
+            progress: value.progress.trim().to_owned(),
+            overall: value.overall_summary.trim().to_owned(),
+            is_summary: value.is_summary,
+        }).unwrap_or_default()
+    }
+
+    pub(super) fn title(&self, show: bool, fallback: &str) -> String {
+        if show && !self.goal.is_empty() { self.goal.clone() } else { fallback.to_owned() }
+    }
+
+    pub(super) fn inline_progress(&self, show: bool) -> Option<String> {
+        (show && !self.progress.is_empty()).then(|| self.progress.clone())
+    }
+
+    pub(super) fn tooltip(&self, status: &str, locale: UiLocale) -> String {
+        let mut text = status.to_owned();
+        if !self.goal.is_empty() {
+            text.push_str(&format!("\n\n{}: {}", tr(locale, "Overall Objective"), self.goal));
+        }
+        if !self.overall.is_empty() {
+            text.push_str(&format!("\n\n{}: {}", tr(locale, "Overall Progress Summary"), self.overall));
+        }
+        if !self.progress.is_empty() {
+            let label = if self.is_summary { "Latest Report · AI Summary" } else { "Latest Report · Original Reply" };
+            text.push_str(&format!("\n\n{}: {}", tr(locale, label), self.progress));
+        }
+        text
+    }
+}
+
 pub(super) fn panel(
     context: Option<&AgentContextOverview>,
     expanded: &HashSet<String>,
