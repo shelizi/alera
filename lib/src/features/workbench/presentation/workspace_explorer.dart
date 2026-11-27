@@ -22,6 +22,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_spec.d
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_controller_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_git_snapshot_refresh.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_flatten_strategy.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_node_snapshots.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_projection_index.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
@@ -129,7 +130,8 @@ class const WorkspaceExplorer({
 
 class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   static const String _rootId = 'workspace-root';
-  static const String _placeholderPrefix = '__alera_placeholder__:';
+  WorkspaceExplorerFlattenStrategy _flattenStrategy =
+      WorkspaceExplorerFlattenStrategy();
   static const int _filterResultLimit = 200;
 
   late tree.DirectoryTreeController _controller;
@@ -240,8 +242,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _controller = tree.DirectoryTreeController(
       data: _buildTreeData(),
       selection: tree.SelectionController(mode: tree.SelectionMode.multi),
-      flattenStrategy: const _AleraFlattenStrategy(),
+      flattenStrategy: _flattenStrategy,
       lazyLookupIndexes: true,
+      immutableVisibleRows: true,
     );
     unawaited(_bootstrapExplorer());
   }
@@ -279,11 +282,13 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _watchQuickOpenRefreshQueue.clear();
       _watchDeferredQuickOpenQueue.clear();
       _controller.dispose();
+      _flattenStrategy = WorkspaceExplorerFlattenStrategy();
       _controller = tree.DirectoryTreeController(
         data: _buildTreeData(),
         selection: tree.SelectionController(mode: tree.SelectionMode.multi),
-        flattenStrategy: const _AleraFlattenStrategy(),
+        flattenStrategy: _flattenStrategy,
         lazyLookupIndexes: true,
+        immutableVisibleRows: true,
       );
       unawaited(_restartExplorer());
     } else if (oldWidget.workspace.branch != widget.workspace.branch) {
@@ -870,12 +875,14 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
             ),
           })
         : _treeNodesById.snapshot();
-    return tree.TreeData(
+    final data = tree.TreeData(
       nodes: nodes,
       rootId: _rootId,
       visibleRootId: _rootId,
       omitContainerRowAtRoot: true,
     );
+    _flattenStrategy.prepareUpdate(data, _treeNodesById.takeChangedKeys());
+    return data;
   }
 
   tree.TreeNode _toDartExplorerTreeNode(
@@ -1447,25 +1454,5 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       native.WorkspaceExplorerTreeNodeKind.folder => tree.NodeType.folder,
       native.WorkspaceExplorerTreeNodeKind.file => tree.NodeType.file,
     };
-  }
-}
-
-class const _AleraFlattenStrategy() extends tree.FlattenStrategy {
-  static const tree.DefaultFlattenStrategy _delegate =
-      tree.DefaultFlattenStrategy();
-
-  @override
-  List<tree.VisibleNode> flatten({
-    required tree.TreeData data,
-    required Set<String> expandedIds,
-    String? filterQuery,
-  }) {
-    return _delegate
-        .flatten(data: data, expandedIds: expandedIds, filterQuery: filterQuery)
-        .where(
-          (node) =>
-              !node.id.startsWith(_WorkspaceExplorerState._placeholderPrefix),
-        )
-        .toList(growable: false);
   }
 }

@@ -132,72 +132,101 @@ void main() {
       expect(find.text('draft.md'), findsOneWidget);
     });
 
-    testWidgets('preserves scroll anchor when data is rebuilt', (tester) async {
-      final controller = DirectoryTreeController(data: _buildLargeTree());
-      addTearDown(controller.dispose);
+    for (final immutableRows in [false, true]) {
+      testWidgets(
+          'preserves scroll anchor when rebuilt (immutableRows=$immutableRows)',
+          (tester) async {
+        final controller = DirectoryTreeController(
+            data: _buildLargeTree(), immutableVisibleRows: immutableRows);
+        addTearDown(controller.dispose);
 
-      final scrollController = ScrollController();
-      addTearDown(scrollController.dispose);
+        final scrollController = ScrollController();
+        addTearDown(scrollController.dispose);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: SizedBox(
-            height: 240,
-            child: DirectoryTreeView(
-              controller: controller,
-              nodeBuilder: _buildNode,
-              scrollController: scrollController,
-              preserveScrollOnChanges: true,
+        await tester.pumpWidget(
+          MaterialApp(
+            home: SizedBox(
+              height: 240,
+              child: DirectoryTreeView(
+                controller: controller,
+                nodeBuilder: _buildNode,
+                scrollController: scrollController,
+                preserveScrollOnChanges: true,
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      await tester.pump();
-      expect(scrollController.hasClients, isTrue);
+        await tester.pump();
+        expect(scrollController.hasClients, isTrue);
 
-      scrollController.jumpTo(140);
-      await tester.pump();
-      final initialOffset = scrollController.offset;
+        scrollController.jumpTo(140);
+        await tester.pump();
+        final initialOffset = scrollController.offset;
 
-      final theme = DirectoryTreeTheme.of(
-        tester.element(find.byType(DirectoryTreeView)),
-      );
-      final rowHeight = theme.rowHeight;
-      final current = controller.data;
-      final previousNodes = List<VisibleNode>.from(controller.visibleNodes);
-      final anchorIndex = (initialOffset / rowHeight).floor();
-      final anchorId = previousNodes[anchorIndex].id;
-      final nextNodes = Map<String, TreeNode>.from(current.nodes);
-      const newNodeId = 'file_new';
-      nextNodes[newNodeId] = TreeNode(
-        id: newNodeId,
-        name: 'file_new.txt',
-        type: NodeType.file,
-        parentId: 'home',
-        virtualPath: '/home/file_new.txt',
-        entryId: 'entry_new',
-      );
-      final home = nextNodes['home']!;
-      nextNodes['home'] = home.copyWith(
-        childIds: [newNodeId, ...home.childIds],
-      );
+        final theme = DirectoryTreeTheme.of(
+          tester.element(find.byType(DirectoryTreeView)),
+        );
+        final rowHeight = theme.rowHeight;
+        final current = controller.data;
+        final previousNodes = List<VisibleNode>.from(controller.visibleNodes);
+        final anchorIndex = (initialOffset / rowHeight).floor();
+        final anchorId = previousNodes[anchorIndex].id;
+        final nextNodes = Map<String, TreeNode>.from(current.nodes);
+        const newNodeId = 'file_new';
+        nextNodes[newNodeId] = TreeNode(
+          id: newNodeId,
+          name: 'file_new.txt',
+          type: NodeType.file,
+          parentId: 'home',
+          virtualPath: '/home/file_new.txt',
+          entryId: 'entry_new',
+        );
+        final home = nextNodes['home']!;
+        nextNodes['home'] = home.copyWith(
+          childIds: [newNodeId, ...home.childIds],
+        );
 
-      controller.rebuild(
-        TreeData(
-          nodes: nextNodes,
-          rootId: current.rootId,
-          visibleRootId: current.visibleRootId,
-        ),
-      );
+        controller.rebuild(
+          TreeData(
+            nodes: nextNodes,
+            rootId: current.rootId,
+            visibleRootId: current.visibleRootId,
+          ),
+        );
 
-      await tester.pumpAndSettle();
+        await tester.pumpAndSettle();
 
-      expect(controller.visibleNodes.any((n) => n.id == newNodeId), isTrue);
-      final newIndex = (scrollController.offset / rowHeight).floor();
-      final anchoredId = controller.visibleNodes[newIndex].id;
-      expect(anchoredId, anchorId);
-    });
+        expect(controller.visibleNodes.any((n) => n.id == newNodeId), isTrue);
+        final newIndex = (scrollController.offset / rowHeight).floor();
+        final anchoredId = controller.visibleNodes[newIndex].id;
+        expect(anchoredId, anchorId);
+        // Selection must still update mounted rows without disturbing
+        // the anchor or changing the already published visible list.
+        final afterRows = controller.visibleNodes;
+        final afterOffset = scrollController.offset;
+        controller.selectOnly(anchorId);
+        await tester.pumpAndSettle();
+        expect(controller.visibleNodes, same(afterRows));
+        expect(scrollController.offset, afterOffset);
+        expect(controller.selection.isSelected(anchorId), isTrue);
+
+        // Removing a preceding item moves the anchor back by one row.
+        controller.rebuild(
+          TreeData(
+            nodes: Map.unmodifiable(current.nodes),
+            rootId: current.rootId,
+            visibleRootId: current.visibleRootId,
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+            controller
+                .visibleNodes[(scrollController.offset / rowHeight).floor()].id,
+            anchorId);
+        expect(scrollController.offset, closeTo(initialOffset, 0.01));
+      });
+    }
 
     testWidgets('rebuilds cleanly when controller instance changes',
         (tester) async {

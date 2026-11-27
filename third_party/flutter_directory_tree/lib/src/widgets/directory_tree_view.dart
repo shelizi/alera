@@ -254,26 +254,51 @@ class _DirectoryTreeViewState extends State<DirectoryTreeView> {
 
     if (_dirtySnapshot) {
       final oldNodes = _visibleSnapshot;
-      final newNodes = List<VisibleNode>.from(widget.controller.visibleNodes);
+      final immutable = widget.controller.immutableVisibleRows;
+      final newNodes = immutable
+          ? widget.controller.visibleNodes
+          : List<VisibleNode>.from(widget.controller.visibleNodes);
 
       if (widget.preserveScrollOnChanges &&
           oldNodes.isNotEmpty &&
           _ownScroll.hasClients) {
-        final diff = diffVisibleNodes(oldNodes, newNodes);
-        if (!diff.isNoop) {
-          final oldOffset = _ownScroll.offset.clamp(0.0, double.infinity);
-          final topIndex = (oldOffset / theme.rowHeight)
-              .floor()
-              .clamp(0, oldNodes.length - 1);
-          final anchorId = oldNodes[topIndex].id;
-          final newIndex = newNodes.indexWhere((n) => n.id == anchorId);
-          if (newIndex != -1) {
-            schedulePreserveScrollOffset(
-              controller: _ownScroll,
-              before: oldNodes,
-              after: newNodes,
-              rowExtent: theme.rowHeight,
-            );
+        if (immutable) {
+          // The LIS edit script is only used below to decide whether to
+          // preserve the anchor; with unique IDs, its position is enough.
+          if (!identical(oldNodes, newNodes)) {
+            final offset = _ownScroll.offset.clamp(0.0, double.infinity);
+            final topIndex = (offset / theme.rowHeight)
+                .floor()
+                .clamp(0, oldNodes.length - 1);
+            final anchor = oldNodes[topIndex].id;
+            final nextIndex = widget.controller.indexOfNode(anchor);
+            if (nextIndex != -1 &&
+                (nextIndex != topIndex || newNodes.length < oldNodes.length)) {
+              schedulePreserveScrollOffset(
+                controller: _ownScroll,
+                before: oldNodes,
+                after: newNodes,
+                rowExtent: theme.rowHeight,
+              );
+            }
+          }
+        } else {
+          final diff = diffVisibleNodes(oldNodes, newNodes);
+          if (!diff.isNoop) {
+            final oldOffset = _ownScroll.offset.clamp(0.0, double.infinity);
+            final topIndex = (oldOffset / theme.rowHeight)
+                .floor()
+                .clamp(0, oldNodes.length - 1);
+            final anchorId = oldNodes[topIndex].id;
+            final newIndex = newNodes.indexWhere((n) => n.id == anchorId);
+            if (newIndex != -1) {
+              schedulePreserveScrollOffset(
+                controller: _ownScroll,
+                before: oldNodes,
+                after: newNodes,
+                rowExtent: theme.rowHeight,
+              );
+            }
           }
         }
       }

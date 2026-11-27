@@ -17,3 +17,12 @@ bindings. Full immutable tree snapshots and public navigation APIs remain.
 
 Tests live in test/unit/workspace_explorer_tree_publication_test.dart in the
 Alera root. Re-evaluate this override when upgrading upstream.
+
+Additional opt-in patch: DirectoryTreeController.immutableVisibleRows
+(default false) supports immutable flattened lists with unique row IDs.
+Identical list publications keep their visible index; DirectoryTreeView
+uses the existing unmodifiable list and preserves the scroll anchor
+without constructing a full LIS edit script. Alera supplies an
+incremental root-branch flatten strategy. Existing default controller
+and view behavior is retained. Tests cover scroll anchoring and selection
+in both modes; Alera unit tests cover incremental/reference row parity.

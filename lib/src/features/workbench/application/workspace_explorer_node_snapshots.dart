@@ -17,11 +17,31 @@ final class WorkspaceExplorerNodeSnapshots<V extends Object> {
   final Set<String> _appendedKeys = {};
   Map<String, V>? _published;
 
+  // Independently track the delta since the last UI handoff, including
+  // edits that were compacted into a new base. Bound the invalidation plan.
+  Set<String>? _pendingChangedKeys;
+
+  void _recordChange(String key) {
+    final pending = _pendingChangedKeys;
+    if (pending == null) return;
+    pending.add(key);
+    if (pending.length > 512) _pendingChangedKeys = null;
+  }
+
+  /// Drain a complete change set after snapshot() and before publication.
+  /// Null indicates a full replacement or too many accumulated edits.
+  Set<String>? takeChangedKeys() {
+    final pending = _pendingChangedKeys;
+    _pendingChangedKeys = <String>{};
+    return pending;
+  }
+
   void put(String key, V value) {
     if (!_base.containsKey(key) || _removedBaseKeys.contains(key)) {
       _appendedKeys.add(key);
     }
     _changes[key] = value;
+    _recordChange(key);
     _published = null;
   }
 
@@ -30,6 +50,7 @@ final class WorkspaceExplorerNodeSnapshots<V extends Object> {
     final hadBase = _base.containsKey(key) && _removedBaseKeys.add(key);
     if (!hadChange && !hadBase) return;
     _appendedKeys.remove(key);
+    _recordChange(key);
     _published = null;
   }
 
@@ -42,6 +63,7 @@ final class WorkspaceExplorerNodeSnapshots<V extends Object> {
     _removedBaseKeys.clear();
     _appendedKeys.clear();
     _published = _base;
+    _pendingChangedKeys = null;
   }
 
   /// Returns the exact same immutable snapshot until another edit arrives.

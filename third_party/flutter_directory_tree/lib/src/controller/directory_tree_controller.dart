@@ -37,6 +37,7 @@ class DirectoryTreeController extends ChangeNotifier {
     bool seedSelectionFromCore = true,
     this.autoExpandVisibleRoot = true,
     this.lazyLookupIndexes = false,
+    this.immutableVisibleRows = false,
   })  : _data = data,
         _ownsExpansions = expansions == null,
         _ownsSelection = selection == null,
@@ -94,6 +95,11 @@ class DirectoryTreeController extends ChangeNotifier {
   /// navigate by node ID. Lookup indexes are still cached per snapshot.
   final bool lazyLookupIndexes;
 
+  /// Opt-in for a flatten strategy that publishes immutable row lists with
+  /// globally unique IDs. Reuse an identical list/index and let the view
+  /// retain that snapshot and preserve its scroll anchor directly.
+  final bool immutableVisibleRows;
+
   /// The sub-controller managing which folder nodes are currently open.
   ///
   /// Exposes methods like [expandAll], [collapseAll] and allows listening to expansion state changes.
@@ -139,6 +145,7 @@ class DirectoryTreeController extends ChangeNotifier {
   late List<VisibleNode> _visibleNodes;
   late UnmodifiableListView<VisibleNode> _visibleNodesView;
   late Map<String, int> _indexById;
+  List<VisibleNode>? _lastImmutableRows;
   Map<String, String>? _idByVirtualPath;
   Map<String, String>? _idByEntryId;
   bool _suppressBubble = false;
@@ -437,11 +444,16 @@ class DirectoryTreeController extends ChangeNotifier {
   /// * Updates [_visibleNodes] and [_indexById].
   /// * This is O(N) relative to the visible nodes, so we cache the result until invalidation.
   void _recomputeVisible() {
-    _visibleNodes = _flattenStrategy.flatten(
+    final next = _flattenStrategy.flatten(
       data: _data,
       expandedIds: expansions.expandedIds,
       filterQuery: _filterQuery.isEmpty ? null : _filterQuery,
     );
+    if (immutableVisibleRows) {
+      if (identical(next, _lastImmutableRows)) return;
+      _lastImmutableRows = next;
+    }
+    _visibleNodes = next;
     _visibleNodesView = UnmodifiableListView(_visibleNodes);
     _indexById = {
       for (var i = 0; i < _visibleNodes.length; i++) _visibleNodes[i].id: i,
