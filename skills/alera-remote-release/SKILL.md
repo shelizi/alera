@@ -19,9 +19,11 @@ Do not manually bump versions, edit metadata, construct a ZIP, or invoke the low
 
 - Prefer an authorized managed command with a fixed one-hour process deadline and a unique operation_id per requested release; poll/reattach the same operation. Do not spawn a new process just because the response wait times out.
 - A running job is not a completed release. Report completion only after exit 0 and the publisher's ZIP/hash/container checks. If the retained operation is lost, verify the served manifest and SHA-256 against the expected release before reporting success.
-- After a failed/interrupted run, diagnose the actual error, then rerun the same command to resume its pending version when main still matches. The record is stored in the Git common directory, not a tracked file. If main advanced or metadata is dirty, stop and inspect; do not reset, discard the record, or republish stale source automatically.
+- After a failed/interrupted run, diagnose the actual error, then rerun the same command to resume its pending version when main still matches. The pending record and validated promotion receipt are stored in the Git common directory, not tracked files. If the receipt exists, verify the already published archive (exact version, commit, SHA-256, ZIP and service HTTP checks); do not rebuild or upload again.
+- For a legacy pending release without a receipt, or when main advanced after promotion, recover only after independently obtaining the original validated local archive SHA-256 (retained build artifact or successful local validation log). Run the same entrypoint with -RecoverPublishedSha256 <64-hex-digest>. It identifies the exact pending release commit in main history, verifies the existing remote archive and live service, and clears pending only on success. Never use a hash taken solely from the remote package as evidence of its local build identity. Do not reset, discard the pending record, or republish stale source automatically.
+- Do not restart a healthy file-server for a routine package update. The mounted uploads directory makes the atomic file replacement visible to the running server. Verify the container hash, login HTTP 200, and protected download HTTP 302. If the existing container is exited or created, attempt a bounded start once and verify again; do not force restart, recreate containers, or restart Docker. A running but unhealthy service or hash mismatch is a failed publication verification, not permission to disrupt unrelated services.
 - Optional read-only preview: append -Plan. This does not bump, commit, build, upload, or contact GitHub.
-- The existing tool/release/publish_windows_final_link.ps1 is the low-level publisher, not the default entrypoint. It handles isolated worktrees, Release checks, staged rsync, atomic promotion, and container-visible SHA-256; the new entrypoint additionally requests exact commit/version and stable-version protection.
+- The existing tool/release/publish_windows_final_link.ps1 is the low-level publisher, not the default entrypoint. It handles isolated worktrees, Release checks, staged rsync, atomic promotion, validated promotion receipts, and container-visible SHA-256 plus non-disruptive HTTP checks; the new entrypoint additionally requests exact commit/version and stable-version protection.
 - For an explicitly requested GitHub push/full release, follow the separate Git identity gate below. Do not treat internal half-compiled publication alone as permission to push tags.
 
 ## Diagnostic/reference workflow
@@ -54,7 +56,7 @@ Do not manually bump versions, edit metadata, construct a ZIP, or invoke the low
   - leave mobile fields unchanged unless the user explicitly requests a mobile release.
 - Commit only these release metadata changes as `release: v<new version>` before running the Final-Link publisher.
 - Use the resulting release commit as the intended local `main` HEAD for package identity checks and publication.
-- Never republish the same desktop version as the current stable package unless the user explicitly asks for a rebuild of an existing version.
+- Never republish the same desktop version as the current stable package unless the user explicitly asks for a rebuild of an existing version. Prefer verify-only recovery of a validated existing publication.
 
 3. Build/export with the tracked Final-Link exporter.
 

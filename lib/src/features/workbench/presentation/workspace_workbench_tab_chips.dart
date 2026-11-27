@@ -203,19 +203,57 @@ class const _WorkspaceTabChip({
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(agentTitleAvailableProvider);
+    final AgentSessionPresentation? presentation;
+    if (tab.kind == WorkspaceTabKind.terminal) {
+      final preferences = ref.watch(
+        settingsControllerProvider.select(
+          (settings) => (
+            summaries: settings.agents.showTaskSummariesInSidebar,
+            titles: settings.agents.showTabTitlesInSidebar,
+          ),
+        ),
+      );
+      AgentSessionPresentation? project(AgentStatusEntry? entry) =>
+          agentSessionPresentation(
+            tab: tab,
+            status: entry,
+            showTaskSummaries: preferences.summaries,
+            showTabTitle: preferences.titles,
+          );
+      // Only the displayed fields of this exact Agent can rebuild its chip.
+      presentation = liveStatus
+          ? ref.watch(
+              agentStatusControllerProvider.select(
+                (statuses) => project(statuses[tab.terminalSessionId]),
+              ),
+            )
+          : project(status);
+    } else {
+      presentation = null;
+    }
     final session = terminalSession;
     if (session == null) {
-      return _buildChip(context, _workspaceTabTitle(tab), ref);
+      return _buildChip(context, _workspaceTabTitle(tab), ref, presentation);
     }
     // Title only: listening to the whole session rebuilt every chip on each
     // OSC title change, which shells emit per prompt.
     return ValueListenableBuilder<String>(
       valueListenable: session.titleListenable,
-      builder: (context, title, _) => _buildChip(context, title, ref),
+      builder: (context, title, _) =>
+          _buildChip(context, title, ref, presentation),
     );
   }
 
-  Widget _buildChip(BuildContext context, String title, WidgetRef ref) {
+  Widget _buildChip(
+    BuildContext context,
+    String title,
+    WidgetRef ref,
+    AgentSessionPresentation? presentation,
+  ) {
+    final caption = presentation?.taskTitle ?? title;
+    final tooltip = presentation == null
+        ? caption
+        : agentSessionTooltip(presentation, (label) => context.tr(label));
     return GestureDetector(
       onSecondaryTapDown: (details) =>
           unawaited(_openContextMenu(context, details.globalPosition, ref)),
@@ -242,11 +280,16 @@ class const _WorkspaceTabChip({
             child: Row(
               mainAxisSize: .min,
               children: <Widget>[
-                _WorkspaceTabLeadingIcon(
-                  tab: tab,
-                  color: active
-                      ? AleraTokens.foreground
-                      : AleraTokens.foregroundMuted,
+                Tooltip(
+                  message: tooltip,
+                  constraints: const BoxConstraints(maxWidth: 480),
+                  child: _WorkspaceTabLeadingIcon(
+                    tab: tab,
+                    agentType: presentation?.agentType,
+                    color: active
+                        ? AleraTokens.foreground
+                        : AleraTokens.foregroundMuted,
+                  ),
                 ),
                 const SizedBox(width: AleraTokens.space4),
                 _WorkspaceTabAttentionDot(
@@ -257,20 +300,26 @@ class const _WorkspaceTabChip({
                 const SizedBox(width: AleraTokens.space4),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxWidth: _tabTitleMaxWidth(tab.kind),
+                    maxWidth: presentation != null
+                        ? 180
+                        : _tabTitleMaxWidth(tab.kind),
                   ),
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: .ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: active
-                          ? AleraTokens.foreground
-                          : AleraTokens.foregroundMuted,
-                      fontStyle: tab.isPreview
-                          ? FontStyle.italic
-                          : FontStyle.normal,
+                  child: Tooltip(
+                    message: tooltip,
+                    constraints: const BoxConstraints(maxWidth: 480),
+                    child: Text(
+                      caption,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: .ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: active
+                            ? AleraTokens.foreground
+                            : AleraTokens.foregroundMuted,
+                        fontStyle: tab.isPreview
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                      ),
                     ),
                   ),
                 ),
@@ -556,9 +605,13 @@ enum _TabMenuAction {
 class const _WorkspaceTabLeadingIcon({
   required final WorkspaceTabRecord tab,
   required final Color color,
+  final AgentType? agentType,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    if (tab.kind == WorkspaceTabKind.terminal && agentType != null) {
+      return AgentIdentityIcon(agentType: agentType!, color: color, size: 12);
+    }
     return switch (tab.kind) {
       WorkspaceTabKind.editor ||
       WorkspaceTabKind.markdownViewer ||

@@ -14,7 +14,10 @@ param(
     [string]$ExpectedCommit = '',
     [string]$ExpectedVersion = '',
     [switch]$ProtectStableVersion,
-    [switch]$AllowSamePublishedCommit
+    [switch]$AllowSamePublishedCommit,
+    [switch]$VerifyPublishedOnly,
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$ExpectedSha256,
+    [string]$ReceiptPath = ''
 )
 
 Set-StrictMode -Version Latest
@@ -382,6 +385,77 @@ function Get-RemoteHash {
     return $match.Groups[1].Value.ToUpperInvariant()
 }
 
+function Invoke-FileServerCommand([string]$Command) {
+    return @(Invoke-Checked -FilePath $script:Ssh -Arguments @(
+        $RemoteHost, $Command
+    ) -Capture)
+}
+
+function Get-FileServerState {
+    $state = (Invoke-FileServerCommand "timeout 10s docker inspect --format '{{.State.Status}}' $ContainerName") -join ''
+    return $state.Trim()
+}
+
+function Assert-ServedPackage([string]$ExpectedHash) {
+    $containerPath = '/app/uploads/alera/Alera-Final-Link-Kit.zip'
+    $state = Get-FileServerState
+    if ($state -in @('exited','created')) {
+        Write-Warning "File server is $state; starting the existing container once (no restart)."
+        try {
+            Invoke-FileServerCommand "timeout 25s docker start $ContainerName" | Out-Null
+        } catch {
+            Write-Warning 'Container start did not return success; checking actual service state before deciding.'
+        }
+    } elseif ($state -notin @('running','restarting')) {
+        throw "File server state '$state' requires manual investigation. No restart attempted."
+    }
+    $last = 'Service not yet verified.'
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            if ((Get-FileServerState) -ne 'running') { throw 'File server is not running.' }
+            $hashText = (Invoke-FileServerCommand "timeout 10s docker exec $ContainerName sha256sum $containerPath") -join "\n"
+            $match = [regex]::Match($hashText,'(?im)^([0-9a-f]{64})\s+/app/uploads/alera/Alera-Final-Link-Kit\.zip\s*$')
+            if (-not $match.Success -or $match.Groups[1].Value -ne $ExpectedHash) {
+                throw 'Container-visible package hash does not match the verified archive.'
+            }
+            $login = ((Invoke-FileServerCommand "curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/login") -join '').Trim()
+            if ($login -ne '200') { throw "File server login HTTP status: $login" }
+            $download = ((Invoke-FileServerCommand "curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/download/alera/Alera-Final-Link-Kit.zip") -join '').Trim()
+            if ($download -ne '302') { throw "Protected download route HTTP status: $download" }
+            Write-Host "File server: running; login HTTP $login; protected download HTTP $download; container SHA256 $ExpectedHash"
+            return
+        } catch { $last = $_.Exception.Message }
+        if ($attempt -lt 5) { Start-Sleep -Seconds 2 }
+    }
+    throw "Published archive may be present, but file-server verification failed: $last. No forced restart performed."
+}
+
+function Assert-PublishedIdentity([string]$RemotePath,[string]$Version,[string]$Commit,[string]$Hash) {
+    $raw = ((Invoke-FileServerCommand "timeout 15s unzip -p $RemotePath kit-manifest.json") -join [Environment]::NewLine).Trim().TrimStart([char]0xFEFF)
+    $manifest = $raw | ConvertFrom-Json
+    if ($manifest.product -ne 'Alera' -or $manifest.version -ne $Version -or $manifest.sourceCommit -ne $Commit) {
+        throw 'Published manifest does not match the pending release. Refusing recovery.'
+    }
+    if ((Get-RemoteHash -RemotePath $RemotePath) -ne $Hash) { throw 'Published archive SHA-256 differs from validated local artifact.' }
+    Assert-ServedPackage $Hash
+    Write-Host "Verified existing publication: $Version ($Commit), ZIP_OK, SHA256 $Hash"
+}
+
+function Write-PublishReceipt($Artifact) {
+    if (-not $ReceiptPath) { return }
+    $receipt = [pscustomobject]@{
+        schemaVersion=1
+        version=$Artifact.Version
+        commit=$Artifact.Commit
+        sha256=$Artifact.Sha256
+        size=$Artifact.Size
+    }
+    $temp = "$ReceiptPath.$PID.tmp"
+    [IO.File]::WriteAllText($temp,($receipt | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+    if ([IO.File]::Exists($ReceiptPath)) { [IO.File]::Replace($temp,$ReceiptPath,$null) }
+    else { [IO.File]::Move($temp,$ReceiptPath) }
+}
+
 if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
     [System.Runtime.InteropServices.OSPlatform]::Windows
 )) {
@@ -390,6 +464,14 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:RepoRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir '..\..')).Path
+if ($VerifyPublishedOnly) {
+    if ($ExpectedCommit -notmatch '^[0-9a-f]{40}$' -or $ExpectedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$' -or -not $ExpectedSha256) {
+        throw 'VerifyPublishedOnly requires exact commit, version and a previously validated local SHA-256.'
+    }
+    $script:Ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
+    Assert-PublishedIdentity -RemotePath "$RemoteDirectory/Alera-Final-Link-Kit.zip" -Version $ExpectedVersion -Commit $ExpectedCommit -Hash $ExpectedSha256
+    return
+}
 if ($env:CI -ne 'true') {
     & (Join-Path $script:RepoRoot 'tool\development\prepare_windows_build_storage.ps1') -RepoRoot $script:RepoRoot
 }
@@ -521,46 +603,11 @@ try {
         throw "Remote stable hash mismatch. Local $($artifact.Sha256), remote $stableHash."
     }
 
-    if (-not $NoRestart) {
-        Write-Step "Restart $ContainerName and verify the served package"
-        $containerPath = '/app/uploads/alera/Alera-Final-Link-Kit.zip'
-        Invoke-Checked -FilePath $script:Ssh -Arguments @($RemoteHost, "docker restart $ContainerName >/dev/null")
-
-        $containerHash = $null
-        $lastContainerOutput = ''
-        for ($attempt = 1; $attempt -le 10; $attempt++) {
-            try {
-                $remote = Invoke-Checked -FilePath $script:Ssh -Arguments @(
-                    $RemoteHost,
-                    "docker exec $ContainerName sha256sum $containerPath && docker ps --filter name=^/$ContainerName`$ --format '{{.Names}}\t{{.Status}}\t{{.Image}}'"
-                ) -Capture
-                $lastContainerOutput = $remote -join "`n"
-                $containerHashMatch = [regex]::Match(
-                    $lastContainerOutput,
-                    '(?im)^([0-9a-f]{64})\s+/app/uploads/alera/Alera-Final-Link-Kit\.zip\s*$'
-                )
-                if ($containerHashMatch.Success) {
-                    $containerHash = $containerHashMatch.Groups[1].Value.ToUpperInvariant()
-                    break
-                }
-            }
-            catch {
-                $lastContainerOutput = $_.Exception.Message
-            }
-
-            if ($attempt -lt 10) {
-                Start-Sleep -Seconds 1
-            }
-        }
-
-        if (-not $containerHash) {
-            throw "Could not verify the package inside $ContainerName after restart.`n$lastContainerOutput"
-        }
-        if ($containerHash -ne $artifact.Sha256) {
-            throw "Container-visible hash mismatch. Local $($artifact.Sha256), container $containerHash."
-        }
-    }
-
+    # Persist the verified promotion before checking service availability. A retry
+    # can verify the same bytes without another build, upload, or version bump.
+    Write-PublishReceipt $artifact
+    Write-Step 'Verify file-server and served package without restarting'
+    Assert-ServedPackage $artifact.Sha256
     Write-Step 'Completed'
     Write-Host "Commit:  $commit"
     Write-Host "Package: $($artifact.ZipPath)"

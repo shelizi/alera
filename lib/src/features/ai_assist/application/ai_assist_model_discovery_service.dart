@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_process_failure.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/process/command_environment_resolver.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 
@@ -20,6 +21,62 @@ class const AiAssistModelDiscoveryResult({
 
 abstract interface class AiAssistModelDiscoveryService {
   Future<AiAssistModelDiscoveryResult> discover(AgentType agentType);
+}
+
+/// The settings list must describe the very same CLI environment used by
+/// background Host jobs. An old/offline Host is an error, not a fallback to
+/// a different local process that could have another account or PATH.
+class RuntimeAiAssistModelDiscoveryService
+    implements AiAssistModelDiscoveryService {
+  const RuntimeAiAssistModelDiscoveryService(this.client);
+  final RuntimeHostClient client;
+
+  @override
+  Future<AiAssistModelDiscoveryResult> discover(AgentType agentType) async {
+    final spec = aiAssistCapabilityFor(agentType);
+    if (spec == null || spec.modelsCommand == null) {
+      return AiAssistModelDiscoveryResult(
+        success: spec != null,
+        agentType: agentType,
+        models: spec?.models ?? const [],
+        defaultModelId: spec?.defaultModelId,
+        error: spec == null ? 'Agent does not support AI Assist.' : null,
+      );
+    }
+    AiAssistModelDiscoveryResult failure(String message) =>
+        AiAssistModelDiscoveryResult(
+          success: false,
+          agentType: agentType,
+          models: spec.models,
+          defaultModelId: spec.defaultModelId,
+          error: message,
+        );
+    try {
+      final raw = await client.runtimeRequest('aiText.models.discover', {
+        'agent': agentType.key,
+      }, const Duration(seconds: 85));
+      if (raw is! Map || raw['stdout'] is! String || raw['stderr'] is! String) {
+        return failure(
+          'Runtime Host returned no model discovery result. Update the Host.',
+        );
+      }
+      var models = spec.parseModels(raw['stdout'] as String);
+      if (models.isEmpty) models = spec.parseModels(raw['stderr'] as String);
+      if (models.isEmpty) {
+        return failure(
+          'Runtime Host returned no recognized models. Check CLI login and version.',
+        );
+      }
+      return AiAssistModelDiscoveryResult(
+        success: true,
+        agentType: agentType,
+        models: models,
+        defaultModelId: spec.modelCanInherit ? null : spec.defaultModelId,
+      );
+    } catch (error) {
+      return failure('Runtime Host model discovery failed: $error');
+    }
+  }
 }
 
 class CliAiAssistModelDiscoveryService({

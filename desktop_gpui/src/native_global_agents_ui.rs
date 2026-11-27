@@ -18,6 +18,99 @@ pub(super) struct GlobalHistoryPreview {
     native_id: String,
 }
 
+// Keep readable multi-line previews bounded without truncating to one line.
+fn dashboard_card_preview(text: &str, cap: usize, lines: usize) -> String {
+    let mut preview = String::new();
+    let mut line_count = 1;
+    for (index, ch) in text.chars().enumerate() {
+        if index >= cap || (ch == '\n' && line_count >= lines) {
+            preview.push('…');
+            break;
+        }
+        if ch == '\n' {
+            line_count += 1;
+        }
+        preview.push(ch);
+    }
+    preview
+}
+
+#[cfg(test)]
+mod dashboard_card_preview_tests {
+    use super::dashboard_card_preview;
+
+    #[test]
+    fn keeps_multiline_text_and_unicode_within_preview_bounds() {
+        assert_eq!(dashboard_card_preview("目標\n進度", 20, 6), "目標\n進度");
+        assert_eq!(dashboard_card_preview("目標\n進度", 20, 1), "目標…");
+        assert_eq!(dashboard_card_preview("進度更新", 3, 6), "進度更…");
+        assert_eq!(dashboard_card_preview("進度更新", 4, 6), "進度更新");
+    }
+}
+
+fn dashboard_completion(session: &TerminalSession) -> Option<&str> {
+    if alera_gpui_desktop::agent_status_visual::dashboard_status_group(
+        session.agent_state,
+        session.interrupted,
+    )
+    .0 != 4
+    {
+        return None;
+    }
+    session
+        .agent_state_started_at
+        .as_deref()
+        .or(session.agent_updated_at.as_deref())
+}
+
+fn dashboard_identity(session: &TerminalSession) -> (String, String, String) {
+    (
+        session.handle.clone(),
+        session.workspace_id.clone(),
+        session.tab_id.clone(),
+    )
+}
+
+pub(super) fn dashboard_done_unread(
+    session: &TerminalSession,
+    receipts: &HashMap<(String, String, String), String>,
+) -> bool {
+    dashboard_completion(session).is_some_and(|generation| {
+        receipts
+            .get(&dashboard_identity(session))
+            .map(String::as_str)
+            != Some(generation)
+    })
+}
+
+fn sort_dashboard_done_peers(
+    sessions: &mut [TerminalSession],
+    receipts: &HashMap<(String, String, String), String>,
+) {
+    sessions.sort_by(|a, b| {
+        let group = |session: &TerminalSession| {
+            alera_gpui_desktop::agent_status_visual::dashboard_status_group(
+                session.agent_state,
+                session.interrupted,
+            )
+            .0
+        };
+        group(a).cmp(&group(b)).then_with(|| {
+            if group(a) != 4 {
+                return std::cmp::Ordering::Equal;
+            }
+            let time = |session: &TerminalSession| {
+                dashboard_completion(session)
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            };
+            dashboard_done_unread(b, receipts)
+                .cmp(&dashboard_done_unread(a, receipts))
+                .then_with(|| time(b).cmp(&time(a)))
+                .then_with(|| a.tab_id.cmp(&b.tab_id))
+        })
+    });
+}
+
 fn history_preview_text(value: Option<&serde_json::Value>, cap: usize) -> String {
     value
         .and_then(serde_json::Value::as_str)
@@ -371,6 +464,83 @@ fn parse_history_previews(
 mod gpui_dashboard_parity_tests {
     use super::*;
 
+    #[test]
+    fn dashboard_uses_same_detected_agent_choices_as_new_tab_without_profiles() {
+        let installed = [
+            InstalledAgentCli {
+                id: "codex".into(),
+                display_name: "Codex".into(),
+                executable_path: PathBuf::from("codex.exe"),
+            },
+            InstalledAgentCli {
+                id: "agy".into(),
+                display_name: "Antigravity".into(),
+                executable_path: PathBuf::from("agy.exe"),
+            },
+            InstalledAgentCli {
+                id: "pi".into(),
+                display_name: "Pi".into(),
+                executable_path: PathBuf::from("pi.cmd"),
+            },
+        ];
+        let expected: Vec<_> = installed
+            .iter()
+            .map(|agent| (agent.id.clone(), agent.new_tab_menu_label().to_owned()))
+            .collect();
+        assert_eq!(dashboard_installed_choices(&installed), expected);
+        assert!(dashboard_installed_choices(&[]).is_empty());
+    }
+
+    #[test]
+    fn dashboard_direct_launch_verifies_same_host_identity_as_new_tab() {
+        let receipt = GlobalAgentLaunchReceipt::Installed(
+            alera_gpui_desktop::terminal::CreatedHostTerminal {
+                handle: "session".into(),
+                workspace_id: "workspace".into(),
+                tab_id: "tab".into(),
+            },
+        );
+        let mut session = running("session", "workspace", "tab", "2026-11-27T12:00:00Z");
+        session.agent_type = None;
+        assert!(receipt.matches(&[session.clone()], "pi"));
+        session.agent_type = Some("pi".into());
+        assert!(receipt.matches(&[session.clone()], "pi"));
+        assert!(!receipt.matches(&[session.clone()], "codex"));
+        session.workspace_id = "other".into();
+        assert!(!receipt.matches(&[session.clone()], "pi"));
+        session.workspace_id = "workspace".into();
+        session.running = false;
+        assert!(!receipt.matches(&[session], "pi"));
+    }
+
+    #[test]
+    fn done_unread_precedes_read_by_completion_not_updated_at() {
+        use alera_gpui_desktop::terminal::AgentActivityState;
+        let mut old = running("old", "w", "old", "2026-11-27T12:50:00Z");
+        old.agent_state = Some(AgentActivityState::Done);
+        old.agent_state_started_at = Some("2026-11-27T12:01:00Z".into());
+        let mut new = running("new", "w", "new", "2026-11-27T12:03:00Z");
+        new.agent_state = Some(AgentActivityState::Done);
+        new.agent_state_started_at = Some("2026-11-27T12:03:00Z".into());
+        let mut read = running("read", "w", "read", "2026-11-27T12:04:00Z");
+        read.agent_state = Some(AgentActivityState::Done);
+        read.agent_state_started_at = Some("2026-11-27T12:04:00Z".into());
+        let receipts = HashMap::from([(dashboard_identity(&read), "2026-11-27T12:04:00Z".into())]);
+        let mut sessions = vec![read.clone(), old, new];
+        sort_dashboard_done_peers(&mut sessions, &receipts);
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|s| s.handle.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new", "old", "read"]
+        );
+        read.agent_updated_at = Some("2026-11-27T12:55:00Z".into());
+        assert!(!dashboard_done_unread(&read, &receipts));
+        read.agent_state_started_at = Some("2026-11-27T12:56:00Z".into());
+        assert!(dashboard_done_unread(&read, &receipts));
+    }
+
     fn running(handle: &str, workspace: &str, tab: &str, updated: &str) -> TerminalSession {
         TerminalSession {
             handle: handle.to_owned(),
@@ -488,6 +658,57 @@ fn sort_dashboard_sessions(
 }
 
 impl Workbench {
+    /// Keep the sidebar, board and visible Terminal on the same receipt
+    /// stream. Never acknowledge a background Tab behind the maximized board.
+    pub(super) fn sync_visible_agent_completion(
+        &mut self,
+        visible_terminal: Option<&(String, String, String)>,
+    ) {
+        if self.terminals.session_list_is_stale() {
+            return;
+        }
+        let live: HashSet<_> = self
+            .terminals
+            .sessions
+            .iter()
+            .filter(|session| session.running)
+            .map(dashboard_identity)
+            .collect();
+        self.agent_completion_acknowledgements
+            .retain(|identity, _| live.contains(identity));
+        let inspected = self.global_agent_inspector.as_ref().map(|state| {
+            (
+                state.target.handle.clone(),
+                state.target.workspace_id.clone(),
+                state.target.tab_id.clone(),
+            )
+        });
+        let Some(identity) = inspected.as_ref().or(visible_terminal) else {
+            return;
+        };
+        if let Some(session) = self.terminals.sessions.iter().find(|session| {
+            session.running
+                && session.agent_type.is_some()
+                && &dashboard_identity(session) == identity
+        }) {
+            if let Some(epoch) = dashboard_completion(session) {
+                let receipt = self
+                    .agent_completion_acknowledgements
+                    .entry(identity.clone());
+                use std::collections::hash_map::Entry;
+                match receipt {
+                    Entry::Occupied(mut entry) if entry.get() != epoch => {
+                        entry.insert(epoch.to_owned());
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(epoch.to_owned());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Persist dashboard pins through the existing Host-owned Tab CAS API.
     /// Never mutate local-only pin metadata or a different Agent/Worktree.
     fn toggle_dashboard_agent_pin(
@@ -1293,6 +1514,16 @@ impl Workbench {
             cx.notify();
             return;
         }
+        if let Some(session) = self.terminals.sessions.iter().find(|session| {
+            session.handle == target.handle
+                && session.workspace_id == target.workspace_id
+                && session.tab_id == target.tab_id
+        }) {
+            if let Some(generation) = dashboard_completion(session) {
+                self.agent_completion_acknowledgements
+                    .insert(dashboard_identity(session), generation.to_owned());
+            }
+        }
         self.global_agent_inspector_epoch = self.global_agent_inspector_epoch.wrapping_add(1);
         self.global_agent_inspector = Some(GlobalAgentInspectorState::new(target));
         self.global_agent_control_armed = None;
@@ -1530,10 +1761,34 @@ impl Workbench {
 enum GlobalAgentCreateReply {
     NotIssued(&'static str),
     Launched(
-        LaunchedAgentTab,
+        GlobalAgentLaunchReceipt,
         Option<Vec<alera_gpui_desktop::terminal::TerminalSession>>,
     ),
     OutcomeUnknown,
+}
+
+#[derive(Debug)]
+pub(super) enum GlobalAgentLaunchReceipt {
+    Installed(alera_gpui_desktop::terminal::CreatedHostTerminal),
+    Profile(LaunchedAgentTab),
+}
+
+impl GlobalAgentLaunchReceipt {
+    fn matches(&self, sessions: &[TerminalSession], expected: &str) -> bool {
+        match self {
+            Self::Installed(created) => sessions
+                .iter()
+                .any(|session| created.matches_host_verified_agent_session(session, expected)),
+            Self::Profile(created) => matching_agent_handle(created, sessions, expected).is_some(),
+        }
+    }
+}
+
+fn dashboard_installed_choices(agents: &[InstalledAgentCli]) -> Vec<(String, String)> {
+    agents
+        .iter()
+        .map(|agent| (agent.id.clone(), agent.new_tab_menu_label().to_owned()))
+        .collect()
 }
 
 impl Workbench {
@@ -1736,8 +1991,9 @@ impl Workbench {
             self.global_agent_create_status = "Alera CLI unavailable. No Host started".into();
         } else {
             self.global_agent_create_status =
-                "Select a Host-registered Workspace, Profile and initial task".into();
+                "Select a Project, Workspace and installed Agent".into();
             self.refresh_mcp_host_workspaces(cx);
+            self.refresh_installed_agent_clis(cx);
             self.refresh_agent_profiles(cx);
         }
         cx.notify();
@@ -1800,7 +2056,7 @@ impl Workbench {
             Ok(None) => {
                 self.global_agent_create_workspace = Some(id.to_owned());
                 self.global_agent_create_status =
-                    "Worktree selected. Choose a Host Profile and initial goal".into();
+                    "Workspace selected. Choose an installed Agent".into();
             }
             Err(_) => {
                 self.global_agent_create_status =
@@ -1826,9 +2082,12 @@ impl Workbench {
             cx.notify();
             return;
         }
-        if self.mcp_host_workspaces_loading || self.agent_profiles_loading {
+        if self.mcp_host_workspaces_loading
+            || self.installed_agent_clis_loading
+            || (self.global_agent_create_profile.is_some() && self.agent_profiles_loading)
+        {
             self.global_agent_create_status =
-                "Host Workspace/Profile inventory is refreshing; try after it completes".into();
+                "Workspace/Agent inventory is refreshing; try after it completes".into();
             cx.notify();
             return;
         }
@@ -1837,22 +2096,53 @@ impl Workbench {
             cx.notify();
             return;
         };
-        let Some(profile_id) = self.global_agent_create_profile.clone() else {
-            self.global_agent_create_status = "Select an Agent Profile first".into();
+        let valid_project = self
+            .global_agent_create_project
+            .as_deref()
+            .is_some_and(|project| {
+                self.runtime_catalog.as_ref().is_some_and(|catalog| {
+                    catalog.projects.iter().any(|entry| entry.id == project)
+                        && catalog.workspaces.iter().any(|workspace| {
+                            workspace.id == workspace_id
+                                && workspace.project_id == project
+                                && !workspace.is_archived
+                        })
+                })
+            });
+        if !valid_project {
+            self.global_agent_create_status =
+                "Project/Workspace selection changed. Select again.".into();
+            cx.notify();
+            return;
+        }
+        let Some(agent_type) = self.global_agent_create_agent.clone() else {
+            self.global_agent_create_status = "Select an installed Agent first".into();
             cx.notify();
             return;
         };
-        let Some(agent_type) = self
-            .agent_profiles
+        let Some(executable) = self
+            .installed_agent_clis
             .iter()
-            .find(|profile| profile.id == profile_id)
-            .map(|profile| profile.agent_type.clone())
+            .find(|agent| agent.id == agent_type)
+            .map(|agent| agent.executable_path.to_string_lossy().into_owned())
         else {
             self.global_agent_create_status =
-                "Agent Profile changed; refresh before launching".into();
+                "Installed Agent changed; refresh before launching".into();
             cx.notify();
             return;
         };
+        let profile_id = self.global_agent_create_profile.clone();
+        if let Some(id) = profile_id.as_deref() {
+            if !self.agent_profiles.iter().any(|profile| {
+                profile.id == id
+                    && alera_core::agent_descriptor::canonical_agent_id(&profile.agent_type)
+                        == Some(agent_type.as_str())
+            }) {
+                self.global_agent_create_status = "Agent Profile changed; select again".into();
+                cx.notify();
+                return;
+            }
+        }
         let root = match alera_gpui_desktop::terminal::resolve_registered_host_workspace_path(
             &workspace_id,
             &self.mcp_host_workspaces,
@@ -1877,13 +2167,15 @@ impl Workbench {
             return;
         }
         let input = self.global_agent_create_prompt_input.read(cx);
-        if input.composing() {
+        if profile_id.is_some() && input.composing() {
             self.global_agent_create_status = "Finish IME composition before launching".into();
             cx.notify();
             return;
         }
         let prompt = input.query().trim().to_owned();
-        if prompt.is_empty() || prompt.len() > 8192 || prompt.contains('\0') {
+        if profile_id.is_some()
+            && (prompt.is_empty() || prompt.len() > 8192 || prompt.contains('\0'))
+        {
             self.global_agent_create_status = "Initial Agent task must be 1–8192 bytes".into();
             cx.notify();
             return;
@@ -1937,7 +2229,13 @@ impl Workbench {
                         "Target Worktree changed since selection; no Agent started",
                     );
                 }
-                match bridge.launch_agent_profile(&profile_id, &workspace_id, &prompt) {
+                let launched = match profile_id.as_deref() {
+                    Some(id) => bridge.launch_agent_profile(id, &workspace_id, &prompt)
+                        .map(GlobalAgentLaunchReceipt::Profile),
+                    None => bridge.create_agent_terminal(&workspace_id, &agent_type, &executable)
+                        .map(GlobalAgentLaunchReceipt::Installed),
+                };
+                match launched {
                     Ok(created) => GlobalAgentCreateReply::Launched(
                         created, bridge.list_terminals().ok(),
                     ),
@@ -1996,7 +2294,7 @@ impl Workbench {
         let Some(expected) = self.global_agent_create_expected_agent.as_deref() else {
             return;
         };
-        if matching_agent_handle(created, sessions, expected).is_none() {
+        if !created.matches(sessions, expected) {
             return;
         }
         let (Some((root, journal)), Some(store)) = (
@@ -2168,7 +2466,8 @@ fn history_panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyElem
                 })
                 .child(label)
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    if view.global_agent_history_busy || view.global_agent_history_provider == next {
+                    if view.global_agent_history_busy || view.global_agent_history_provider == next
+                    {
                         return;
                     }
                     view.global_agent_history_provider = next.clone();
@@ -2780,6 +3079,12 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
         return history_panel(view, cx);
     }
     let fresh = !view.terminals.session_list_is_stale();
+    let search = view
+        .global_agent_search_input
+        .read(cx)
+        .query()
+        .trim()
+        .to_lowercase();
     let needs_review_count = view
         .terminals
         .sessions
@@ -2809,12 +3114,44 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         session.tab_id.clone(),
                     )))
         })
+        .filter(|session| {
+            if search.is_empty() {
+                return true;
+            }
+            let catalog = view.runtime_catalog.as_ref();
+            let workspace = catalog.and_then(|catalog| {
+                catalog
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == session.workspace_id)
+            });
+            let project = workspace.and_then(|workspace| {
+                catalog.and_then(|catalog| {
+                    catalog
+                        .projects
+                        .iter()
+                        .find(|project| project.id == workspace.project_id)
+                })
+            });
+            let context = session.agent_context.as_ref();
+            let text = format!(
+                "{} {} {} {} {}",
+                project.map(|p| p.name.as_str()).unwrap_or(""),
+                workspace.map(|w| w.name.as_str()).unwrap_or(""),
+                session.agent_type.as_deref().unwrap_or(""),
+                context.map(|c| c.goal.as_str()).unwrap_or(""),
+                context.map(|c| c.progress.as_str()).unwrap_or("")
+            )
+            .to_lowercase();
+            search.split_whitespace().all(|term| text.contains(term))
+        })
         .take(128)
         .cloned()
         .collect::<Vec<_>>();
     // Match Flutter Kanban ordering: status columns, then persisted Host Tab
     // pins at the top of their own column, then most recently updated Agents.
     sort_dashboard_sessions(&mut sessions, &view.host_pin_snapshots);
+    sort_dashboard_done_peers(&mut sessions, &view.agent_completion_acknowledgements);
 
     let mut create_form = div().h(px(0.0)).into_any_element();
     if view.global_agent_create_open {
@@ -2829,121 +3166,239 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             .border_color(rgb(BORDER))
             .child(
                 div()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Launch Agent without switching your editor Workspace"),
-            )
-            .child(
-                div()
                     .id("global-agent-refresh-launch-choices")
                     .cursor_pointer()
                     .text_xs()
-                    .text_color(rgb(TEXT))
-                    .child("Refresh Host Worktrees and Agent Profiles ↻")
+                    .text_color(rgb(MUTED))
+                    .child("Refresh choices ↻")
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.refresh_mcp_host_workspaces(cx);
+                        view.refresh_installed_agent_clis(cx);
                         view.refresh_agent_profiles(cx);
                     })),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child("Host-registered Worktrees"),
             );
-
-        let mut workspaces = div()
-            .id("global-agent-create-workspaces")
-            .max_h(px(90.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_1();
-        for (index, workspace) in view.mcp_host_workspaces.iter().take(96).enumerate() {
-            let id = workspace.id.clone();
-            let selected = view.global_agent_create_workspace.as_deref() == Some(id.as_str());
-            let label = format!("{} · {}", workspace.path.display(), workspace.id);
-            workspaces = workspaces.child(
+        // The RuntimeStore owns Project membership. Only catalog workspaces
+        // also registered in the live Host are offered for launch.
+        let catalog = view.runtime_catalog.as_ref();
+        let registered = |id: &str| view.mcp_host_workspaces.iter().any(|w| w.id == id);
+        let projects: Vec<(String, String)> = catalog
+            .map(|catalog| {
+                catalog
+                    .projects
+                    .iter()
+                    .filter(|project| {
+                        catalog.workspaces.iter().any(|workspace| {
+                            !workspace.is_archived
+                                && workspace.project_id == project.id
+                                && registered(&workspace.id)
+                        })
+                    })
+                    .map(|project| (project.id.clone(), project.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let workspaces: Vec<(String, String)> = catalog
+            .into_iter()
+            .flat_map(|catalog| catalog.workspaces.iter())
+            .filter(|workspace| {
+                !workspace.is_archived
+                    && registered(&workspace.id)
+                    && view.global_agent_create_project.as_deref()
+                        == Some(workspace.project_id.as_str())
+            })
+            .map(|workspace| (workspace.id.clone(), workspace.name.clone()))
+            .collect();
+        let agents = dashboard_installed_choices(&view.installed_agent_clis);
+        let mut profiles = vec![(String::new(), "Default (same as New Tab)".to_owned())];
+        profiles.extend(
+            view.agent_profiles
+                .iter()
+                .filter(|profile| {
+                    view.global_agent_create_agent
+                        .as_deref()
+                        .is_some_and(|agent| {
+                            alera_core::agent_descriptor::canonical_agent_id(&profile.agent_type)
+                                == Some(agent)
+                        })
+                })
+                .map(|profile| (profile.id.clone(), profile.name.clone())),
+        );
+        let locked = view.global_agent_create_busy || view.global_agent_create_journal.is_some();
+        let stage_count = if profiles.len() > 1 || view.global_agent_create_profile.is_some() {
+            4
+        } else {
+            3
+        };
+        let selected = [
+            view.global_agent_create_project.as_deref(),
+            view.global_agent_create_workspace.as_deref(),
+            view.global_agent_create_agent.as_deref(),
+            Some(view.global_agent_create_profile.as_deref().unwrap_or("")),
+        ];
+        let choices = [&projects, &workspaces, &agents, &profiles];
+        let labels = ["Project", "Workspace", "Agent", "Profile (optional)"];
+        let mut selectors = div().w_full().flex().flex_wrap().gap_2();
+        for stage in 0..stage_count {
+            let current = choices[stage]
+                .iter()
+                .find(|(id, _)| Some(id.as_str()) == selected[stage]);
+            let enabled = !locked
+                && (stage != 2 || !view.installed_agent_clis_loading)
+                && (stage != 3 || !view.agent_profiles_loading)
+                && (stage == 0
+                    || choices[stage - 1]
+                        .iter()
+                        .any(|(id, _)| Some(id.as_str()) == selected[stage - 1]));
+            selectors = selectors.child(
                 div()
-                    .id(("global-create-workspace", index))
-                    .cursor_pointer()
+                    .id(("global-create-select", stage))
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .px_2()
+                    .py_1()
                     .text_xs()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(if selected { TEXT } else { MUTED }))
-                    .child(format!("{} {label}", if selected { "●" } else { "○" }))
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.global_agent_create_busy
-                            && view.global_agent_create_journal.is_none()
+                    .text_color(rgb(if enabled { TEXT } else { MUTED }))
+                    .when(enabled, |element| element.cursor_pointer())
+                    .child(format!(
+                        "{}: {} ▾",
+                        labels[stage],
+                        current.map(|(_, name)| name.as_str()).unwrap_or("Select")
+                    ))
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        if !enabled
+                            || view.global_agent_create_busy
+                            || view.global_agent_create_journal.is_some()
                         {
-                            view.select_global_agent_create_workspace(&id, cx);
+                            return;
                         }
+                        let stage = stage as u8;
+                        if view.global_agent_create_picker == Some(stage) {
+                            view.global_agent_create_picker = None;
+                        } else {
+                            view.global_agent_create_picker = Some(stage);
+                            view.global_agent_create_filter_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            window.focus(
+                                &view
+                                    .global_agent_create_filter_input
+                                    .read(cx)
+                                    .focus_handle(cx),
+                                cx,
+                            );
+                        }
+                        cx.notify();
                     })),
             );
         }
-        form = form.child(workspaces);
-        if view.mcp_host_workspaces.is_empty() {
+        form = form.child(selectors);
+        if let Some(stage) = view
+            .global_agent_create_picker
+            .filter(|stage| (*stage as usize) < stage_count)
+        {
+            let query = view
+                .global_agent_create_filter_input
+                .read(cx)
+                .query()
+                .trim()
+                .to_lowercase();
+            let mut options = div()
+                .id("global-create-options")
+                .max_h(px(150.0))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_1();
+            let mut count = 0;
+            for (index, (id, name)) in choices[stage as usize].iter().enumerate() {
+                if !query
+                    .split_whitespace()
+                    .all(|term| name.to_lowercase().contains(term))
+                {
+                    continue;
+                }
+                count += 1;
+                let id = id.clone();
+                let current = selected[stage as usize] == Some(id.as_str());
+                options = options.child(
+                    div()
+                        .id(("global-create-option", index))
+                        .cursor_pointer()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .bg(rgb(if current { ELEVATED } else { BG }))
+                        .child(name.clone())
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            if view.global_agent_create_busy
+                                || view.global_agent_create_journal.is_some()
+                            {
+                                return;
+                            }
+                            match stage {
+                                0 => {
+                                    view.global_agent_create_project = Some(id.clone());
+                                    view.global_agent_create_workspace = None;
+                                    view.global_agent_create_agent = None;
+                                    view.global_agent_create_profile = None;
+                                }
+                                1 => {
+                                    view.global_agent_create_workspace = None;
+                                    view.global_agent_create_agent = None;
+                                    view.global_agent_create_profile = None;
+                                    view.select_global_agent_create_workspace(&id, cx);
+                                }
+                                2 => {
+                                    view.global_agent_create_agent = Some(id.clone());
+                                    view.global_agent_create_profile = None;
+                                }
+                                _ => {
+                                    view.global_agent_create_profile =
+                                        (!id.is_empty()).then(|| id.clone())
+                                }
+                            }
+                            view.global_agent_create_prompt_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.global_agent_create_picker = None;
+                            cx.notify();
+                        })),
+                );
+            }
+            if count == 0 {
+                options = options.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("No matching choices"),
+                );
+            }
+            form = form
+                .child(view.global_agent_create_filter_input.clone())
+                .child(options);
+        }
+        if view.installed_agent_clis_loading || agents.is_empty() {
             form = form.child(div().text_xs().text_color(rgb(MUTED)).child(
-                if view.mcp_host_workspaces_loading {
-                    "Loading Host Workspaces…"
+                if view.installed_agent_clis_loading {
+                    "Detecting installed Agents…"
                 } else {
-                    "No registered Host Worktrees available. Refresh to retry."
+                    "No installed Agents detected. Check Settings or refresh choices."
                 },
             ));
         }
-
-        form = form.child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child("Agent Profile"),
-        );
-        let mut profiles = div()
-            .id("global-agent-create-profiles")
-            .max_h(px(75.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_1();
-        for (index, profile) in view.agent_profiles.iter().take(96).enumerate() {
-            let id = profile.id.clone();
-            let selected = view.global_agent_create_profile.as_deref() == Some(id.as_str());
-            let label = format!(
-                "{} · {} ({})",
-                profile.name,
-                profile.agent_type,
-                if profile.managed {
-                    "Managed"
-                } else {
-                    "Command"
-                }
-            );
-            profiles = profiles.child(
-                div()
-                    .id(("global-create-profile", index))
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(rgb(if selected { TEXT } else { MUTED }))
-                    .child(format!("{} {label}", if selected { "●" } else { "○" }))
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if !view.global_agent_create_busy
-                            && view.global_agent_create_journal.is_none()
-                        {
-                            view.global_agent_create_profile = Some(id.clone());
-                            cx.notify();
-                        }
-                    })),
-            );
+        if view.global_agent_create_profile.is_some() {
+            form = form
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("Initial task (Profile's Host credentials and settings apply)"),
+                )
+                .child(view.global_agent_create_prompt_input.clone());
         }
         form = form
-            .child(profiles)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .child("Initial task (Profile's Host credentials and settings apply)"),
-            )
-            .child(view.global_agent_create_prompt_input.clone())
             .child(
                 div()
                     .id("global-agent-create-submit")
@@ -3041,7 +3496,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             div()
                 .id("global-agent-toolbar")
                 .w_full()
-                .min_h(px(46.0))
+                .min_h(px(36.0))
                 .flex()
                 .items_center()
                 .gap_3()
@@ -3052,6 +3507,12 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         .text_sm()
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(format!("Agents · {}", sessions.len())),
+                )
+                .child(
+                    div()
+                        .w(px(180.0))
+                        .min_w_0()
+                        .child(view.global_agent_search_input.clone()),
                 )
                 .child(div().flex_1())
                 .child(
@@ -3205,40 +3666,20 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             .into_any_element();
     }
 
-    if sessions.is_empty() {
-        return list
-            .child(div().text_sm().text_color(rgb(MUTED)).child(
-                if view.global_agent_needs_review_only {
-                    "No verified Waiting/Blocked Agents need review."
-                } else {
-                    "No running Agent sessions in the connected Host."
-                },
-            ))
-            .into_any_element();
-    }
-
-    let mut sections: Vec<(u8, String, usize, Vec<gpui::AnyElement>)> = Vec::new();
-    let mut last_group = None;
+    // Seed every lane before projecting cards, including when the filtered
+    // inventory is empty. A status transition cannot move a lane's position.
+    let mut sections: Vec<(u8, String, usize, Vec<gpui::AnyElement>)> =
+        alera_gpui_desktop::agent_status_visual::DASHBOARD_STATUS_GROUPS
+            .iter()
+            .map(|&(rank, label)| (rank, label.to_owned(), 0, Vec::new()))
+            .collect();
     for (index, session) in sessions.iter().enumerate() {
-        let (group_rank, group_label) =
+        let (group_rank, _) =
             alera_gpui_desktop::agent_status_visual::dashboard_status_group(
                 session.agent_state,
                 session.interrupted,
             );
-        if last_group != Some(group_rank) {
-            let count = sessions
-                .iter()
-                .filter(|item| {
-                    alera_gpui_desktop::agent_status_visual::dashboard_status_group(
-                        item.agent_state,
-                        item.interrupted,
-                    )
-                    .0 == group_rank
-                })
-                .count();
-            sections.push((group_rank, group_label.to_owned(), count, Vec::new()));
-            last_group = Some(group_rank);
-        }
+        sections[usize::from(group_rank)].2 += 1;
         if view.global_agent_collapsed_groups.contains(&group_rank) {
             continue;
         }
@@ -3285,6 +3726,10 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                 (agent.clone(), format!("Worktree {short_id}"))
             });
         let action_identity = (session_id.clone(), workspace_id.clone(), tab_id.clone());
+        let done_generation = dashboard_completion(session).map(str::to_owned);
+        let done_unread = dashboard_done_unread(session, &view.agent_completion_acknowledgements);
+        let receipt_identity = action_identity.clone();
+        let receipt_generation = done_generation.clone();
         let more_actions_visible =
             view.global_agent_actions_expanded.as_ref() == Some(&action_identity);
         let more_actions_key = action_identity.clone();
@@ -3518,15 +3963,15 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             );
         }
 
-        sections.last_mut().expect("status section").3.push(
+        sections[usize::from(group_rank)].3.push(
             div()
                 .id(("global-agent-session-row", index))
                 .w_full()
                 .min_w_0()
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(BORDER))
-                .bg(rgb(ELEVATED))
+                .border_color(rgb(if done_unread { 0x36936A } else { BORDER }))
+                .bg(rgb(if done_unread { 0x20382D } else { ELEVATED }))
                 .px_3()
                 .py_3()
                 .flex()
@@ -3575,26 +4020,44 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                         .text_xs()
                         .text_color(rgb(MUTED))
                         .truncate()
-                        .child(format!("{} · {}", workspace_label, agent)),
+                        .child(format!(
+                            "{} · {}{}",
+                            workspace_label,
+                            agent,
+                            if done_unread {
+                                " · ● Unread"
+                            } else if done_generation.is_some() {
+                                " · Read"
+                            } else {
+                                ""
+                            }
+                        )),
                 )
-                .child(div().min_w_0().text_sm().truncate().child(goal))
                 .child(
                     div()
+                        .w_full()
                         .min_w_0()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .truncate()
-                        .child(progress),
+                        .text_sm()
+                        .child(dashboard_card_preview(&goal, 360, 6)),
                 )
-                .child(timeline_panel)
-                .child(original_panel)
-                // Keep controls on one compact action row, wrapping only when
-                // the application window is narrower than the Agent card.
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child(dashboard_card_preview(&progress, 520, 8)),
+                )
+                .when(!timeline_events.is_empty(), |card| {
+                    card.child(timeline_panel)
+                })
+                .when(selected_original, |card| card.child(original_panel))
+                // Mount secondary actions only on demand; the default
+                // footer stays a single row and reserves no hidden space.
                 .child(
                     div()
                         .w_full()
                         .flex()
-                        .flex_wrap()
                         .items_center()
                         .gap_3()
                         .child(
@@ -3603,7 +4066,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 .cursor_pointer()
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("Inspect · Live Terminal")
+                                .child("Inspect")
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     view.open_global_agent_inspector(
                                         inspect_target.clone(),
@@ -3613,127 +4076,11 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                 })),
                         )
                         .child(
-                            if more_actions_visible && matches!(agent.as_str(), "claude" | "codex")
-                            {
-                                div()
-                                    .id(("global-agent-original-open", index))
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("Original conversation · read only")
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.load_original_conversation(
-                                            original_button_target.clone(),
-                                            false,
-                                            cx,
-                                        );
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                div().hidden().into_any_element()
-                            },
-                        )
-                        .child(
-                            div()
-                                .id(("global-agent-interrupt", index))
-                                .when(!more_actions_visible, |action| action.hidden())
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(if control_busy { MUTED } else { TEXT }))
-                                .child(if interrupt_armed {
-                                    "Confirm Interrupt Turn (keeps PTY)"
-                                } else {
-                                    "Interrupt Turn · confirmation required"
-                                })
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.confirm_global_agent_control(
-                                        interrupt_target.clone(),
-                                        false,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("global-agent-terminate", index))
-                                .when(!more_actions_visible, |action| action.hidden())
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(if control_busy { MUTED } else { TEXT }))
-                                .child(if terminate_armed {
-                                    "Confirm Terminate Session (ends PTY)"
-                                } else {
-                                    "Terminate Session · confirmation required"
-                                })
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.confirm_global_agent_control(
-                                        terminate_target.clone(),
-                                        true,
-                                        cx,
-                                    );
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("global-agent-hide-card", index))
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(if is_hidden { "Show" } else { "Hide" })
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    let key =
-                                        (card_id.clone(), card_workspace.clone(), card_tab.clone());
-                                    if view.global_agent_hidden.contains(&key) {
-                                        view.global_agent_hidden.remove(&key);
-                                    } else {
-                                        view.global_agent_hidden.insert(key.clone());
-                                        view.global_agent_control_armed = None;
-                                        // A card hidden from the dashboard cannot remain
-                                        // an invisible destination for subsequent input.
-                                        if view.global_agent_target.as_ref().is_some_and(|target| {
-                                            target.handle == key.0
-                                                && target.workspace_id == key.1
-                                                && target.tab_id == key.2
-                                        }) {
-                                            view.global_agent_target = None;
-                                            view.global_agent_submit_status =
-                                                "Hidden card; direct input target cleared".into();
-                                        }
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("global-agent-more", index))
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(if more_actions_visible {
-                                    "▴ Less"
-                                } else {
-                                    "⋯ More"
-                                })
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    if view.global_agent_actions_expanded.as_ref()
-                                        == Some(&more_actions_key)
-                                    {
-                                        view.global_agent_actions_expanded = None;
-                                        view.global_agent_control_armed = None;
-                                    } else {
-                                        view.global_agent_actions_expanded =
-                                            Some(more_actions_key.clone());
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
                             div()
                                 .id(("global-agent-open", index))
-                                .when(!more_actions_visible, |action| action.hidden())
                                 .cursor_pointer()
                                 .text_xs()
-                                .child("Open original Agent tab")
+                                .child("Open Agent")
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     // Read fresh Host state again; never navigate from a stale
                                     // copied row or a recycled handle.
@@ -3773,13 +4120,177 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
                                         cx.notify();
                                     }
                                 })),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .id(("global-agent-more", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if more_actions_visible {
+                                    "▴ Less"
+                                } else {
+                                    "⋯ More"
+                                })
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.global_agent_control_armed = None;
+                                    if view.global_agent_actions_expanded.as_ref()
+                                        == Some(&more_actions_key)
+                                    {
+                                        view.global_agent_actions_expanded = None;
+                                    } else {
+                                        view.global_agent_actions_expanded =
+                                            Some(more_actions_key.clone());
+                                    }
+                                    cx.notify();
+                                })),
                         ),
                 )
+                .when(more_actions_visible, |card| {
+                    card.child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .when(done_generation.is_some(), |actions| {
+                                actions.child(
+                                    div()
+                                        .id(("global-agent-done-receipt", index))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .child(if done_unread {
+                                            "Mark as read"
+                                        } else {
+                                            "Mark as unread"
+                                        })
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            if view.terminals.session_list_is_stale() {
+                                                return;
+                                            }
+                                            let current =
+                                                view.terminals.sessions.iter().find(|session| {
+                                                    dashboard_identity(session) == receipt_identity
+                                                });
+                                            if current.and_then(dashboard_completion)
+                                                != receipt_generation.as_deref()
+                                            {
+                                                return;
+                                            }
+                                            if done_unread {
+                                                if let Some(generation) = &receipt_generation {
+                                                    view.agent_completion_acknowledgements.insert(
+                                                        receipt_identity.clone(),
+                                                        generation.clone(),
+                                                    );
+                                                }
+                                            } else {
+                                                view.agent_completion_acknowledgements
+                                                    .remove(&receipt_identity);
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .when(matches!(agent.as_str(), "claude" | "codex"), |actions| {
+                                actions.child(
+                                    div()
+                                        .id(("global-agent-original-open", index))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("Original conversation · read only")
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.load_original_conversation(
+                                                original_button_target.clone(),
+                                                false,
+                                                cx,
+                                            );
+                                        })),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .id(("global-agent-hide-card", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(if is_hidden { "Show" } else { "Hide" })
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        let key = (
+                                            card_id.clone(),
+                                            card_workspace.clone(),
+                                            card_tab.clone(),
+                                        );
+                                        if view.global_agent_hidden.contains(&key) {
+                                            view.global_agent_hidden.remove(&key);
+                                        } else {
+                                            view.global_agent_hidden.insert(key.clone());
+                                            view.global_agent_control_armed = None;
+                                            // A card hidden from the dashboard cannot remain
+                                            // an invisible destination for subsequent input.
+                                            if view.global_agent_target.as_ref().is_some_and(
+                                                |target| {
+                                                    target.handle == key.0
+                                                        && target.workspace_id == key.1
+                                                        && target.tab_id == key.2
+                                                },
+                                            ) {
+                                                view.global_agent_target = None;
+                                                view.global_agent_submit_status =
+                                                    "Hidden card; direct input target cleared"
+                                                        .into();
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("global-agent-interrupt", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                                    .child(if interrupt_armed {
+                                        "Confirm Interrupt Turn (keeps PTY)"
+                                    } else {
+                                        "Interrupt Turn · confirmation required"
+                                    })
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.confirm_global_agent_control(
+                                            interrupt_target.clone(),
+                                            false,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("global-agent-terminate", index))
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if control_busy { MUTED } else { TEXT }))
+                                    .child(if terminate_armed {
+                                        "Confirm Terminate Session (ends PTY)"
+                                    } else {
+                                        "Terminate Session · confirmation required"
+                                    })
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.confirm_global_agent_control(
+                                            terminate_target.clone(),
+                                            true,
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                    )
+                })
                 .into_any_element(),
         );
     }
-    // A fixed-width independent scroll lane per current Hook state. More
-    // statuses scroll sideways rather than squeezing cards into tiny tiles.
+    // Every status has its own fixed-width scroll lane. Collapse hides cards
+    // only; it does not move other statuses.
     let mut board = div()
         .id("global-agent-kanban-board")
         .w_full()
@@ -3794,7 +4305,7 @@ pub(super) fn panel(view: &Workbench, cx: &mut Context<Workbench>) -> gpui::AnyE
             .id(("global-agent-state-section", rank as usize))
             .w_full()
             .px_3()
-            .py_3()
+            .py_1()
             .cursor_pointer()
             .border_b_1()
             .border_color(rgb(BORDER))

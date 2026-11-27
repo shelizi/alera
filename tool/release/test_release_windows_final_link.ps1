@@ -37,13 +37,26 @@ $entry=Join-Path $fixture 'tool\release\release_windows_final_link.ps1'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'release_windows_final_link.ps1') -Destination $entry
 $stub=Join-Path $fixture 'tool\release\publish_windows_final_link.ps1'
 Write-Text $stub @'
-param([string]$ExpectedCommit,[string]$ExpectedVersion,[switch]$ProtectStableVersion,[switch]$AllowSamePublishedCommit)
+param([string]$ExpectedCommit,[string]$ExpectedVersion,[switch]$ProtectStableVersion,[switch]$AllowSamePublishedCommit,[string]$ReceiptPath,[switch]$VerifyPublishedOnly,[string]$ExpectedSha256)
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-if (-not $ProtectStableVersion -or $ExpectedCommit -ne ((git.exe -C $root rev-parse HEAD).Trim())) { exit 12 }
-$m=Get-Content (Join-Path $root 'tool\release\prepared_release.json') -Raw | ConvertFrom-Json
+$hash='a'*64
+if ($VerifyPublishedOnly) {
+    if ($ReceiptPath -or $ProtectStableVersion -or $ExpectedSha256 -ne $hash -or $env:ALERA_TEST_HEALTH_FAIL -eq '1') { exit 21 }
+    $m=(git.exe -C $root show "$($ExpectedCommit):tool/release/prepared_release.json") | ConvertFrom-Json
+    if ($ExpectedVersion -ne "$($m.desktop.releaseVersion)+$($m.desktop.buildNumber)") { exit 22 }
+    Write-Host 'VERIFY_ONLY'
+    exit 0
+}
+if (-not $ProtectStableVersion -or -not $ReceiptPath -or $ExpectedCommit -ne ((git.exe -C $root rev-parse HEAD).Trim())) { exit 12 }
+$m=Get-Content (Join-Path $root 'tool/release/prepared_release.json') -Raw | ConvertFrom-Json
 if ($ExpectedVersion -ne "$($m.desktop.releaseVersion)+$($m.desktop.buildNumber)") { exit 13 }
 if ($env:ALERA_TEST_PUBLISH_FAIL -eq '1') { exit 19 }
 if ($env:ALERA_TEST_EXPECT_RESUME -eq '1' -and -not $AllowSamePublishedCommit) { exit 20 }
+if ($env:ALERA_TEST_POST_UPLOAD_FAIL -eq '1') {
+    $receipt=@{schemaVersion=1;commit=$ExpectedCommit;version=$ExpectedVersion;sha256=$hash;size=1024}
+    [IO.File]::WriteAllText($ReceiptPath,($receipt | ConvertTo-Json))
+    exit 23
+}
 exit 0
 '@
 $pub=Join-Path $fixture 'pubspec.yaml'
@@ -98,6 +111,21 @@ $advanced=Git @('rev-parse','HEAD')
 $env:ALERA_TEST_PUBLISH_FAIL='0'
 $null=Run-Release -ExpectFailure
 Assert-True ($advanced -ne $third -and (Git @('rev-parse','HEAD')) -eq $advanced -and (Test-Path $pending)) 'advanced main cannot publish stale pending commit'
+# A historical release can only be reconciled with the validated hash, never rebuilt.
+$bad=Run-Release @('-RecoverPublishedSha256',('b'*64)) -ExpectFailure
+Assert-True ((Test-Path $pending) -and (Git @('rev-parse','HEAD')) -eq $advanced) 'wrong recovery hash leaves pending intact'
+$good=Run-Release @('-RecoverPublishedSha256',('a'*64))
+Assert-True ($good -match 'VERIFY_ONLY' -and -not (Test-Path $pending) -and (Git @('rev-parse','HEAD')) -eq $advanced) 'historical release reconciliation does not rebuild or advance main'
+$env:ALERA_TEST_POST_UPLOAD_FAIL='1'
+$null=Run-Release -ExpectFailure
+$receiptCommit=Git @('rev-parse','HEAD')
+$env:ALERA_TEST_POST_UPLOAD_FAIL='0'
+$env:ALERA_TEST_HEALTH_FAIL='1'
+$null=Run-Release -ExpectFailure
+Assert-True ((Test-Path $pending) -and (Git @('rev-parse','HEAD')) -eq $receiptCommit) 'failed verification retains promoted release receipt'
+$env:ALERA_TEST_HEALTH_FAIL='0'
+$recovered=Run-Release
+Assert-True ($recovered -match 'VERIFY_ONLY' -and -not (Test-Path $pending) -and (Git @('rev-parse','HEAD')) -eq $receiptCommit) 'promoted receipt retries verification without upload or version bump'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'publish_windows_final_link.ps1'),[ref]$tokens,[ref]$errors)
 Assert-True ($errors.Count -eq 0) 'publisher parses'
@@ -122,5 +150,50 @@ Assert-True $true 'same-version recovery only for matching commit'
 $script:stableRaw='NO_STABLE'
 Assert-StableVersion -RemotePath '/fake' -Version '1.2.4+9' -Commit $same
 Assert-True $true 'first release permitted'
+# Execute real health-check function with fake command responses.
+foreach ($name in @('Get-FileServerState','Assert-ServedPackage')) {
+    $fn=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+    if ($null -eq $fn) { throw "Missing health function $name" }
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
+$ContainerName='file-server'
+$script:expectedHash='A'*64
+$script:fakeState='running'
+$script:startCount=0
+$script:loginCode='200'
+$script:downloadCode='302'
+$script:hashCode=$script:expectedHash
+function Start-Sleep { param([int]$Seconds) }
+function Invoke-FileServerCommand([string]$Command) {
+    switch -Regex ($Command) {
+        'docker inspect' { return $script:fakeState }
+        'docker start' { $script:startCount++; $script:fakeState='running'; return 'file-server' }
+        'docker exec' { return "$script:hashCode  /app/uploads/alera/Alera-Final-Link-Kit.zip" }
+        '/login$' { return $script:loginCode }
+        '/download/' { return $script:downloadCode }
+        default { throw "Unexpected command: $Command" }
+    }
+}
+Assert-ServedPackage $script:expectedHash
+Assert-True ($script:startCount -eq 0) 'healthy file server verified without restart or start'
+$script:fakeState='exited'
+Assert-ServedPackage $script:expectedHash
+Assert-True ($script:startCount -eq 1) 'stopped container started exactly once'
+$script:loginCode='503'
+$rejected=$false
+try { Assert-ServedPackage $script:expectedHash } catch { $rejected=$true }
+Assert-True ($rejected -and $script:startCount -eq 1) 'unhealthy HTTP fails closed without restarting'
+$script:loginCode='200'; $script:hashCode='B'*64
+$rejected=$false
+try { Assert-ServedPackage $script:expectedHash } catch { $rejected=$true }
+Assert-True ($rejected -and $script:startCount -eq 1) 'container hash mismatch fails closed without restarting'
+$script:hashCode=$script:expectedHash; $script:downloadCode='404'
+$rejected=$false
+try { Assert-ServedPackage $script:expectedHash } catch { $rejected=$true }
+Assert-True ($rejected -and $script:startCount -eq 1) 'missing protected route fails closed'
+$script:downloadCode='302'; $script:fakeState='dead'
+$rejected=$false
+try { Assert-ServedPackage $script:expectedHash } catch { $rejected=$true }
+Assert-True ($rejected -and $script:startCount -eq 1) 'dead container requires investigation rather than forced restart'
 Write-Host "PASS: $checks checks; no actual build, SSH, upload or push."
 Write-Host "Retained disposable fixture: $fixture"

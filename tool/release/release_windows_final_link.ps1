@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([switch]$Plan)
+param(
+    [switch]$Plan,
+    [ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$RecoverPublishedSha256
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -44,21 +47,33 @@ function Previous-Tag([string]$Source) {
     if ($subject -notmatch '^release: (v[0-9]+\.[0-9]+\.[0-9]+)$') { throw 'No first-parent release marker.' }
     return $Matches[1]
 }
-function Assert-Prepared($p,[string]$head) {
-    $v = Read-Version
-    $m = Read-Metadata
-    if ((Git-Text @('rev-parse','HEAD')) -ne $head -or
-        (Git-Text @('rev-parse','HEAD^')) -ne $p.sourceCommit -or
-        (Git-Text @('log','-1','--format=%s','HEAD')) -ne "release: v$($p.version)" -or
-        $v.Text -ne "$($p.version)+$($p.build)" -or $m.sourceSha -ne $p.sourceCommit -or
-        $m.desktop.shouldRelease -ne $true -or $m.desktop.artifactVersion -ne $p.version -or
-        $m.desktop.releaseVersion -ne $p.version -or $m.desktop.buildNumber -ne $p.build -or
-        $m.desktop.tag -ne "v$($p.version)" -or $m.desktop.previousTag -ne $p.previousTag) {
+function Assert-Prepared($p,[string]$head,[switch]$Historical) {
+    if (-not $Historical -and (Git-Text @('rev-parse','HEAD')) -ne $head) { throw 'Main changed.' }
+    $v = Git-Text @('show',"$($head):pubspec.yaml")
+    $m = (Git-Text @('show',"$($head):tool/release/prepared_release.json")) | ConvertFrom-Json
+    $versions = [regex]::Matches($v,'(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+\+[0-9]+)(?=\r?$)')
+    if ((Git-Text @('rev-parse',"$head^")) -ne $p.sourceCommit -or
+        (Git-Text @('log','-1','--format=%s',$head)) -ne "release: v$($p.version)" -or
+        $versions.Count -ne 1 -or $versions[0].Groups[1].Value -ne "$($p.version)+$($p.build)" -or
+        $m.sourceSha -ne $p.sourceCommit -or $m.desktop.shouldRelease -ne $true -or
+        $m.desktop.artifactVersion -ne $p.version -or $m.desktop.releaseVersion -ne $p.version -or
+        $m.desktop.buildNumber -ne $p.build -or $m.desktop.tag -ne "v$($p.version)" -or $m.desktop.previousTag -ne $p.previousTag) {
         throw 'Pending release does not match main; inspect before retrying. Never publish stale source.'
     }
     $changed = @((Git-Text @('diff-tree','--no-commit-id','--name-only','-r',$head)) -split '\r?\n')
     if ($changed.Count -ne 2 -or @($changed | Where-Object { $_ -notin $paths }).Count -gt 0) { throw 'Release commit has unexpected files.' }
 }
+
+function Complete-ExistingPublication($p,[string]$head,[string]$hash) {
+    $target = "$($p.version)+$($p.build)"
+    Write-Host "Recovering verified archive $target ($head) without build, upload, or restart."
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $publisher -VerifyPublishedOnly -ExpectedCommit $head -ExpectedVersion $target -ExpectedSha256 $hash
+    if ($LASTEXITCODE -ne 0) { throw 'Existing publication verification failed; retaining pending release and receipt.' }
+    [IO.File]::Delete($pendingPath)
+    Write-Host "Verified internal publication: $target ($head)"
+    Write-Host 'No Git push, tag or GitHub Release performed.'
+}
+
 function Get-ReleasePlan {
     Assert-Inputs
     $head = Git-Text @('rev-parse','HEAD')
@@ -86,12 +101,27 @@ if (-not [IO.Path]::IsPathRooted($gitDir)) { $gitDir = Join-Path $root $gitDir }
 $gitDir = (Resolve-Path $gitDir).Path
 $pendingPath = Join-Path $gitDir 'alera-final-link-pending.json'
 $lockPath = Join-Path $gitDir 'alera-final-link-release.lock'
+if ($Plan -and $RecoverPublishedSha256) { throw 'Plan and explicit recovery are mutually exclusive.' }
 if ($Plan) { Get-ReleasePlan | ConvertTo-Json -Depth 8; return }
 
 $lock = $null
 try {
     try { $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
     catch { throw 'Another one-command release is running.' }
+    if ($RecoverPublishedSha256) {
+        Assert-Inputs
+        if (-not (Test-Path -LiteralPath $pendingPath -PathType Leaf)) { throw 'No pending release to recover.' }
+        $p = [IO.File]::ReadAllText($pendingPath) | ConvertFrom-Json
+        if ($p.schemaVersion -ne 1 -or $p.sourceCommit -notmatch '^[0-9a-f]{40}$' -or $p.version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or $p.build -le 0 -or $p.previousTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid pending release record.' }
+        # Reconcile an exact ancestor release, even if main advanced during repair.
+        $candidates = @((Git-Text @('log','--format=%H','--fixed-strings',"--grep=release: v$($p.version)","$($p.sourceCommit)..HEAD")) -split '\r?\n' |
+            Where-Object { $_ -match '^[0-9a-f]{40}$' -and (Git-Text @('rev-parse',"$_^")) -eq $p.sourceCommit -and (Git-Text @('log','-1','--format=%s',$_)) -eq "release: v$($p.version)" })
+        if ($candidates.Count -ne 1) { throw 'Cannot uniquely identify the pending release commit in main history.' }
+        $historical = $candidates[0]
+        Assert-Prepared $p $historical -Historical
+        Complete-ExistingPublication $p $historical $RecoverPublishedSha256
+        return
+    }
     $r = Get-ReleasePlan
     $p = $r.Pending
     Write-Host "Final-Link target: $($p.version)+$($p.build)"
@@ -124,6 +154,17 @@ try {
     Assert-Prepared $p $head
     Write-Host "Release commit: $head"
     $argsForPublisher = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$publisher,'-ExpectedCommit',$head,'-ExpectedVersion',"$($p.version)+$($p.build)",'-ProtectStableVersion')
+    $receiptPath = Join-Path $gitDir "alera-final-link-receipt-$($p.version)-$head.json"
+    if ($r.Existing -and (Test-Path -LiteralPath $receiptPath -PathType Leaf)) {
+        $receipt = [IO.File]::ReadAllText($receiptPath) | ConvertFrom-Json
+        if ($receipt.schemaVersion -ne 1 -or $receipt.commit -ne $head -or
+            $receipt.version -ne "$($p.version)+$($p.build)" -or $receipt.sha256 -notmatch '^[0-9a-f]{64}$' -or $receipt.size -le 0) {
+            throw 'Publication receipt does not match the pending release. Inspect before retrying.'
+        }
+        Complete-ExistingPublication $p $head $receipt.sha256
+        return
+    }
+    $argsForPublisher += @('-ReceiptPath',$receiptPath)
     if ($r.Existing) { $argsForPublisher += '-AllowSamePublishedCommit' }
     & powershell.exe @argsForPublisher
     if ($LASTEXITCODE -ne 0) { throw "Final-Link publisher failed ($LASTEXITCODE). Re-run to resume same version." }

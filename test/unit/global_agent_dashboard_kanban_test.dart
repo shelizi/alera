@@ -8,17 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('Kanban status column sizing', () {
-    test('there is no column when there are no statuses', () {
-      expect(globalAgentDashboardColumnWidth(1100, 0), 0);
+    test('five fixed lanes fit a standard wide viewport', () {
+      expect(globalAgentDashboardColumnWidth(1600), closeTo(310.4, 0.01));
     });
-    test('one status does not make a giant full-width card', () {
-      expect(globalAgentDashboardColumnWidth(1200, 1), 385);
-    });
-    test('three statuses produce three readable columns', () {
-      expect(globalAgentDashboardColumnWidth(1100, 3), closeTo(358.666, 0.01));
+    test('wide screens retain the readable maximum width', () {
+      expect(globalAgentDashboardColumnWidth(2200), 385);
     });
     test('narrow windows scroll rather than crush cards', () {
-      expect(globalAgentDashboardColumnWidth(620, 3), 280);
+      expect(globalAgentDashboardColumnWidth(620), 280);
     });
   });
 

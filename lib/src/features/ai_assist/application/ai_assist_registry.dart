@@ -214,7 +214,8 @@ _registeredAiAssistCapabilities = <AiAssistCapability>[
         defaultThinkingLevel: 'low',
       ),
     ],
-    defaultModelId: 'github-copilot/gpt-5.4-mini',
+    defaultModelId: null,
+    modelCanInherit: true,
     diffOnlyAccess: .toolFree,
     buildArgs:
         ({
@@ -231,8 +232,7 @@ _registeredAiAssistCapabilities = <AiAssistCapability>[
           '--no-context-files',
           '--mode',
           'text',
-          '--model',
-          model,
+          if (model.trim().isNotEmpty) ...<String>['--model', model],
           if (thinkingLevel != null) ...<String>['--thinking', thinkingLevel],
         ],
   ),
@@ -363,7 +363,8 @@ String defaultModelIdForAgentType(
   if (spec == null) {
     return 'custom';
   }
-  if (!spec.modelCanInherit) {
+  // A discovered catalog is not an implicit replacement for the CLI default.
+  if (!spec.modelCanInherit && spec.defaultModelId == null) {
     final discoveredDefault = settings.discoveredDefaultModelForType(agentType);
     if (discoveredDefault != null) {
       return discoveredDefault;
@@ -480,11 +481,22 @@ List<AiAssistModel> parseCodexModels(String stdout) {
 }
 
 List<AiAssistModel> parsePiModels(String stdout) {
+  final idPart = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:/-]*$');
+  final tokenCount = RegExp(r'^\d+(?:\.\d+)?[KkMm]?$');
   return _uniqueModels(
     stdout
         .split(RegExp(r'\r?\n'))
         .map((line) => line.trim().split(RegExp(r'\s+')))
-        .where((parts) => parts.length >= 2 && parts.first != 'provider')
+        .where(
+          (parts) =>
+              parts.length >= 6 &&
+              idPart.hasMatch(parts[0]) &&
+              idPart.hasMatch(parts[1]) &&
+              tokenCount.hasMatch(parts[2]) &&
+              tokenCount.hasMatch(parts[3]) &&
+              const {'yes', 'no'}.contains(parts[4].toLowerCase()) &&
+              const {'yes', 'no'}.contains(parts[5].toLowerCase()),
+        )
         .map((parts) {
           final id = '${parts[0]}/${parts[1]}';
           return AiAssistModel(id: id, label: labelFromModelId(id));

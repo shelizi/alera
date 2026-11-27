@@ -92,7 +92,7 @@ impl AgentContextOverview {
 
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        let goal = Self::text(object.get("goal"), 120);
+        let goal = Self::text(object.get("goal"), 600);
         let summary = Self::text(object.get("reportSummary"), 420);
         let is_summary = !summary.is_empty();
         let progress = if is_summary { summary.clone() } else { Self::text(object.get("progress"), 420) };
@@ -393,6 +393,18 @@ impl CreatedHostTerminal {
             && session.handle == self.handle
             && session.workspace_id == self.workspace_id
             && session.tab_id == self.tab_id
+    }
+
+    /// A typed direct Agent create reply has already verified the persisted
+    /// executable and adapter. Hook presence can arrive later; conflicting
+    /// adapter reports, stopped sessions and recycled handles fail closed.
+    pub fn matches_host_verified_agent_session(
+        &self,
+        session: &TerminalSession,
+        expected_agent: &str,
+    ) -> bool {
+        self.matches_live_session(session)
+            && session.agent_type.as_deref().is_none_or(|reported| reported == expected_agent)
     }
 }
 
@@ -2576,12 +2588,7 @@ impl TerminalCreateFlow {
             return None;
         };
         if !sessions.iter().any(|session| {
-            created.matches_live_session(session)
-                && session.running
-                && session
-                    .agent_type
-                    .as_deref()
-                    .is_none_or(|reported| reported == expected_agent)
+            created.matches_host_verified_agent_session(session, expected_agent)
         }) {
             return None;
         }

@@ -347,6 +347,7 @@ struct ServerActor {
     agent_title_jobs: HashMap<String, agent_title_generation::AgentTitleJob>,
     agent_report_jobs: HashMap<String, agent_report_summary::AgentReportJob>,
     agent_report_queue: std::collections::VecDeque<agent_report_summary::ReportRequest>,
+    agent_report_results: std::collections::VecDeque<agent_report_summary::AgentReportResult>,
     managed_workspace_jobs: usize,
     mutation_queue: runtime_mutation_queue::RuntimeMutationQueue,
     agent_quota_cache: Option<(Instant, u64, Value)>,

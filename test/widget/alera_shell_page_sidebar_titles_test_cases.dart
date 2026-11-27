@@ -106,6 +106,8 @@ void _registerAleraShellSidebarTitleTests() {
       (tester) async {
         const goal = 'Finish the complete GPUI settings parity task';
         const report = 'Shared Host controls completed; visual review pending';
+        const summary = 'AI summary of shared Host controls';
+        const overall = 'Cumulative progress report';
         await _pumpShell(
           tester,
           state: _stackedWorkbenchState(),
@@ -125,6 +127,8 @@ void _registerAleraShellSidebarTitleTests() {
               contextOverview: <String, dynamic>{
                 'goal': goal,
                 'progress': report,
+                'reportSummary': summary,
+                'overallSummary': overall,
                 'timeline': <Object?>[],
               },
             ),
@@ -148,13 +152,40 @@ void _registerAleraShellSidebarTitleTests() {
         );
         final progressRow = find.descendant(
           of: sidebar,
-          matching: find.text('最新回報：$report'),
+          matching: find.text('最新回報：$summary'),
+        );
+        final summaryTooltip = find.byWidgetPredicate(
+          (widget) =>
+              widget is Tooltip &&
+              (widget.message?.contains(summary) ?? false) &&
+              (widget.message?.contains(overall) ?? false) &&
+              !(widget.message?.contains(report) ?? false),
+        );
+        expect(
+          find.descendant(of: sidebar, matching: summaryTooltip),
+          findsWidgets,
+        );
+        final tab = find.byKey(
+          const ValueKey<String>('workspace-tab-chip:tab-1'),
+        );
+        expect(tab, findsOneWidget);
+        expect(
+          find.descendant(of: tab, matching: summaryTooltip),
+          findsWidgets,
+        );
+        expect(
+          find.descendant(of: tab, matching: find.byType(AgentIdentityIcon)),
+          findsOneWidget,
         );
         if (enabled) {
           expect(goalRow, findsOneWidget);
           expect(progressRow, findsOneWidget);
           expect(legacyRow, findsNothing);
           expect(tester.widget<Text>(goalRow).maxLines, 4);
+          expect(
+            find.descendant(of: tab, matching: find.text(goal)),
+            findsOneWidget,
+          );
         } else {
           expect(goalRow, findsNothing);
           expect(progressRow, findsNothing);
