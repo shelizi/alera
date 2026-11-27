@@ -26,3 +26,10 @@ without constructing a full LIS edit script. Alera supplies an
 incremental root-branch flatten strategy. Existing default controller
 and view behavior is retained. Tests cover scroll anchoring and selection
 in both modes; Alera unit tests cover incremental/reference row parity.
+
+For immutableVisibleRows consumers, the optional IndexedVisibleRows
+interface lets an immutable segmented list supply its own visible-ID
+index using the current TreeData graph. DirectoryTreeController avoids
+allocating a redundant full-list index and uses getRange for selection.
+DirectoryTreeView passes its known anchor index to the scroll helper.
+Contiguous lists and default behavior remain supported.

@@ -18,6 +18,7 @@ export 'package:directory_tree/directory_tree.dart' hide folderSelection;
 // ------------------- Controllers -------------------
 export 'src/controller/directory_tree_controller.dart';
 export 'src/controller/expansion_controller.dart';
+export 'src/controller/indexed_visible_rows.dart';
 export 'src/controller/selection_controller.dart';
 export 'src/controller/tree_diff.dart';
 export 'src/delegates/context_menu_delegate.dart';

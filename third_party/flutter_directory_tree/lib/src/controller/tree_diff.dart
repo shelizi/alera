@@ -19,6 +19,7 @@ void schedulePreserveScrollOffset({
   required List<VisibleNode> before,
   required List<VisibleNode> after,
   required double rowExtent,
+  int? knownAnchorIndex,
 }) {
   if (!controller.hasClients || before.isEmpty || after.isEmpty) return;
 
@@ -27,8 +28,13 @@ void schedulePreserveScrollOffset({
       (oldOffset / rowExtent).floor().clamp(0, before.length - 1);
   final anchorId = before[oldTopIndex].id;
 
-  final newIndex = after.indexWhere((n) => n.id == anchorId);
-  if (newIndex == -1) return; // Anchor vanished; do nothing.
+  final newIndex =
+      knownAnchorIndex ?? after.indexWhere((n) => n.id == anchorId);
+  if (newIndex < 0 ||
+      newIndex >= after.length ||
+      after[newIndex].id != anchorId) {
+    return; // Anchor vanished or supplied index does not match.
+  }
 
   final remainder = oldOffset - (oldTopIndex * rowExtent);
   final target = (newIndex * rowExtent + remainder).clamp(0.0, double.infinity);

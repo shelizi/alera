@@ -1,5 +1,6 @@
 import 'package:alera/src/features/workbench/application/workspace_explorer_flatten_strategy.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_node_snapshots.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_directory_tree/flutter_directory_tree.dart' as tree;
 import 'package:flutter_test/flutter_test.dart';
 
@@ -373,6 +374,323 @@ void main() {
     },
   );
 
+  test('segmented rows preserve ordering, range selection, old snapshots and branch offsets', () {
+    final seed = _fixture(16, 200);
+    final harness = _Harness(seed);
+    addTearDown(harness.dispose);
+    final dirs = seed[_root]!.childIds;
+    harness.expand(dirs);
+    final rows = harness.controller.visibleNodes;
+    expect(rows, isA<tree.IndexedVisibleRows>());
+    expect(rows.length, 3216);
+    final before = rows.map(_fields).toList();
+    for (final (start, end) in [
+      (0, 0),
+      (0, 1),
+      (199, 205),
+      (200, 402),
+      (3210, 3216),
+      (3216, 3216),
+    ]) {
+      expect(
+        rows.getRange(start, end).map(_fields).toList(),
+        before.sublist(start, end),
+      );
+    }
+    expect(rows.toList().map(_fields).toList(), before);
+    expect(() => rows[-1], throwsRangeError);
+    expect(() => rows[rows.length], throwsRangeError);
+    expect(() => rows.getRange(-1, 1), throwsRangeError);
+    expect(() => rows.getRange(0, rows.length + 1), throwsRangeError);
+    expect(() => rows.add(rows.first), throwsUnsupportedError);
+    expect(() => rows[0] = rows.last, throwsUnsupportedError);
+    expect(rows.clear, throwsUnsupportedError);
+    expect(harness.controller.indexOfNode(_root), -1);
+    expect(harness.controller.indexOfNode('missing'), -1);
+
+    const anchor = 'dir-0/file-198.dart';
+    const end = 'dir-2/file-3.dart';
+    harness.controller.selectRange(anchorId: anchor, toId: end);
+    harness.reference.selectRange(anchorId: anchor, toId: end);
+    harness.check();
+    expect(
+      harness.controller.selection.selectedIds,
+      containsAll([anchor, end, 'dir-1']),
+    );
+
+    // Change the length of the first branch. All later branch-local
+    // indexes stay valid while global offsets move forward.
+    final stableRow = rows[201];
+    final stableIndex = harness.controller.indexOfNode(stableRow.id);
+    const added = 'dir-0/added.dart';
+    harness.store.put(added, _node(added, 'dir-0'));
+    harness.store.put(
+      'dir-0',
+      seed['dir-0']!.copyWith(childIds: [added, ...seed['dir-0']!.childIds]),
+    );
+    harness.publish();
+    expect(harness.controller.visibleNodes, isA<tree.IndexedVisibleRows>());
+    expect(harness.controller.indexOfNode(stableRow.id), stableIndex + 1);
+    expect(harness.controller.visibleNodes[stableIndex + 1], same(stableRow));
+    expect(rows.map(_fields).toList(), before);
+
+    harness.store.put(
+      _root,
+      seed[_root]!.copyWith(childIds: dirs.reversed.toList()),
+    );
+    harness.publish();
+    expect(harness.controller.visibleNodes.first.id, dirs.last);
+    expect(harness.controller.indexOfNode(stableRow.id), 14 * 201);
+    expect(harness.controller.visibleNodes[14 * 201], same(stableRow));
+
+    // Drop below the segmented threshold and restore it. Hidden or
+    // removed IDs must not be returned by either indexing representation.
+    for (final id in dirs.take(7)) {
+      harness.collapse(id);
+    }
+    expect(
+      harness.controller.visibleNodes,
+      isNot(isA<tree.IndexedVisibleRows>()),
+    );
+    expect(harness.controller.indexOfNode(anchor), -1);
+    harness.expand(dirs);
+    expect(harness.controller.visibleNodes, isA<tree.IndexedVisibleRows>());
+    expect(harness.controller.indexOfNode(anchor), greaterThanOrEqualTo(0));
+    harness.filter('file-199.dart');
+    expect(
+      harness.controller.visibleNodes,
+      isNot(isA<tree.IndexedVisibleRows>()),
+    );
+    harness.filter('');
+    expect(harness.controller.visibleNodes, isA<tree.IndexedVisibleRows>());
+    expect(rows.map(_fields).toList(), before);
+  });
+
+  test(
+    'segmented list lookup follows moved nodes and current hidden graph',
+    () {
+      final seed = _fixture(16, 200);
+      final harness = _Harness(seed);
+      addTearDown(harness.dispose);
+      final dirs = seed[_root]!.childIds;
+      harness.expand(dirs.take(15));
+      final before = harness.controller.visibleNodes;
+      expect(before, isA<tree.IndexedVisibleRows>());
+      const hidden = 'dir-15/file-2.dart';
+      expect(harness.controller.indexOfNode(hidden), -1);
+      harness.store.put(hidden, _node(hidden, 'dir-15', name: 'hidden update'));
+      harness.publish();
+      expect(harness.controller.visibleNodes, same(before));
+      expect(harness.controller.indexOfNode(hidden), -1);
+
+      // A node ID moves from a hidden to an expanded branch, then vanishes.
+      harness.store.put(
+        'dir-15',
+        seed['dir-15']!.copyWith(
+          childIds: [
+            for (final id in seed['dir-15']!.childIds)
+              if (id != hidden) id,
+          ],
+        ),
+      );
+      harness.store.put(hidden, _node(hidden, 'dir-0'));
+      harness.store.put(
+        'dir-0',
+        seed['dir-0']!.copyWith(childIds: [hidden, ...seed['dir-0']!.childIds]),
+      );
+      harness.publish();
+      expect(harness.controller.indexOfNode(hidden), 1);
+      harness.controller.selectRange(
+        anchorId: hidden,
+        toId: 'dir-1/file-0.dart',
+      );
+      harness.reference.selectRange(
+        anchorId: hidden,
+        toId: 'dir-1/file-0.dart',
+      );
+      harness.check();
+      harness.store.remove(hidden);
+      harness.store.put('dir-0', seed['dir-0']!);
+      harness.publish();
+      expect(harness.controller.indexOfNode(hidden), -1);
+      expect(harness.controller.selection.selectedIds, isNot(contains(hidden)));
+    },
+  );
+
+  testWidgets(
+    'segmented visible rows keep scroll anchor and selection across branch insert and removal',
+    (tester) async {
+      final seed = _fixture(16, 200);
+      final harness = _Harness(seed);
+      addTearDown(harness.dispose);
+      harness.expand(seed[_root]!.childIds);
+      final controller = harness.controller;
+      expect(controller.visibleNodes, isA<tree.IndexedVisibleRows>());
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SizedBox(
+            height: 240,
+            child: tree.DirectoryTreeView(
+              controller: controller,
+              scrollController: scroll,
+              showScrollbar: false,
+              nodeBuilder: (context, node, state) => Text(
+                node.name,
+                key: ValueKey("text:${node.id}"),
+                style: TextStyle(
+                  color: state.isSelected ? Colors.red : Colors.black,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final rowHeight = tree.DirectoryTreeTheme.of(
+        tester.element(find.byType(tree.DirectoryTreeView)),
+      ).rowHeight;
+      const anchor = 'dir-3/file-12.dart';
+      final oldIndex = controller.indexOfNode(anchor);
+      final offset = oldIndex * rowHeight + 2;
+      scroll.jumpTo(offset);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey("text:$anchor")), findsOneWidget);
+
+      const added = 'dir-0/inserted';
+      harness.store.put(added, _node(added, 'dir-0'));
+      harness.store.put(
+        'dir-0',
+        seed['dir-0']!.copyWith(childIds: [added, ...seed['dir-0']!.childIds]),
+      );
+      harness.publish();
+      await tester.pumpAndSettle();
+      expect(controller.indexOfNode(anchor), oldIndex + 1);
+      expect(scroll.offset, closeTo(offset + rowHeight, 0.01));
+      expect(find.byKey(const ValueKey("text:$anchor")), findsOneWidget);
+
+      controller.selectOnly(anchor);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey("text:$anchor")))
+            .style!
+            .color,
+        Colors.red,
+      );
+      expect(scroll.offset, closeTo(offset + rowHeight, 0.01));
+
+      harness.reference.selectOnly(anchor);
+      harness.store.remove(added);
+      harness.store.put('dir-0', seed['dir-0']!);
+      harness.publish();
+      await tester.pumpAndSettle();
+      expect(controller.indexOfNode(anchor), oldIndex);
+      expect(scroll.offset, closeTo(offset, 0.01));
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey("text:$anchor")))
+            .style!
+            .color,
+        Colors.red,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+  test(
+    'benchmark segmented visible list publication and lookups',
+    () {
+      final seed = _fixture(200, 200);
+      final dirs = seed[_root]!.childIds;
+      const updates = 12;
+
+      ({int elapsed, List<Object> rows}) run(bool segmented, int expanded) {
+        final store = WorkspaceExplorerNodeSnapshots<tree.TreeNode>()
+          ..replace(seed.entries);
+        final strategy = WorkspaceExplorerFlattenStrategy(
+          segmentedRows: segmented,
+        );
+        final initial = _data(store.snapshot());
+        strategy.prepareUpdate(initial, store.takeChangedKeys());
+        final controller = tree.DirectoryTreeController(
+          data: initial,
+          flattenStrategy: strategy,
+          immutableVisibleRows: true,
+          lazyLookupIndexes: true,
+          selection: tree.SelectionController(mode: tree.SelectionMode.multi),
+        );
+        controller.expansions.expandAll(dirs.take(expanded));
+        var elapsed = 0;
+        for (var i = 0; i < updates; i++) {
+          final dir = dirs[i % expanded];
+          final oldId = '$dir/file-$i.dart';
+          final newId = '$dir/renamed-$i.dart';
+          final parent = store.snapshot()[dir]!;
+          final watch = Stopwatch()..start();
+          store.remove(oldId);
+          store.put(newId, _node(newId, dir));
+          store.put(
+            dir,
+            parent.copyWith(
+              childIds: [
+                for (final id in parent.childIds) id == oldId ? newId : id,
+              ],
+            ),
+          );
+          final next = _data(store.snapshot());
+          strategy.prepareUpdate(next, store.takeChangedKeys());
+          controller.rebuild(next);
+          final newIndex = controller.indexOfNode(newId);
+          final oldIndex = controller.indexOfNode(oldId);
+          final distant = controller.indexOfNode(
+            '${dirs[expanded - 1]}/file-199.dart',
+          );
+          final missing = controller.indexOfNode('unknown');
+          final selected = controller.visibleNodes[newIndex];
+          watch.stop();
+          elapsed += watch.elapsedMicroseconds;
+          expect(newIndex, (i % expanded) * 201 + i + 1);
+          expect(oldIndex, -1);
+          expect(distant, expanded * 201 - 1);
+          expect(missing, -1);
+          expect(selected.id, newId);
+        }
+        final rows = controller.visibleNodes.map(_fields).toList();
+        controller.dispose();
+        return (elapsed: elapsed, rows: rows);
+      }
+
+      double median(List<int> samples) {
+        samples.sort();
+        return samples[samples.length ~/ 2] / 1000;
+      }
+
+      for (final expanded in [5, 200]) {
+        final reference = run(false, expanded);
+        final warm = run(true, expanded);
+        expect(warm.rows, reference.rows);
+        final before = <int>[];
+        final after = <int>[];
+        for (var sample = 0; sample < 7; sample++) {
+          for (final segmented
+              in sample.isEven ? [false, true] : [true, false]) {
+            final measured = run(segmented, expanded);
+            expect(measured.rows, reference.rows);
+            (segmented ? after : before).add(measured.elapsed);
+          }
+        }
+        final oldMs = median(before);
+        final newMs = median(after);
+        // ignore: avoid_print
+        print(
+          'Explorer segmented publication expanded=$expanded nodes=${seed.length} visible=${reference.rows.length} updates=$updates old_ms=${oldMs.toStringAsFixed(3)} new_ms=${newMs.toStringAsFixed(3)} speedup=${(oldMs / newMs).toStringAsFixed(2)}x',
+        );
+      }
+    },
+    skip: !const bool.fromEnvironment('ALERA_EXPLORER_BENCHMARK'),
+    timeout: const Timeout(Duration(minutes: 10)),
+  );
   test(
     'benchmark incremental visible branch publication',
     () {

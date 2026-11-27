@@ -279,6 +279,7 @@ class _DirectoryTreeViewState extends State<DirectoryTreeView> {
                 before: oldNodes,
                 after: newNodes,
                 rowExtent: theme.rowHeight,
+                knownAnchorIndex: nextIndex,
               );
             }
           }

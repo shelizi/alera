@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:directory_tree/directory_tree.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_directory_tree/src/controller/expansion_controller.dart';
+import 'package:flutter_directory_tree/src/controller/indexed_visible_rows.dart';
 import 'package:flutter_directory_tree/src/controller/selection_controller.dart';
 
 /// The central coordinator for the directory tree's state and logic.
@@ -143,8 +144,9 @@ class DirectoryTreeController extends ChangeNotifier {
   /// This is the data source for the view's [ListView].
   List<VisibleNode> get visibleNodes => _visibleNodesView;
   late List<VisibleNode> _visibleNodes;
-  late UnmodifiableListView<VisibleNode> _visibleNodesView;
-  late Map<String, int> _indexById;
+  late List<VisibleNode> _visibleNodesView;
+  Map<String, int>? _indexById;
+  IndexedVisibleRows? _indexedVisibleRows;
   List<VisibleNode>? _lastImmutableRows;
   Map<String, String>? _idByVirtualPath;
   Map<String, String>? _idByEntryId;
@@ -380,13 +382,13 @@ class DirectoryTreeController extends ChangeNotifier {
   /// * Adds the entire range to the current selection.
   /// * Typically used for "Shift+Click" interactions.
   void selectRange({required String anchorId, required String toId}) {
-    final a = _indexById[anchorId];
-    final b = _indexById[toId];
-    if (a == null || b == null) return;
+    final a = indexOfNode(anchorId);
+    final b = indexOfNode(toId);
+    if (a < 0 || b < 0) return;
     final start = a < b ? a : b;
     final end = a < b ? b : a;
     final ids = <String>[
-      for (var i = start; i <= end; i++) _visibleNodes[i].id,
+      for (final node in _visibleNodes.getRange(start, end + 1)) node.id,
     ];
     selection.selectRange(ids, anchorId, toId);
   }
@@ -426,7 +428,10 @@ class DirectoryTreeController extends ChangeNotifier {
   }
 
   /// Return the visible index of a node, or -1 if not visible.
-  int indexOfNode(String nodeId) => _indexById[nodeId] ?? -1;
+  int indexOfNode(String nodeId) =>
+      _indexedVisibleRows?.indexOfVisibleNode(nodeId, _data) ??
+      _indexById?[nodeId] ??
+      -1;
 
   // ---- internals ------------------------------------------------------------
 
@@ -454,10 +459,17 @@ class DirectoryTreeController extends ChangeNotifier {
       _lastImmutableRows = next;
     }
     _visibleNodes = next;
-    _visibleNodesView = UnmodifiableListView(_visibleNodes);
-    _indexById = {
-      for (var i = 0; i < _visibleNodes.length; i++) _visibleNodes[i].id: i,
-    };
+    if (immutableVisibleRows && next is IndexedVisibleRows) {
+      _indexedVisibleRows = next;
+      _visibleNodesView = next;
+      _indexById = null;
+    } else {
+      _indexedVisibleRows = null;
+      _visibleNodesView = UnmodifiableListView(_visibleNodes);
+      _indexById = {
+        for (var i = 0; i < _visibleNodes.length; i++) _visibleNodes[i].id: i,
+      };
+    }
   }
 
   /// Re-indexes nodes for O(1) lookup by path or entry ID.
