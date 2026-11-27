@@ -53,18 +53,14 @@ Future<void> _showGitChangeContextMenu(
       if (onCopyFiles != null)
         AleraDropdownEntry<_GitChangeContextAction>(
           value: .copyFiles,
-          label: selectionCount > 1
-              ? 'Copy Selected Files/Folders'
-              : 'Copy File/Folder',
+          label: 'Copy',
           leading: const Icon(Icons.copy, size: 16),
           enabled: !busy,
         ),
       if (onCutFiles != null)
         AleraDropdownEntry<_GitChangeContextAction>(
           value: .cutFiles,
-          label: selectionCount > 1
-              ? 'Cut Selected Files/Folders'
-              : 'Cut File/Folder',
+          label: 'Cut',
           leading: const Icon(Icons.content_cut, size: 16),
           enabled: !busy,
         ),

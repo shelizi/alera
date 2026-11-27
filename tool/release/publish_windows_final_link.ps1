@@ -10,7 +10,11 @@ param(
     [switch]$NoRestart,
     [switch]$AllowNonMain,
     [switch]$UseCurrentWorktree,
-    [switch]$KeepWorktree
+    [switch]$KeepWorktree,
+    [string]$ExpectedCommit = '',
+    [string]$ExpectedVersion = '',
+    [switch]$ProtectStableVersion,
+    [switch]$AllowSamePublishedCommit
 )
 
 Set-StrictMode -Version Latest
@@ -334,6 +338,33 @@ function Assert-ReleaseArtifact {
     }
 }
 
+function Assert-StableVersion {
+    param([string]$RemotePath, [string]$Version, [string]$Commit)
+    $lines = Invoke-Checked -FilePath $script:Ssh -Arguments @(
+        $RemoteHost,
+        "if test -f $RemotePath; then unzip -p $RemotePath kit-manifest.json; else echo NO_STABLE; fi"
+    ) -Capture
+    $raw = ($lines -join [Environment]::NewLine).Trim().TrimStart([char]0xFEFF)
+    if ($raw -eq 'NO_STABLE') { return }
+    $stable = $raw | ConvertFrom-Json
+    $pattern = '^([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)$'
+    if ($stable.product -ne 'Alera' -or $stable.sourceCommit -notmatch '^[0-9a-f]{40}$' -or $stable.version -notmatch $pattern) {
+        throw 'Cannot verify the existing stable Final-Link identity; refusing to replace it.'
+    }
+    $stableSemVer = [version]$Matches[1]
+    $stableBuild = [int]$Matches[2]
+    if ($Version -notmatch $pattern) { throw 'Invalid target version.' }
+    $targetSemVer = [version]$Matches[1]
+    $targetBuild = [int]$Matches[2]
+    if ($AllowSamePublishedCommit -and $stable.version -eq $Version -and $stable.sourceCommit -eq $Commit) {
+        Write-Host 'Stable package already has the same version and source; allowing explicit pending-release recovery.'
+        return
+    }
+    if ($targetSemVer -le $stableSemVer -or $targetBuild -le $stableBuild) {
+        throw "Stable version $($stable.version) is not older than $Version. Refusing downgrade or version reuse."
+    }
+}
+
 function Get-RemoteHash {
     param([Parameter(Mandatory = $true)][string]$RemotePath)
     $lines = Invoke-Checked -FilePath $script:Ssh -Arguments @(
@@ -400,6 +431,8 @@ try {
     if (-not $AllowNonMain -and $branch -ne 'main') {
         throw "Expected branch main, found $branch. Use -AllowNonMain only for an intentional test release."
     }
+    if ($ExpectedCommit -and $commit -ne $ExpectedCommit) { throw "Main changed: expected $ExpectedCommit, found $commit." }
+    if ($ExpectedCommit -and $UseCurrentWorktree) { throw 'Pinned release requires an isolated worktree.' }
     Write-Host "Branch: $branch"
     Write-Host "Commit: $commit"
 
@@ -456,6 +489,7 @@ try {
 
     Write-Step 'Verify Release identity and package contents'
     $artifact = Assert-ReleaseArtifact -ExpectedCommit $commit
+    if ($ExpectedVersion -and $artifact.Version -ne $ExpectedVersion) { throw "Artifact version mismatch: expected $ExpectedVersion, found $($artifact.Version)." }
     Write-Host "Version: $($artifact.Version)"
     Write-Host "Size:    $($artifact.Size) bytes"
     Write-Host "SHA256:  $($artifact.Sha256)"
@@ -469,12 +503,16 @@ try {
     $remoteStable = "$RemoteDirectory/Alera-Final-Link-Kit.zip"
     $remoteStaging = "$RemoteDirectory/.Alera-Final-Link-Kit.uploading.zip"
 
+    if ($ProtectStableVersion) { Assert-StableVersion -RemotePath $remoteStable -Version $artifact.Version -Commit $commit }
+
     Write-Step 'Sync to remote staging path'
     Sync-RemoteStaging -LocalPath $artifact.ZipPath -RemoteStable $remoteStable -RemoteStaging $remoteStaging
     $stagingHash = Get-RemoteHash -RemotePath $remoteStaging
     if ($stagingHash -ne $artifact.Sha256) {
         throw "Remote staging hash mismatch. Local $($artifact.Sha256), remote $stagingHash."
     }
+
+    if ($ProtectStableVersion) { Assert-StableVersion -RemotePath $remoteStable -Version $artifact.Version -Commit $commit }
 
     Write-Step 'Atomically promote and verify remote stable package'
     Invoke-Checked -FilePath $script:Ssh -Arguments @($RemoteHost, "mv -f $remoteStaging $remoteStable")

@@ -216,16 +216,6 @@ _version: 2
   zh-TW: "使用外部程式開啟工作區檔案"
   zh-CN: "使用外部程序打开工作区文件"
   ja: "作業ツリーファイルを外部アプリで開く"
-"Copy worktree file(s)":
-  en: "Copy worktree file(s)"
-  zh-TW: "複製工作區檔案"
-  zh-CN: "复制工作区文件"
-  ja: "作業ツリーファイルをコピー"
-"Cut worktree file(s)":
-  en: "Cut worktree file(s)"
-  zh-TW: "剪下工作區檔案"
-  zh-CN: "剪切工作区文件"
-  ja: "作業ツリーファイルを切り取り"
 "Paste into containing folder":
   en: "Paste into containing folder"
   zh-TW: "貼到所在資料夾"
@@ -276,16 +266,6 @@ _version: 2
   zh-TW: "捨棄未暫存的變更（需確認）"
   zh-CN: "丢弃未暂存的更改（需确认）"
   ja: "未ステージの変更を破棄（要確認）"
-"Copy worktree folder / selected items":
-  en: "Copy worktree folder / selected items"
-  zh-TW: "複製工作區資料夾／所選項目"
-  zh-CN: "复制工作区文件夹／所选项目"
-  ja: "作業ツリーフォルダー／選択項目をコピー"
-"Cut worktree folder / selected items":
-  en: "Cut worktree folder / selected items"
-  zh-TW: "剪下工作區資料夾／所選項目"
-  zh-CN: "剪切工作区文件夹／所选项目"
-  ja: "作業ツリーフォルダー／選択項目を切り取り"
 "Paste into this folder":
   en: "Paste into this folder"
   zh-TW: "貼到此資料夾"

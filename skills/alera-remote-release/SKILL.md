@@ -1,21 +1,30 @@
 ---
 name: alera-remote-release
-description: Build and publish the Alera Windows Release as the semi-compiled Final-Link Kit to the internal file server. Use when asked to compile/package Alera main for Windows Release, create or refresh the Final-Link/half-compiled package, upload or update the remote Alera package, or verify that the remote package is a real Release build. Use home-node for the Alera workspace, protect uncommitted work, verify Release flavor and kit metadata, compare local/remote SHA-256 and ZIP integrity, and never git-push unless the user explicitly asks.
+description: Build and publish the Alera Windows Release as the semi-compiled Final-Link Kit to the internal file server. Use for Alera Windows Release, internal half-compiled/Final-Link publish or refresh, repeat releases, and remote Release verification. Run the one-command release entrypoint for routine publishing. Use home-node for the Alera workspace, protect uncommitted work, verify Release flavor and kit metadata, compare local/remote SHA-256 and ZIP integrity, and never git-push unless the user explicitly asks.
 ---
 
 # Alera Remote Release
 
 Use the project's tracked Windows Final-Link workflow to publish the reusable semi-compiled Release package. Treat successful upload as incomplete until Release identity, package contents, hash, and remote ZIP integrity are verified.
 
-For the normal end-to-end release, prefer the tracked one-command wrapper:
+## Quick start: internal half-compiled release
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/release/publish_windows_final_link.ps1
-```
+For "publish a half-compiled version", "publish another version" in this context, or an equivalent request, bootstrap home-node, select the Alera workspace, confirm the Git repository (often the alera child directory), and run **one command** from local main:
 
-It runs the authoritative exporter, verifies Release identity and ZIP contents, syncs through a staged path (preferring `rsync` delta/resume semantics), atomically promotes the package, restarts `file-server`, and verifies the container-visible SHA-256. Use the detailed workflow below when diagnosing or extending the release process.
+~~~powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/release/release_windows_final_link.ps1
+~~~
 
-## Workflow
+Do not manually bump versions, edit metadata, construct a ZIP, or invoke the low-level publisher for routine requests. The entrypoint validates the Git state, advances desktop patch/build, commits only the two release metadata files, pins the source, calls the authoritative publisher, and reports the verified result. It preserves mobile metadata and unrelated work. It does not fetch, merge, push, create a tag, or trigger GitHub CI.
+
+- Prefer an authorized managed command with a fixed one-hour process deadline and a unique operation_id per requested release; poll/reattach the same operation. Do not spawn a new process just because the response wait times out.
+- A running job is not a completed release. Report completion only after exit 0 and the publisher's ZIP/hash/container checks. If the retained operation is lost, verify the served manifest and SHA-256 against the expected release before reporting success.
+- After a failed/interrupted run, diagnose the actual error, then rerun the same command to resume its pending version when main still matches. The record is stored in the Git common directory, not a tracked file. If main advanced or metadata is dirty, stop and inspect; do not reset, discard the record, or republish stale source automatically.
+- Optional read-only preview: append -Plan. This does not bump, commit, build, upload, or contact GitHub.
+- The existing tool/release/publish_windows_final_link.ps1 is the low-level publisher, not the default entrypoint. It handles isolated worktrees, Release checks, staged rsync, atomic promotion, and container-visible SHA-256; the new entrypoint additionally requests exact commit/version and stable-version protection.
+- For an explicitly requested GitHub push/full release, follow the separate Git identity gate below. Do not treat internal half-compiled publication alone as permission to push tags.
+
+## Diagnostic/reference workflow
 
 1. Connect to the Alera workspace with `home-node`.
    - Follow the connector's bootstrap requirement before project operations.
@@ -31,9 +40,9 @@ It runs the authoritative exporter, verifies Release identity and ZIP contents, 
    - Known harmless local history may remain under `docs/history-session/`.
    - `tool/release/build_windows_release.ps1` is a local incremental Release-build helper, not the publishing authority for this workflow. Do not substitute it for the tracked Final-Link exporter below.
 
-### Required desktop version bump before every formal publish
+### Version preparation implemented by the one-command entrypoint (diagnostic reference)
 
-- Every formal Windows Final-Link publish must advance the desktop version first unless the user explicitly supplies a target version.
+- For a fresh internal Windows Final-Link publication, the entrypoint advances the desktop version. A pending retry reuses the same version and commit.
 - Read the current `pubspec.yaml` version in `major.minor.patch+build` form.
 - Default bump rule: increment `patch` by 1 and increment `build` by 1. Example: `0.82.1+258` -> `0.82.2+259`.
 - Update `tool/release/prepared_release.json` in the same change:
@@ -123,15 +132,15 @@ Before retrying a failed Windows build, classify the failure. Do not repeatedly 
    - Confirm the build/upload process did not add tracked modifications.
    - Leave pre-existing untracked files untouched.
 
-## Mandatory Git tag / commit identity gate
+## Git tag / commit identity gate (only for explicitly requested GitHub releases)
 
-For every successful formal Final-Link publication, create and push an **annotated** Git tag `vX.Y.Z` whose peeled commit is the exact release source commit recorded by `kit-manifest.json` and the ZIP's root `CHANGELOG.md`.
+Only when the user explicitly requests GitHub release/tag publication, create and push an **annotated** Git tag `vX.Y.Z` whose peeled commit is the exact release source commit recorded by `kit-manifest.json` and the ZIP's root `CHANGELOG.md`.
 
 1. Before publication, fetch `fork/main` and inspect remote `main` plus all `refs/tags/vX.Y.Z` values. Never overwrite or move an existing version tag. When local `main` and remote `main` diverge, integrate on a clean separate worktree and preserve the user's dirty `main`. Push the release commit to `fork/main` only after verifying it descends from the latest remote `main` and release metadata matches the intended commit.
 2. Keep `pubspec.yaml` version/build, `prepared_release.json` desktop version/build/tag, and the upcoming release commit synchronized. Verify `prepared_release.json.sourceSha` is the release commit's **first parent** and the previous release marker is reachable on its first-parent history. Commit these metadata changes as `release: vX.Y.Z` (other audited Skill changes can be committed separately before that release commit).
 3. Build and publish via the tracked Final-Link wrapper from an isolated pinned worktree (`-AllowNonMain` is valid only for a reviewed clean release branch whose HEAD has already been pushed as `fork/main`). Do not tag on a failed build, partial upload, missing artifact, failed SHA-256 comparison, or failed remote ZIP integrity check.
 4. After **successful** publication, verify: `git ls-remote fork refs/heads/main` equals the expected commit; `kit-manifest.json.sourceCommit` and the ZIP `CHANGELOG.md` source commit match that commit; then `git tag -a vX.Y.Z <sha> -m "Alera vX.Y.Z Final-Link Release"` and `git push fork refs/tags/vX.Y.Z`. Reject pre-existing different local/remote tags; never use `--force`.
-5. Verify the remote tag with `git ls-remote fork refs/tags/vX.Y.Z^{}` (for annotated tag) and compare to remote `main`, manifest, and changelog. A GitHub Release object is **not** implied by an internal semi-compiled Final-Link upload; only create one when specifically requested.
+5. Verify the remote tag with `git ls-remote fork refs/tags/vX.Y.Z^{}` (for annotated tag) and compare to remote `main`, manifest, and changelog. A tag may trigger a full GitHub Actions release. Never push a tag for a half-compiled-only request; a GitHub Release object is not implied by an internal upload.
 6. Report the release version and build, final commit, remote branch and tag peeled SHA, ZIP SHA-256, remote `ZIP_OK`, and excluded dirty files. Never claim publication, tag creation, or remote upload before verifying the actual result.
 
 ### Minimum repeatable tag-verification commands
