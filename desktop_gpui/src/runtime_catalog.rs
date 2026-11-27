@@ -56,6 +56,59 @@ pub struct RuntimeCatalog {
     pub workspace_updated_ms: HashMap<String, i64>,
 }
 
+/// Borrow the current RuntimeCatalog for one sidebar projection. Preserve
+/// source order and *all* rows for a path: legacy display/section metadata
+/// chooses the first match, relationship/manual-order IDs choose the last,
+/// and search/filters match any registered row. No persistence or I/O.
+#[derive(Default)]
+pub struct SidebarCatalogIndex<'a> {
+    projects: HashMap<&'a Path, Vec<&'a RuntimeProject>>,
+    workspaces: HashMap<&'a Path, Vec<&'a RuntimeWorkspace>>,
+    sections: HashMap<&'a str, Vec<&'a RuntimeSection>>,
+}
+
+impl<'a> SidebarCatalogIndex<'a> {
+    pub fn new(catalog: Option<&'a RuntimeCatalog>) -> Self {
+        let mut index = Self::default();
+        if let Some(catalog) = catalog {
+            for project in &catalog.projects {
+                index
+                    .projects
+                    .entry(project.root.as_path())
+                    .or_default()
+                    .push(project);
+            }
+            for workspace in &catalog.workspaces {
+                index
+                    .workspaces
+                    .entry(workspace.path.as_path())
+                    .or_default()
+                    .push(workspace);
+            }
+            for section in &catalog.sections {
+                index
+                    .sections
+                    .entry(section.id.as_str())
+                    .or_default()
+                    .push(section);
+            }
+        }
+        index
+    }
+
+    pub fn projects_at(&self, path: &Path) -> &[&'a RuntimeProject] {
+        self.projects.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn workspaces_at(&self, path: &Path) -> &[&'a RuntimeWorkspace] {
+        self.workspaces.get(path).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn sections_with_id(&self, id: &str) -> &[&'a RuntimeSection] {
+        self.sections.get(id).map_or(&[], Vec::as_slice)
+    }
+}
+
 fn item_list<'a>(value: &'a Value, kind: &str) -> io::Result<&'a [Value]> {
     if value.get("kind").and_then(Value::as_str) != Some(kind) {
         return Err(io::Error::new(

@@ -7,6 +7,7 @@
 //! Non-Git directories become plain roots without worktrees. Collection is
 //! read-only: it canonicalizes paths and asks [`WorktreeManager`] for
 //! `git worktree list`; it never writes, moves or deletes anything.
+use crate::runtime_catalog::SidebarCatalogIndex;
 use crate::worktree_manager::{WorktreeEntry, WorktreeManager, WorktreeReadSnapshot};
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -320,6 +321,65 @@ pub fn worktree_matches_search(
                         }))
             })
         })
+}
+
+/// Search using the same normalized query and catalog index across every
+/// project and worktree in a sidebar projection.
+pub struct SidebarSearch<'a, 'catalog> {
+    query: String,
+    catalog: &'a SidebarCatalogIndex<'catalog>,
+}
+
+impl<'a, 'catalog> SidebarSearch<'a, 'catalog> {
+    pub fn new(query: &str, catalog: &'a SidebarCatalogIndex<'catalog>) -> Self {
+        Self {
+            query: query.trim().to_lowercase(),
+            catalog,
+        }
+    }
+
+    pub fn project_matches(&self, group: &ProjectTreeGroup) -> bool {
+        let query = &self.query;
+        query.is_empty()
+            || group.label.to_lowercase().contains(query)
+            || group.root.to_string_lossy().to_lowercase().contains(query)
+            || self
+                .catalog
+                .projects_at(&group.root)
+                .iter()
+                .any(|project| project.name.to_lowercase().contains(query))
+    }
+
+    pub fn worktree_matches(&self, entry: &WorktreeEntry) -> bool {
+        let query = &self.query;
+        query.is_empty()
+            || entry.path.to_string_lossy().to_lowercase().contains(query)
+            || entry
+                .branch
+                .as_deref()
+                .is_some_and(|branch| branch.to_lowercase().contains(query))
+            || self
+                .catalog
+                .workspaces_at(&entry.path)
+                .iter()
+                .any(|workspace| {
+                    workspace.name.to_lowercase().contains(query)
+                        || workspace
+                            .branch
+                            .as_deref()
+                            .is_some_and(|branch| branch.to_lowercase().contains(query))
+                        || workspace
+                            .tag_names
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(query))
+                        || workspace.section_id.as_deref().is_some_and(|id| {
+                            self.catalog
+                                .sections_with_id(id)
+                                .iter()
+                                .any(|section| section.name.to_lowercase().contains(query))
+                        })
+                })
+    }
 }
 
 /// A matching branch must keep its parent project visible even when its

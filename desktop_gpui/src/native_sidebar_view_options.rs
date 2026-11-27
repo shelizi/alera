@@ -1,6 +1,6 @@
 //! View Options controls for the GPUI project sidebar.
 use super::*;
-use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
+use alera_gpui_desktop::runtime_catalog::SidebarCatalogIndex;
 use alera_gpui_desktop::sidebar_manual_order::SIDEBAR_SORT_CHOICES;
 use native_components::action_button;
 
@@ -23,7 +23,7 @@ impl SidebarViewOptions {
     pub(super) fn includes_worktree(
         &self,
         entry: &WorktreeEntry,
-        catalog: Option<&RuntimeCatalog>,
+        catalog: &SidebarCatalogIndex<'_>,
         has_active_agent: bool,
     ) -> bool {
         if self
@@ -34,11 +34,8 @@ impl SidebarViewOptions {
             return false;
         }
         self.tag_ids.is_empty()
-            || catalog.is_some_and(|catalog| {
-                catalog.workspaces.iter().any(|workspace| {
-                    workspace.path == entry.path
-                        && workspace.tag_ids.iter().any(|id| self.tag_ids.contains(id))
-                })
+            || catalog.workspaces_at(&entry.path).iter().any(|workspace| {
+                workspace.tag_ids.iter().any(|id| self.tag_ids.contains(id))
             })
     }
 }

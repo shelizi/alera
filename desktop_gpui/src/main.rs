@@ -127,13 +127,13 @@ use alera_gpui_desktop::native_settings::{
 };
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_snapshot,
-    project_title_matches_search, reconcile_sidebar_on_workspace_switch,
-    sidebar_workspaces_for_group, worktree_matches_search, ProjectTreeGroup,
+    reconcile_sidebar_on_workspace_switch,
+    sidebar_workspaces_for_group, ProjectTreeGroup, SidebarSearch,
 };
 use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
-use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
+use alera_gpui_desktop::runtime_catalog::{RuntimeCatalog, SidebarCatalogIndex};
 use alera_gpui_desktop::session::{
     PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
 };
@@ -173,7 +173,7 @@ use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_sidebar_order::{
-    order_worktree_rows_sorted, visible_worktree_rows,
+    order_worktree_rows_indexed, visible_worktree_rows,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_content_search::{
@@ -12998,6 +12998,8 @@ impl Render for Workbench {
             .map(|group| group.root.clone());
         let sidebar_has_git_projects = self.project_tree_groups.iter()
             .any(|group| !group.worktrees.is_empty());
+        let sidebar_catalog_index = SidebarCatalogIndex::new(self.runtime_catalog.as_ref());
+        let sidebar_search = SidebarSearch::new(&sidebar_search_query, &sidebar_catalog_index);
         let mut project_tree_rows: Vec<_> = self
             .project_tree_groups
             .iter()
@@ -13008,21 +13010,20 @@ impl Render for Workbench {
             .filter_map(|(index, group)| {
                 let catalog = self.runtime_catalog.as_ref();
                 let show_all = !sidebar_search_active
-                    || project_title_matches_search(group, catalog, &sidebar_search_query);
+                    || sidebar_search.project_matches(group);
                 let mut entries = sidebar_workspaces_for_group(group, catalog);
                 entries.retain(|entry| {
-                    let has_terminal = catalog.is_some_and(|catalog| catalog.workspaces.iter()
-                        .any(|workspace| workspace.path == entry.path
-                            && active_sidebar_workspaces.contains(workspace.id.as_str())));
-                    sidebar_filters.includes_worktree(entry, catalog, has_terminal)
-                        && (show_all || worktree_matches_search(entry, catalog, &sidebar_search_query))
+                    let has_terminal = sidebar_catalog_index.workspaces_at(&entry.path).iter()
+                        .any(|workspace| active_sidebar_workspaces.contains(workspace.id.as_str()));
+                    sidebar_filters.includes_worktree(entry, &sidebar_catalog_index, has_terminal)
+                        && (show_all || sidebar_search.worktree_matches(entry))
                 });
                 if entries.is_empty() && (sidebar_filtered || !show_all) {
                     return None;
                 }
                 let order = self.sidebar_order_prefs.as_ref();
-                let rows = order_worktree_rows_sorted(
-                    &entries, catalog, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
+                let rows = order_worktree_rows_indexed(
+                    &entries, &sidebar_catalog_index, order.map_or("name", |prefs| prefs.workspace_sort.as_str()),
                     order.filter(|prefs| prefs.workspace_is_manual())
                         .map(|prefs| prefs.workspace_order.as_slice()),
                     &sidebar_sort,
