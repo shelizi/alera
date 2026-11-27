@@ -66,6 +66,8 @@ class _FakeWorkspaceFileService({
   WorkspaceFileClipboardPayload? systemClipboard;
   int systemClipboardSequence = 0;
   final List<_ListChildrenCall> listChildrenCalls = <_ListChildrenCall>[];
+  Future<void> Function(String workspacePath, String relativePath)?
+  beforeListChildren;
   final List<bool> hideHiddenCalls = <bool>[];
   final List<List<String>> watchedPathUpdates = <List<String>>[];
   int projectionCalls = 0;
@@ -137,6 +139,7 @@ class _FakeWorkspaceFileService({
     );
     listChildrenCalls.add(call);
     hideHiddenCalls.add(hideHidden);
+    await beforeListChildren?.call(workspacePath, relativePath);
     if (failingListChildrenCalls.contains(call)) {
       throw StateError('Failed to list $relativePath');
     }

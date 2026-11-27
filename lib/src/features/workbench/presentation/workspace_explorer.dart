@@ -143,6 +143,11 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   // Structural revisions change DirectoryTreeController.data; metadata
   // revisions repaint only mounted rows (DirectoryTreeView caches ListView).
   int _treeStructureRevision = 0;
+  int _publishedTreeStructureRevision = 0;
+  Timer? _batchedTreeRebuildTimer;
+  // Publish a partial batch when later directory IO stalls. Do not debounce
+  // from the last result, which could starve the visible tree indefinitely.
+  static const _batchedTreeRebuildMaxWait = Duration(milliseconds: 50);
   final ValueNotifier<int> _rowMetadataRevision = ValueNotifier<int>(0);
   native.WorkspaceExplorerProjectionHandle? _nativeProjectionHandle;
   Future<native.WorkspaceExplorerProjectionHandle>? _nativeProjectionStarting;
@@ -801,8 +806,32 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     if (!mounted) {
       return;
     }
+    _cancelBatchedTreeRebuild();
     final next = _buildTreeData();
+    _publishedTreeStructureRevision = _treeStructureRevision;
     _controller.rebuild(next, tryPreserveState: tryPreserveState);
+  }
+
+  void _cancelBatchedTreeRebuild() {
+    _batchedTreeRebuildTimer?.cancel();
+    _batchedTreeRebuildTimer = null;
+  }
+
+  void _publishPendingTreeStructure({bool defer = false}) {
+    if (!mounted || _publishedTreeStructureRevision == _treeStructureRevision) {
+      return;
+    }
+    if (!defer) {
+      _rebuildTree();
+      return;
+    }
+    final generation = _nativeProjectionGeneration;
+    _batchedTreeRebuildTimer ??= Timer(_batchedTreeRebuildMaxWait, () {
+      _batchedTreeRebuildTimer = null;
+      if (mounted && generation == _nativeProjectionGeneration) {
+        _publishPendingTreeStructure();
+      }
+    });
   }
 
   int _compareDirectoryDepth(String left, String right) {

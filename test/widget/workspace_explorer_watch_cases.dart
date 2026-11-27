@@ -768,6 +768,247 @@ void _registerWorkspaceExplorerWatchTests() {
     expect(service.projectionCalls, 0);
   });
 
+  testWidgets('watch batch publishes four structural directory deltas once', (
+    tester,
+  ) async {
+    final folders = ['a', 'b', 'c', 'd'];
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = [
+        for (final folder in folders) _directory(folder, hasChildrenHint: true),
+        _file('stable.md'),
+      ];
+    for (final folder in folders) {
+      service.childrenByDirectory[folder] = [_file('$folder/old-$folder.dart')];
+    }
+    await _pumpExplorer(tester, service);
+    for (final folder in folders) {
+      await tester.tap(find.text(folder));
+      await tester.pumpAndSettle();
+    }
+    final controller = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller;
+    final initial = controller.data;
+    final stable = initial.nodes['path:stable.md'];
+    final publications = <tree.TreeData>[];
+    var previous = initial;
+    void record() {
+      if (!identical(previous, controller.data)) {
+        previous = controller.data;
+        publications.add(previous);
+      }
+    }
+
+    controller.addListener(record);
+    final reads = service.listChildrenCalls.length;
+    final updates = service.nativeProjectionUpdates;
+    try {
+      for (final folder in folders) {
+        service.childrenByDirectory[folder] = [
+          _file('$folder/new-$folder.dart'),
+        ];
+      }
+      service.emitWatchBatch(folders);
+      await _pumpWatchedRefresh(tester);
+      expect(publications, hasLength(1));
+      expect(service.nativeProjectionUpdates - updates, 4);
+      expect(
+        service.listChildrenCalls.skip(reads).map((call) => call.relativePath),
+        folders,
+      );
+      expect(controller.data.nodes['path:stable.md'], same(stable));
+      for (final folder in folders) {
+        expect(
+          controller.data.nodes.containsKey('path:$folder/new-$folder.dart'),
+          isTrue,
+        );
+        expect(
+          controller.data.nodes.containsKey('path:$folder/old-$folder.dart'),
+          isFalse,
+        );
+        expect(find.text('new-$folder.dart'), findsOneWidget);
+      }
+    } finally {
+      controller.removeListener(record);
+    }
+  });
+
+  testWidgets(
+    'watch batch publishes completed structure while later read stalls',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = [
+          _directory('a', hasChildrenHint: true),
+          _directory('b', hasChildrenHint: true),
+        ]
+        ..childrenByDirectory['a'] = [_file('a/old-a.dart')]
+        ..childrenByDirectory['b'] = [_file('b/old-b.dart')];
+      await _pumpExplorer(tester, service);
+      for (final folder in ['a', 'b']) {
+        await tester.tap(find.text(folder));
+        await tester.pumpAndSettle();
+      }
+      final controller = tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller;
+      final initial = controller.data;
+      final release = Completer<void>();
+      final blocked = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      service.beforeListChildren = (_, path) async {
+        if (path == 'b') {
+          if (!blocked.isCompleted) blocked.complete();
+          await release.future;
+        }
+      };
+      service.childrenByDirectory['a'] = [_file('a/new-a.dart')];
+      service.childrenByDirectory['b'] = [_file('b/new-b.dart')];
+      service.emitWatchBatch(['a', 'b']);
+      await tester.pump();
+      // Advance exactly to the watcher debounce boundary. The first
+      // completed directory arms the 50 ms publication timer here.
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(blocked.isCompleted, isTrue);
+      expect(controller.data, same(initial));
+      await tester.pump(const Duration(milliseconds: 49));
+      expect(controller.data, same(initial));
+      await tester.pump(const Duration(milliseconds: 1));
+      final partial = controller.data;
+      expect(partial, isNot(same(initial)));
+      expect(partial.nodes.containsKey('path:a/new-a.dart'), isTrue);
+      expect(partial.nodes.containsKey('path:b/old-b.dart'), isTrue);
+      release.complete();
+      await tester.pumpAndSettle();
+      expect(controller.data, isNot(same(partial)));
+      expect(controller.data.nodes.containsKey('path:b/new-b.dart'), isTrue);
+      expect(find.text('new-a.dart'), findsOneWidget);
+      expect(find.text('new-b.dart'), findsOneWidget);
+    },
+  );
+
+  testWidgets('watch batch publishes completed changes after later failure', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = [
+        _directory('a', hasChildrenHint: true),
+        _directory('b', hasChildrenHint: true),
+        _directory('c', hasChildrenHint: true),
+      ]
+      ..childrenByDirectory['a'] = [_file('a/old-a.dart')]
+      ..childrenByDirectory['b'] = [_file('b/old-b.dart')]
+      ..childrenByDirectory['c'] = [_file('c/old-c.dart')];
+    await _pumpExplorer(tester, service);
+    for (final folder in ['a', 'b', 'c']) {
+      await tester.tap(find.text(folder));
+      await tester.pumpAndSettle();
+    }
+    final controller = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller;
+    var previous = controller.data;
+    var publications = 0;
+    void record() {
+      if (!identical(previous, controller.data)) {
+        previous = controller.data;
+        publications++;
+      }
+    }
+
+    controller.addListener(record);
+    try {
+      service.childrenByDirectory['a'] = [_file('a/new-a.dart')];
+      service.failingListChildrenCalls.add(
+        const _ListChildrenCall(relativePath: 'b', hideIgnored: true),
+      );
+      service.childrenByDirectory['c'] = [_file('c/new-c.dart')];
+      service.emitWatchBatch(['a', 'b', 'c']);
+      await _pumpWatchedRefresh(tester);
+      expect(publications, 1);
+      expect(controller.data.nodes.containsKey('path:a/new-a.dart'), isTrue);
+      expect(controller.data.nodes.containsKey('path:b/old-b.dart'), isTrue);
+      expect(controller.data.nodes.containsKey('path:c/new-c.dart'), isTrue);
+    } finally {
+      controller.removeListener(record);
+    }
+  });
+
+  testWidgets('watch batch publication is retired by workspace switch', (
+    tester,
+  ) async {
+    final first = _workspace();
+    final second = _workspace(
+      id: 'workspace-2',
+      path: '/repo/other',
+    ).copyWith(projectId: 'project-2');
+    final service = _FakeWorkspaceFileService()
+      ..childrenByWorkspacePath[first.path] = {
+        '': [
+          _directory('a', hasChildrenHint: true),
+          _directory('b', hasChildrenHint: true),
+        ],
+        'a': [_file('a/old-a.dart')],
+        'b': [_file('b/old-b.dart')],
+      }
+      ..childrenByWorkspacePath[second.path] = {
+        '': [_file('second.dart')],
+      };
+    await tester.pumpWidget(
+      _withWorkspaceFiles(
+        service,
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 320,
+              height: 480,
+              child: _SwitchingWorkspaceExplorerHarness(
+                first: first,
+                second: second,
+                onOpenFile: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final folder in ['a', 'b']) {
+      await tester.tap(find.text(folder));
+      await tester.pumpAndSettle();
+    }
+    final release = Completer<void>();
+    final blocked = Completer<void>();
+    addTearDown(() {
+      if (!release.isCompleted) release.complete();
+    });
+    service.beforeListChildren = (workspace, path) async {
+      if (workspace == first.path && path == 'b') {
+        if (!blocked.isCompleted) blocked.complete();
+        await release.future;
+      }
+    };
+    service.childrenByWorkspacePath[first.path]!['a'] = [_file('a/new-a.dart')];
+    service.emitWatchBatch(['a', 'b']);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 130));
+    expect(blocked.isCompleted, isTrue);
+    await tester.tap(find.text('Switch workspace'));
+    await tester.pumpAndSettle();
+    expect(find.text('second.dart'), findsOneWidget);
+    final controller = tester
+        .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+        .controller;
+    final current = controller.data;
+    await tester.pump(const Duration(milliseconds: 100));
+    release.complete();
+    await tester.pumpAndSettle();
+    expect(controller.data, same(current));
+    expect(find.text('second.dart'), findsOneWidget);
+    expect(find.text('new-a.dart'), findsNothing);
+  });
+
   testWidgets('watched directory updates are skipped when nothing changed', (
     tester,
   ) async {

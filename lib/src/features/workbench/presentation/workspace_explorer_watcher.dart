@@ -243,28 +243,29 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
     final generation = _watcherGeneration;
     final projectionGeneration = _nativeProjectionGeneration;
     final workspacePath = widget.workspace.path;
+    bool projectionIsCurrent() =>
+        mounted &&
+        projectionGeneration == _nativeProjectionGeneration &&
+        workspacePath == widget.workspace.path;
+    bool isCurrent() =>
+        projectionIsCurrent() && generation == _watcherGeneration;
     await _refreshGitStatusSnapshot();
-    if (!mounted ||
-        generation != _watcherGeneration ||
-        projectionGeneration != _nativeProjectionGeneration ||
-        workspacePath != widget.workspace.path) {
-      return;
-    }
-    for (final relativePath in relativePaths) {
-      if (!mounted ||
-          generation != _watcherGeneration ||
-          projectionGeneration != _nativeProjectionGeneration ||
-          workspacePath != widget.workspace.path) {
-        return;
+    if (!isCurrent()) return;
+    try {
+      for (final relativePath in relativePaths) {
+        if (!isCurrent()) return;
+        if (!_childrenByDirectory.containsKey(relativePath)) continue;
+        await _refreshDirectory(
+          relativePath,
+          refreshGitStatus: false,
+          refreshQuickOpen: false,
+          deferTreeRebuild: true,
+        );
       }
-      if (!_childrenByDirectory.containsKey(relativePath)) {
-        continue;
-      }
-      await _refreshDirectory(
-        relativePath,
-        refreshGitStatus: false,
-        refreshQuickOpen: false,
-      );
+    } finally {
+      // Even if the watcher restarts or a later directory fails, publish
+      // structural changes already accepted by the still-current projection.
+      if (projectionIsCurrent()) _publishPendingTreeStructure();
     }
   }
 }

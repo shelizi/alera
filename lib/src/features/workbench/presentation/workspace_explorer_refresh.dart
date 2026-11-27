@@ -326,6 +326,8 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   void _disposeNativeProjectionSession({bool bumpGeneration = true}) {
     if (bumpGeneration) {
       _nativeProjectionGeneration += 1;
+      _cancelBatchedTreeRebuild();
+      _publishedTreeStructureRevision = _treeStructureRevision;
       _gitSnapshotRefresh.clear();
       _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
     }

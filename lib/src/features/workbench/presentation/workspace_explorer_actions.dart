@@ -709,13 +709,18 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
         generation == _nativeProjectionGeneration &&
         workspacePath == widget.workspace.path;
     await _refreshGitStatusSnapshot();
-    for (final directory in directories) {
-      if (!isCurrent()) return;
-      await _refreshDirectory(
-        directory,
-        refreshGitStatus: false,
-        refreshQuickOpen: false,
-      );
+    try {
+      for (final directory in directories) {
+        if (!isCurrent()) return;
+        await _refreshDirectory(
+          directory,
+          refreshGitStatus: false,
+          refreshQuickOpen: false,
+          deferTreeRebuild: true,
+        );
+      }
+    } finally {
+      if (isCurrent()) _publishPendingTreeStructure();
     }
     if (isCurrent() && _isFiltering) {
       _workspaceFiles.scheduleQuickOpenRefresh(
@@ -729,6 +734,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     String relativePath, {
     bool refreshGitStatus = true,
     bool refreshQuickOpen = true,
+    bool deferTreeRebuild = false,
   }) async {
     final generation = _nativeProjectionGeneration;
     final workspacePath = widget.workspace.path;
@@ -741,7 +747,6 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
           workspacePath != widget.workspace.path) {
         return;
       }
-      final previousStructureRevision = _treeStructureRevision;
       await _loadDirectory(relativePath);
       if (!mounted ||
           generation != _nativeProjectionGeneration ||
@@ -751,9 +756,7 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
       // Metadata-only and identical watcher events retain TreeData and the
       // flattened visible list. Changed rows repaint through their notifier.
       // Only native graph/entry-binding changes require controller.rebuild.
-      if (_treeStructureRevision != previousStructureRevision) {
-        _rebuildTree();
-      }
+      _publishPendingTreeStructure(defer: deferTreeRebuild);
       // Watcher batches already scheduled one debounced Quick Open refresh.
       // Explicit directory edits still request their own immediate refresh.
       if (refreshQuickOpen && _isFiltering) {

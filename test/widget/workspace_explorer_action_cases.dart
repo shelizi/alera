@@ -733,8 +733,26 @@ void _registerWorkspaceExplorerActionTests() {
           .length;
       await tester.tap(find.text('dest'), buttons: kSecondaryMouseButton);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Paste'));
-      await tester.pumpAndSettle();
+      final controller = tester
+          .widget<tree.DirectoryTreeView>(find.byType(tree.DirectoryTreeView))
+          .controller;
+      var previous = controller.data;
+      var publications = 0;
+      void record() {
+        if (!identical(previous, controller.data)) {
+          previous = controller.data;
+          publications++;
+        }
+      }
+
+      controller.addListener(record);
+      try {
+        await tester.tap(find.text('Paste'));
+        await tester.pumpAndSettle();
+        expect(publications, 1);
+      } finally {
+        controller.removeListener(record);
+      }
 
       expect(service.movedFiles, [
         'a/one.txt->dest',
