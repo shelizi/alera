@@ -1,5 +1,5 @@
+use crate::workspace_files::top_matches::TopMatches;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::sync::Arc;
 
 use super::super::WorkspaceQuickOpenMatch;
@@ -188,7 +188,7 @@ fn search_lower<'a>(
     let Some(candidates) = index.character_index.candidates(&query_character_counts) else {
         return Vec::new();
     };
-    let mut best: BinaryHeap<RankedFile<'a>> = BinaryHeap::with_capacity(limit);
+    let mut best: TopMatches<RankedFile<'a>> = TopMatches::new(limit);
     for candidate in candidates {
         let file_index = candidate.file_index;
         let file = &index.files[file_index];
@@ -199,28 +199,16 @@ fn search_lower<'a>(
         {
             continue;
         }
-        let minimum_score = (best.len() == limit).then(|| {
-            best.peek()
-                .expect("full result heap has a worst match")
-                .score
-        });
+        let minimum_score = best.worst_if_full().map(|worst| worst.score);
         let Some(score) = lower_score(file, query, query_code_units, minimum_score) else {
             continue;
         };
         if minimum_score.is_some_and(|minimum| score <= minimum) {
             continue;
         }
-        let candidate = RankedFile { file, score };
-        if best.len() < limit {
-            best.push(candidate);
-        } else if candidate < *best.peek().expect("non-empty result heap") {
-            best.pop();
-            best.push(candidate);
-        }
+        best.push(RankedFile { file, score });
     }
-    let mut ranked = best.into_vec();
-    ranked.sort_by(compare_best);
-    ranked
+    best.into_sorted_vec()
 }
 
 fn into_matches(ranked: Vec<RankedFile<'_>>) -> Vec<WorkspaceQuickOpenMatch> {
@@ -271,14 +259,6 @@ impl PartialOrd for RankedFile<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
-}
-
-fn compare_best(left: &RankedFile<'_>, right: &RankedFile<'_>) -> Ordering {
-    right
-        .score
-        .cmp(&left.score)
-        .then_with(|| left.file.normalized_path.cmp(&right.file.normalized_path))
-        .then_with(|| left.file.relative_path.cmp(&right.file.relative_path))
 }
 
 fn lower_score(

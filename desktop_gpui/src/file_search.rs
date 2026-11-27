@@ -2,6 +2,9 @@
 //! No project files are read or modified while indexing. Open-time canonical
 //! containment still belongs to WorkbenchModel::open_path.
 use crate::explorer_visibility::{ExplorerVisibility, ExplorerVisibilityOptions};
+use alera_core::workspace_files::top_matches::TopMatches;
+use std::cmp::Reverse;
+use std::collections::HashSet;
 
 use std::fs;
 use std::io;
@@ -14,9 +17,82 @@ const MAX_DEPTH: usize = 20;
 #[derive(Debug, Clone)]
 pub struct WorkspaceFileIndex {
     root: PathBuf,
-    files: Vec<PathBuf>,
-    directories: Vec<PathBuf>,
+    files: Vec<IndexedSearchPath>,
+    directories: Vec<IndexedSearchPath>,
     pub truncated: bool,
+}
+
+/// Cache query-independent text once per bounded index generation. Keep the
+/// original path for ordering, display and open-time validation.
+#[derive(Debug, Clone)]
+struct IndexedSearchPath {
+    relative: PathBuf,
+    path: String,
+    name: String,
+    depth: usize,
+    parent_names: Box<[String]>,
+}
+
+impl IndexedSearchPath {
+    fn new(relative: PathBuf, is_directory: bool) -> Self {
+        let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+        let name = relative
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let depth = path.matches('/').count();
+        // Preserve actual path components for exclusions, rather than
+        // splitting the normalized search string (literal backslashes on Unix).
+        // Directories only participate in Explorer search.
+        let parent_names = if is_directory {
+            Box::new([]) as Box<[String]>
+        } else {
+            relative
+                .parent()
+                .into_iter()
+                .flat_map(Path::components)
+                .filter_map(|component| match component {
+                    std::path::Component::Normal(name) => {
+                        Some(name.to_string_lossy().to_lowercase())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        Self {
+            relative,
+            path,
+            name,
+            depth,
+            parent_names,
+        }
+    }
+
+    fn score(&self, words: &[&str]) -> Option<i32> {
+        let mut score = 0;
+        for word in words {
+            score += if self.name == *word {
+                1000
+            } else if self.name.starts_with(word) {
+                650
+            } else if self.name.contains(word) {
+                400
+            } else if self.path.contains(word) {
+                200
+            } else if is_subsequence(word, &self.path) {
+                60
+            } else {
+                return None;
+            };
+        }
+        Some(score)
+    }
+
+    fn excluded(&self, excluded: &HashSet<String>) -> bool {
+        self.parent_names
+            .iter()
+            .any(|name| excluded.contains(name) || matches!(name.as_str(), ".git" | ".hg" | ".svn"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,8 +164,14 @@ impl WorkspaceFileIndex {
         directories.sort();
         Ok(Self {
             root,
-            files,
-            directories,
+            files: files
+                .into_iter()
+                .map(|path| IndexedSearchPath::new(path, false))
+                .collect(),
+            directories: directories
+                .into_iter()
+                .map(|path| IndexedSearchPath::new(path, true))
+                .collect(),
             truncated,
         })
     }
@@ -121,55 +203,28 @@ impl WorkspaceFileIndex {
         limit: usize,
         excluded_directory_names: &[String],
     ) -> Vec<PathBuf> {
+        let limit = limit.min(60);
+        if limit == 0 {
+            return Vec::new();
+        }
         let query = query.trim().to_lowercase().replace('\\', "/");
-        let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
-        let excluded = excluded_directory_names
+        let words: Vec<_> = query.split_whitespace().collect();
+        let excluded: HashSet<_> = excluded_directory_names
             .iter()
             .map(|name| name.to_lowercase())
-            .collect::<std::collections::HashSet<_>>();
-        let mut matches: Vec<_> = self
-            .files
-            .iter()
-            .filter(|relative| {
-                !relative.parent().is_some_and(|parent| {
-                    parent.components().any(|component| {
-                        if let std::path::Component::Normal(name) = component {
-                            let lowercase = name.to_string_lossy().to_lowercase();
-                            excluded.contains(&lowercase)
-                                || matches!(lowercase.as_str(), ".git" | ".hg" | ".svn")
-                        } else {
-                            false
-                        }
-                    })
-                })
-            })
-            .filter_map(|relative| {
-                let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
-                let name = relative.file_name()?.to_string_lossy().to_lowercase();
-                let mut score = 0;
-                for word in &words {
-                    if name == *word {
-                        score += 1000;
-                    } else if name.starts_with(word) {
-                        score += 650;
-                    } else if name.contains(word) {
-                        score += 400;
-                    } else if path.contains(word) {
-                        score += 200;
-                    } else if is_subsequence(word, &path) {
-                        score += 60;
-                    } else {
-                        return None;
-                    }
-                }
-                // Prefer shallow paths when scores are otherwise equal.
-                Some((score, path.matches('/').count(), relative))
-            })
             .collect();
-        matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+        let mut matches = TopMatches::new(limit);
+        for entry in &self.files {
+            if entry.excluded(&excluded) {
+                continue;
+            }
+            if let Some(score) = entry.score(&words) {
+                matches.push((Reverse(score), entry.depth, &entry.relative));
+            }
+        }
         matches
+            .into_sorted_vec()
             .into_iter()
-            .take(limit.min(60))
             .map(|(_, _, relative)| self.root.join(relative))
             .collect()
     }
@@ -177,45 +232,30 @@ impl WorkspaceFileIndex {
     /// across the project even when their ancestors are collapsed. Unlike
     /// Ctrl+P, this includes folders and caps the list at 200 results.
     pub fn search_explorer(&self, query: &str, limit: usize) -> Vec<ExplorerSearchHit> {
+        let limit = limit.min(200);
         let query = query.trim().to_lowercase().replace('\\', "/");
-        if query.is_empty() {
+        if limit == 0 || query.is_empty() {
             return Vec::new();
         }
-        let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
-        let mut matches = self
+        let words: Vec<_> = query.split_whitespace().collect();
+        let mut matches = TopMatches::new(limit);
+        for (entry, is_directory) in self
             .directories
             .iter()
-            .map(|path| (path, true))
-            .chain(self.files.iter().map(|path| (path, false)))
-            .filter_map(|(relative, is_directory)| {
-                let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
-                let name = relative.file_name()?.to_string_lossy().to_lowercase();
-                let mut score = 0;
-                for word in &words {
-                    if name == *word {
-                        score += 1000;
-                    } else if name.starts_with(word) {
-                        score += 650;
-                    } else if name.contains(word) {
-                        score += 400;
-                    } else if path.contains(word) {
-                        score += 200;
-                    } else if is_subsequence(word, &path) {
-                        score += 60;
-                    } else {
-                        return None;
-                    }
-                }
-                Some((score, path.matches('/').count(), relative, is_directory))
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+            .map(|entry| (entry, true))
+            .chain(self.files.iter().map(|entry| (entry, false)))
+        {
+            if let Some(score) = entry.score(&words) {
+                // Preserve directory-before-file ordering for exact key ties.
+                matches.push((Reverse(score), entry.depth, &entry.relative, !is_directory));
+            }
+        }
         matches
+            .into_sorted_vec()
             .into_iter()
-            .take(limit.min(200))
-            .map(|(_, _, relative, is_directory)| ExplorerSearchHit {
+            .map(|(_, _, relative, is_file)| ExplorerSearchHit {
                 path: self.root.join(relative),
-                is_directory,
+                is_directory: !is_file,
             })
             .collect()
     }
@@ -229,6 +269,371 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Test oracle: the pre-optimization search methods on the original
+    // raw PathBuf index. Keep scores, sort and exclusion rules independent.
+    struct LegacyIndex {
+        root: PathBuf,
+        files: Vec<PathBuf>,
+        directories: Vec<PathBuf>,
+    }
+
+    impl LegacyIndex {
+        fn search_with_exclusions(
+            &self,
+            query: &str,
+            limit: usize,
+            excluded_directory_names: &[String],
+        ) -> Vec<PathBuf> {
+            let query = query.trim().to_lowercase().replace('\\', "/");
+            let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
+            let excluded = excluded_directory_names
+                .iter()
+                .map(|name| name.to_lowercase())
+                .collect::<std::collections::HashSet<_>>();
+            let mut matches: Vec<_> = self
+                .files
+                .iter()
+                .filter(|relative| {
+                    !relative.parent().is_some_and(|parent| {
+                        parent.components().any(|component| {
+                            if let std::path::Component::Normal(name) = component {
+                                let lowercase = name.to_string_lossy().to_lowercase();
+                                excluded.contains(&lowercase)
+                                    || matches!(lowercase.as_str(), ".git" | ".hg" | ".svn")
+                            } else {
+                                false
+                            }
+                        })
+                    })
+                })
+                .filter_map(|relative| {
+                    let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+                    let name = relative.file_name()?.to_string_lossy().to_lowercase();
+                    let mut score = 0;
+                    for word in &words {
+                        if name == *word {
+                            score += 1000;
+                        } else if name.starts_with(word) {
+                            score += 650;
+                        } else if name.contains(word) {
+                            score += 400;
+                        } else if path.contains(word) {
+                            score += 200;
+                        } else if is_subsequence(word, &path) {
+                            score += 60;
+                        } else {
+                            return None;
+                        }
+                    }
+                    // Prefer shallow paths when scores are otherwise equal.
+                    Some((score, path.matches('/').count(), relative))
+                })
+                .collect();
+            matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+            matches
+                .into_iter()
+                .take(limit.min(60))
+                .map(|(_, _, relative)| self.root.join(relative))
+                .collect()
+        }
+        /// The original Flutter Explorer filter searches files and directories
+        /// across the project even when their ancestors are collapsed. Unlike
+        /// Ctrl+P, this includes folders and caps the list at 200 results.
+        fn search_explorer(&self, query: &str, limit: usize) -> Vec<ExplorerSearchHit> {
+            let query = query.trim().to_lowercase().replace('\\', "/");
+            if query.is_empty() {
+                return Vec::new();
+            }
+            let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
+            let mut matches = self
+                .directories
+                .iter()
+                .map(|path| (path, true))
+                .chain(self.files.iter().map(|path| (path, false)))
+                .filter_map(|(relative, is_directory)| {
+                    let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+                    let name = relative.file_name()?.to_string_lossy().to_lowercase();
+                    let mut score = 0;
+                    for word in &words {
+                        if name == *word {
+                            score += 1000;
+                        } else if name.starts_with(word) {
+                            score += 650;
+                        } else if name.contains(word) {
+                            score += 400;
+                        } else if path.contains(word) {
+                            score += 200;
+                        } else if is_subsequence(word, &path) {
+                            score += 60;
+                        } else {
+                            return None;
+                        }
+                    }
+                    Some((score, path.matches('/').count(), relative, is_directory))
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+            matches
+                .into_iter()
+                .take(limit.min(200))
+                .map(|(_, _, relative, is_directory)| ExplorerSearchHit {
+                    path: self.root.join(relative),
+                    is_directory,
+                })
+                .collect()
+        }
+    }
+
+    fn synthetic_pair(count: usize) -> (LegacyIndex, WorkspaceFileIndex) {
+        let root = PathBuf::from("fixture");
+        let mut files = Vec::with_capacity(count);
+        let mut directories = Vec::new();
+        for index in 0..count {
+            let group = match index % 11 {
+                0 => ".svn",
+                1 => ".hg",
+                2 => ".git",
+                3 => "Generated",
+                _ => "Packages",
+            };
+            let dir = PathBuf::from(group)
+                .join(format!("Feature-{:03}", index % 137))
+                .join("src");
+            let name = match index % 7 {
+                0 => format!("TestSearch-{index:05}.rs"),
+                1 => format!("testsearch-{index:05}.rs"),
+                2 => format!("中文-{index:05}.ts"),
+                3 => format!("\u{0130}tem-{index:05}.txt"),
+                4 => format!("emoji-\u{1f680}-{index:05}.md"),
+                5 => format!("Read Me-{index:05}.md"),
+                _ => format!("main-{index:05}.rs"),
+            };
+            files.push(dir.join(name));
+            directories.push(dir);
+        }
+        files.sort();
+        directories.sort();
+        directories.dedup();
+        let index = WorkspaceFileIndex {
+            root: root.clone(),
+            files: files
+                .iter()
+                .cloned()
+                .map(|path| IndexedSearchPath::new(path, false))
+                .collect(),
+            directories: directories
+                .iter()
+                .cloned()
+                .map(|path| IndexedSearchPath::new(path, true))
+                .collect(),
+            truncated: false,
+        };
+        let legacy = LegacyIndex {
+            root,
+            files,
+            directories,
+        };
+        (legacy, index)
+    }
+
+    #[test]
+    fn cached_search_matches_legacy_full_sort_across_queries_and_limits() {
+        let (legacy, index) = synthetic_pair(2400);
+        let queries = [
+            "",
+            " ",
+            "src",
+            "TESTSEARCH",
+            "tssr",
+            "中文",
+            "i\u{0307}tem",
+            "\u{1f680}",
+            "Packages\\Feature-012",
+            "test rs",
+            "read me",
+            "zzzzmissing",
+        ];
+        for query in queries {
+            for limit in [0, 1, 17, 60, 200, 999] {
+                for exclusions in [
+                    vec![],
+                    vec!["PACKAGES".to_owned()],
+                    vec!["generated".to_owned(), "feature-012".to_owned()],
+                ] {
+                    assert_eq!(
+                        legacy.search_with_exclusions(query, limit, &exclusions),
+                        index.search_with_exclusions(query, limit, &exclusions),
+                        "quick open query={query:?} limit={limit} exclusions={exclusions:?}",
+                    );
+                }
+                assert_eq!(
+                    legacy.search_explorer(query, limit),
+                    index.search_explorer(query, limit),
+                    "explorer query={query:?} limit={limit}",
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_exclusions_do_not_split_literal_backslashes_in_unix_names() {
+        let root = PathBuf::from("fixture");
+        let files = vec![
+            PathBuf::from("literal\\generated/find.rs"),
+            PathBuf::from("generated/find.rs"),
+        ];
+        let index = WorkspaceFileIndex {
+            root: root.clone(),
+            files: files
+                .iter()
+                .cloned()
+                .map(|path| IndexedSearchPath::new(path, false))
+                .collect(),
+            directories: Vec::new(),
+            truncated: false,
+        };
+        let legacy = LegacyIndex {
+            root,
+            files,
+            directories: Vec::new(),
+        };
+        let excluded = vec!["generated".to_owned()];
+        assert_eq!(
+            legacy.search_with_exclusions("find", 20, &excluded),
+            index.search_with_exclusions("find", 20, &excluded)
+        );
+        assert_eq!(index.search_with_exclusions("find", 20, &excluded).len(), 1);
+    }
+
+    #[test]
+    #[ignore = "synthetic in-memory search performance benchmark"]
+    fn benchmark_cached_gpui_search_top_matches() {
+        use std::time::{Duration, Instant};
+        let (legacy, index) = synthetic_pair(30_000);
+        let queries = [
+            "",
+            "src",
+            "tssr",
+            "中文",
+            "Packages\\Feature-012",
+            "test rs",
+            "zzzzmissing",
+        ];
+        let excluded = vec!["generated".to_owned(), "feature-012".to_owned()];
+        let expected_quick: Vec<_> = queries
+            .iter()
+            .map(|query| legacy.search_with_exclusions(query, 60, &excluded))
+            .collect();
+        let expected_explorer: Vec<_> = queries
+            .iter()
+            .map(|query| legacy.search_explorer(query, 200))
+            .collect();
+        for (i, query) in queries.iter().enumerate() {
+            assert_eq!(
+                expected_quick[i],
+                index.search_with_exclusions(query, 60, &excluded)
+            );
+            assert_eq!(expected_explorer[i], index.search_explorer(query, 200));
+        }
+        fn median(values: &mut [Duration]) -> f64 {
+            values.sort();
+            values[values.len() / 2].as_secs_f64() * 1000.0
+        }
+        for explorer in [false, true] {
+            let mut old = Vec::new();
+            let mut new = Vec::new();
+            for sample in 0..7 {
+                for optimized in if sample % 2 == 0 {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let started = Instant::now();
+                    if explorer {
+                        let actual: Vec<_> = queries
+                            .iter()
+                            .map(|query| {
+                                if optimized {
+                                    index.search_explorer(query, 200)
+                                } else {
+                                    legacy.search_explorer(query, 200)
+                                }
+                            })
+                            .collect();
+                        let elapsed = started.elapsed();
+                        assert_eq!(actual, expected_explorer);
+                        if optimized {
+                            new.push(elapsed);
+                        } else {
+                            old.push(elapsed);
+                        }
+                    } else {
+                        let actual: Vec<_> = queries
+                            .iter()
+                            .map(|query| {
+                                if optimized {
+                                    index.search_with_exclusions(query, 60, &excluded)
+                                } else {
+                                    legacy.search_with_exclusions(query, 60, &excluded)
+                                }
+                            })
+                            .collect();
+                        let elapsed = started.elapsed();
+                        assert_eq!(actual, expected_quick);
+                        if optimized {
+                            new.push(elapsed);
+                        } else {
+                            old.push(elapsed);
+                        }
+                    }
+                }
+            }
+            let old = median(&mut old);
+            let new = median(&mut new);
+            println!("GPUI search explorer={explorer} files={} dirs={} queries={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", index.files.len(), index.directories.len(), queries.len(), old/new);
+        }
+        let mut construction = Vec::new();
+        for _ in 0..7 {
+            let started = Instant::now();
+            let files: Vec<_> = legacy
+                .files
+                .iter()
+                .cloned()
+                .map(|path| IndexedSearchPath::new(path, false))
+                .collect();
+            let dirs: Vec<_> = legacy
+                .directories
+                .iter()
+                .cloned()
+                .map(|path| IndexedSearchPath::new(path, true))
+                .collect();
+            construction.push(started.elapsed());
+            assert_eq!(files.len(), index.files.len());
+            assert_eq!(dirs.len(), index.directories.len());
+        }
+        let payload_bytes: usize = index
+            .files
+            .iter()
+            .chain(&index.directories)
+            .map(|entry| {
+                std::mem::size_of::<IndexedSearchPath>() - std::mem::size_of::<PathBuf>()
+                    + entry.path.capacity()
+                    + entry.name.capacity()
+                    + entry.parent_names.len() * std::mem::size_of::<String>()
+                    + entry
+                        .parent_names
+                        .iter()
+                        .map(String::capacity)
+                        .sum::<usize>()
+            })
+            .sum();
+        println!(
+            "GPUI cached index construction_ms={:.3} estimated_extra_payload_bytes={payload_bytes}",
+            median(&mut construction)
+        );
+    }
 
     #[test]
     fn filtered_results_and_quick_open_follow_ignored_visibility_mode() {

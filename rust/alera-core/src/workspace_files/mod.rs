@@ -13,6 +13,7 @@ mod mime;
 mod move_file;
 mod prompts;
 mod quick_open;
+pub mod top_matches;
 mod trash;
 mod worktree_boundaries;
 
