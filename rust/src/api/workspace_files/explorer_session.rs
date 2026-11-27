@@ -489,6 +489,150 @@ fn diff_projections(
     after: &WorkspaceExplorerTreeProjection,
     version: u64,
 ) -> WorkspaceExplorerProjectionDelta {
+    try_diff_sorted_projections(before, after, version)
+        .unwrap_or_else(|| diff_projections_legacy(before, after, version))
+}
+
+/// The full projector and the incremental file-only path already maintain
+/// these collection orders. Only a strict order permits a merge diff:
+/// duplicate bindings or colliding placeholder paths must keep the original
+/// ID-based, last-value-wins comparison semantics.
+fn strictly_ordered<T>(items: &[T], key: impl Fn(&T) -> &str) -> bool {
+    items.windows(2).all(|pair| key(&pair[0]) < key(&pair[1]))
+}
+
+fn node_path_identifies_id(node: &WorkspaceExplorerTreeNode) -> bool {
+    if node.id == "workspace-root" {
+        return node.virtual_path == "/";
+    }
+    let Some(path) = node.virtual_path.strip_prefix('/') else {
+        return false;
+    };
+    if let Some(relative) = node.id.strip_prefix("path:") {
+        return !relative.is_empty() && path == relative;
+    }
+    if let Some(parent) = node.id.strip_prefix("__alera_placeholder__:") {
+        return path.strip_suffix("/.alera-placeholder") == Some(parent);
+    }
+    false
+}
+
+/// Merge two strictly ordered collections without allocating whole-tree
+/// lookup maps. The order key may differ from the stable identity (nodes
+/// are sorted by virtual path but identified by node ID). When a placeholder
+/// and a real node occupy the same path across snapshots, emit the new node
+/// and remove the old ID. Preserve each side's original output ordering.
+fn diff_ordered<T: Clone + PartialEq>(
+    before: &[T],
+    after: &[T],
+    key: impl Fn(&T) -> &str,
+    identity: impl Fn(&T) -> &str,
+) -> (Vec<T>, Vec<String>) {
+    use std::cmp::Ordering;
+    let mut changed = Vec::new();
+    let mut removed = Vec::new();
+    let mut old = before.iter().peekable();
+    let mut new = after.iter().peekable();
+    while let (Some(&previous), Some(&current)) = (old.peek(), new.peek()) {
+        match key(previous).cmp(key(current)) {
+            Ordering::Less => {
+                removed.push(identity(previous).to_owned());
+                old.next();
+            }
+            Ordering::Greater => {
+                changed.push(current.clone());
+                new.next();
+            }
+            Ordering::Equal => {
+                if identity(previous) != identity(current) {
+                    removed.push(identity(previous).to_owned());
+                    changed.push(current.clone());
+                } else if previous != current {
+                    changed.push(current.clone());
+                }
+                old.next();
+                new.next();
+            }
+        }
+    }
+    removed.extend(old.map(|item| identity(item).to_owned()));
+    changed.extend(new.cloned());
+    (changed, removed)
+}
+
+fn try_diff_sorted_projections(
+    before: &WorkspaceExplorerTreeProjection,
+    after: &WorkspaceExplorerTreeProjection,
+    version: u64,
+) -> Option<WorkspaceExplorerProjectionDelta> {
+    // Use noncapturing functions for the borrowed keys to preserve the
+    // input lifetime across the generic comparison helper.
+    fn directory_path(directory: &WorkspaceExplorerDirectoryChildren) -> &str {
+        &directory.relative_path
+    }
+    fn binding_id(binding: &WorkspaceExplorerEntryBinding) -> &str {
+        &binding.node_id
+    }
+    fn node_path(node: &WorkspaceExplorerTreeNode) -> &str {
+        &node.virtual_path
+    }
+    fn node_id(node: &WorkspaceExplorerTreeNode) -> &str {
+        &node.id
+    }
+    for projection in [before, after] {
+        if !strictly_ordered(&projection.directories, directory_path)
+            || !strictly_ordered(&projection.nodes, node_path)
+            || !strictly_ordered(&projection.entry_bindings, binding_id)
+            || !projection.nodes.iter().all(node_path_identifies_id)
+        {
+            return None;
+        }
+    }
+    let (changed_directories, removed_directory_paths) = diff_ordered(
+        &before.directories,
+        &after.directories,
+        directory_path,
+        directory_path,
+    );
+    let (mut changed_nodes, removed_node_ids) =
+        diff_ordered(&before.nodes, &after.nodes, node_path, node_id);
+    let (changed_bindings, removed_binding_node_ids) = diff_ordered(
+        &before.entry_bindings,
+        &after.entry_bindings,
+        binding_id,
+        binding_id,
+    );
+    // Match legacy first-loaded-empty-root bootstrap behavior.
+    if before.directories.is_empty() && !after.directories.is_empty() {
+        if let Some(root) = after
+            .nodes
+            .first()
+            .filter(|node| node.id == "workspace-root")
+        {
+            if changed_nodes
+                .first()
+                .is_none_or(|node| node.id != "workspace-root")
+            {
+                changed_nodes.insert(0, root.clone());
+            }
+        }
+    }
+    Some(WorkspaceExplorerProjectionDelta {
+        version,
+        changed_directories,
+        removed_directory_paths,
+        changed_nodes,
+        removed_node_ids,
+        changed_bindings,
+        removed_binding_node_ids,
+    })
+}
+
+fn diff_projections_legacy(
+    before: &WorkspaceExplorerTreeProjection,
+    after: &WorkspaceExplorerTreeProjection,
+    version: u64,
+) -> WorkspaceExplorerProjectionDelta {
     let previous_directories = before
         .directories
         .iter()
@@ -1241,6 +1385,193 @@ mod tests {
         let old = median(&mut old);
         let new = median(&mut new);
         println!("Classic native sparse update folders=200 nodes={} bindings={} renames={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", seed.nodes.len(), seed.entry_bindings.len(), replacements.len(), old/new);
+    }
+
+    fn mixed_root_replacement(
+        seed: &WorkspaceExplorerTreeProjection,
+    ) -> WorkspaceExplorerDirectoryChildren {
+        let mut rows = seed
+            .directories
+            .iter()
+            .find(|dir| dir.relative_path.is_empty())
+            .unwrap()
+            .children
+            .clone();
+        rows.retain(|row| row.relative_path != "folder-002");
+        let converted = rows
+            .iter_mut()
+            .find(|row| row.relative_path == "folder-004")
+            .unwrap();
+        *converted = entry("folder-004", WorkspaceFileKind::File, false);
+        rows.push(entry("new-dir", WorkspaceFileKind::Directory, true));
+        rows.reverse();
+        children("", rows)
+    }
+
+    fn full_with_replacement(
+        before: &WorkspaceExplorerTreeProjection,
+        replacement: WorkspaceExplorerDirectoryChildren,
+    ) -> WorkspaceExplorerTreeProjection {
+        explorer_tree::project_tree(
+            "alera".into(),
+            "/repo".into(),
+            before.directories.clone(),
+            Some(replacement),
+        )
+    }
+
+    #[test]
+    fn ordered_projection_diff_matches_legacy_for_mixed_changes_and_placeholder_replacement() {
+        let initial = sparse_fixture(8, 12);
+        let mut current = initial.clone();
+        let replacements = [
+            mixed_root_replacement(&initial),
+            children(
+                "new-dir",
+                vec![
+                    entry("new-dir/.alera-placeholder", WorkspaceFileKind::File, false),
+                    entry("new-dir/nested", WorkspaceFileKind::Directory, true),
+                ],
+            ),
+            children(
+                "new-dir",
+                vec![
+                    entry("new-dir/nested", WorkspaceFileKind::Directory, false),
+                    entry("new-dir/renamed.rs", WorkspaceFileKind::File, false),
+                ],
+            ),
+            children("folder-003", vec![]),
+        ];
+        for (round, replacement) in replacements.into_iter().enumerate() {
+            let next = full_with_replacement(&current, replacement);
+            let version = round as u64 + 1;
+            let expected = diff_projections_legacy(&current, &next, version);
+            let actual = try_diff_sorted_projections(&current, &next, version)
+                .expect("ordinary native snapshots have strictly ordered keys");
+            assert_delta_equal(&actual, &expected);
+            if round == 0 {
+                // The existing projector removes a missing path, but keeps
+                // the loaded cache when a directory becomes a same-path file.
+                // This test checks diff parity, not that pre-existing policy.
+                assert_eq!(actual.removed_directory_paths, ["folder-002"]);
+            }
+            if round == 1 {
+                assert!(actual
+                    .removed_node_ids
+                    .iter()
+                    .any(|id| id == "__alera_placeholder__:new-dir"));
+                assert!(actual
+                    .changed_nodes
+                    .iter()
+                    .any(|node| node.id == "path:new-dir/.alera-placeholder"));
+            }
+            current = next;
+        }
+        let empty = explorer_tree::project_tree("alera".into(), "/repo".into(), vec![], None);
+        let loaded = full_with_replacement(&empty, children("", vec![]));
+        let expected = diff_projections_legacy(&empty, &loaded, 1);
+        let actual = try_diff_sorted_projections(&empty, &loaded, 1).expect("empty root bootstrap");
+        assert_delta_equal(&actual, &expected);
+        assert_eq!(actual.changed_nodes[0].id, "workspace-root");
+    }
+
+    #[test]
+    fn ordered_diff_falls_back_for_duplicate_bindings_path_collisions_and_invalid_order() {
+        let seed = sparse_fixture(8, 4);
+        let lazy = full_with_replacement(&seed, mixed_root_replacement(&seed));
+        let real = full_with_replacement(
+            &lazy,
+            children(
+                "new-dir",
+                vec![entry(
+                    "new-dir/.alera-placeholder",
+                    WorkspaceFileKind::File,
+                    false,
+                )],
+            ),
+        );
+        let mut duplicate = real.clone();
+        let mut binding = duplicate.entry_bindings[0].clone();
+        binding.relative_path = "different-path".into();
+        duplicate.entry_bindings.insert(1, binding);
+        let mut collision = real.clone();
+        collision.nodes.push(
+            lazy.nodes
+                .iter()
+                .find(|node| node.id == "__alera_placeholder__:new-dir")
+                .unwrap()
+                .clone(),
+        );
+        collision
+            .nodes
+            .sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+        let mut unordered = real.clone();
+        unordered.nodes.swap(0, 1);
+        let mut relocated_id = real.clone();
+        relocated_id
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == "path:new-dir")
+            .unwrap()
+            .virtual_path = "/new-dir-other".into();
+        relocated_id
+            .nodes
+            .sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+        for unusual in [duplicate, collision, unordered, relocated_id] {
+            for (before, after) in [(&real, &unusual), (&unusual, &real)] {
+                assert!(try_diff_sorted_projections(before, after, 9).is_none());
+                assert_delta_equal(
+                    &diff_projections(before, after, 9),
+                    &diff_projections_legacy(before, after, 9),
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "synthetic native mixed-tree projection diff benchmark"]
+    fn benchmark_ordered_explorer_projection_diff() {
+        use std::hint::black_box;
+        use std::time::{Duration, Instant};
+        let before = sparse_fixture(200, 200);
+        let after = full_with_replacement(&before, mixed_root_replacement(&before));
+        let expected = diff_projections_legacy(&before, &after, 1);
+        let warm = try_diff_sorted_projections(&before, &after, 1).expect("ordered fixture");
+        assert_delta_equal(&warm, &expected);
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        const REPEATS: usize = 10;
+        for sample in 0..7 {
+            for optimized in if sample % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            } {
+                let mut elapsed = Duration::ZERO;
+                for _ in 0..REPEATS {
+                    let start = Instant::now();
+                    let actual = if optimized {
+                        diff_projections(black_box(&before), black_box(&after), 1)
+                    } else {
+                        diff_projections_legacy(black_box(&before), black_box(&after), 1)
+                    };
+                    elapsed += start.elapsed();
+                    assert_delta_equal(&actual, &expected);
+                }
+                if optimized {
+                    new.push(elapsed);
+                } else {
+                    old.push(elapsed);
+                }
+            }
+        }
+        fn median(samples: &mut [Duration]) -> f64 {
+            samples.sort();
+            samples[samples.len() / 2].as_secs_f64() * 1000.0
+        }
+        let old = median(&mut old);
+        let new = median(&mut new);
+        println!("Classic ordered projection diff before_nodes={} after_nodes={} changed_nodes={} removed_nodes={} repeats={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", before.nodes.len(), after.nodes.len(), expected.changed_nodes.len(), expected.removed_node_ids.len(), REPEATS, old/new);
     }
 
     #[test]
