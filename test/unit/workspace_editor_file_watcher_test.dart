@@ -6,6 +6,253 @@ import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'coalesces 1000 directory targets behind one blocked registration',
+    () async {
+      final service = _WatcherFileService();
+      final registry = EditorSessionRegistry();
+      addTearDown(registry.dispose);
+      final watcher = WorkspaceEditorFileWatcher(
+        workspaceFiles: service,
+        editorSessions: registry,
+      );
+      addTearDown(watcher.dispose);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      service.beforeWatcherUpdate = (_, paths) async {
+        if (!started.isCompleted) {
+          started.complete();
+          await release.future;
+        }
+      };
+      final first = watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['first/a.txt'],
+      );
+      await started.future;
+      final requests = List.generate(
+        1000,
+        (i) => watcher.update(
+          workspacePath: '/repo/alera',
+          openRelativePaths: ['dir-$i/a.txt'],
+        ),
+      );
+      await _flush();
+      expect(service.watchedDirectories, [
+        ['first'],
+      ]);
+      expect(requests.every((future) => identical(future, first)), isTrue);
+      release.complete();
+      await Future.wait([first, ...requests]);
+      expect(service.watchedDirectories, [
+        ['first'],
+        ['dir-999'],
+      ]);
+      expect(service.starts, ['/repo/alera']);
+      expect(service.stops, isEmpty);
+
+      // A new tab in the already watched directory is a no-op.
+      await watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['dir-999/b.txt'],
+      );
+      expect(service.watchedDirectories, hasLength(2));
+    },
+  );
+
+  test('synchronous target burst starts only the final workspace', () async {
+    final service = _WatcherFileService();
+    final registry = EditorSessionRegistry();
+    addTearDown(registry.dispose);
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    final requests = List.generate(
+      100,
+      (i) => watcher.update(
+        workspacePath: '/repo/workspace-$i',
+        openRelativePaths: ['dir-$i/a.txt'],
+      ),
+    );
+    await Future.wait(requests);
+    expect(service.starts, ['/repo/workspace-99']);
+    expect(service.watchedDirectories, [
+      ['dir-99'],
+    ]);
+    expect(service.stops, isEmpty);
+  });
+
+  test(
+    'superseded native start skips obsolete directory registration',
+    () async {
+      final service = _WatcherFileService();
+      final registry = EditorSessionRegistry();
+      addTearDown(registry.dispose);
+      final watcher = WorkspaceEditorFileWatcher(
+        workspaceFiles: service,
+        editorSessions: registry,
+      );
+      addTearDown(watcher.dispose);
+      final started = Completer<void>();
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      service.beforeWatcherStart = (path) async {
+        if (path == '/repo/one') {
+          started.complete();
+          await release.future;
+        }
+      };
+      final old = watcher.update(
+        workspacePath: '/repo/one',
+        openRelativePaths: ['old/a.txt'],
+      );
+      await started.future;
+      final skipped = watcher.update(
+        workspacePath: '/repo/two',
+        openRelativePaths: ['skipped/a.txt'],
+      );
+      final latest = watcher.update(
+        workspacePath: '/repo/three',
+        openRelativePaths: ['latest/a.txt'],
+      );
+      release.complete();
+      await Future.wait([old, skipped, latest]);
+      expect(service.starts, ['/repo/one', '/repo/three']);
+      expect(service.watchedDirectories, [
+        ['latest'],
+      ]);
+      expect(service.stops, ['watcher-1']);
+    },
+  );
+
+  test(
+    'failed superseded registration restarts handle and applies latest target',
+    () async {
+      final service = _WatcherFileService();
+      final registry = EditorSessionRegistry();
+      addTearDown(registry.dispose);
+      final watcher = WorkspaceEditorFileWatcher(
+        workspaceFiles: service,
+        editorSessions: registry,
+      );
+      addTearDown(watcher.dispose);
+      await watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['stable/a.txt'],
+      );
+      final started = Completer<void>();
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      service.beforeWatcherUpdate = (_, paths) async {
+        if (paths.contains('broken')) {
+          started.complete();
+          await release.future;
+          throw StateError('simulated partial native registration');
+        }
+      };
+      final old = watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['broken/a.txt'],
+      );
+      await started.future;
+      final latest = watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['stable/a.txt'],
+      );
+      release.complete();
+      await Future.wait([old, latest]);
+      expect(service.starts, ['/repo/alera', '/repo/alera']);
+      expect(service.stops, ['watcher-1']);
+      expect(service.watchedDirectories, [
+        ['stable'],
+        ['broken'],
+        ['stable'],
+      ]);
+    },
+  );
+
+  test('final registration failure is reported and retry succeeds', () async {
+    final service = _WatcherFileService();
+    final registry = EditorSessionRegistry();
+    addTearDown(registry.dispose);
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    service.beforeWatcherUpdate = (_, _) async =>
+        throw StateError('registration failed');
+    await expectLater(
+      watcher.update(
+        workspacePath: '/repo/alera',
+        openRelativePaths: ['src/a.txt'],
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(service.stops, ['watcher-1']);
+    service.beforeWatcherUpdate = null;
+    await watcher.update(
+      workspacePath: '/repo/alera',
+      openRelativePaths: ['src/a.txt'],
+    );
+    expect(service.starts, ['/repo/alera', '/repo/alera']);
+    expect(service.watchedDirectories, [
+      ['src'],
+      ['src'],
+    ]);
+  });
+
+  test('dispose during native registration cancels pending target and stops handle once', () async {
+    final service = _WatcherFileService();
+    final registry = EditorSessionRegistry();
+    addTearDown(registry.dispose);
+    final watcher = WorkspaceEditorFileWatcher(
+      workspaceFiles: service,
+      editorSessions: registry,
+    );
+    addTearDown(watcher.dispose);
+    final started = Completer<void>();
+    final release = Completer<void>();
+    addTearDown(() {
+      if (!release.isCompleted) release.complete();
+    });
+    service.beforeWatcherUpdate = (_, _) async {
+      started.complete();
+      await release.future;
+    };
+    final old = watcher.update(
+      workspacePath: '/repo/one',
+      openRelativePaths: ['src/a.txt'],
+    );
+    await started.future;
+    final pending = watcher.update(
+      workspacePath: '/repo/two',
+      openRelativePaths: ['src/b.txt'],
+    );
+    final disposed = watcher.dispose();
+    expect(identical(disposed, watcher.dispose()), isTrue);
+    release.complete();
+    await Future.wait([old, pending, disposed]);
+    await watcher.update(
+      workspacePath: '/repo/three',
+      openRelativePaths: ['src/c.txt'],
+    );
+    expect(service.starts, ['/repo/one']);
+    expect(service.watchedDirectories, [
+      ['src'],
+    ]);
+    expect(service.stops, ['watcher-1']);
+  });
+
   test('watches only parent directories of open editor files', () async {
     final service = _WatcherFileService();
     final registry = EditorSessionRegistry();
@@ -803,6 +1050,12 @@ class _WatcherFileService extends WorkspaceFileService {
   final List<String> contentTokenReads = <String>[];
   Future<void> Function(String workspacePath, String relativePath)?
   beforeContentTokenRead;
+  Future<void> Function(String workspacePath)? beforeWatcherStart;
+  Future<void> Function(
+    native.WorkspaceExplorerWatcherHandle handle,
+    List<String> paths,
+  )?
+  beforeWatcherUpdate;
   var _nextWatcher = 0;
 
   @override
@@ -810,6 +1063,7 @@ class _WatcherFileService extends WorkspaceFileService {
     required String workspacePath,
   }) async {
     starts.add(workspacePath);
+    await beforeWatcherStart?.call(workspacePath);
     _nextWatcher += 1;
     return native.WorkspaceExplorerWatcherHandle(id: 'watcher-$_nextWatcher');
   }
@@ -820,6 +1074,7 @@ class _WatcherFileService extends WorkspaceFileService {
     required List<String> watchedRelativePaths,
   }) async {
     watchedDirectories.add(List<String>.from(watchedRelativePaths));
+    await beforeWatcherUpdate?.call(handle, watchedRelativePaths);
   }
 
   @override

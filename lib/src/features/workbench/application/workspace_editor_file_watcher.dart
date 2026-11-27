@@ -36,70 +36,121 @@ class WorkspaceEditorFileWatcher {
   bool _hasStartedWatcher = false;
   bool _needsActivationReconcile = false;
   bool _disposed = false;
-  Future<void> _mutation = Future<void>.value();
+  // Directory registrations are snapshots of the desired open tabs, not
+  // incremental mutations. Retain only the latest target behind active IO.
+  ({String workspacePath, Set<String> directories})? _pendingUpdate;
+  Future<void>? _updateDrain;
+  Future<void>? _disposeFuture;
 
   Future<void> update({
     required String workspacePath,
     required Iterable<String> openRelativePaths,
   }) {
+    if (_disposed) return Future<void>.value();
     final directories = _parentDirectories(openRelativePaths);
-    return _enqueue(() async {
-      if (_disposed) {
-        return;
-      }
-      if (directories.isEmpty) {
-        await _stop();
-        return;
-      }
-      if (_workspacePath != workspacePath || _handle == null) {
-        await _stop();
-        final handle = await _workspaceFiles.startExplorerWatcher(
-          workspacePath: workspacePath,
-        );
-        if (_disposed) {
-          await _workspaceFiles.stopExplorerWatcher(handle: handle);
-          return;
+    if (_updateDrain == null &&
+        (directories.isEmpty
+            ? _handle == null
+            : _workspacePath == workspacePath &&
+                  _handle != null &&
+                  !_needsActivationReconcile &&
+                  _sameSet(_watchedDirectories, directories))) {
+      return Future<void>.value();
+    }
+    _pendingUpdate = (workspacePath: workspacePath, directories: directories);
+    // Defer the first application by one microtask so a synchronous burst
+    // also collapses, and the drain future is installed before it can finish.
+    return _updateDrain ??= Future<void>.microtask(_drainUpdates);
+  }
+
+  Future<void> _drainUpdates() async {
+    try {
+      while (!_disposed && _pendingUpdate != null) {
+        final target = _pendingUpdate!;
+        _pendingUpdate = null;
+        try {
+          await _applyUpdate(target.workspacePath, target.directories);
+        } catch (_) {
+          // A superseded registration failure must not prevent the latest
+          // target from being attempted. A failure for the final target still
+          // reaches the callers, and a later update can retry it.
+          if (_disposed || _pendingUpdate == null) rethrow;
         }
-        _workspacePath = workspacePath;
-        _handle = handle;
-        _needsActivationReconcile = _hasStartedWatcher;
-        _hasStartedWatcher = true;
-        final owner = _reloadOwner;
-        _subscription = _workspaceFiles
-            .watchExplorerEvents(handle: handle)
-            .listen((batch) {
-              if (_isCurrent(owner)) {
-                _scheduleReload(batch.changedRelativePaths);
-              }
-            }, onError: (_) {});
       }
-      if (_sameSet(_watchedDirectories, directories)) {
+    } finally {
+      _updateDrain = null;
+    }
+  }
+
+  Future<void> _applyUpdate(
+    String workspacePath,
+    Set<String> directories,
+  ) async {
+    if (directories.isEmpty) {
+      await _stop();
+      return;
+    }
+    if (_workspacePath != workspacePath || _handle == null) {
+      await _stop();
+      if (_disposed || _pendingUpdate != null) return;
+      final handle = await _workspaceFiles.startExplorerWatcher(
+        workspacePath: workspacePath,
+      );
+      if (_disposed) {
+        await _workspaceFiles.stopExplorerWatcher(handle: handle);
         return;
       }
-      await _workspaceFiles.updateExplorerWatcher(
-        handle: _handle!,
-        watchedRelativePaths: directories.toList(growable: false),
-      );
-      _watchedDirectories = directories;
-      // An inactive workspace may have missed events or retired an
-      // unfinished read. Check its open documents once, asynchronously,
-      // after the new watcher is registered.
-      if (_needsActivationReconcile && !_disposed) {
-        _needsActivationReconcile = false;
-        _scheduleReload(const ['']);
+      _workspacePath = workspacePath;
+      _handle = handle;
+      _needsActivationReconcile = _hasStartedWatcher;
+      _hasStartedWatcher = true;
+      final owner = _reloadOwner;
+      _subscription = _workspaceFiles
+          .watchExplorerEvents(handle: handle)
+          .listen((batch) {
+            if (_isCurrent(owner)) {
+              _scheduleReload(batch.changedRelativePaths);
+            }
+          }, onError: (_) {});
+      // The next pass either reuses this handle for the latest directories
+      // or retires it without registering obsolete paths.
+      if (_pendingUpdate != null) return;
+    }
+    if (!_sameSet(_watchedDirectories, directories)) {
+      try {
+        await _workspaceFiles.updateExplorerWatcher(
+          handle: _handle!,
+          watchedRelativePaths: directories.toList(growable: false),
+        );
+      } catch (_) {
+        // Native watch/unwatch may have partially succeeded. Discard the
+        // handle so retrying even the previous target cannot reuse it.
+        await _stop();
+        rethrow;
       }
-    });
+      _watchedDirectories = directories;
+    }
+    // A newly registered watcher may have missed events while inactive.
+    // Do not start catch-up IO for a target that is about to be superseded.
+    if (_needsActivationReconcile && !_disposed && _pendingUpdate == null) {
+      _needsActivationReconcile = false;
+      _scheduleReload(const ['']);
+    }
   }
 
   Future<void> dispose() {
     _disposed = true;
-    return _enqueue(_stop);
+    _pendingUpdate = null;
+    return _disposeFuture ??= _disposeAfterUpdate();
   }
 
-  Future<void> _enqueue(Future<void> Function() action) {
-    final next = _mutation.then((_) => action(), onError: (_) => action());
-    _mutation = next.catchError((_) {});
-    return next;
+  Future<void> _disposeAfterUpdate() async {
+    try {
+      await _updateDrain;
+    } catch (_) {
+      // Even a failed registration must not prevent native handle cleanup.
+    }
+    await _stop();
   }
 
   bool _isCurrent(Object owner) => !_disposed && identical(owner, _reloadOwner);
