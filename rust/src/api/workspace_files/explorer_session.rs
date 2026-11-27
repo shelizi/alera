@@ -1450,10 +1450,9 @@ mod tests {
                 .expect("ordinary native snapshots have strictly ordered keys");
             assert_delta_equal(&actual, &expected);
             if round == 0 {
-                // The existing projector removes a missing path, but keeps
-                // the loaded cache when a directory becomes a same-path file.
-                // This test checks diff parity, not that pre-existing policy.
-                assert_eq!(actual.removed_directory_paths, ["folder-002"]);
+                // Directory-to-file replacement now removes the stale cache
+                // as well as an ordinary deleted directory.
+                assert_eq!(actual.removed_directory_paths, ["folder-002", "folder-004"]);
             }
             if round == 1 {
                 assert!(actual
@@ -1572,6 +1571,104 @@ mod tests {
         let old = median(&mut old);
         let new = median(&mut new);
         println!("Classic ordered projection diff before_nodes={} after_nodes={} changed_nodes={} removed_nodes={} repeats={} old_ms={old:.3} new_ms={new:.3} speedup={:.2}x", before.nodes.len(), after.nodes.len(), expected.changed_nodes.len(), expected.removed_node_ids.len(), REPEATS, old/new);
+    }
+
+    #[test]
+    fn live_directory_to_file_removes_cached_children_and_rejects_late_listing() {
+        use std::fs;
+        let workspace = tempfile::tempdir().unwrap();
+        let base = workspace.path();
+        fs::create_dir_all(base.join("src/nested")).unwrap();
+        fs::write(base.join("src/nested/deep.txt"), "old").unwrap();
+        fs::create_dir_all(base.join("src-extra")).unwrap();
+        fs::write(base.join("src-extra/keep.txt"), "keep").unwrap();
+        let workspace_path = base.to_string_lossy().into_owned();
+        let list = |path: &str| {
+            children(
+                path,
+                super::super::list_workspace_children(
+                    workspace_path.clone(),
+                    path.into(),
+                    false,
+                    false,
+                )
+                .unwrap(),
+            )
+        };
+        let root = list("");
+        let old_src = list("src");
+        let nested = list("src/nested");
+        let extra = list("src-extra");
+        let handle = start(
+            "fixture".into(),
+            workspace_path.clone(),
+            vec![root, old_src.clone(), nested, extra],
+        )
+        .unwrap();
+        fs::remove_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src"), "replacement").unwrap();
+        let changed = update(handle.clone(), list("")).unwrap();
+        assert_eq!(changed.removed_directory_paths, ["src", "src/nested"]);
+        assert!(changed
+            .removed_node_ids
+            .contains(&"path:src/nested/deep.txt".into()));
+        assert!(changed
+            .removed_binding_node_ids
+            .contains(&"path:src/nested/deep.txt".into()));
+        let file_node = changed
+            .changed_nodes
+            .iter()
+            .find(|node| node.id == "path:src")
+            .unwrap();
+        assert_eq!(file_node.kind, WorkspaceExplorerTreeNodeKind::File);
+        assert!(file_node.child_ids.is_empty());
+        assert!(changed
+            .removed_node_ids
+            .iter()
+            .all(|id| !id.starts_with("path:src-extra")));
+        let late = update(
+            WorkspaceExplorerProjectionHandle {
+                id: handle.id,
+                version: changed.version,
+            },
+            old_src,
+        )
+        .unwrap();
+        assert!(late.changed_directories.is_empty());
+        assert!(late.changed_nodes.is_empty());
+        assert!(late.changed_bindings.is_empty());
+        fs::remove_file(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::write(base.join("src/new.txt"), "fresh").unwrap();
+        let recreated = update(
+            WorkspaceExplorerProjectionHandle {
+                id: handle.id,
+                version: late.version,
+            },
+            list(""),
+        )
+        .unwrap();
+        assert!(recreated
+            .changed_nodes
+            .iter()
+            .any(|node| node.id == "__alera_placeholder__:src"));
+        let fresh = update(
+            WorkspaceExplorerProjectionHandle {
+                id: handle.id,
+                version: recreated.version,
+            },
+            list("src"),
+        )
+        .unwrap();
+        assert!(fresh
+            .changed_nodes
+            .iter()
+            .any(|node| node.id == "path:src/new.txt"));
+        assert!(fresh
+            .changed_nodes
+            .iter()
+            .all(|node| node.id != "path:src/nested/deep.txt"));
+        stop(handle);
     }
 
     #[test]
