@@ -45,18 +45,16 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   Future<void> _bootstrapExplorer() async {
+    final initialGeneration = _nativeProjectionGeneration;
     await _startNativeWatcher();
-    if (!mounted) {
-      return;
-    }
-    await _reloadRoot();
-    if (!mounted) {
-      return;
-    }
+    if (!mounted || initialGeneration != _nativeProjectionGeneration) return;
+    final rootLoad = _reloadRoot();
+    final generation = _nativeProjectionGeneration;
+    bool isCurrent() => mounted && generation == _nativeProjectionGeneration;
+    await rootLoad;
+    if (!isCurrent()) return;
     await _restoreWorkspaceUiState();
-    if (!mounted) {
-      return;
-    }
+    if (!isCurrent()) return;
     await _revealPendingPath();
   }
 
@@ -74,6 +72,8 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   Future<void> _restoreWorkspaceUiState({
     _WorkspaceExplorerUiState? snapshot,
   }) async {
+    final generation = _nativeProjectionGeneration;
+    bool isCurrent() => mounted && generation == _nativeProjectionGeneration;
     final savedState = snapshot ?? _readWorkspaceUiState();
     if (savedState == null) {
       _expandedDirectoryPaths.clear();
@@ -85,14 +85,13 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
       growable: false,
     )..sort(_compareDirectoryDepth);
     for (final relativePath in loadedDirectories) {
-      if (!mounted || !_isDirectoryEntry(_entryByPath[relativePath])) {
+      if (!isCurrent()) return;
+      if (!_isDirectoryEntry(_entryByPath[relativePath])) {
         continue;
       }
       await _loadDirectory(relativePath);
     }
-    if (!mounted) {
-      return;
-    }
+    if (!isCurrent()) return;
 
     _expandedDirectoryPaths
       ..clear()
@@ -325,7 +324,11 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   void _disposeNativeProjectionSession({bool bumpGeneration = true}) {
-    if (bumpGeneration) _nativeProjectionGeneration += 1;
+    if (bumpGeneration) {
+      _nativeProjectionGeneration += 1;
+      _gitSnapshotRefresh.clear();
+      _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
+    }
     final active = _nativeProjectionHandle;
     final starting = _nativeProjectionStarting;
     _nativeProjectionHandle = null;

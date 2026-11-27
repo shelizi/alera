@@ -20,6 +20,7 @@ import 'package:alera/src/features/external_editor/application/external_editor_p
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/external_editor/presentation/external_editor_menu_entries.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_git_snapshot_refresh.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_explorer_watch_refresh_queue.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -175,6 +176,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   late final WorkspaceFolderOpener _folderOpener;
   late final GitBackend _gitBackend;
   GitExplorerStatusSnapshot _gitStatusSnapshot = const .empty();
+  late final _gitSnapshotRefresh = WorkspaceExplorerGitSnapshotRefresh(
+    load: _gitBackend.explorerStatusSnapshot,
+    publish: (snapshot) => _gitStatusSnapshot = snapshot,
+  );
   _ExplorerClipboard? _clipboard;
   final WindowsFileDrag _nativeFileDrag = const WindowsFileDrag();
   bool _checkingNativeDrag = false;
@@ -286,6 +291,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     _watchRefreshQueue.dispose();
     _watchQuickOpenRefreshQueue.dispose();
     _watchDeferredQuickOpenQueue.dispose();
+    _gitSnapshotRefresh.dispose();
     _disposeNativeProjectionSession();
     unawaited(_quickOpenRefreshSubscription?.cancel());
     _filterController.dispose();
@@ -697,24 +703,26 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   Future<void> _reloadRoot() async {
     final snapshot = _captureWorkspaceUiState();
     setState(() => _loading = true);
+    _resetExplorerProjection();
+    final generation = _nativeProjectionGeneration;
+    bool isCurrent() => mounted && generation == _nativeProjectionGeneration;
     try {
-      _resetExplorerProjection();
       await _refreshGitStatusSnapshot();
+      if (!isCurrent()) return;
       await _syncWatchedDirectories();
+      if (!isCurrent()) return;
       await _loadDirectory('');
-      if (!mounted) {
-        return;
-      }
+      if (!isCurrent()) return;
       await _restoreWorkspaceUiState(snapshot: snapshot);
     } catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         _expandedDirectoryPaths.clear();
         _selectedRelativePath = null;
         _rebuildTree(tryPreserveState: false);
+        _showError(error);
       }
-      _showError(error);
     } finally {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() => _loading = false);
       }
     }
@@ -727,34 +735,34 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
             .toList(growable: false)
           ..sort(_compareDirectoryDepth);
     setState(() => _loading = true);
+    _resetExplorerProjection();
+    final generation = _nativeProjectionGeneration;
+    bool isCurrent() => mounted && generation == _nativeProjectionGeneration;
     try {
-      _resetExplorerProjection();
       await _refreshGitStatusSnapshot();
+      if (!isCurrent()) return;
       await _syncWatchedDirectories();
+      if (!isCurrent()) return;
       await _loadDirectory('');
       for (final relativePath in loadedDirectories) {
-        if (!mounted) {
-          return;
-        }
+        if (!isCurrent()) return;
         if (!_isDirectoryEntry(_entryByPath[relativePath])) {
           continue;
         }
         await _loadDirectory(relativePath);
       }
-      if (!mounted) {
-        return;
-      }
+      if (!isCurrent()) return;
       _rebuildTree();
       if (_filterController.text.trim().isNotEmpty) {
         _onFilterChanged(_filterController.text);
       }
     } catch (error) {
-      if (mounted) {
+      if (isCurrent()) {
         _rebuildTree(tryPreserveState: false);
+        _showError(error);
       }
-      _showError(error);
     } finally {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() => _loading = false);
       }
     }
@@ -786,26 +794,8 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     await _replaceDirectoryChildren(relativePath, children);
   }
 
-  Future<void> _refreshGitStatusSnapshot() async {
-    final workspacePath = widget.workspace.path;
-    final projectionGeneration = _nativeProjectionGeneration;
-    try {
-      final snapshot = await _gitBackend.explorerStatusSnapshot(workspacePath);
-      // A slow Git scan from a retired worktree must never overwrite the
-      // Explorer's status badges after its workspace changes.
-      if (mounted &&
-          projectionGeneration == _nativeProjectionGeneration &&
-          workspacePath == widget.workspace.path) {
-        _gitStatusSnapshot = snapshot;
-      }
-    } catch (_) {
-      if (mounted &&
-          projectionGeneration == _nativeProjectionGeneration &&
-          workspacePath == widget.workspace.path) {
-        _gitStatusSnapshot = const GitExplorerStatusSnapshot.empty();
-      }
-    }
-  }
+  Future<void> _refreshGitStatusSnapshot() =>
+      _gitSnapshotRefresh.refresh(widget.workspace.path);
 
   void _rebuildTree({bool tryPreserveState = true}) {
     if (!mounted) {
