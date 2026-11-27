@@ -1,6 +1,7 @@
 //! A bounded, read-only view of the Classic RuntimeStore project/workspace
 //! catalog. The existing CLI owns database access; the GPUI preview only
 //! consumes its JSON and never writes another shadow catalog.
+use crate::worktree_manager::{WorktreeManager, WorktreeReadSnapshot};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, ErrorKind};
@@ -98,6 +99,18 @@ pub fn parse_runtime_catalog(
     projects_json: &Value,
     workspaces_json: &Value,
 ) -> io::Result<RuntimeCatalog> {
+    parse_runtime_catalog_with_snapshot(
+        projects_json,
+        workspaces_json,
+        &mut WorktreeReadSnapshot::default(),
+    )
+}
+
+pub(crate) fn parse_runtime_catalog_with_snapshot(
+    projects_json: &Value,
+    workspaces_json: &Value,
+    snapshot: &mut WorktreeReadSnapshot,
+) -> io::Result<RuntimeCatalog> {
     let project_items = item_list(projects_json, "projects")?;
     let workspace_items = item_list(workspaces_json, "workspaces")?;
     if project_items.len() > MAX_PROJECTS || workspace_items.len() > MAX_WORKSPACES {
@@ -127,6 +140,11 @@ pub fn parse_runtime_catalog(
         }
     }
 
+    let projects_by_id: HashMap<_, _> = catalog
+        .projects
+        .iter()
+        .map(|project| (project.id.as_str(), project))
+        .collect();
     let mut workspace_ids = HashSet::new();
     // Avoid one Git subprocess for every registered checkout of a project.
     let mut project_checkouts: HashMap<String, Option<HashSet<PathBuf>>> = HashMap::new();
@@ -140,7 +158,7 @@ pub fn parse_runtime_catalog(
         let Some(project_id) = display_text(value.get("projectId"), 128) else {
             continue;
         };
-        let Some(project) = catalog.projects.iter().find(|p| p.id == project_id) else {
+        let Some(project) = projects_by_id.get(project_id.as_str()) else {
             continue;
         };
         let Some(path) = existing_directory(value.get("path")) else {
@@ -153,10 +171,10 @@ pub fn parse_runtime_catalog(
             let recognized = project_checkouts
                 .entry(project.id.clone())
                 .or_insert_with(|| {
-                    crate::worktree_manager::WorktreeManager::discover(&project.root)
+                    WorktreeManager::discover_canonical(&project.root)
                         .ok()
-                        .and_then(|manager| manager.list().ok())
-                        .map(|entries| entries.into_iter().map(|entry| entry.path).collect())
+                        .and_then(|manager| snapshot.list(&manager).ok())
+                        .map(|entries| entries.iter().map(|entry| entry.path.clone()).collect())
                 });
             if !recognized
                 .as_ref()

@@ -126,7 +126,7 @@ use alera_gpui_desktop::native_settings::{
     NativeSettings, NativeSettingsStore, NativeSidebarLayout,
 };
 use alera_gpui_desktop::project_tree::{
-    collect_project_tree_with_registered,
+    collect_project_tree_with_snapshot,
     project_title_matches_search, reconcile_sidebar_on_workspace_switch,
     sidebar_workspaces_for_group, worktree_matches_search, ProjectTreeGroup,
 };
@@ -181,7 +181,7 @@ use alera_gpui_desktop::worktree_content_search::{
     WorktreeContentScope,
 };
 use alera_gpui_desktop::worktree_manager::{
-    matching_branch_worktree, WorktreeEntry, WorktreeManager,
+    matching_branch_worktree, WorktreeEntry, WorktreeManager, WorktreeReadSnapshot,
 };
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
@@ -1490,8 +1490,10 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let (mut groups, runtime_result, order_result) = cx
                 .background_spawn(async move {
-                    let runtime_result =
-                        bridge.as_ref().map(|bridge| bridge.list_runtime_catalog());
+                    let mut snapshot = WorktreeReadSnapshot::default();
+                    let runtime_result = bridge.as_ref().map(|bridge| {
+                        bridge.list_runtime_catalog_with_snapshot(&mut snapshot)
+                    });
                     let order_result = bridge
                         .as_ref()
                         .map(|bridge| bridge.sidebar_order_snapshot());
@@ -1506,8 +1508,9 @@ impl Workbench {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let groups =
-                        collect_project_tree_with_registered(&saved, &recent, &registered, &active);
+                    let groups = collect_project_tree_with_snapshot(
+                        &saved, &recent, &registered, &active, &mut snapshot,
+                    );
                     (groups, runtime_result, order_result)
                 })
                 .await;
